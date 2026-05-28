@@ -5105,16 +5105,23 @@ export const loadServerActionClient = ${
     // Expand Webpack's build-time `require.context(...)` into a static module
     // map backed by `import.meta.glob` — see src/plugins/require-context.ts
     createRequireContextPlugin(),
+    // Inline binary assets fetched via `fetch(new URL("./asset", import.meta.url))` —
+    // see src/plugins/og-assets.ts
+    createOgInlineFetchAssetsPlugin(),
     // Emit assets referenced via `new URL("./asset", import.meta.url)` in
     // SSR/server environments. Vite's built-in asset-import-meta-url plugin
     // only runs in the client environment, so server-side URL dependencies
     // (e.g. edge API routes with `import(new URL('./style.css', ...))`) are
     // left untransformed and reference files that never get emitted. See
     // src/plugins/server-asset-import-meta-url.ts and #1346.
+    //
+    // MUST run AFTER `vinext:og-inline-fetch-assets`: that plugin matches
+    // the `fetch(new URL(...))` pattern verbatim, and our regex would also
+    // match the inner `new URL(...)` and rewrite it to a placeholder before
+    // OG inlining gets a chance to inline @vercel/og fonts as base64 —
+    // silently breaking @vercel/og under Cloudflare Workers where
+    // `import.meta.url` is the literal string "worker".
     createServerAssetImportMetaUrlPlugin(),
-    // Inline binary assets fetched via `fetch(new URL("./asset", import.meta.url))` —
-    // see src/plugins/og-assets.ts
-    createOgInlineFetchAssetsPlugin(),
     // Dedupe/copy @vercel/og binary WASM assets in the RSC output — see src/plugins/og-assets.ts
     createOgAssetsPlugin(),
     // Collect SSR/RSC bundle externals and write dist/server/vinext-externals.json.
