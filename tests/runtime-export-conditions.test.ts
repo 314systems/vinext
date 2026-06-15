@@ -281,6 +281,91 @@ describe("runtime-specific package export conditions", () => {
     expect(code).toContain('from "external-only"');
     expect(code).not.toContain("external-only?__vinext_runtime_condition");
   });
+
+  it("preserves ssr.external metadata in marked edge graphs", async () => {
+    const root = await createFixture();
+    const entryPath = path.join(root, "external-entry.js");
+    await writeFile(
+      entryPath,
+      'import value from "library-with-exports/server-favoring-edge"; console.log(value);',
+    );
+
+    const result = await build({
+      root,
+      configFile: false,
+      logLevel: "silent",
+      plugins: [runtimeExportConditionsPlugin()],
+      ssr: { external: ["library-with-exports"] },
+      build: {
+        write: false,
+        ssr: true,
+        minify: false,
+        rolldownOptions: {
+          input: withRuntimeExportCondition(entryPath, "edge-light"),
+        },
+      },
+    });
+    if (!Array.isArray(result) && !("output" in result)) {
+      throw new Error("Unexpected watch result from one-shot build");
+    }
+    const output = Array.isArray(result) ? result[0]!.output : result.output;
+    const code = output.find((item) => item.type === "chunk")!.code;
+    expect(code).toContain('from "library-with-exports/server-favoring-edge"');
+    expect(code).not.toContain("server-favoring-edge?__vinext_runtime_condition");
+  });
+
+  it("propagates edge conditions through resolved virtual modules", async () => {
+    const root = await createFixture();
+    const virtualEntry = "\0virtual:runtime-export-entry";
+    const virtualDependency = "virtual:runtime-export-dependency";
+    const resolvedVirtualDependency = `\0${virtualDependency}`;
+    const entryId = withRuntimeExportCondition(virtualEntry, "edge-light-react-server");
+    const loadedIds: string[] = [];
+
+    const result = await build({
+      root,
+      configFile: false,
+      logLevel: "silent",
+      plugins: [
+        runtimeExportConditionsPlugin(),
+        {
+          name: "runtime-export-virtual-modules",
+          resolveId(source) {
+            if (source === virtualEntry || source === resolvedVirtualDependency) return source;
+            if (source === virtualDependency) return resolvedVirtualDependency;
+            return null;
+          },
+          load(id) {
+            loadedIds.push(id);
+            if (id === virtualEntry)
+              return `import value from ${JSON.stringify(virtualDependency)}; console.log(value);`;
+            if (id === resolvedVirtualDependency) {
+              return 'import value from "library-with-exports/server-favoring-edge"; export default value;';
+            }
+            return null;
+          },
+        },
+      ],
+      ssr: { noExternal: true },
+      build: {
+        write: false,
+        ssr: true,
+        minify: false,
+        rolldownOptions: { input: entryId },
+      },
+    });
+    if (!Array.isArray(result) && !("output" in result)) {
+      throw new Error("Unexpected watch result from one-shot build");
+    }
+    const output = Array.isArray(result) ? result[0]!.output : result.output;
+    const code = output.find((item) => item.type === "chunk")!.code;
+    expect(code).toContain('console.log("edge-light")');
+    expect(loadedIds).toContain(virtualEntry);
+    expect(loadedIds).toContain(resolvedVirtualDependency);
+    expect(loadedIds.filter((id) => id.includes("runtime-export-dependency"))).toEqual([
+      resolvedVirtualDependency,
+    ]);
+  });
 });
 
 async function symlinkWorkspaceNodeModules(root: string): Promise<void> {

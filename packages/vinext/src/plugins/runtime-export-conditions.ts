@@ -1,5 +1,5 @@
 import { builtinModules } from "node:module";
-import { createIdResolver, type Plugin, type ResolvedConfig } from "vite";
+import { createIdResolver, type Plugin, type ResolvedConfig, type Rollup } from "vite";
 
 export type RuntimeExportCondition = "edge-light" | "edge-light-react-server" | "middleware";
 
@@ -35,6 +35,21 @@ function stripRuntimeExportCondition(specifier: string): string {
   return query.length > 0 ? `${pathname}?${query}` : pathname;
 }
 
+function isVirtualId(specifier: string): boolean {
+  return specifier.startsWith("virtual:") || specifier.startsWith("\0virtual:");
+}
+
+function isUnhandledScheme(specifier: string): boolean {
+  const schemeSpecifier = specifier.startsWith("\0") ? specifier.slice(1) : specifier;
+  return /^[a-z][a-z+.-]*:/.test(schemeSpecifier) && !isVirtualId(specifier);
+}
+
+type ResolvedId = Rollup.PartialResolvedId;
+
+function normalizeResolvedId(resolved: string | ResolvedId): ResolvedId {
+  return typeof resolved === "string" ? { id: resolved } : resolved;
+}
+
 function runtimeConditions(
   config: ResolvedConfig,
   environmentConditions: readonly string[],
@@ -59,6 +74,7 @@ function runtimeConditions(
 export function runtimeExportConditionsPlugin(): Plugin {
   let config: ResolvedConfig;
   const resolvers = new Map<string, ReturnType<typeof createIdResolver>>();
+  const virtualConditions = new WeakMap<object, Map<string, RuntimeExportCondition>>();
 
   return {
     name: "vinext:runtime-export-conditions",
@@ -69,14 +85,25 @@ export function runtimeExportConditionsPlugin(): Plugin {
     },
 
     async resolveId(source, importer, options) {
-      const condition = readRuntimeExportCondition(source) ?? readRuntimeExportCondition(importer);
+      const environment = this.environment;
+      let environmentVirtualConditions = virtualConditions.get(environment);
+      if (!environmentVirtualConditions) {
+        environmentVirtualConditions = new Map();
+        virtualConditions.set(environment, environmentVirtualConditions);
+      }
+      const condition =
+        readRuntimeExportCondition(source) ??
+        readRuntimeExportCondition(importer) ??
+        (importer
+          ? environmentVirtualConditions.get(stripRuntimeExportCondition(importer))
+          : undefined) ??
+        null;
       if (condition === null) return null;
 
       const cleanSource = stripRuntimeExportCondition(source);
-      if (NODE_BUILTINS.has(cleanSource) || /^[a-z][a-z+.-]*:/.test(cleanSource)) return null;
+      if (NODE_BUILTINS.has(cleanSource) || isUnhandledScheme(cleanSource)) return null;
 
       const cleanImporter = importer ? stripRuntimeExportCondition(importer) : undefined;
-      const environment = this.environment;
       const conditions = runtimeConditions(
         config,
         environment.config.resolve.conditions,
@@ -89,17 +116,34 @@ export function runtimeExportConditionsPlugin(): Plugin {
         resolver = createIdResolver(config, { conditions, isRequire });
         resolvers.set(resolverKey, resolver);
       }
-      const resolved = await resolver(environment, cleanSource, cleanImporter);
-      if (!resolved) return null;
+      const customResolved = await resolver(environment, cleanSource, cleanImporter);
+      const pluginResolved = await this.resolve(cleanSource, cleanImporter, {
+        ...options,
+        skipSelf: true,
+      });
+      if (!customResolved && !pluginResolved) return null;
+
+      const resolved = normalizeResolvedId(customResolved ?? pluginResolved!);
+      const metadata = pluginResolved ? { ...pluginResolved, ...resolved } : resolved;
+      if (metadata.external) return metadata;
+
+      const resolvedId = resolved.id;
+      if (isVirtualId(resolvedId)) {
+        environmentVirtualConditions.set(resolvedId, condition);
+        return metadata;
+      }
       if (
-        !resolved.startsWith("\0") &&
-        !resolved.startsWith("/") &&
-        !/^[A-Za-z]:[\\/]/.test(resolved)
+        !resolvedId.startsWith("\0") &&
+        !resolvedId.startsWith("/") &&
+        !/^[A-Za-z]:[\\/]/.test(resolvedId)
       ) {
-        return resolved;
+        return metadata;
       }
 
-      return withRuntimeExportCondition(resolved, condition);
+      return {
+        ...metadata,
+        id: withRuntimeExportCondition(resolvedId, condition),
+      };
     },
   };
 }
