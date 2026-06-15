@@ -314,13 +314,22 @@ describe("runtime-specific package export conditions", () => {
     expect(code).not.toContain("server-favoring-edge?__vinext_runtime_condition");
   });
 
-  it("propagates edge conditions through resolved virtual modules", async () => {
+  it("creates distinct node and edge identities for a shared virtual module", async () => {
     const root = await createFixture();
-    const virtualEntry = "\0virtual:runtime-export-entry";
+    const nodeEntry = path.join(root, "virtual-node-entry.js");
+    const edgeEntry = path.join(root, "virtual-edge-entry.js");
     const virtualDependency = "virtual:runtime-export-dependency";
     const resolvedVirtualDependency = `\0${virtualDependency}`;
-    const entryId = withRuntimeExportCondition(virtualEntry, "edge-light-react-server");
+    await writeFile(
+      nodeEntry,
+      `import value from ${JSON.stringify(virtualDependency)}; console.log("node", value);`,
+    );
+    await writeFile(
+      edgeEntry,
+      `import value from ${JSON.stringify(virtualDependency)}; console.log("edge", value);`,
+    );
     const loadedIds: string[] = [];
+    let virtualLoadCount = 0;
 
     const result = await build({
       root,
@@ -331,15 +340,14 @@ describe("runtime-specific package export conditions", () => {
         {
           name: "runtime-export-virtual-modules",
           resolveId(source) {
-            if (source === virtualEntry || source === resolvedVirtualDependency) return source;
+            if (source === resolvedVirtualDependency) return source;
             if (source === virtualDependency) return resolvedVirtualDependency;
             return null;
           },
           load(id) {
             loadedIds.push(id);
-            if (id === virtualEntry)
-              return `import value from ${JSON.stringify(virtualDependency)}; console.log(value);`;
             if (id === resolvedVirtualDependency) {
+              virtualLoadCount++;
               return 'import value from "library-with-exports/server-favoring-edge"; export default value;';
             }
             return null;
@@ -351,20 +359,41 @@ describe("runtime-specific package export conditions", () => {
         write: false,
         ssr: true,
         minify: false,
-        rolldownOptions: { input: entryId },
+        rolldownOptions: {
+          input: {
+            node: nodeEntry,
+            edge: withRuntimeExportCondition(edgeEntry, "edge-light-react-server"),
+          },
+          output: { entryFileNames: "[name].js" },
+        },
       },
     });
     if (!Array.isArray(result) && !("output" in result)) {
       throw new Error("Unexpected watch result from one-shot build");
     }
     const output = Array.isArray(result) ? result[0]!.output : result.output;
-    const code = output.find((item) => item.type === "chunk")!.code;
-    expect(code).toContain('console.log("edge-light")');
-    expect(loadedIds).toContain(virtualEntry);
+    const nodeCode = output.find((item) => item.type === "chunk" && item.fileName === "node.js")!;
+    const edgeCode = output.find((item) => item.type === "chunk" && item.fileName === "edge.js")!;
+    expect(nodeCode.type === "chunk" && nodeCode.code).toContain('console.log("node", "node")');
+    expect(edgeCode.type === "chunk" && edgeCode.code).toContain(
+      'console.log("edge", "edge-light")',
+    );
+    const nodeVirtualModules =
+      nodeCode.type === "chunk"
+        ? Object.keys(nodeCode.modules).filter((id) => id.startsWith("\0vinext-runtime-virtual:"))
+        : [];
+    const edgeVirtualModules =
+      edgeCode.type === "chunk"
+        ? Object.keys(edgeCode.modules).filter((id) => id.startsWith("\0vinext-runtime-virtual:"))
+        : [];
+    expect(nodeVirtualModules).toHaveLength(1);
+    expect(edgeVirtualModules).toHaveLength(1);
+    expect(nodeVirtualModules[0]).not.toBe(edgeVirtualModules[0]);
     expect(loadedIds).toContain(resolvedVirtualDependency);
     expect(loadedIds.filter((id) => id.includes("runtime-export-dependency"))).toEqual([
       resolvedVirtualDependency,
     ]);
+    expect(virtualLoadCount).toBe(1);
   });
 });
 
