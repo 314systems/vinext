@@ -190,6 +190,10 @@ export function createOgInlineFetchAssetsPlugin(): Plugin {
 // the latter injected by the vinext:og-font-patch transform.
 const OG_WASM_ASSETS = ["resvg.wasm", "yoga.wasm"] as const;
 
+function isServerEnvironment(environmentName: string | undefined): boolean {
+  return environmentName === "rsc" || environmentName === "ssr";
+}
+
 /**
  * Find an emitted WASM asset in the output bundle whose name corresponds to the
  * given base file (e.g. base `resvg.wasm` matches the emitted `resvg-HASH.wasm`).
@@ -245,6 +249,7 @@ export function copyMissingOgWasm(opts: {
   sourceDir: string;
   assets: readonly string[];
 }): void {
+  fs.mkdirSync(opts.outDir, { recursive: true });
   for (const asset of opts.assets) {
     const src = path.join(opts.sourceDir, asset);
     const dest = path.join(opts.outDir, asset);
@@ -283,6 +288,7 @@ export function createOgAssetsPlugin(): Plugin {
   // builds, this shared state could go stale (writeBundle would copy a
   // redundant root file) — keep the produce/consume pair in the same env.
   let dedupedBases = new Set<string>();
+  let fallbackDirectories = new Map<string, Set<string>>();
 
   return {
     name: "vinext:og-assets",
@@ -293,21 +299,27 @@ export function createOgAssetsPlugin(): Plugin {
       order: "post",
       handler(_options, bundle) {
         const envName = this.environment?.name;
-        if (envName !== "rsc") return;
+        if (!isServerEnvironment(envName)) return;
 
         dedupedBases = new Set<string>();
+        fallbackDirectories = new Map<string, Set<string>>();
 
         const chunks = Object.values(bundle).filter(
           (o): o is typeof o & { type: "chunk"; code: string } => o.type === "chunk",
         );
 
         for (const base of OG_WASM_ASSETS) {
-          // Only act if some chunk references this WASM at all.
-          const referenced = chunks.some((c) => c.code.includes(base));
-          if (!referenced) continue;
+          const referencingChunks = chunks.filter((chunk) => chunk.code.includes(base));
+          if (referencingChunks.length === 0) continue;
 
           const emitted = findEmittedWasmAsset(bundle as never, base);
-          if (!emitted) continue; // no emitted asset → leave for writeBundle to copy
+          if (!emitted) {
+            fallbackDirectories.set(
+              base,
+              new Set(referencingChunks.map((chunk) => path.posix.dirname(chunk.fileName))),
+            );
+            continue;
+          }
 
           for (const chunk of chunks) {
             const re = fallbackUrlRegex(base);
@@ -359,7 +371,7 @@ export function createOgAssetsPlugin(): Plugin {
       order: "post",
       async handler(options, bundle) {
         const envName = this.environment?.name;
-        if (envName !== "rsc") return;
+        if (!isServerEnvironment(envName)) return;
 
         const outDir = options.dir;
         if (!outDir) return;
@@ -383,7 +395,16 @@ export function createOgAssetsPlugin(): Plugin {
           const ogPkgPath = require.resolve("@vercel/og/package.json");
           const ogDistDir = path.join(path.dirname(ogPkgPath), "dist");
 
-          copyMissingOgWasm({ outDir, sourceDir: ogDistDir, assets: referencedAssets });
+          for (const asset of referencedAssets) {
+            const directories = fallbackDirectories.get(asset) ?? new Set(["."]);
+            for (const directory of directories) {
+              copyMissingOgWasm({
+                outDir: path.join(outDir, directory),
+                sourceDir: ogDistDir,
+                assets: [asset],
+              });
+            }
+          }
         } catch {
           // @vercel/og not installed — nothing to copy
         }
