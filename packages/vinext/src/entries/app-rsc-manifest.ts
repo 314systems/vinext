@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import {
   computeAppRouteStaticSiblings,
   convertSegmentsToRouteParts,
@@ -6,6 +7,8 @@ import {
 import { createMetadataRouteEntriesSource } from "../server/metadata-route-build-data.js";
 import type { MetadataFileRoute } from "../server/metadata-routes.js";
 import { normalizePathSeparators } from "../utils/path.js";
+import { extractExportConstString } from "../build/report.js";
+import { withRuntimeExportCondition } from "../plugins/runtime-export-conditions.js";
 
 type AppRscManifestCode = {
   imports: string[];
@@ -90,7 +93,7 @@ type ImportAllocator = {
    * (page modules of static routes, and all route-handler modules). Returns the
    * loader variable name. Deduplicated independently of eager imports.
    */
-  getLazyLoaderVar(filePath: string): string;
+  getLazyLoaderVar(filePath: string, edgeLight?: boolean): string;
   importMap: ReadonlyMap<string, string>;
   imports: string[];
 };
@@ -115,40 +118,57 @@ function createImportAllocator(): ImportAllocator {
       importMap.set(filePath, varName);
       return varName;
     },
-    getLazyLoaderVar(filePath) {
-      const existing = lazyMap.get(filePath);
+    getLazyLoaderVar(filePath, edgeLight = false) {
+      const key = `${edgeLight ? "edge" : "default"}:${filePath}`;
+      const existing = lazyMap.get(key);
       if (existing) return existing;
 
       const varName = `load_${lazyIdx++}`;
       const absPath = normalizePathSeparators(filePath);
+      const specifier = edgeLight
+        ? withRuntimeExportCondition(absPath, "edge-light-react-server")
+        : absPath;
       // `filePath` is a trusted filesystem-scan result (route.pagePath /
       // route.routePath), the same input and trust model as the eager
       // `import * as ${var} from ${JSON.stringify(absPath)}` in getImportVar
       // above. CodeQL flags the `import()` form as dynamic code construction,
       // but this is a build-time codegen template with a JSON-encoded absolute
       // path, not runtime-attacker-controlled input — a false positive.
-      imports.push(`const ${varName} = () => import(${JSON.stringify(absPath)});`);
-      lazyMap.set(filePath, varName);
+      imports.push(`const ${varName} = () => import(${JSON.stringify(specifier)});`);
+      lazyMap.set(key, varName);
       return varName;
     },
   };
 }
 
+function routeUsesEdgeRuntime(route: AppRoute): boolean {
+  const runtimePath = route.routePath ?? route.pagePath;
+  if (!runtimePath) return false;
+
+  try {
+    const runtime = extractExportConstString(fs.readFileSync(runtimePath, "utf8"), "runtime");
+    return runtime === "edge" || runtime === "experimental-edge";
+  } catch {
+    return false;
+  }
+}
+
 function registerRouteModules(routes: AppRoute[], imports: ImportAllocator): void {
   for (const route of routes) {
+    const edgeLight = routeUsesEdgeRuntime(route);
     // All page modules are lazy-loaded so route modules — including dynamic
     // routes and routes nested under a dynamic segment — stay out of the RSC
     // entry's top-level evaluation. Their generateStaticParams (if any) is
     // reached via lazy `{ load }` sources in generateStaticParamsMap, resolved
     // on demand at prerender time.
-    if (route.pagePath) imports.getLazyLoaderVar(route.pagePath);
+    if (route.pagePath) imports.getLazyLoaderVar(route.pagePath, edgeLight);
     // Route handlers are always lazy: they are never referenced by
     // generateStaticParamsMap (buildGenerateStaticParamsEntries sources only
     // from layouts + page, never route.routePath), so unlike dynamic-route
     // pages they have no module-load-time consumer. (Next.js route handlers can
     // export generateStaticParams for prerendering, but vinext does not wire
     // that into the map yet — a separate gap, unaffected by lazy loading.)
-    if (route.routePath) imports.getLazyLoaderVar(route.routePath);
+    if (route.routePath) imports.getLazyLoaderVar(route.routePath, edgeLight);
     for (const layout of route.layouts) imports.getImportVar(layout);
     for (const tmpl of route.templates) imports.getImportVar(tmpl);
     if (route.loadingPath) imports.getImportVar(route.loadingPath);
@@ -207,6 +227,7 @@ function registerRouteModules(routes: AppRoute[], imports: ImportAllocator): voi
 
 function buildRouteEntries(routes: AppRoute[], imports: ImportAllocator): string[] {
   return routes.map((route, routeIdx) => {
+    const edgeLight = routeUsesEdgeRuntime(route);
     // Pre-compute static-sibling segment names for the matched route's
     // dynamic URL levels. The client router uses this to decide if a cached
     // dynamic-route prefetch can be reused when navigating to a static
@@ -273,9 +294,11 @@ ${interceptEntries.join(",\n")}
     const errorVars = (route.errorPaths ?? []).map((ep) => imports.getImportVar(ep));
     // Page and route handler are always lazy-loaded; hydrated onto route.page /
     // route.routeHandler by ensureAppRouteModulesLoaded before any read.
-    const loadPageField = route.pagePath ? imports.getLazyLoaderVar(route.pagePath) : "null";
+    const loadPageField = route.pagePath
+      ? imports.getLazyLoaderVar(route.pagePath, edgeLight)
+      : "null";
     const loadRouteHandlerField = route.routePath
-      ? imports.getLazyLoaderVar(route.routePath)
+      ? imports.getLazyLoaderVar(route.routePath, edgeLight)
       : "null";
     return `  {
     __buildTimeClassifications: __VINEXT_CLASS(${routeIdx}), // evaluated once at module load
@@ -408,7 +431,7 @@ function buildGenerateStaticParamsEntries(
       appendStaticParamSource(
         sourcesByPattern,
         route.pattern,
-        `{ load: ${imports.getLazyLoaderVar(route.pagePath)} }`,
+        `{ load: ${imports.getLazyLoaderVar(route.pagePath, routeUsesEdgeRuntime(route))} }`,
       );
     }
   }

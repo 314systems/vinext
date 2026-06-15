@@ -1,0 +1,351 @@
+// Ported from Next.js: test/e2e/import-conditions/import-conditions.test.ts
+// https://github.com/vercel/next.js/blob/canary/test/e2e/import-conditions/import-conditions.test.ts
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { build, type Plugin } from "vite";
+import { describe, expect, it } from "vite-plus/test";
+import {
+  runtimeExportConditionsPlugin,
+  withRuntimeExportCondition,
+  type RuntimeExportCondition,
+} from "../packages/vinext/src/plugins/runtime-export-conditions.js";
+
+async function writeFile(filePath: string, source: string): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, source, "utf8");
+}
+
+async function createFixture(): Promise<string> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-runtime-conditions-"));
+  const packageDir = path.join(root, "node_modules", "library-with-exports");
+
+  await writeFile(
+    path.join(packageDir, "package.json"),
+    JSON.stringify({
+      name: "library-with-exports",
+      version: "1.0.0",
+      type: "module",
+      exports: {
+        "./server-favoring-edge": {
+          worker: "./worker.js",
+          workerd: "./workerd.js",
+          "edge-light": "./edge-light.js",
+          node: "./node.js",
+          browser: "./browser.js",
+          default: "./default.js",
+        },
+        "./server-favoring-browser": {
+          worker: "./worker.js",
+          workerd: "./workerd.js",
+          browser: "./browser.js",
+          node: "./node.js",
+          "edge-light": "./edge-light.js",
+          default: "./default.js",
+        },
+        "./react": {
+          "react-server": "./react-server.js",
+          default: "./default.js",
+        },
+      },
+    }),
+  );
+
+  for (const condition of [
+    "browser",
+    "default",
+    "edge-light",
+    "node",
+    "react-server",
+    "worker",
+    "workerd",
+  ]) {
+    await writeFile(
+      path.join(packageDir, `${condition}.js`),
+      `export default ${JSON.stringify(condition)};`,
+    );
+  }
+
+  return root;
+}
+
+async function buildConditions(
+  root: string,
+  condition: RuntimeExportCondition | null,
+  resolveConditions?: string[],
+): Promise<string> {
+  const virtualEntry = "\0runtime-export-conditions-entry";
+  const entryId = condition ? withRuntimeExportCondition(virtualEntry, condition) : virtualEntry;
+  const entryPlugin: Plugin = {
+    name: "runtime-export-conditions-entry",
+    resolveId(source) {
+      if (source === entryId) return source;
+      return null;
+    },
+    load(id) {
+      if (id !== entryId) return null;
+      return `
+        import react from "library-with-exports/react";
+        import serverFavoringBrowser from "library-with-exports/server-favoring-browser";
+        import serverFavoringEdge from "library-with-exports/server-favoring-edge";
+        console.log(JSON.stringify({ react, serverFavoringBrowser, serverFavoringEdge }));
+      `;
+    },
+  };
+
+  const result = await build({
+    root,
+    configFile: false,
+    logLevel: "silent",
+    resolve: resolveConditions ? { conditions: resolveConditions } : undefined,
+    plugins: [entryPlugin, runtimeExportConditionsPlugin()],
+    ssr: { noExternal: true },
+    build: {
+      write: false,
+      ssr: true,
+      minify: false,
+      rollupOptions: { input: entryId },
+    },
+  });
+  if (!Array.isArray(result) && !("output" in result)) {
+    throw new Error("Unexpected watch result from one-shot build");
+  }
+  const output = Array.isArray(result) ? result[0]!.output : result.output;
+  return output.find((item) => item.type === "chunk")!.code;
+}
+
+describe("runtime-specific package export conditions", () => {
+  it("keeps the default node server conditions", async () => {
+    const code = await buildConditions(await createFixture(), null);
+    expect(code).toContain('var default_default = "default";');
+    expect(code).toContain('var node_default = "node";');
+    expect(code).toMatch(/react:\s*default_default/);
+    expect(code).toMatch(/serverFavoringBrowser:\s*node_default/);
+    expect(code).toMatch(/serverFavoringEdge:\s*node_default/);
+  });
+
+  it("uses react-server, browser, and edge-light for App edge graphs", async () => {
+    const code = await buildConditions(await createFixture(), "edge-light-react-server");
+    expect(code).toMatch(/react:\s*"react-server"/);
+    expect(code).toMatch(/serverFavoringBrowser:\s*"browser"/);
+    expect(code).toMatch(/serverFavoringEdge:\s*"edge-light"/);
+  });
+
+  it("uses browser and edge-light without react-server for Pages edge graphs", async () => {
+    const code = await buildConditions(await createFixture(), "edge-light");
+    expect(code).toMatch(/react:\s*"default"/);
+    expect(code).toMatch(/serverFavoringBrowser:\s*"browser"/);
+    expect(code).toMatch(/serverFavoringEdge:\s*"edge-light"/);
+  });
+
+  it("does not let worker or workerd override Next edge conditions", async () => {
+    const code = await buildConditions(await createFixture(), "middleware", [
+      "module",
+      "worker",
+      "workerd",
+      "browser",
+      "node",
+    ]);
+    expect(code).toMatch(/react:\s*"react-server"/);
+    expect(code).toMatch(/serverFavoringBrowser:\s*"browser"/);
+    expect(code).toMatch(/serverFavoringEdge:\s*"edge-light"/);
+    expect(code).not.toContain('"serverFavoringEdge":"worker"');
+    expect(code).not.toContain('"serverFavoringEdge":"workerd"');
+  });
+});
+
+async function symlinkWorkspaceNodeModules(root: string): Promise<void> {
+  const workspaceNodeModules = path.resolve(import.meta.dirname, "../node_modules");
+  const fixtureNodeModules = path.join(root, "node_modules");
+  await fs.mkdir(fixtureNodeModules, { recursive: true });
+
+  for (const entry of await fs.readdir(workspaceNodeModules, { withFileTypes: true })) {
+    if (entry.name === "library-with-exports") continue;
+    await fs.symlink(
+      path.join(workspaceNodeModules, entry.name),
+      path.join(fixtureNodeModules, entry.name),
+      "junction",
+    );
+  }
+}
+
+async function createVinextFixture(): Promise<string> {
+  const root = await createFixture();
+  await symlinkWorkspaceNodeModules(root);
+  await writeFile(path.join(root, "package.json"), JSON.stringify({ type: "module" }));
+  await writeFile(
+    path.join(root, "app", "layout.tsx"),
+    `export default function Layout({ children }: { children: React.ReactNode }) {
+  return <html><body>{children}</body></html>;
+}`,
+  );
+  await writeFile(
+    path.join(root, "app", "node-route", "route.ts"),
+    `import react from "library-with-exports/react";
+import serverFavoringBrowser from "library-with-exports/server-favoring-browser";
+import serverFavoringEdge from "library-with-exports/server-favoring-edge";
+export const runtime = "nodejs";
+export function GET() {
+  return Response.json({ react, serverFavoringBrowser, serverFavoringEdge });
+}`,
+  );
+  await writeFile(
+    path.join(root, "app", "edge-route", "route.ts"),
+    `import react from "library-with-exports/react";
+import serverFavoringBrowser from "library-with-exports/server-favoring-browser";
+import serverFavoringEdge from "library-with-exports/server-favoring-edge";
+export const runtime = "edge";
+export function GET() {
+  return Response.json({ react, serverFavoringBrowser, serverFavoringEdge });
+}`,
+  );
+  await writeFile(
+    path.join(root, "app", "client.tsx"),
+    `'use client';
+import react from "library-with-exports/react";
+import serverFavoringBrowser from "library-with-exports/server-favoring-browser";
+import serverFavoringEdge from "library-with-exports/server-favoring-edge";
+export default function Client() {
+  return <output>{JSON.stringify({ react, serverFavoringBrowser, serverFavoringEdge })}</output>;
+}`,
+  );
+  await writeFile(
+    path.join(root, "app", "page.tsx"),
+    `import Client from "./client";
+export default function Page() { return <Client />; }`,
+  );
+  await writeFile(
+    path.join(root, "middleware.ts"),
+    `import react from "library-with-exports/react";
+import serverFavoringBrowser from "library-with-exports/server-favoring-browser";
+import serverFavoringEdge from "library-with-exports/server-favoring-edge";
+import { NextResponse } from "next/server";
+export function middleware() {
+  const response = NextResponse.next();
+  response.headers.set("x-react-condition", react);
+  response.headers.set("x-server-favoring-browser-condition", serverFavoringBrowser);
+  response.headers.set("x-server-favoring-edge-condition", serverFavoringEdge);
+  return response;
+}`,
+  );
+  await writeFile(
+    path.join(root, "pages", "api", "node-route.ts"),
+    `import react from "library-with-exports/react";
+import serverFavoringBrowser from "library-with-exports/server-favoring-browser";
+import serverFavoringEdge from "library-with-exports/server-favoring-edge";
+export const config = { runtime: "nodejs" };
+export default function handler(_request: unknown, response: { status(code: number): typeof response; json(value: unknown): void }) {
+  response.status(200).json({ react, serverFavoringBrowser, serverFavoringEdge });
+}`,
+  );
+  await writeFile(
+    path.join(root, "pages", "api", "edge-route.ts"),
+    `import react from "library-with-exports/react";
+import serverFavoringBrowser from "library-with-exports/server-favoring-browser";
+import serverFavoringEdge from "library-with-exports/server-favoring-edge";
+export const config = { runtime: "experimental-edge" };
+export default function handler() {
+  return Response.json({ react, serverFavoringBrowser, serverFavoringEdge });
+}`,
+  );
+  return root;
+}
+
+async function readAllJavaScript(directory: string): Promise<string> {
+  let source = "";
+  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) source += await readAllJavaScript(entryPath);
+    else if (entry.name.endsWith(".js")) source += await fs.readFile(entryPath, "utf8");
+  }
+  return source;
+}
+
+describe("vinext runtime-specific package export integration", () => {
+  it("matches node, edge, middleware, and client conditions", async () => {
+    const root = await createVinextFixture();
+    const { createBuilder } = await import("vite");
+    const { default: vinext } = await import("../packages/vinext/src/index.js");
+    const builder = await createBuilder({
+      root,
+      configFile: false,
+      logLevel: "silent",
+      plugins: [vinext({ appDir: root })],
+    });
+    await builder.buildApp();
+
+    const serverEntryUrl = pathToFileURL(path.join(root, "dist", "server", "index.js"));
+    serverEntryUrl.searchParams.set("t", String(Date.now()));
+    const serverEntry = await import(serverEntryUrl.href);
+    const handler = serverEntry.default as (request: Request) => Promise<Response>;
+
+    const nodeResponse = await handler(new Request("http://localhost/node-route"));
+    expect(await nodeResponse.json()).toEqual({
+      react: "react-server",
+      serverFavoringBrowser: "node",
+      serverFavoringEdge: "node",
+    });
+    expect(nodeResponse.headers.get("x-react-condition")).toBe("react-server");
+    expect(nodeResponse.headers.get("x-server-favoring-browser-condition")).toBe("browser");
+    expect(nodeResponse.headers.get("x-server-favoring-edge-condition")).toBe("edge-light");
+
+    const edgeResponse = await handler(new Request("http://localhost/edge-route"));
+    expect(await edgeResponse.json()).toEqual({
+      react: "react-server",
+      serverFavoringBrowser: "browser",
+      serverFavoringEdge: "edge-light",
+    });
+
+    const clientSource = await readAllJavaScript(path.join(root, "dist", "client"));
+    expect(clientSource).toContain("browser");
+    expect(clientSource).not.toContain("edge-light-react-server");
+
+    const pagesOutDir = path.join(root, "dist", "pages-server");
+    await build({
+      root,
+      configFile: false,
+      logLevel: "silent",
+      plugins: [vinext({ disableAppRouter: true })],
+      build: {
+        outDir: pagesOutDir,
+        ssr: "virtual:vinext-server-entry",
+        rollupOptions: { output: { entryFileNames: "entry.js" } },
+      },
+    });
+
+    const pagesEntryUrl = pathToFileURL(path.join(pagesOutDir, "entry.js"));
+    pagesEntryUrl.searchParams.set("t", String(Date.now()));
+    const pagesEntry = await import(pagesEntryUrl.href);
+    const middlewareResult = await pagesEntry.runMiddleware(
+      new Request("http://localhost/api/node-route"),
+    );
+    expect(middlewareResult.responseHeaders?.get("x-react-condition")).toBe("react-server");
+    expect(middlewareResult.responseHeaders?.get("x-server-favoring-browser-condition")).toBe(
+      "browser",
+    );
+    expect(middlewareResult.responseHeaders?.get("x-server-favoring-edge-condition")).toBe(
+      "edge-light",
+    );
+
+    const nodeApiResponse = await pagesEntry.handleApiRoute(
+      new Request("http://localhost/api/node-route"),
+      "/api/node-route",
+    );
+    expect(await nodeApiResponse.json()).toEqual({
+      react: "default",
+      serverFavoringBrowser: "node",
+      serverFavoringEdge: "node",
+    });
+
+    const edgeApiResponse = await pagesEntry.handleApiRoute(
+      new Request("http://localhost/api/edge-route"),
+      "/api/edge-route",
+    );
+    expect(await edgeApiResponse.json()).toEqual({
+      react: "default",
+      serverFavoringBrowser: "browser",
+      serverFavoringEdge: "edge-light",
+    });
+  }, 60_000);
+});

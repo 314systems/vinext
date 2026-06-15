@@ -857,6 +857,39 @@ describe("App Router entry templates", () => {
 // ── Pages Router entry template runtime bootstrap ─────────────────────
 
 describe("Pages Router entry template", () => {
+  it("marks edge routes and middleware for runtime export conditions", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-pages-entry-conditions-"));
+    const pagesDir = path.join(tmpDir, "pages");
+    const middlewarePath = path.join(tmpDir, "middleware.ts");
+
+    try {
+      fs.mkdirSync(path.join(pagesDir, "api"), { recursive: true });
+      fs.writeFileSync(
+        path.join(pagesDir, "index.tsx"),
+        'export const config = { runtime: "experimental-edge" }; export default function Page() { return null; }',
+      );
+      fs.writeFileSync(
+        path.join(pagesDir, "api", "node.ts"),
+        'export const config = { runtime: "nodejs" }; export default function handler() {}',
+      );
+      fs.writeFileSync(middlewarePath, "export function middleware() {}");
+
+      const code = await generateServerEntry(
+        pagesDir,
+        await resolveNextConfig({}),
+        createValidFileMatcher(),
+        middlewarePath,
+        null,
+      );
+
+      expect(code).toContain("index.tsx?__vinext_runtime_condition=edge-light");
+      expect(code).not.toContain("node.ts?__vinext_runtime_condition=edge-light");
+      expect(code).toContain("middleware.ts?__vinext_runtime_condition=middleware");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("installs server globals before Pages Router user modules are imported", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-pages-entry-"));
     const pagesDir = path.join(tmpDir, "pages");
