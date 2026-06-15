@@ -1201,14 +1201,19 @@ export function createSSRHandler(
                       // Rebuild __NEXT_DATA__ with fresh props. The hydration
                       // script (module URLs) is stable across regenerations —
                       // extract it from the cached HTML to avoid duplication.
-                      const viteRoot = server.config?.root;
-                      const regenPageUrl = viteRoot
-                        ? "/" + path.relative(viteRoot, route.filePath)
-                        : route.filePath;
+                      const viteRoot = server.config.root;
+                      const viteBase = server.config.base;
+                      const regenPageUrl = createPagesDevModuleUrl(
+                        viteRoot,
+                        route.filePath,
+                        viteBase,
+                      );
                       const regenAppUrl = RegenApp
-                        ? viteRoot
-                          ? "/" + path.relative(viteRoot, path.join(pagesDir, "_app"))
-                          : path.join(pagesDir, "_app")
+                        ? createPagesDevModuleUrl(
+                            viteRoot,
+                            path.join(pagesDir, "_app"),
+                            viteBase,
+                          )
                         : null;
                       const freshPagesNextData = {
                         ...pagesNextData,
