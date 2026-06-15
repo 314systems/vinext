@@ -170,7 +170,7 @@ export async function isrGet(key: string): Promise<ISRCacheEntry | null> {
 export async function isrSet(
   key: string,
   data: IncrementalCacheValue,
-  revalidateSeconds: number,
+  revalidateSeconds: number | false,
   tags?: string[],
   expireSeconds?: number,
 ): Promise<void> {
@@ -184,6 +184,54 @@ export async function isrSet(
     revalidate: revalidateSeconds,
     tags: tags ?? [],
   });
+}
+
+export type PagesIsrGeneration = {
+  key: string;
+  version: number;
+};
+
+type PagesIsrCoordinationState = {
+  version: number;
+  commitTail: Promise<void>;
+};
+
+const _PAGES_ISR_COORDINATION_KEY = Symbol.for("vinext.pagesIsr.coordination");
+const _pagesIsrGlobal = globalThis as unknown as Record<PropertyKey, unknown>;
+const pagesIsrCoordination = (_pagesIsrGlobal[_PAGES_ISR_COORDINATION_KEY] ??= new Map<
+  string,
+  PagesIsrCoordinationState
+>()) as Map<string, PagesIsrCoordinationState>;
+
+export function beginPagesIsrGeneration(key: string): PagesIsrGeneration {
+  const state = pagesIsrCoordination.get(key) ?? {
+    version: 0,
+    commitTail: Promise.resolve(),
+  };
+  state.version += 1;
+  pagesIsrCoordination.set(key, state);
+  return { key, version: state.version };
+}
+
+export function commitPagesIsrGeneration(
+  generation: PagesIsrGeneration,
+  write: () => Promise<void>,
+): Promise<boolean> {
+  const state = pagesIsrCoordination.get(generation.key);
+  if (!state) return Promise.resolve(false);
+
+  const commit = state.commitTail
+    .catch(() => {})
+    .then(async () => {
+      if (state.version !== generation.version) return false;
+      await write();
+      return true;
+    });
+  state.commitTail = commit.then(
+    () => {},
+    () => {},
+  );
+  return commit;
 }
 
 export async function isrSetPrerenderedAppPage(

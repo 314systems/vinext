@@ -636,6 +636,7 @@ export function createPagesPageHandler(
         }
         const gsspRes = pageDataResult.gsspRes;
         const isrRevalidateSeconds = pageDataResult.isrRevalidateSeconds;
+        const isrGeneration = pageDataResult.isrGeneration;
         const isFallbackRender = pageDataResult.isFallback === true;
 
         // Republish SSR context with isFallback flipped on so `useRouter().isFallback`
@@ -740,6 +741,7 @@ export function createPagesPageHandler(
           isrCacheKey: pageIsrCacheKey,
           expireSeconds: vinextConfig.expireTime,
           isrRevalidateSeconds,
+          isrGeneration,
           isrSet,
           i18n: buildI18nRenderContext(i18nConfig, locale, currentDefaultLocale, domainLocales),
           isFallback: isFallbackRender,

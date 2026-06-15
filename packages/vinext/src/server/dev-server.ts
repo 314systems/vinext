@@ -19,6 +19,8 @@ import {
   isrSet,
   isrCacheKey,
   buildPagesCacheValue,
+  beginPagesIsrGeneration,
+  commitPagesIsrGeneration,
   triggerBackgroundRegeneration,
   setRevalidateDuration,
   getRevalidateDuration,
@@ -692,7 +694,8 @@ export function createSSRHandler(
         // Collect page props via data fetching methods
         let pageProps: Record<string, unknown> = {};
         let renderProps: Record<string, unknown> = { pageProps };
-        let isrRevalidateSeconds: number | null = null;
+        let isrRevalidateSeconds: number | false | null = null;
+        let pagesIsrGeneration: ReturnType<typeof beginPagesIsrGeneration> | null = null;
         // Set when `getStaticPaths: { fallback: true }` is configured and the
         // requested path is NOT in the pre-rendered list. Triggers the loading
         // shell render below: `getStaticProps`/`getServerSideProps` are skipped
@@ -999,6 +1002,9 @@ export function createSSRHandler(
           const isOnDemandRevalidate = isOnDemandRevalidateRequest(
             req.headers[PRERENDER_REVALIDATE_HEADER],
           );
+          if (isOnDemandRevalidate) {
+            pagesIsrGeneration = beginPagesIsrGeneration(cacheKey);
+          }
 
           if (
             !isOnDemandRevalidate &&
@@ -1049,6 +1055,7 @@ export function createSSRHandler(
             triggerBackgroundRegeneration(
               cacheKey,
               async () => {
+                const generation = beginPagesIsrGeneration(cacheKey);
                 const regenContext = createRequestContext({
                   // Dev never has a Workers ExecutionContext. Set it
                   // explicitly so background regeneration cannot inherit
@@ -1238,10 +1245,12 @@ export function createSSRHandler(
                       const hydrationScript = hydrationMatch?.[0] ?? "";
 
                       const freshHtml = `<!DOCTYPE html><html><head></head><body><div id="__next">${freshBody}</div>${freshNextData}\n  ${hydrationScript}</body></html>`;
-                      await isrSet(
-                        cacheKey,
-                        buildPagesCacheValue(freshHtml, freshRenderProps),
-                        revalidate,
+                      await commitPagesIsrGeneration(generation, () =>
+                        isrSet(
+                          cacheKey,
+                          buildPagesCacheValue(freshHtml, freshRenderProps),
+                          revalidate,
+                        ),
                       );
                       setRevalidateDuration(cacheKey, revalidate);
                     }
@@ -1358,6 +1367,8 @@ export function createSSRHandler(
           // Extract revalidate period for ISR caching after render
           if (typeof result?.revalidate === "number" && result.revalidate > 0) {
             isrRevalidateSeconds = result.revalidate;
+          } else if (isOnDemandRevalidate) {
+            isrRevalidateSeconds = false;
           } else if (
             cached?.value.value?.kind === "PAGES" &&
             cached.value.value.generatedFromDataRequest
@@ -1412,19 +1423,24 @@ export function createSSRHandler(
           if (shouldPersistFallbackData) {
             const cacheKey = pagesIsrCacheKey(url.split("?")[0]);
             const revalidateSeconds = isrRevalidateSeconds ?? 31_536_000;
-            await isrSet(
-              cacheKey,
-              {
-                kind: "PAGES",
-                html: "",
-                pageData: renderProps,
-                generatedFromDataRequest: true,
-                headers: undefined,
-                status: undefined,
-              },
-              revalidateSeconds,
+            const generation = beginPagesIsrGeneration(cacheKey);
+            await commitPagesIsrGeneration(generation, () =>
+              isrSet(
+                cacheKey,
+                {
+                  kind: "PAGES",
+                  html: "",
+                  pageData: renderProps,
+                  generatedFromDataRequest: true,
+                  headers: undefined,
+                  status: undefined,
+                },
+                revalidateSeconds,
+              ),
             );
-            setRevalidateDuration(cacheKey, revalidateSeconds);
+            if (typeof revalidateSeconds === "number") {
+              setRevalidateDuration(cacheKey, revalidateSeconds);
+            }
           }
           const dataHeaders: Record<string, string | string[] | number> = {
             "Content-Type": "application/json",
@@ -1671,11 +1687,13 @@ hydrate();
         const extraHeaders: Record<string, string | string[]> = {
           ...gsspExtraHeaders,
         };
-        if (isrRevalidateSeconds) {
+        if (isrRevalidateSeconds !== null) {
           if (scriptNonce) {
             extraHeaders["Cache-Control"] = ISR_NO_STORE_CACHE_CONTROL;
           } else {
-            extraHeaders["Cache-Control"] = buildMissIsrCacheControl(isrRevalidateSeconds);
+            extraHeaders["Cache-Control"] = buildMissIsrCacheControl(
+              isrRevalidateSeconds === false ? 31_536_000 : isrRevalidateSeconds,
+            );
             Object.assign(extraHeaders, buildCacheStateHeaders("MISS"));
           }
         }
@@ -1770,7 +1788,7 @@ hydrate();
         // If ISR is enabled, we need the full HTML for caching.
         // For ISR, re-render synchronously to get the complete HTML string.
         // This runs after the stream is already sent, so it doesn't affect TTFB.
-        if (!scriptNonce && isrRevalidateSeconds !== null && isrRevalidateSeconds > 0) {
+        if (!scriptNonce && isrRevalidateSeconds !== null) {
           let isrElement = AppComponent
             ? createElement(AppComponent, {
                 ...renderProps,
@@ -1786,8 +1804,13 @@ hydrate();
           );
           const isrHtml = `<!DOCTYPE html><html><head></head><body><div id="__next">${isrBodyHtml}</div>${allScripts}</body></html>`;
           const cacheKey = pagesIsrCacheKey(url.split("?")[0]);
-          await isrSet(cacheKey, buildPagesCacheValue(isrHtml, pageProps), isrRevalidateSeconds);
-          setRevalidateDuration(cacheKey, isrRevalidateSeconds);
+          const generation = pagesIsrGeneration ?? beginPagesIsrGeneration(cacheKey);
+          await commitPagesIsrGeneration(generation, () =>
+            isrSet(cacheKey, buildPagesCacheValue(isrHtml, pageProps), isrRevalidateSeconds),
+          );
+          if (typeof isrRevalidateSeconds === "number") {
+            setRevalidateDuration(cacheKey, isrRevalidateSeconds);
+          }
         }
       } catch (e) {
         // ssrFixStacktrace() is specific to ssrLoadModule and is not applicable

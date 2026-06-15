@@ -23,6 +23,11 @@ import { fnv1a52 } from "../utils/hash.js";
 import { readStreamAsText } from "../utils/text-stream.js";
 import { callDocumentGetInitialProps } from "./document-initial-head.js";
 import { appendAssetDeploymentIdQuery } from "../utils/deployment-id.js";
+import {
+  beginPagesIsrGeneration,
+  commitPagesIsrGeneration,
+  type PagesIsrGeneration,
+} from "./isr-cache.js";
 
 // ---------------------------------------------------------------------------
 // Bot / crawler detection for Pages Router edge-runtime SSR
@@ -166,12 +171,13 @@ type RenderPagesPageResponseOptions = {
   gsspRes: PagesGsspResponse | null;
   isrCacheKey: (router: string, pathname: string) => string;
   expireSeconds?: number;
-  isrRevalidateSeconds: number | null;
+  isrRevalidateSeconds: number | false | null;
+  isrGeneration?: PagesIsrGeneration | null;
   awaitIsrCacheWrite?: boolean;
   isrSet: (
     key: string,
     data: CachedPagesValue,
-    revalidateSeconds: number,
+    revalidateSeconds: number | false,
     tags?: string[],
     expireSeconds?: number,
   ) => Promise<void>;
@@ -405,13 +411,12 @@ async function reportPagesIsrCacheWriteError(
   }
 }
 
-const pendingPagesIsrCacheWrites = new Map<string, Promise<void>>();
-
 function schedulePagesIsrCacheWrite(options: {
   cacheKey: string;
   expireSeconds?: number;
   pageData: Record<string, unknown>;
-  revalidateSeconds: number;
+  revalidateSeconds: number | false;
+  generation: PagesIsrGeneration;
   routePattern: string;
   shellPrefix: string;
   shellSuffix: string;
@@ -419,10 +424,8 @@ function schedulePagesIsrCacheWrite(options: {
   stream: ReadableStream<Uint8Array>;
   setCache: RenderPagesPageResponseOptions["isrSet"];
 }): Promise<void> {
-  const bodyHtmlPromise = readStreamAsText(options.stream);
-  const previousWrite = pendingPagesIsrCacheWrites.get(options.cacheKey) ?? Promise.resolve();
-  const cacheWritePromise = Promise.all([previousWrite, bodyHtmlPromise])
-    .then(([, bodyHtml]) =>
+  return readStreamAsText(options.stream).then((bodyHtml) =>
+    commitPagesIsrGeneration(options.generation, () =>
       options.setCache(
         options.cacheKey,
         {
@@ -436,19 +439,8 @@ function schedulePagesIsrCacheWrite(options: {
         undefined,
         options.expireSeconds,
       ),
-    )
-    .catch((error: unknown) =>
-      reportPagesIsrCacheWriteError(error, options.cacheKey, options.routePattern),
-    )
-    .finally(() => {
-      if (pendingPagesIsrCacheWrites.get(options.cacheKey) === cacheWritePromise) {
-        pendingPagesIsrCacheWrites.delete(options.cacheKey);
-      }
-    });
-
-  pendingPagesIsrCacheWrites.set(options.cacheKey, cacheWritePromise);
-  getRequestExecutionContext()?.waitUntil(cacheWritePromise);
-  return cacheWritePromise;
+    ).then(() => {}),
+  );
 }
 
 function applyGsspHeaders(
@@ -614,7 +606,7 @@ export async function renderPagesPageResponse(
     // later matches the cached __NEXT_DATA__ block via a bare <script> marker.
     !options.scriptNonce &&
     options.isrRevalidateSeconds !== null &&
-    options.isrRevalidateSeconds > 0
+    options.isrGeneration !== null
   ) {
     const cacheBodyStreamPair = bodyStream.tee();
     responseBodyStream = cacheBodyStreamPair[0];
@@ -627,6 +619,7 @@ export async function renderPagesPageResponse(
       expireSeconds: options.expireSeconds,
       pageData: options.pageProps,
       revalidateSeconds: options.isrRevalidateSeconds,
+      generation: options.isrGeneration ?? beginPagesIsrGeneration(cacheKey),
       routePattern: options.routePattern,
       setCache: options.isrSet,
       shellPrefix,
@@ -636,6 +629,11 @@ export async function renderPagesPageResponse(
     });
     if (options.awaitIsrCacheWrite) {
       await cacheWritePromise;
+    } else {
+      const backgroundCacheWrite = cacheWritePromise.catch((error: unknown) =>
+        reportPagesIsrCacheWriteError(error, cacheKey, options.routePattern),
+      );
+      getRequestExecutionContext()?.waitUntil(backgroundCacheWrite);
     }
   }
 
@@ -656,14 +654,17 @@ export async function renderPagesPageResponse(
 
   if (options.scriptNonce) {
     responseHeaders.set("Cache-Control", ISR_NO_STORE_CACHE_CONTROL);
-  } else if (options.isrRevalidateSeconds) {
+  } else if (options.isrRevalidateSeconds !== null) {
     // Fresh ISR (MISS) response: route through the CDN adapter so edge adapters
     // emit CDN-Cache-Control + a path-based Cache-Tag (matching revalidatePath,
     // which Pages Router invalidation uses) while the default emits Cache-Control.
     const isrPathname = options.routeUrl.split("?")[0];
     const stem = isrPathname.endsWith("/") ? isrPathname.slice(0, -1) : isrPathname;
     applyCdnResponseHeaders(responseHeaders, {
-      cacheControl: buildMissIsrCacheControl(options.isrRevalidateSeconds, options.expireSeconds),
+      cacheControl: buildMissIsrCacheControl(
+        options.isrRevalidateSeconds === false ? 31_536_000 : options.isrRevalidateSeconds,
+        options.expireSeconds,
+      ),
       tags: [encodeCacheTag(`_N_T_${stem || "/"}`)],
     });
     setCacheStateHeaders(responseHeaders, "MISS");

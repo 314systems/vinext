@@ -17,6 +17,8 @@ import {
   isrGet,
   isrSet,
   buildPagesCacheValue,
+  beginPagesIsrGeneration,
+  commitPagesIsrGeneration,
   buildAppPageCacheValue,
   normalizeMountedSlotsHeader,
   setRevalidateDuration,
@@ -423,6 +425,49 @@ describe("ISR expire ceiling", () => {
     });
 
     await expect(isrGet("expired-handler-entry")).resolves.toBeNull();
+  });
+
+  it("replaces a prior numeric TTL with never-revalidate metadata", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1_000);
+
+    await isrSet("ttl-transition", buildPagesCacheValue("<html>numeric</html>", {}), 1);
+    await isrSet("ttl-transition", buildPagesCacheValue("<html>static</html>", {}), false);
+
+    vi.setSystemTime(10_000);
+    const entry = await isrGet("ttl-transition");
+    expect(entry?.isStale).toBe(false);
+    expect(entry?.value.cacheControl?.revalidate).toBe(false);
+    expect(entry?.value.value).toEqual(
+      expect.objectContaining({ kind: "PAGES", html: "<html>static</html>" }),
+    );
+  });
+});
+
+describe("Pages ISR generation coordination", () => {
+  it("skips a stale write when a later on-demand generation finishes first", async () => {
+    const key = "pages:coordination-stale-first";
+    const writes: string[] = [];
+    const staleGeneration = beginPagesIsrGeneration(key);
+    let finishStaleRender: (() => void) | undefined;
+    const staleRender = new Promise<void>((resolve) => {
+      finishStaleRender = resolve;
+    });
+
+    const staleCommit = staleRender.then(() =>
+      commitPagesIsrGeneration(staleGeneration, async () => {
+        writes.push("stale");
+      }),
+    );
+
+    const onDemandGeneration = beginPagesIsrGeneration(key);
+    await commitPagesIsrGeneration(onDemandGeneration, async () => {
+      writes.push("on-demand");
+    });
+    finishStaleRender?.();
+
+    await expect(staleCommit).resolves.toBe(false);
+    expect(writes).toEqual(["on-demand"]);
   });
 });
 

@@ -57,7 +57,7 @@ function createCommonOptions() {
     async (
       _key: string,
       _data: CachedPagesValue,
-      _revalidateSeconds: number,
+      _revalidateSeconds: number | false,
       _tags?: string[],
       _expireSeconds?: number,
     ) => {},
@@ -278,6 +278,39 @@ describe("pages page response", () => {
     const response = await responsePromise;
     expect(settled).toBe(true);
     await expect(response.text()).resolves.toContain("<div>live-body</div>");
+  });
+
+  it("propagates awaited on-demand ISR cache write failures", async () => {
+    const common = createCommonOptions();
+    common.isrSet.mockRejectedValue(new Error("cache write failed"));
+
+    await expect(
+      renderPagesPageResponse({
+        ...common.options,
+        awaitIsrCacheWrite: true,
+        isrRevalidateSeconds: 60,
+      }),
+    ).rejects.toThrow("cache write failed");
+  });
+
+  it("uses one-year cache-control compatibility for false revalidate metadata", async () => {
+    const common = createCommonOptions();
+
+    const response = await renderPagesPageResponse({
+      ...common.options,
+      awaitIsrCacheWrite: true,
+      isrRevalidateSeconds: false,
+    });
+
+    expect(response.headers.get("cache-control")).toBe("s-maxage=31536000, stale-while-revalidate");
+    await response.text();
+    expect(common.isrSet).toHaveBeenCalledWith(
+      "pages:/posts/post",
+      expect.any(Object),
+      false,
+      undefined,
+      undefined,
+    );
   });
 
   it("orders an on-demand cache write after an earlier asynchronous write", async () => {

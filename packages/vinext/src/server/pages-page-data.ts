@@ -6,7 +6,13 @@ import type { CachedPagesValue, CacheControlMetadata } from "vinext/shims/cache"
 import { applyCdnResponseHeaders } from "./cache-control.js";
 import { decideIsr } from "./isr-decision.js";
 import { buildCacheStateHeaders } from "./cache-headers.js";
-import { buildPagesCacheValue, type ISRCacheEntry } from "./isr-cache.js";
+import {
+  beginPagesIsrGeneration,
+  buildPagesCacheValue,
+  commitPagesIsrGeneration,
+  type ISRCacheEntry,
+  type PagesIsrGeneration,
+} from "./isr-cache.js";
 import {
   buildPagesNextDataScript,
   etagMatches,
@@ -154,7 +160,7 @@ export type ResolvePagesPageDataOptions = {
   isrSet: (
     key: string,
     data: CachedPagesValue,
-    revalidateSeconds: number,
+    revalidateSeconds: number | false,
     tags?: string[],
     expireSeconds?: number,
   ) => Promise<void>;
@@ -240,7 +246,8 @@ export type ResolvePagesPageDataOptions = {
 type ResolvePagesPageDataRenderResult = {
   kind: "render";
   gsspRes: PagesGsspResponse | null;
-  isrRevalidateSeconds: number | null;
+  isrRevalidateSeconds: number | false | null;
+  isrGeneration: PagesIsrGeneration | null;
   pageProps: Record<string, unknown>;
   props: PagesRenderProps;
   /**
@@ -686,6 +693,7 @@ export async function resolvePagesPageData(
         kind: "render",
         gsspRes: null,
         isrRevalidateSeconds: null,
+        isrGeneration: null,
         pageProps,
         props: renderProps,
         isFallback: true,
@@ -756,11 +764,15 @@ export async function resolvePagesPageData(
     gsspRes = res;
   }
 
-  let isrRevalidateSeconds: number | null = null;
+  let isrRevalidateSeconds: number | false | null = null;
+  let isrGeneration: PagesIsrGeneration | null = null;
 
   if (typeof options.pageModule.getStaticProps === "function") {
     const pathname = options.routeUrl.split("?")[0];
     const cacheKey = options.isrCacheKey("pages", pathname);
+    if (options.isOnDemandRevalidate) {
+      isrGeneration = beginPagesIsrGeneration(cacheKey);
+    }
     const cached = await options.isrGet(cacheKey);
     const cachedValue = cached?.value.value;
 
@@ -812,6 +824,7 @@ export async function resolvePagesPageData(
       options.triggerBackgroundRegeneration(
         cacheKey,
         async function () {
+          const generation = beginPagesIsrGeneration(cacheKey);
           return options.runInFreshUnifiedContext(async () => {
             options.applyRequestContexts();
             // Rebuild the full App render props before re-running getStaticProps
@@ -849,9 +862,9 @@ export async function resolvePagesPageData(
             const freshRevalidateSeconds =
               typeof freshResult?.revalidate === "number" && freshResult.revalidate > 0
                 ? freshResult.revalidate
-                : cached.value.cacheControl?.revalidate;
+                : false;
 
-            if (freshResult?.props && freshRevalidateSeconds && freshRevalidateSeconds > 0) {
+            if (freshResult?.props) {
               const freshHtml = await renderPagesIsrHtml({
                 buildId: options.buildId,
                 cachedHtml: cachedValue.html,
@@ -867,12 +880,14 @@ export async function resolvePagesPageData(
                 vinext: options.vinext,
               });
 
-              await options.isrSet(
-                cacheKey,
-                buildPagesCacheValue(freshHtml, freshRenderProps, options.statusCode),
-                freshRevalidateSeconds,
-                undefined,
-                options.expireSeconds,
+              await commitPagesIsrGeneration(generation, () =>
+                options.isrSet(
+                  cacheKey,
+                  buildPagesCacheValue(freshHtml, freshRenderProps, options.statusCode),
+                  freshRevalidateSeconds,
+                  undefined,
+                  options.expireSeconds,
+                ),
               );
             }
           });
@@ -911,6 +926,7 @@ export async function resolvePagesPageData(
       isUnknownRecord(cachedValue.pageData)
         ? cachedValue.pageData
         : null;
+    isrGeneration ??= beginPagesIsrGeneration(cacheKey);
     if (!generatedPageData) {
       const shortCircuit = await loadForegroundAppInitialRenderProps();
       if (shortCircuit) return shortCircuit;
@@ -965,26 +981,28 @@ export async function resolvePagesPageData(
     if (typeof result?.revalidate === "number" && result.revalidate > 0) {
       isrRevalidateSeconds = result.revalidate;
     } else if (options.isOnDemandRevalidate) {
-      isrRevalidateSeconds = cached?.value.cacheControl?.revalidate ?? 31_536_000;
+      isrRevalidateSeconds = false;
     } else if (cachedValue?.kind === "PAGES" && cachedValue.generatedFromDataRequest) {
       isrRevalidateSeconds = cached?.value.cacheControl?.revalidate ?? 31_536_000;
     }
 
     if (shouldPersistFallbackData) {
       const revalidateSeconds = isrRevalidateSeconds ?? 31_536_000;
-      await options.isrSet(
-        cacheKey,
-        {
-          kind: "PAGES",
-          html: "",
-          pageData: renderProps,
-          generatedFromDataRequest: true,
-          headers: undefined,
-          status: undefined,
-        },
-        revalidateSeconds,
-        undefined,
-        options.expireSeconds,
+      await commitPagesIsrGeneration(isrGeneration, () =>
+        options.isrSet(
+          cacheKey,
+          {
+            kind: "PAGES",
+            html: "",
+            pageData: renderProps,
+            generatedFromDataRequest: true,
+            headers: undefined,
+            status: undefined,
+          },
+          revalidateSeconds,
+          undefined,
+          options.expireSeconds,
+        ),
       );
     }
   }
@@ -1036,6 +1054,7 @@ export async function resolvePagesPageData(
     kind: "render",
     gsspRes,
     isrRevalidateSeconds,
+    isrGeneration,
     pageProps,
     props: renderProps,
     isFallback: false,
