@@ -48,6 +48,20 @@ async function createFixture(): Promise<string> {
           "react-server": "./react-server.js",
           default: "./default.js",
         },
+        "./node-first": {
+          node: "./node.js",
+          "node-addons": "./node-addons.js",
+          "edge-light": "./edge-light.js",
+          browser: "./browser.js",
+          default: "./default.js",
+        },
+        "./module-kind": {
+          "edge-light": {
+            import: "./edge-import.js",
+            require: "./edge-require.cjs",
+          },
+          default: "./default.js",
+        },
       },
     }),
   );
@@ -57,6 +71,7 @@ async function createFixture(): Promise<string> {
     "default",
     "edge-light",
     "node",
+    "node-addons",
     "react-server",
     "worker",
     "workerd",
@@ -66,6 +81,8 @@ async function createFixture(): Promise<string> {
       `export default ${JSON.stringify(condition)};`,
     );
   }
+  await writeFile(path.join(packageDir, "edge-import.js"), 'export default "edge-import";');
+  await writeFile(path.join(packageDir, "edge-require.cjs"), 'module.exports = "edge-require";');
 
   return root;
 }
@@ -100,6 +117,35 @@ async function buildConditions(
     logLevel: "silent",
     resolve: resolveConditions ? { conditions: resolveConditions } : undefined,
     plugins: [entryPlugin, runtimeExportConditionsPlugin()],
+    ssr: { noExternal: true },
+    build: {
+      write: false,
+      ssr: true,
+      minify: false,
+      rollupOptions: { input: entryId },
+    },
+  });
+  if (!Array.isArray(result) && !("output" in result)) {
+    throw new Error("Unexpected watch result from one-shot build");
+  }
+  const output = Array.isArray(result) ? result[0]!.output : result.output;
+  return output.find((item) => item.type === "chunk")!.code;
+}
+
+async function buildModuleKind(root: string, kind: "import" | "require"): Promise<string> {
+  const entryPath = path.join(root, kind === "import" ? "entry.mjs" : "entry.cjs");
+  const source =
+    kind === "import"
+      ? 'import value from "library-with-exports/module-kind"; console.log(value);'
+      : 'const value = require("library-with-exports/module-kind"); console.log(value);';
+  await writeFile(entryPath, source);
+  const entryId = withRuntimeExportCondition(entryPath, "edge-light");
+
+  const result = await build({
+    root,
+    configFile: false,
+    logLevel: "silent",
+    plugins: [runtimeExportConditionsPlugin()],
     ssr: { noExternal: true },
     build: {
       write: false,
@@ -153,6 +199,88 @@ describe("runtime-specific package export conditions", () => {
     expect(code).not.toContain('"serverFavoringEdge":"worker"');
     expect(code).not.toContain('"serverFavoringEdge":"workerd"');
   });
+
+  it("removes node and node-addons from edge condition graphs", async () => {
+    const root = await createFixture();
+    const virtualEntry = "\0runtime-export-node-first";
+    const entryId = withRuntimeExportCondition(virtualEntry, "edge-light");
+    const result = await build({
+      root,
+      configFile: false,
+      logLevel: "silent",
+      resolve: {
+        conditions: ["module", "node", "node-addons", "edge-light", "browser"],
+      },
+      plugins: [
+        {
+          name: "runtime-export-node-first-entry",
+          resolveId(source) {
+            return source === entryId ? source : null;
+          },
+          load(id) {
+            return id === entryId
+              ? 'import value from "library-with-exports/node-first"; console.log(value);'
+              : null;
+          },
+        },
+        runtimeExportConditionsPlugin(),
+      ],
+      ssr: { noExternal: true },
+      build: { write: false, ssr: true, minify: false, rollupOptions: { input: entryId } },
+    });
+    if (!Array.isArray(result) && !("output" in result)) {
+      throw new Error("Unexpected watch result from one-shot build");
+    }
+    const output = Array.isArray(result) ? result[0]!.output : result.output;
+    const code = output.find((item) => item.type === "chunk")!.code;
+    expect(code).toContain('console.log("edge-light")');
+    expect(code).not.toContain('console.log("node")');
+    expect(code).not.toContain('console.log("node-addons")');
+  });
+
+  it("preserves import versus require package export branches", async () => {
+    const root = await createFixture();
+    expect(await buildModuleKind(root, "import")).toContain('console.log("edge-import")');
+    expect(await buildModuleKind(root, "require")).toContain('module.exports = "edge-require"');
+  });
+
+  it("does not append runtime markers to unresolved bare externals", async () => {
+    const root = await createFixture();
+    const virtualEntry = "\0runtime-export-external";
+    const entryId = withRuntimeExportCondition(virtualEntry, "edge-light-react-server");
+    const result = await build({
+      root,
+      configFile: false,
+      logLevel: "silent",
+      plugins: [
+        {
+          name: "runtime-export-external-entry",
+          resolveId(source) {
+            return source === entryId ? source : null;
+          },
+          load(id) {
+            return id === entryId
+              ? 'import external from "external-only"; console.log(external);'
+              : null;
+          },
+        },
+        runtimeExportConditionsPlugin(),
+      ],
+      build: {
+        write: false,
+        ssr: true,
+        minify: false,
+        rolldownOptions: { external: ["external-only"], input: entryId },
+      },
+    });
+    if (!Array.isArray(result) && !("output" in result)) {
+      throw new Error("Unexpected watch result from one-shot build");
+    }
+    const output = Array.isArray(result) ? result[0]!.output : result.output;
+    const code = output.find((item) => item.type === "chunk")!.code;
+    expect(code).toContain('from "external-only"');
+    expect(code).not.toContain("external-only?__vinext_runtime_condition");
+  });
 });
 
 async function symlinkWorkspaceNodeModules(root: string): Promise<void> {
@@ -176,7 +304,8 @@ async function createVinextFixture(): Promise<string> {
   await writeFile(path.join(root, "package.json"), JSON.stringify({ type: "module" }));
   await writeFile(
     path.join(root, "app", "layout.tsx"),
-    `export default function Layout({ children }: { children: React.ReactNode }) {
+    `export const runtime = "edge";
+export default function Layout({ children }: { children: React.ReactNode }) {
   return <html><body>{children}</body></html>;
 }`,
   );
@@ -196,6 +325,15 @@ export function GET() {
 import serverFavoringBrowser from "library-with-exports/server-favoring-browser";
 import serverFavoringEdge from "library-with-exports/server-favoring-edge";
 export const runtime = "edge";
+export function GET() {
+  return Response.json({ react, serverFavoringBrowser, serverFavoringEdge });
+}`,
+  );
+  await writeFile(
+    path.join(root, "app", "inherited-edge-route", "route.ts"),
+    `import react from "library-with-exports/react";
+import serverFavoringBrowser from "library-with-exports/server-favoring-browser";
+import serverFavoringEdge from "library-with-exports/server-favoring-edge";
 export function GET() {
   return Response.json({ react, serverFavoringBrowser, serverFavoringEdge });
 }`,
@@ -292,6 +430,15 @@ describe("vinext runtime-specific package export integration", () => {
 
     const edgeResponse = await handler(new Request("http://localhost/edge-route"));
     expect(await edgeResponse.json()).toEqual({
+      react: "react-server",
+      serverFavoringBrowser: "browser",
+      serverFavoringEdge: "edge-light",
+    });
+
+    const inheritedEdgeResponse = await handler(
+      new Request("http://localhost/inherited-edge-route"),
+    );
+    expect(await inheritedEdgeResponse.json()).toEqual({
       react: "react-server",
       serverFavoringBrowser: "browser",
       serverFavoringEdge: "edge-light",

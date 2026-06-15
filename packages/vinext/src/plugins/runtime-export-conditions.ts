@@ -1,5 +1,5 @@
 import { builtinModules } from "node:module";
-import { createIdResolver, type Environment, type Plugin, type ResolvedConfig } from "vite";
+import { createIdResolver, type Plugin, type ResolvedConfig } from "vite";
 
 export type RuntimeExportCondition = "edge-light" | "edge-light-react-server" | "middleware";
 
@@ -46,7 +46,9 @@ function runtimeConditions(
   conditions.add("browser");
 
   for (const value of environmentConditions) {
-    if (value !== "worker" && value !== "workerd") conditions.add(value);
+    if (value !== "worker" && value !== "workerd" && value !== "node" && value !== "node-addons") {
+      conditions.add(value);
+    }
   }
 
   if (config.isProduction) conditions.add("production");
@@ -56,10 +58,7 @@ function runtimeConditions(
 
 export function runtimeExportConditionsPlugin(): Plugin {
   let config: ResolvedConfig;
-  const resolvers = new Map<
-    RuntimeExportCondition,
-    (environment: Environment, id: string, importer?: string) => Promise<string | undefined>
-  >();
+  const resolvers = new Map<string, ReturnType<typeof createIdResolver>>();
 
   return {
     name: "vinext:runtime-export-conditions",
@@ -69,7 +68,7 @@ export function runtimeExportConditionsPlugin(): Plugin {
       config = resolvedConfig;
     },
 
-    async resolveId(source, importer) {
+    async resolveId(source, importer, options) {
       const condition = readRuntimeExportCondition(source) ?? readRuntimeExportCondition(importer);
       if (condition === null) return null;
 
@@ -83,13 +82,22 @@ export function runtimeExportConditionsPlugin(): Plugin {
         environment.config.resolve.conditions,
         condition,
       );
-      let resolver = resolvers.get(condition);
+      const isRequire = options.kind === "require-call";
+      const resolverKey = `${condition}:${isRequire ? "require" : "import"}:${conditions.join("\0")}`;
+      let resolver = resolvers.get(resolverKey);
       if (!resolver) {
-        resolver = createIdResolver(config, { conditions });
-        resolvers.set(condition, resolver);
+        resolver = createIdResolver(config, { conditions, isRequire });
+        resolvers.set(resolverKey, resolver);
       }
       const resolved = await resolver(environment, cleanSource, cleanImporter);
       if (!resolved) return null;
+      if (
+        !resolved.startsWith("\0") &&
+        !resolved.startsWith("/") &&
+        !/^[A-Za-z]:[\\/]/.test(resolved)
+      ) {
+        return resolved;
+      }
 
       return withRuntimeExportCondition(resolved, condition);
     },
