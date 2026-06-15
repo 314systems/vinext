@@ -153,7 +153,7 @@ export async function isrGet(key: string): Promise<ISRCacheEntry | null> {
   // Page-level reads go through the CDN cache adapter. The default adapter
   // reads the data cache; an edge adapter may return null so the CDN serves.
   const result = await getCdnCacheAdapter().get(key);
-  if (!result || !result.value) return null;
+  if (!result) return null;
   // Built-in handlers hard-delete expired entries and return null, but custom
   // CacheHandler implementations may surface expiry explicitly.
   if (result.cacheState === "expired") return null;
@@ -169,7 +169,7 @@ export async function isrGet(key: string): Promise<ISRCacheEntry | null> {
  */
 export async function isrSet(
   key: string,
-  data: IncrementalCacheValue,
+  data: IncrementalCacheValue | null,
   revalidateSeconds: number | false,
   tags?: string[],
   expireSeconds?: number,
@@ -191,6 +191,9 @@ export type PagesIsrGeneration = {
   kind: "on-demand" | "ordinary" | "stale";
   version: number;
   finished: boolean;
+  authoritativeTurn: Promise<void>;
+  resolveAuthoritative: (() => void) | null;
+  rejectAuthoritative: ((error: unknown) => void) | null;
 };
 
 type PagesIsrCoordinationState = {
@@ -199,6 +202,7 @@ type PagesIsrCoordinationState = {
   authoritativeVersion: number;
   version: number;
   commitTail: Promise<void>;
+  authoritativeTail: Promise<void>;
 };
 
 const _PAGES_ISR_COORDINATION_KEY = Symbol.for("vinext.pagesIsr.coordination");
@@ -218,6 +222,7 @@ export function beginPagesIsrGeneration(
     authoritativeVersion: 0,
     version: 0,
     commitTail: Promise.resolve(),
+    authoritativeTail: Promise.resolve(),
   };
   if (kind !== "on-demand" && state.authoritativeInFlight > 0) return null;
   state.version += 1;
@@ -226,18 +231,47 @@ export function beginPagesIsrGeneration(
     state.authoritativeInFlight += 1;
     state.authoritativeVersion = state.version;
   }
+  const authoritativeTurn = kind === "on-demand" ? state.authoritativeTail : Promise.resolve();
+  let resolveAuthoritative: (() => void) | null = null;
+  let rejectAuthoritative: ((error: unknown) => void) | null = null;
+  if (kind === "on-demand") {
+    const authoritativeResult = new Promise<void>((resolve, reject) => {
+      resolveAuthoritative = resolve;
+      rejectAuthoritative = reject;
+    });
+    state.authoritativeTail = authoritativeTurn.catch(() => {}).then(() => authoritativeResult);
+    void state.authoritativeTail.catch(() => {});
+  }
   pagesIsrCoordination.set(key, state);
-  return { key, kind, version: state.version, finished: false };
+  return {
+    key,
+    kind,
+    version: state.version,
+    finished: false,
+    authoritativeTurn,
+    resolveAuthoritative,
+    rejectAuthoritative,
+  };
+}
+
+export async function waitForPagesIsrGeneration(generation: PagesIsrGeneration | null) {
+  await generation?.authoritativeTurn;
 }
 
 function finishPagesIsrGeneration(
   generation: PagesIsrGeneration,
   state: PagesIsrCoordinationState,
+  error?: unknown,
 ): void {
   if (generation.finished) return;
   generation.finished = true;
   state.active -= 1;
-  if (generation.kind === "on-demand") state.authoritativeInFlight -= 1;
+  if (generation.kind === "on-demand") {
+    state.authoritativeInFlight -= 1;
+    if (error === undefined) generation.resolveAuthoritative?.();
+    else generation.rejectAuthoritative?.(error);
+    if (state.authoritativeInFlight === 0) state.authoritativeTail = Promise.resolve();
+  }
   const cleanupTail = state.commitTail;
   void cleanupTail.then(() => {
     if (
@@ -250,11 +284,14 @@ function finishPagesIsrGeneration(
   });
 }
 
-export function cancelPagesIsrGeneration(generation: PagesIsrGeneration | null): void {
+export function cancelPagesIsrGeneration(
+  generation: PagesIsrGeneration | null,
+  error?: unknown,
+): void {
   if (!generation) return;
   const state = pagesIsrCoordination.get(generation.key);
   if (!state) return;
-  finishPagesIsrGeneration(generation, state);
+  finishPagesIsrGeneration(generation, state, error);
 }
 
 export function commitPagesIsrGeneration(
@@ -271,13 +308,19 @@ export function commitPagesIsrGeneration(
       if (generation.kind !== "on-demand" && state.authoritativeVersion > generation.version) {
         return false;
       }
-      if (generation.kind === "on-demand" && state.authoritativeVersion !== generation.version) {
-        return false;
-      }
       await write();
       return true;
     })
-    .finally(() => finishPagesIsrGeneration(generation, state));
+    .then(
+      (result) => {
+        finishPagesIsrGeneration(generation, state);
+        return result;
+      },
+      (error) => {
+        finishPagesIsrGeneration(generation, state, error);
+        throw error;
+      },
+    );
   state.commitTail = commit.then(
     () => {},
     () => {},

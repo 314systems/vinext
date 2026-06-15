@@ -56,7 +56,7 @@ function createCommonOptions() {
   const isrSet = vi.fn(
     async (
       _key: string,
-      _data: CachedPagesValue,
+      _data: CachedPagesValue | null,
       _revalidateSeconds: number | false,
       _tags?: string[],
       _expireSeconds?: number,
@@ -318,6 +318,7 @@ describe("pages page response", () => {
     let finishFirstWrite: (() => void) | undefined;
     const writes: string[] = [];
     common.isrSet.mockImplementation(async (_key, value) => {
+      if (!value) throw new Error("expected Pages cache value");
       const pageData = value.pageData as Record<string, unknown>;
       const title = String(pageData.title);
       writes.push(title);

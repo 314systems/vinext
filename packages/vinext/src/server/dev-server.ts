@@ -22,6 +22,7 @@ import {
   beginPagesIsrGeneration,
   cancelPagesIsrGeneration,
   commitPagesIsrGeneration,
+  waitForPagesIsrGeneration,
   triggerBackgroundRegeneration,
   setRevalidateDuration,
   getRevalidateDuration,
@@ -575,6 +576,7 @@ export function createSSRHandler(
     const requestContext = createRequestContext();
     return runWithRequestContext(requestContext, async () => {
       ensureFetchPatch();
+      let pagesIsrGeneration: ReturnType<typeof beginPagesIsrGeneration> | null = null;
       try {
         await _alsRegistration;
 
@@ -696,7 +698,6 @@ export function createSSRHandler(
         let pageProps: Record<string, unknown> = {};
         let renderProps: Record<string, unknown> = { pageProps };
         let isrRevalidateSeconds: number | false | null = null;
-        let pagesIsrGeneration: ReturnType<typeof beginPagesIsrGeneration> | null = null;
         // Set when `getStaticPaths: { fallback: true }` is configured and the
         // requested path is NOT in the pre-rendered list. Triggers the loading
         // shell render below: `getStaticProps`/`getServerSideProps` are skipped
@@ -1005,6 +1006,21 @@ export function createSSRHandler(
           );
           if (isOnDemandRevalidate) {
             pagesIsrGeneration = beginPagesIsrGeneration(cacheKey, "on-demand");
+            await waitForPagesIsrGeneration(pagesIsrGeneration);
+          }
+
+          if (!isOnDemandRevalidate && cached && !cached.isStale && cached.value.value === null) {
+            await renderErrorPage(
+              server,
+              runner,
+              req,
+              res,
+              url,
+              pagesDir,
+              404,
+              routerShim.wrapWithRouterContext,
+            );
+            return;
           }
 
           if (
@@ -1334,6 +1350,15 @@ export function createSSRHandler(
             return;
           }
           if (result && "notFound" in result && result.notFound) {
+            if (isOnDemandRevalidate) {
+              const revalidateSeconds =
+                typeof result.revalidate === "number" && result.revalidate > 0
+                  ? result.revalidate
+                  : false;
+              await commitPagesIsrGeneration(pagesIsrGeneration, () =>
+                isrSet(cacheKey, null, revalidateSeconds),
+              );
+            }
             if (isDataReq) {
               // Mirror Next.js pages-handler.ts: set x-nextjs-deployment-id on
               // `_next/data` notFound exits for deployment-skew protection. Fixes #1829.
@@ -1819,6 +1844,7 @@ hydrate();
           }
         }
       } catch (e) {
+        cancelPagesIsrGeneration(pagesIsrGeneration, e);
         // ssrFixStacktrace() is specific to ssrLoadModule and is not applicable
         // when using ModuleRunner — no stack trace fixup is needed here.
         console.error(e);
@@ -1866,7 +1892,7 @@ hydrate();
           res.end(`Internal Server Error: ${(fallbackErr as Error).message}`);
         }
       } finally {
-        // Cleanup is handled by unified ALS scope unwinding.
+        cancelPagesIsrGeneration(pagesIsrGeneration);
       }
     });
   };

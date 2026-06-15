@@ -176,7 +176,7 @@ type RenderPagesPageResponseOptions = {
   awaitIsrCacheWrite?: boolean;
   isrSet: (
     key: string,
-    data: CachedPagesValue,
+    data: CachedPagesValue | null,
     revalidateSeconds: number | false,
     tags?: string[],
     expireSeconds?: number,

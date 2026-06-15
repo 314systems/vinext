@@ -11,6 +11,7 @@ import {
   buildPagesCacheValue,
   cancelPagesIsrGeneration,
   commitPagesIsrGeneration,
+  waitForPagesIsrGeneration,
   type ISRCacheEntry,
   type PagesIsrGeneration,
 } from "./isr-cache.js";
@@ -160,7 +161,7 @@ export type ResolvePagesPageDataOptions = {
   isrGet: (key: string) => Promise<ISRCacheEntry | null>;
   isrSet: (
     key: string,
-    data: CachedPagesValue,
+    data: CachedPagesValue | null,
     revalidateSeconds: number | false,
     tags?: string[],
     expireSeconds?: number,
@@ -773,9 +774,25 @@ export async function resolvePagesPageData(
     const cacheKey = options.isrCacheKey("pages", pathname);
     if (options.isOnDemandRevalidate) {
       isrGeneration = beginPagesIsrGeneration(cacheKey, "on-demand");
+      try {
+        await waitForPagesIsrGeneration(isrGeneration);
+      } catch (error) {
+        cancelPagesIsrGeneration(isrGeneration, error);
+        throw error;
+      }
     }
-    const cached = await options.isrGet(cacheKey);
+    let cached: ISRCacheEntry | null;
+    try {
+      cached = await options.isrGet(cacheKey);
+    } catch (error) {
+      cancelPagesIsrGeneration(isrGeneration, error);
+      throw error;
+    }
     const cachedValue = cached?.value.value;
+
+    if (!options.isOnDemandRevalidate && cached && !cached.isStale && cachedValue === null) {
+      return buildPagesNotFoundResult(options);
+    }
 
     // On-demand revalidation (`res.revalidate()`) must regenerate the entry
     // synchronously with `revalidateReason: "on-demand"`, so the fresh/stale
@@ -970,7 +987,7 @@ export async function resolvePagesPageData(
                 : "stale",
           });
     } catch (error) {
-      cancelPagesIsrGeneration(isrGeneration);
+      cancelPagesIsrGeneration(isrGeneration, error);
       throw error;
     }
 
@@ -993,7 +1010,17 @@ export async function resolvePagesPageData(
     }
 
     if (result?.notFound) {
-      cancelPagesIsrGeneration(isrGeneration);
+      if (options.isOnDemandRevalidate) {
+        const revalidateSeconds =
+          typeof result.revalidate === "number" && result.revalidate > 0
+            ? result.revalidate
+            : false;
+        await commitPagesIsrGeneration(isrGeneration, () =>
+          options.isrSet(cacheKey, null, revalidateSeconds, undefined, options.expireSeconds),
+        );
+      } else {
+        cancelPagesIsrGeneration(isrGeneration);
+      }
       return buildPagesNotFoundResult(options);
     }
 
@@ -1006,7 +1033,12 @@ export async function resolvePagesPageData(
     // .nextjs-ref/packages/next/src/lib/is-serializable-props.ts. Tracked in
     // vinext#1478.
     if (result?.props !== undefined) {
-      isSerializableProps(options.routePattern, "getStaticProps", pageProps);
+      try {
+        isSerializableProps(options.routePattern, "getStaticProps", pageProps);
+      } catch (error) {
+        cancelPagesIsrGeneration(isrGeneration, error);
+        throw error;
+      }
     }
 
     if (typeof result?.revalidate === "number" && result.revalidate > 0) {

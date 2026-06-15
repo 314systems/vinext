@@ -134,10 +134,32 @@ export async function getStaticProps({ revalidateReason }) {
     );
     await fs.writeFile(
       path.join(tmpRoot, "pages", "not-found.tsx"),
-      `export default function Page() { return null; }
+      `let calls = 0;
+
+export default function Page() { return null; }
 
 export async function getStaticProps() {
+  calls += 1;
+  if (calls > 1) throw new Error("notFound tombstone was not reused");
   return { notFound: true };
+}
+`,
+    );
+    await fs.writeFile(
+      path.join(tmpRoot, "pages", "concurrent-failure.tsx"),
+      `let onDemandCalls = 0;
+
+export default function Page({ calls }) {
+  return <p id="calls">{calls}</p>;
+}
+
+export async function getStaticProps({ revalidateReason }) {
+  if (revalidateReason === "on-demand") {
+    onDemandCalls += 1;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    if (onDemandCalls === 1) throw new Error("first authoritative generation failed");
+  }
+  return { props: { calls: onDemandCalls }, revalidate: 60 };
 }
 `,
     );
@@ -213,5 +235,25 @@ export async function getStaticProps() {
     const notFound = await fetch(`${baseUrl}/not-found`, { method: "HEAD", headers });
     expect(notFound.status).toBe(404);
     expect(notFound.headers.get("x-nextjs-cache")).toBe("REVALIDATED");
+
+    const cachedNotFound = await fetch(`${baseUrl}/not-found`);
+    expect(cachedNotFound.status).toBe(404);
+  });
+
+  it("propagates a failed authoritative result to concurrent on-demand callers", async () => {
+    const headers = { [PRERENDER_REVALIDATE_HEADER]: revalidateSecret };
+    const [first, second] = await Promise.all([
+      fetch(`${baseUrl}/concurrent-failure`, { method: "HEAD", headers }),
+      fetch(`${baseUrl}/concurrent-failure`, { method: "HEAD", headers }),
+    ]);
+
+    expect(first.status).toBe(500);
+    expect(second.status).toBe(500);
+    expect(first.headers.get("x-nextjs-cache")).not.toBe("REVALIDATED");
+    expect(second.headers.get("x-nextjs-cache")).not.toBe("REVALIDATED");
+
+    const recovered = await fetch(`${baseUrl}/concurrent-failure`, { method: "HEAD", headers });
+    expect(recovered.status).toBe(200);
+    expect(recovered.headers.get("x-nextjs-cache")).toBe("REVALIDATED");
   });
 });

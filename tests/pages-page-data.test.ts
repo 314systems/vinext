@@ -379,6 +379,56 @@ describe("pages page data", () => {
     await expect(result.response.text()).resolves.toBe("{}");
   });
 
+  it("persists and awaits an on-demand notFound tombstone", async () => {
+    let releaseWrite: (() => void) | undefined;
+    const writePending = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    const isrSet = vi.fn(async () => writePending);
+    let settled = false;
+    const resultPromise = resolvePagesPageData(
+      createOptions({
+        isOnDemandRevalidate: true,
+        isrSet,
+        pageModule: {
+          async getStaticProps() {
+            return { notFound: true };
+          },
+        },
+      }),
+    ).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    await vi.waitFor(() => expect(isrSet).toHaveBeenCalledOnce());
+    expect(settled).toBe(false);
+    expect(isrSet).toHaveBeenCalledWith("pages:/posts/post", null, false, undefined, 300);
+    releaseWrite?.();
+
+    await expect(resultPromise).resolves.toEqual({ kind: "notFound" });
+  });
+
+  it("serves a persisted notFound tombstone without rerunning getStaticProps", async () => {
+    const getStaticProps = vi.fn(async () => ({ props: {} }));
+    const result = await resolvePagesPageData(
+      createOptions({
+        isrGet: vi.fn().mockResolvedValue({
+          isStale: false,
+          value: {
+            lastModified: 1,
+            cacheControl: { revalidate: false },
+            value: null,
+          },
+        }),
+        pageModule: { getStaticProps },
+      }),
+    );
+
+    expect(result).toEqual({ kind: "notFound" });
+    expect(getStaticProps).not.toHaveBeenCalled();
+  });
+
   it("returns JSON 404 envelope for data requests when getServerSideProps returns notFound", async () => {
     const result = await resolvePagesPageData(
       createOptions({

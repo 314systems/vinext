@@ -35,9 +35,11 @@ import {
   isrGet,
   isrSet,
   isrCacheKey,
+  cancelPagesIsrGeneration,
   triggerBackgroundRegeneration,
   PRERENDER_REVALIDATE_HEADER,
   isOnDemandRevalidateRequest,
+  type PagesIsrGeneration,
 } from "./isr-cache.js";
 import { getScriptNonceFromHeaderSources } from "./csp.js";
 import { reportRequestError } from "./instrumentation.js";
@@ -414,6 +416,8 @@ export function createPagesPageHandler(
 
     return runWithRequestContext(uCtx, async () => {
       ensureFetchPatch();
+      let ownedIsrGeneration: PagesIsrGeneration | null = null;
+      let renderFailure: unknown;
       try {
         const routePattern = patternToNextFormat(route.pattern);
         const renderStatusCode =
@@ -643,6 +647,7 @@ export function createPagesPageHandler(
         const gsspRes = pageDataResult.gsspRes;
         const isrRevalidateSeconds = pageDataResult.isrRevalidateSeconds;
         const isrGeneration = pageDataResult.isrGeneration;
+        ownedIsrGeneration = isrGeneration;
         const isFallbackRender = pageDataResult.isFallback === true;
 
         // Republish SSR context with isFallback flipped on so `useRouter().isFallback`
@@ -722,8 +727,12 @@ export function createPagesPageHandler(
           deploymentId: process.env.__VINEXT_DEPLOYMENT_ID || process.env.NEXT_DEPLOYMENT_ID,
         });
 
-        return finalizePagesResponse(
-          await renderPagesPageResponse({
+        const responseOwnsIsrGeneration =
+          !scriptNonce && isrRevalidateSeconds !== null && isrGeneration !== null;
+        if (responseOwnsIsrGeneration) ownedIsrGeneration = null;
+        let renderedResponse: Response;
+        try {
+          renderedResponse = await renderPagesPageResponse({
             assetTags,
             awaitIsrCacheWrite: isOnDemandRevalidate,
             buildId,
@@ -778,9 +787,14 @@ export function createPagesPageHandler(
             userAgent: request.headers.get("user-agent") ?? undefined,
             ifNoneMatch: request.headers.get("if-none-match") ?? undefined,
             requestCacheControl: request.headers.get("cache-control") ?? undefined,
-          }),
-        );
+          });
+        } catch (error) {
+          cancelPagesIsrGeneration(isrGeneration, error);
+          throw error;
+        }
+        return finalizePagesResponse(renderedResponse);
       } catch (e) {
+        renderFailure = e;
         console.error("[vinext] SSR error:", e);
         reportRequestError(
           e instanceof Error ? e : new Error(String(e)),
@@ -828,6 +842,8 @@ export function createPagesPageHandler(
           }
         }
         return new Response("Internal Server Error", { status: 500 });
+      } finally {
+        cancelPagesIsrGeneration(ownedIsrGeneration, renderFailure);
       }
     });
   }

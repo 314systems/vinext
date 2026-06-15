@@ -20,6 +20,7 @@ import {
   beginPagesIsrGeneration,
   cancelPagesIsrGeneration,
   commitPagesIsrGeneration,
+  waitForPagesIsrGeneration,
   buildAppPageCacheValue,
   normalizeMountedSlotsHeader,
   setRevalidateDuration,
@@ -443,6 +444,19 @@ describe("ISR expire ceiling", () => {
       expect.objectContaining({ kind: "PAGES", html: "<html>static</html>" }),
     );
   });
+
+  it("round-trips a Pages notFound tombstone", async () => {
+    await isrSet("pages:not-found-tombstone", null, false);
+
+    const entry = await isrGet("pages:not-found-tombstone");
+    expect(entry).toMatchObject({
+      isStale: false,
+      value: {
+        value: null,
+        cacheControl: { revalidate: false },
+      },
+    });
+  });
 });
 
 describe("Pages ISR generation coordination", () => {
@@ -478,6 +492,51 @@ describe("Pages ISR generation coordination", () => {
     expect(beginPagesIsrGeneration(key, "stale")).toBeNull();
 
     await expect(commitPagesIsrGeneration(onDemandGeneration, async () => {})).resolves.toBe(true);
+  });
+
+  it("serializes concurrent on-demand generations and preserves both results", async () => {
+    const key = "pages:coordination-concurrent-on-demand";
+    const writes: string[] = [];
+    const first = beginPagesIsrGeneration(key, "on-demand");
+    const second = beginPagesIsrGeneration(key, "on-demand");
+    let secondStarted = false;
+
+    const secondRun = (async () => {
+      await waitForPagesIsrGeneration(second);
+      secondStarted = true;
+      return commitPagesIsrGeneration(second, async () => {
+        writes.push("second");
+      });
+    })();
+
+    await Promise.resolve();
+    expect(secondStarted).toBe(false);
+    await expect(
+      commitPagesIsrGeneration(first, async () => {
+        writes.push("first");
+      }),
+    ).resolves.toBe(true);
+    await expect(secondRun).resolves.toBe(true);
+    expect(writes).toEqual(["first", "second"]);
+  });
+
+  it("propagates an authoritative failure to a queued on-demand generation", async () => {
+    const key = "pages:coordination-on-demand-failure";
+    const first = beginPagesIsrGeneration(key, "on-demand");
+    const second = beginPagesIsrGeneration(key, "on-demand");
+    const secondTurn = waitForPagesIsrGeneration(second);
+
+    await expect(
+      commitPagesIsrGeneration(first, async () => {
+        throw new Error("authoritative write failed");
+      }),
+    ).rejects.toThrow("authoritative write failed");
+    await expect(secondTurn).rejects.toThrow("authoritative write failed");
+    cancelPagesIsrGeneration(second, new Error("authoritative write failed"));
+
+    const later = beginPagesIsrGeneration(key, "on-demand");
+    await expect(waitForPagesIsrGeneration(later)).resolves.toBeUndefined();
+    cancelPagesIsrGeneration(later);
   });
 
   it("cleans failed and cancelled generations without retaining priority state", async () => {
