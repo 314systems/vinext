@@ -18,6 +18,7 @@ import {
   isrSet,
   buildPagesCacheValue,
   beginPagesIsrGeneration,
+  cancelPagesIsrGeneration,
   commitPagesIsrGeneration,
   buildAppPageCacheValue,
   normalizeMountedSlotsHeader,
@@ -448,7 +449,7 @@ describe("Pages ISR generation coordination", () => {
   it("skips a stale write when a later on-demand generation finishes first", async () => {
     const key = "pages:coordination-stale-first";
     const writes: string[] = [];
-    const staleGeneration = beginPagesIsrGeneration(key);
+    const staleGeneration = beginPagesIsrGeneration(key, "stale");
     let finishStaleRender: (() => void) | undefined;
     const staleRender = new Promise<void>((resolve) => {
       finishStaleRender = resolve;
@@ -460,7 +461,7 @@ describe("Pages ISR generation coordination", () => {
       }),
     );
 
-    const onDemandGeneration = beginPagesIsrGeneration(key);
+    const onDemandGeneration = beginPagesIsrGeneration(key, "on-demand");
     await commitPagesIsrGeneration(onDemandGeneration, async () => {
       writes.push("on-demand");
     });
@@ -468,6 +469,52 @@ describe("Pages ISR generation coordination", () => {
 
     await expect(staleCommit).resolves.toBe(false);
     expect(writes).toEqual(["on-demand"]);
+  });
+
+  it("does not start stale work after on-demand generation begins", async () => {
+    const key = "pages:coordination-on-demand-first";
+    const onDemandGeneration = beginPagesIsrGeneration(key, "on-demand");
+
+    expect(beginPagesIsrGeneration(key, "stale")).toBeNull();
+
+    await expect(commitPagesIsrGeneration(onDemandGeneration, async () => {})).resolves.toBe(true);
+  });
+
+  it("cleans failed and cancelled generations without retaining priority state", async () => {
+    const failedKey = "pages:coordination-failed-cleanup";
+    const failedGeneration = beginPagesIsrGeneration(failedKey, "on-demand");
+    await expect(
+      commitPagesIsrGeneration(failedGeneration, async () => {
+        throw new Error("cache write failed");
+      }),
+    ).rejects.toThrow("cache write failed");
+    await Promise.resolve();
+
+    const afterFailure = beginPagesIsrGeneration(failedKey, "stale");
+    expect(afterFailure).toMatchObject({ version: 1, kind: "stale" });
+    cancelPagesIsrGeneration(afterFailure);
+
+    const cancelledKey = "pages:coordination-cancelled-cleanup";
+    const cancelledGeneration = beginPagesIsrGeneration(cancelledKey, "on-demand");
+    cancelPagesIsrGeneration(cancelledGeneration);
+    await Promise.resolve();
+
+    const afterCancellation = beginPagesIsrGeneration(cancelledKey, "stale");
+    expect(afterCancellation).toMatchObject({ version: 1, kind: "stale" });
+    cancelPagesIsrGeneration(afterCancellation);
+  });
+
+  it("does not delete a newer generation during older-tail cleanup", async () => {
+    const key = "pages:coordination-cleanup-race";
+    const first = beginPagesIsrGeneration(key, "ordinary");
+    let second: ReturnType<typeof beginPagesIsrGeneration> = null;
+
+    await commitPagesIsrGeneration(first, async () => {
+      second = beginPagesIsrGeneration(key, "ordinary");
+    });
+    await Promise.resolve();
+
+    await expect(commitPagesIsrGeneration(second, async () => {})).resolves.toBe(true);
   });
 });
 

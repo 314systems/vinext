@@ -45,7 +45,7 @@ import { createRequestContext, runWithRequestContext } from "vinext/shims/unifie
 import { getRequestExecutionContext } from "vinext/shims/request-context";
 import { ensureFetchPatch } from "vinext/shims/fetch-cache";
 import { collectAssetTags, resolveClientModuleUrl } from "./pages-asset-tags.js";
-import { NEXTJS_DEPLOYMENT_ID_HEADER } from "./headers.js";
+import { NEXTJS_CACHE_HEADER, NEXTJS_DEPLOYMENT_ID_HEADER } from "./headers.js";
 import { ISR_NEVER_CACHE_CONTROL } from "./isr-decision.js";
 import { appendAssetDeploymentIdQuery } from "../utils/deployment-id.js";
 
@@ -539,6 +539,10 @@ export function createPagesPageHandler(
         const isOnDemandRevalidate = isOnDemandRevalidateRequest(
           request.headers.get(PRERENDER_REVALIDATE_HEADER),
         );
+        const finalizePagesResponse = (response: Response): Response => {
+          if (isOnDemandRevalidate) response.headers.set(NEXTJS_CACHE_HEADER, "REVALIDATED");
+          return response;
+        };
 
         const pageDataResult = await resolvePagesPageData({
           isDataReq,
@@ -615,17 +619,19 @@ export function createPagesPageHandler(
         if (pageDataResult.kind === "notFound") {
           const notFoundRoute = findNotFoundRoute();
           if (notFoundRoute && routePattern !== "/404" && routePattern !== "/_error") {
-            return renderPage(request, url, manifest, middlewareHeaders, {
-              statusCode: 404,
-              asPath: renderAsPath ?? routeUrl,
-              renderErrorPageOnMiss: false,
-              __forcedRoute: notFoundRoute,
-            });
+            return finalizePagesResponse(
+              await renderPage(request, url, manifest, middlewareHeaders, {
+                statusCode: 404,
+                asPath: renderAsPath ?? routeUrl,
+                renderErrorPageOnMiss: false,
+                __forcedRoute: notFoundRoute,
+              }),
+            );
           }
-          return buildDefaultPagesNotFoundResponse();
+          return finalizePagesResponse(buildDefaultPagesNotFoundResponse());
         }
         if (pageDataResult.kind === "response") {
-          return pageDataResult.response;
+          return finalizePagesResponse(pageDataResult.response);
         }
 
         let pageProps = pageDataResult.pageProps;
@@ -695,7 +701,9 @@ export function createPagesPageHandler(
               init.headers[NEXTJS_DEPLOYMENT_ID_HEADER] = deploymentId;
             }
           }
-          return buildNextDataPropsJsonResponse(renderProps, safeJsonStringify, init);
+          return finalizePagesResponse(
+            buildNextDataPropsJsonResponse(renderProps, safeJsonStringify, init),
+          );
         }
 
         // Include both the matched page module and the global _app module.
@@ -714,57 +722,64 @@ export function createPagesPageHandler(
           deploymentId: process.env.__VINEXT_DEPLOYMENT_ID || process.env.NEXT_DEPLOYMENT_ID,
         });
 
-        return await renderPagesPageResponse({
-          assetTags,
-          awaitIsrCacheWrite: isOnDemandRevalidate,
-          buildId,
-          clearSsrContext() {
-            if (typeof setSSRContext === "function") setSSRContext(null);
-          },
-          createPageElement(currentProps) {
-            const el = createPageElement(PageComponent, AppComponent, currentProps);
-            return typeof wrapWithRouterContext === "function" ? wrapWithRouterContext(el) : el;
-          },
-          enhancePageElement(renderPageOpts) {
-            const el = enhancePageElement(PageComponent, AppComponent, renderProps, renderPageOpts);
-            return typeof wrapWithRouterContext === "function" ? wrapWithRouterContext(el) : el;
-          },
-          DocumentComponent,
-          flushPreloads: typeof flushPreloads === "function" ? flushPreloads : undefined,
-          fontLinkHeader,
-          fontPreloads: allFontPreloads,
-          getFontLinks,
-          getFontStyles,
-          getSSRHeadHTML: typeof getSSRHeadHTML === "function" ? getSSRHeadHTML : undefined,
-          clientTraceMetadata: vinextConfig.clientTraceMetadata,
-          gsspRes,
-          isrCacheKey: pageIsrCacheKey,
-          expireSeconds: vinextConfig.expireTime,
-          isrRevalidateSeconds,
-          isrGeneration,
-          isrSet,
-          i18n: buildI18nRenderContext(i18nConfig, locale, currentDefaultLocale, domainLocales),
-          isFallback: isFallbackRender,
-          pageProps,
-          props: renderProps,
-          params,
-          renderDocumentToString(element) {
-            return renderToStringAsync(element);
-          },
-          renderToReadableStream,
-          resetSSRHead: typeof resetSSRHead === "function" ? resetSSRHead : undefined,
-          setDocumentInitialHead:
-            typeof setDocumentInitialHead === "function" ? setDocumentInitialHead : undefined,
-          routePattern,
-          routeUrl,
-          safeJsonStringify,
-          scriptNonce,
-          statusCode: renderStatusCode,
-          nextData: serializedPagesNextData,
-          userAgent: request.headers.get("user-agent") ?? undefined,
-          ifNoneMatch: request.headers.get("if-none-match") ?? undefined,
-          requestCacheControl: request.headers.get("cache-control") ?? undefined,
-        });
+        return finalizePagesResponse(
+          await renderPagesPageResponse({
+            assetTags,
+            awaitIsrCacheWrite: isOnDemandRevalidate,
+            buildId,
+            clearSsrContext() {
+              if (typeof setSSRContext === "function") setSSRContext(null);
+            },
+            createPageElement(currentProps) {
+              const el = createPageElement(PageComponent, AppComponent, currentProps);
+              return typeof wrapWithRouterContext === "function" ? wrapWithRouterContext(el) : el;
+            },
+            enhancePageElement(renderPageOpts) {
+              const el = enhancePageElement(
+                PageComponent,
+                AppComponent,
+                renderProps,
+                renderPageOpts,
+              );
+              return typeof wrapWithRouterContext === "function" ? wrapWithRouterContext(el) : el;
+            },
+            DocumentComponent,
+            flushPreloads: typeof flushPreloads === "function" ? flushPreloads : undefined,
+            fontLinkHeader,
+            fontPreloads: allFontPreloads,
+            getFontLinks,
+            getFontStyles,
+            getSSRHeadHTML: typeof getSSRHeadHTML === "function" ? getSSRHeadHTML : undefined,
+            clientTraceMetadata: vinextConfig.clientTraceMetadata,
+            gsspRes,
+            isrCacheKey: pageIsrCacheKey,
+            expireSeconds: vinextConfig.expireTime,
+            isrRevalidateSeconds,
+            isrGeneration,
+            isrSet,
+            i18n: buildI18nRenderContext(i18nConfig, locale, currentDefaultLocale, domainLocales),
+            isFallback: isFallbackRender,
+            pageProps,
+            props: renderProps,
+            params,
+            renderDocumentToString(element) {
+              return renderToStringAsync(element);
+            },
+            renderToReadableStream,
+            resetSSRHead: typeof resetSSRHead === "function" ? resetSSRHead : undefined,
+            setDocumentInitialHead:
+              typeof setDocumentInitialHead === "function" ? setDocumentInitialHead : undefined,
+            routePattern,
+            routeUrl,
+            safeJsonStringify,
+            scriptNonce,
+            statusCode: renderStatusCode,
+            nextData: serializedPagesNextData,
+            userAgent: request.headers.get("user-agent") ?? undefined,
+            ifNoneMatch: request.headers.get("if-none-match") ?? undefined,
+            requestCacheControl: request.headers.get("cache-control") ?? undefined,
+          }),
+        );
       } catch (e) {
         console.error("[vinext] SSR error:", e);
         reportRequestError(

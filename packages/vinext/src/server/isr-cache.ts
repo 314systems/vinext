@@ -188,10 +188,15 @@ export async function isrSet(
 
 export type PagesIsrGeneration = {
   key: string;
+  kind: "on-demand" | "ordinary" | "stale";
   version: number;
+  finished: boolean;
 };
 
 type PagesIsrCoordinationState = {
+  active: number;
+  authoritativeInFlight: number;
+  authoritativeVersion: number;
   version: number;
   commitTail: Promise<void>;
 };
@@ -203,30 +208,76 @@ const pagesIsrCoordination = (_pagesIsrGlobal[_PAGES_ISR_COORDINATION_KEY] ??= n
   PagesIsrCoordinationState
 >()) as Map<string, PagesIsrCoordinationState>;
 
-export function beginPagesIsrGeneration(key: string): PagesIsrGeneration {
+export function beginPagesIsrGeneration(
+  key: string,
+  kind: PagesIsrGeneration["kind"] = "ordinary",
+): PagesIsrGeneration | null {
   const state = pagesIsrCoordination.get(key) ?? {
+    active: 0,
+    authoritativeInFlight: 0,
+    authoritativeVersion: 0,
     version: 0,
     commitTail: Promise.resolve(),
   };
+  if (kind !== "on-demand" && state.authoritativeInFlight > 0) return null;
   state.version += 1;
+  state.active += 1;
+  if (kind === "on-demand") {
+    state.authoritativeInFlight += 1;
+    state.authoritativeVersion = state.version;
+  }
   pagesIsrCoordination.set(key, state);
-  return { key, version: state.version };
+  return { key, kind, version: state.version, finished: false };
+}
+
+function finishPagesIsrGeneration(
+  generation: PagesIsrGeneration,
+  state: PagesIsrCoordinationState,
+): void {
+  if (generation.finished) return;
+  generation.finished = true;
+  state.active -= 1;
+  if (generation.kind === "on-demand") state.authoritativeInFlight -= 1;
+  const cleanupTail = state.commitTail;
+  void cleanupTail.then(() => {
+    if (
+      state.active === 0 &&
+      state.commitTail === cleanupTail &&
+      pagesIsrCoordination.get(generation.key) === state
+    ) {
+      pagesIsrCoordination.delete(generation.key);
+    }
+  });
+}
+
+export function cancelPagesIsrGeneration(generation: PagesIsrGeneration | null): void {
+  if (!generation) return;
+  const state = pagesIsrCoordination.get(generation.key);
+  if (!state) return;
+  finishPagesIsrGeneration(generation, state);
 }
 
 export function commitPagesIsrGeneration(
-  generation: PagesIsrGeneration,
+  generation: PagesIsrGeneration | null,
   write: () => Promise<void>,
 ): Promise<boolean> {
+  if (!generation) return Promise.resolve(false);
   const state = pagesIsrCoordination.get(generation.key);
   if (!state) return Promise.resolve(false);
 
   const commit = state.commitTail
     .catch(() => {})
     .then(async () => {
-      if (state.version !== generation.version) return false;
+      if (generation.kind !== "on-demand" && state.authoritativeVersion > generation.version) {
+        return false;
+      }
+      if (generation.kind === "on-demand" && state.authoritativeVersion !== generation.version) {
+        return false;
+      }
       await write();
       return true;
-    });
+    })
+    .finally(() => finishPagesIsrGeneration(generation, state));
   state.commitTail = commit.then(
     () => {},
     () => {},

@@ -18,6 +18,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import vinext from "../../packages/vinext/src/index.js";
+import { PRERENDER_REVALIDATE_HEADER } from "../../packages/vinext/src/server/isr-cache.js";
 import { startFixtureServer, PAGES_FIXTURE_DIR, type TestServerResult } from "../helpers.js";
 
 let ctx: TestServerResult;
@@ -92,12 +93,16 @@ describe("Next.js compat: revalidate-reason (Pages Router)", () => {
 });
 
 describe("Next.js compat: revalidate-reason (Pages Router production)", () => {
+  const revalidateSecret = "vinext-revalidate-reason-test-secret";
+  let previousRevalidateSecret: string | undefined;
   let tmpRoot: string;
   let outDir: string;
   let server: import("node:http").Server;
   let baseUrl: string;
 
   beforeAll(async () => {
+    previousRevalidateSecret = process.env.__VINEXT_SHARED_REVALIDATE_SECRET;
+    process.env.__VINEXT_SHARED_REVALIDATE_SECRET = revalidateSecret;
     tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-revalidate-reason-"));
     outDir = path.join(tmpRoot, "dist");
 
@@ -124,6 +129,15 @@ export async function getStaticProps({ revalidateReason }) {
       `export default async function handler(_req, res) {
   await res.revalidate("/");
   res.status(200).json({ revalidated: true });
+}
+`,
+    );
+    await fs.writeFile(
+      path.join(tmpRoot, "pages", "not-found.tsx"),
+      `export default function Page() { return null; }
+
+export async function getStaticProps() {
+  return { notFound: true };
 }
 `,
     );
@@ -162,6 +176,11 @@ export async function getStaticProps({ revalidateReason }) {
   }, 60_000);
 
   afterAll(async () => {
+    if (previousRevalidateSecret === undefined) {
+      delete process.env.__VINEXT_SHARED_REVALIDATE_SECRET;
+    } else {
+      process.env.__VINEXT_SHARED_REVALIDATE_SECRET = previousRevalidateSecret;
+    }
     if (server) {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -182,5 +201,17 @@ export async function getStaticProps({ revalidateReason }) {
     const regenerated = await fetch(baseUrl);
     expect(regenerated.status).toBe(200);
     expect(reasonFromHtml(await regenerated.text())).toBe("on-demand");
+  });
+
+  it("emits REVALIDATED for authenticated on-demand success and notFound", async () => {
+    const headers = { [PRERENDER_REVALIDATE_HEADER]: revalidateSecret };
+
+    const success = await fetch(baseUrl, { method: "HEAD", headers });
+    expect(success.status).toBe(200);
+    expect(success.headers.get("x-nextjs-cache")).toBe("REVALIDATED");
+
+    const notFound = await fetch(`${baseUrl}/not-found`, { method: "HEAD", headers });
+    expect(notFound.status).toBe(404);
+    expect(notFound.headers.get("x-nextjs-cache")).toBe("REVALIDATED");
   });
 });

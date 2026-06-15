@@ -614,26 +614,29 @@ export async function renderPagesPageResponse(
     const isrPathname = options.routeUrl.split("?")[0];
     const cacheKey = options.isrCacheKey("pages", isrPathname);
 
-    const cacheWritePromise = schedulePagesIsrCacheWrite({
-      cacheKey,
-      expireSeconds: options.expireSeconds,
-      pageData: options.pageProps,
-      revalidateSeconds: options.isrRevalidateSeconds,
-      generation: options.isrGeneration ?? beginPagesIsrGeneration(cacheKey),
-      routePattern: options.routePattern,
-      setCache: options.isrSet,
-      shellPrefix,
-      shellSuffix,
-      status: finalStatus,
-      stream: cacheBodyStream,
-    });
-    if (options.awaitIsrCacheWrite) {
-      await cacheWritePromise;
-    } else {
-      const backgroundCacheWrite = cacheWritePromise.catch((error: unknown) =>
-        reportPagesIsrCacheWriteError(error, cacheKey, options.routePattern),
-      );
-      getRequestExecutionContext()?.waitUntil(backgroundCacheWrite);
+    const generation = options.isrGeneration ?? beginPagesIsrGeneration(cacheKey, "ordinary");
+    if (generation) {
+      const cacheWritePromise = schedulePagesIsrCacheWrite({
+        cacheKey,
+        expireSeconds: options.expireSeconds,
+        pageData: options.pageProps,
+        revalidateSeconds: options.isrRevalidateSeconds,
+        generation,
+        routePattern: options.routePattern,
+        setCache: options.isrSet,
+        shellPrefix,
+        shellSuffix,
+        status: finalStatus,
+        stream: cacheBodyStream,
+      });
+      if (options.awaitIsrCacheWrite) {
+        await cacheWritePromise;
+      } else {
+        const backgroundCacheWrite = cacheWritePromise.catch((error: unknown) =>
+          reportPagesIsrCacheWriteError(error, cacheKey, options.routePattern),
+        );
+        getRequestExecutionContext()?.waitUntil(backgroundCacheWrite);
+      }
     }
   }
 

@@ -1,10 +1,16 @@
 import type { ReactNode } from "react";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   renderPagesIsrHtml,
   resolvePagesPageData,
   type ResolvePagesPageDataOptions,
 } from "../packages/vinext/src/server/pages-page-data.js";
+import { commitPagesIsrGeneration } from "../packages/vinext/src/server/isr-cache.js";
+
+afterEach(() => {
+  const coordination = Reflect.get(globalThis, Symbol.for("vinext.pagesIsr.coordination"));
+  if (coordination instanceof Map) coordination.clear();
+});
 
 function createOptions(
   overrides: Partial<ResolvePagesPageDataOptions> = {},
@@ -837,9 +843,59 @@ describe("pages page data", () => {
       }),
     );
     expect(onDemandResult.kind).toBe("render");
+    if (onDemandResult.kind !== "render") throw new Error("expected render result");
+    await commitPagesIsrGeneration(onDemandResult.isrGeneration, async () => {});
 
     finishStaleRender?.();
     await staleRegeneration;
+    expect(isrSet).not.toHaveBeenCalled();
+  });
+
+  it("skips a stale write when the backend entry advanced in another isolate", async () => {
+    let staleRegeneration: Promise<void> | undefined;
+    const isrSet = vi.fn(async () => {});
+    const staleCacheEntry = {
+      isStale: true,
+      value: {
+        lastModified: 1,
+        cacheState: "stale",
+        cacheControl: { revalidate: 5 },
+        value: {
+          kind: "PAGES" as const,
+          html: "<html>stale</html>",
+          pageData: { reason: "build" },
+          headers: undefined,
+          status: undefined,
+        },
+      },
+    };
+    const advancedCacheEntry = {
+      ...staleCacheEntry,
+      isStale: false,
+      value: { ...staleCacheEntry.value, lastModified: 2, cacheState: "fresh" },
+    };
+    const isrGet = vi
+      .fn<ResolvePagesPageDataOptions["isrGet"]>()
+      .mockResolvedValueOnce(staleCacheEntry)
+      .mockResolvedValueOnce(advancedCacheEntry);
+
+    await resolvePagesPageData(
+      createOptions({
+        isrGet,
+        isrSet,
+        pageModule: {
+          async getStaticProps() {
+            return { props: { reason: "stale" }, revalidate: 5 };
+          },
+        },
+        triggerBackgroundRegeneration: vi.fn((_key, renderFn) => {
+          staleRegeneration = renderFn();
+        }),
+      }),
+    );
+
+    await staleRegeneration;
+    expect(isrGet).toHaveBeenCalledTimes(2);
     expect(isrSet).not.toHaveBeenCalled();
   });
 

@@ -9,6 +9,7 @@ import { buildCacheStateHeaders } from "./cache-headers.js";
 import {
   beginPagesIsrGeneration,
   buildPagesCacheValue,
+  cancelPagesIsrGeneration,
   commitPagesIsrGeneration,
   type ISRCacheEntry,
   type PagesIsrGeneration,
@@ -771,7 +772,7 @@ export async function resolvePagesPageData(
     const pathname = options.routeUrl.split("?")[0];
     const cacheKey = options.isrCacheKey("pages", pathname);
     if (options.isOnDemandRevalidate) {
-      isrGeneration = beginPagesIsrGeneration(cacheKey);
+      isrGeneration = beginPagesIsrGeneration(cacheKey, "on-demand");
     }
     const cached = await options.isrGet(cacheKey);
     const cachedValue = cached?.value.value;
@@ -821,76 +822,95 @@ export async function resolvePagesPageData(
       !options.scriptNonce &&
       !options.isDataReq
     ) {
+      const staleEntryLastModified = cached.value.lastModified;
       options.triggerBackgroundRegeneration(
         cacheKey,
         async function () {
-          const generation = beginPagesIsrGeneration(cacheKey);
-          return options.runInFreshUnifiedContext(async () => {
-            options.applyRequestContexts();
-            // Rebuild the full App render props before re-running getStaticProps
-            // so the regenerated HTML / __NEXT_DATA__ still contains app-level
-            // props from _app.getInitialProps. Mirrors the foreground path.
-            const freshAppResult = await loadPagesAppInitialRenderProps(options, () =>
-              options.createGsspReqRes(),
-            );
-            if (freshAppResult.kind === "response") {
-              // _app.getInitialProps short-circuited the request during background
-              // regeneration. We cannot turn that into an HTTP response here, so
-              // skip the cache write and let the stale entry remain.
-              return;
-            }
-            let freshPageProps = freshAppResult.pageProps;
-            let freshRenderProps = freshAppResult.renderProps;
+          const generation = beginPagesIsrGeneration(cacheKey, "stale");
+          if (!generation) return;
+          try {
+            await options.runInFreshUnifiedContext(async () => {
+              options.applyRequestContexts();
+              // Rebuild the full App render props before re-running getStaticProps
+              // so the regenerated HTML / __NEXT_DATA__ still contains app-level
+              // props from _app.getInitialProps. Mirrors the foreground path.
+              const freshAppResult = await loadPagesAppInitialRenderProps(options, () =>
+                options.createGsspReqRes(),
+              );
+              if (freshAppResult.kind === "response") {
+                // _app.getInitialProps short-circuited the request during background
+                // regeneration. We cannot turn that into an HTTP response here, so
+                // skip the cache write and let the stale entry remain.
+                return;
+              }
+              let freshPageProps = freshAppResult.pageProps;
+              let freshRenderProps = freshAppResult.renderProps;
 
-            const freshResult = await options.pageModule.getStaticProps?.({
-              params: userFacingParams,
-              locale: options.i18n.locale,
-              locales: options.i18n.locales,
-              defaultLocale: options.i18n.defaultLocale,
-              // Background regeneration for an entry that is already in the
-              // cache is always a stale-while-revalidate refresh — mirrors
-              // Next.js `render.tsx` (`isBuildTimeSSG ? "build" : "stale"`,
-              // and we're not at build time here).
-              revalidateReason: "stale",
-            });
-
-            if (freshResult?.props) {
-              freshPageProps = { ...freshPageProps, ...freshResult.props };
-              freshRenderProps = { ...freshRenderProps, pageProps: freshPageProps };
-            }
-
-            const freshRevalidateSeconds =
-              typeof freshResult?.revalidate === "number" && freshResult.revalidate > 0
-                ? freshResult.revalidate
-                : false;
-
-            if (freshResult?.props) {
-              const freshHtml = await renderPagesIsrHtml({
-                buildId: options.buildId,
-                cachedHtml: cachedValue.html,
-                createPageElement: options.createPageElement,
-                i18n: options.i18n,
-                pageProps: freshPageProps,
-                props: freshRenderProps,
-                params: options.params,
-                renderIsrPassToStringAsync: options.renderIsrPassToStringAsync,
-                routePattern: options.routePattern,
-                safeJsonStringify: options.safeJsonStringify,
-                nextData: options.nextData,
-                vinext: options.vinext,
+              const freshResult = await options.pageModule.getStaticProps?.({
+                params: userFacingParams,
+                locale: options.i18n.locale,
+                locales: options.i18n.locales,
+                defaultLocale: options.i18n.defaultLocale,
+                // Background regeneration for an entry that is already in the
+                // cache is always a stale-while-revalidate refresh — mirrors
+                // Next.js `render.tsx` (`isBuildTimeSSG ? "build" : "stale"`,
+                // and we're not at build time here).
+                revalidateReason: "stale",
               });
 
-              await commitPagesIsrGeneration(generation, () =>
-                options.isrSet(
-                  cacheKey,
-                  buildPagesCacheValue(freshHtml, freshRenderProps, options.statusCode),
-                  freshRevalidateSeconds,
-                  undefined,
-                  options.expireSeconds,
-                ),
-              );
-            }
-          });
+              if (freshResult?.props) {
+                freshPageProps = { ...freshPageProps, ...freshResult.props };
+                freshRenderProps = { ...freshRenderProps, pageProps: freshPageProps };
+              }
+
+              const freshRevalidateSeconds =
+                typeof freshResult?.revalidate === "number" && freshResult.revalidate > 0
+                  ? freshResult.revalidate
+                  : false;
+
+              if (freshResult?.props) {
+                const freshHtml = await renderPagesIsrHtml({
+                  buildId: options.buildId,
+                  cachedHtml: cachedValue.html,
+                  createPageElement: options.createPageElement,
+                  i18n: options.i18n,
+                  pageProps: freshPageProps,
+                  props: freshRenderProps,
+                  params: options.params,
+                  renderIsrPassToStringAsync: options.renderIsrPassToStringAsync,
+                  routePattern: options.routePattern,
+                  safeJsonStringify: options.safeJsonStringify,
+                  nextData: options.nextData,
+                  vinext: options.vinext,
+                });
+
+                await commitPagesIsrGeneration(generation, async () => {
+                  // This re-read prevents a stale renderer in another isolate
+                  // from overwriting an on-demand result that is already
+                  // visible through the configured cache backend. The check
+                  // and write are not atomic: CacheHandler/CdnCacheAdapter do
+                  // not currently expose CAS or conditional-set primitives,
+                  // so cross-isolate ordering cannot be guaranteed here.
+                  const current = await options.isrGet(cacheKey);
+                  if (
+                    current?.value.lastModified !== undefined &&
+                    current.value.lastModified > staleEntryLastModified
+                  ) {
+                    return;
+                  }
+                  await options.isrSet(
+                    cacheKey,
+                    buildPagesCacheValue(freshHtml, freshRenderProps, options.statusCode),
+                    freshRevalidateSeconds,
+                    undefined,
+                    options.expireSeconds,
+                  );
+                });
+              }
+            });
+          } finally {
+            cancelPagesIsrGeneration(generation);
+          }
         },
         {
           routerKind: "Pages Router",
@@ -927,23 +947,32 @@ export async function resolvePagesPageData(
         ? cachedValue.pageData
         : null;
     isrGeneration ??= beginPagesIsrGeneration(cacheKey);
-    if (!generatedPageData) {
-      const shortCircuit = await loadForegroundAppInitialRenderProps();
-      if (shortCircuit) return shortCircuit;
+    let result: Awaited<ReturnType<NonNullable<PagesPageModule["getStaticProps"]>>> | null;
+    try {
+      if (!generatedPageData) {
+        const shortCircuit = await loadForegroundAppInitialRenderProps();
+        if (shortCircuit) {
+          cancelPagesIsrGeneration(isrGeneration);
+          return shortCircuit;
+        }
+      }
+      result = generatedPageData
+        ? null
+        : await options.pageModule.getStaticProps({
+            params: userFacingParams,
+            locale: options.i18n.locale,
+            locales: options.i18n.locales,
+            defaultLocale: options.i18n.defaultLocale,
+            revalidateReason: options.isOnDemandRevalidate
+              ? "on-demand"
+              : options.isBuildTimePrerendering
+                ? "build"
+                : "stale",
+          });
+    } catch (error) {
+      cancelPagesIsrGeneration(isrGeneration);
+      throw error;
     }
-    const result = generatedPageData
-      ? null
-      : await options.pageModule.getStaticProps({
-          params: userFacingParams,
-          locale: options.i18n.locale,
-          locales: options.i18n.locales,
-          defaultLocale: options.i18n.defaultLocale,
-          revalidateReason: options.isOnDemandRevalidate
-            ? "on-demand"
-            : options.isBuildTimePrerendering
-              ? "build"
-              : "stale",
-        });
 
     if (generatedPageData) {
       renderProps = generatedPageData as PagesRenderProps;
@@ -956,6 +985,7 @@ export async function resolvePagesPageData(
     }
 
     if (result?.redirect) {
+      cancelPagesIsrGeneration(isrGeneration);
       return {
         kind: "response",
         response: buildPagesRedirectResponse(result.redirect, options, renderProps),
@@ -963,6 +993,7 @@ export async function resolvePagesPageData(
     }
 
     if (result?.notFound) {
+      cancelPagesIsrGeneration(isrGeneration);
       return buildPagesNotFoundResult(options);
     }
 
