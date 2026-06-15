@@ -91,6 +91,7 @@ async function buildConditions(
   root: string,
   condition: RuntimeExportCondition | null,
   resolveConditions?: string[],
+  ssr = true,
 ): Promise<string> {
   const virtualEntry = "\0runtime-export-conditions-entry";
   const entryId = condition ? withRuntimeExportCondition(virtualEntry, condition) : virtualEntry;
@@ -120,7 +121,7 @@ async function buildConditions(
     ssr: { noExternal: true },
     build: {
       write: false,
-      ssr: true,
+      ssr,
       minify: false,
       rollupOptions: { input: entryId },
     },
@@ -176,6 +177,19 @@ describe("runtime-specific package export conditions", () => {
     expect(code).toMatch(/react:\s*"react-server"/);
     expect(code).toMatch(/serverFavoringBrowser:\s*"browser"/);
     expect(code).toMatch(/serverFavoringEdge:\s*"edge-light"/);
+  });
+
+  it("does not leak edge server conditions into client graphs", async () => {
+    const code = await buildConditions(
+      await createFixture(),
+      "edge-light-react-server",
+      undefined,
+      false,
+    );
+    expect(code).toContain('var default_default = "default"');
+    expect(code).toContain('var browser_default = "browser"');
+    expect(code).not.toContain('var react_server_default = "react-server"');
+    expect(code).not.toContain('var edge_light_default = "edge-light"');
   });
 
   it("uses browser and edge-light without react-server for Pages edge graphs", async () => {

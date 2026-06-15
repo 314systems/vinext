@@ -89,6 +89,14 @@ export function runtimeExportConditionsPlugin(): Plugin {
       if (condition === null) return null;
 
       const cleanSource = stripRuntimeExportCondition(source);
+      const cleanImporter = importer ? stripRuntimeExportCondition(importer) : undefined;
+      if (environment.config.consumer === "client") {
+        return this.resolve(cleanSource, cleanImporter, {
+          ...options,
+          skipSelf: true,
+        });
+      }
+
       if (
         NODE_BUILTINS.has(cleanSource) ||
         isUnhandledScheme(cleanSource) ||
@@ -98,7 +106,6 @@ export function runtimeExportConditionsPlugin(): Plugin {
         return null;
       }
 
-      const cleanImporter = importer ? stripRuntimeExportCondition(importer) : undefined;
       const conditions = runtimeConditions(
         config,
         environment.config.resolve.conditions,
