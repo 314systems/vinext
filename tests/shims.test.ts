@@ -15878,6 +15878,80 @@ describe("Pages Router concurrent navigation", () => {
     }
   });
 
+  // Ported from Next.js: test/e2e/use-router-with-rewrites/use-router-with-rewrites.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/use-router-with-rewrites/use-router-with-rewrites.test.ts
+  it.each([
+    ["push", "/", "/?param=1"],
+    ["replace", "/", "/?param=1"],
+    ["push", "/source/0", "/source/0?param=1"],
+    ["replace", "/source/0", "/source/0?param=1"],
+  ] as const)(
+    "%s preserves the current pathname and visible query while a rewrite resolves",
+    async (method, pathname, expectedUrl) => {
+      const previousWindow = (globalThis as any).window;
+      const originalFetch = globalThis.fetch;
+      const { win, pushState, replaceState } = createNavWindow();
+      const destinationLoader = vi.fn(async () => ({ default: () => null }));
+      Object.assign(win.location, {
+        origin: "http://localhost",
+        pathname,
+        href: `http://localhost${pathname}`,
+      });
+      Object.assign(win.__NEXT_DATA__, {
+        buildId: "build-1",
+        __vinext: { ...win.__NEXT_DATA__.__vinext, hasMiddleware: true },
+      });
+      Object.assign(win, {
+        __VINEXT_PAGE_PATTERNS__: ["/destination"],
+        __VINEXT_PAGE_LOADERS__: {
+          "/destination": destinationLoader,
+        },
+      });
+      (globalThis as any).window = win;
+
+      const response = createDeferred<Response>();
+      globalThis.fetch = vi.fn(() => response.promise);
+
+      try {
+        vi.resetModules();
+        const routerModule = await import("../packages/vinext/src/shims/router.js");
+        const Router = routerModule.default;
+
+        const navigation = Router[method]({ query: { param: 1 } });
+
+        const historyMutation = method === "push" ? pushState : replaceState;
+        expect(historyMutation).toHaveBeenLastCalledWith(
+          expect.objectContaining({ __N: true }),
+          "",
+          expectedUrl,
+        );
+        expect(win.location.pathname + win.location.search).toBe(expectedUrl);
+
+        response.resolve(
+          new Response(JSON.stringify({ pageProps: {} }), {
+            headers: {
+              "content-type": "application/json",
+              "x-nextjs-rewrite": "/destination",
+            },
+          }),
+        );
+        const result = await navigation;
+
+        expect(result).toBe(true);
+        expect(win.location.pathname + win.location.search).toBe(expectedUrl);
+        expect(destinationLoader).toHaveBeenCalledOnce();
+      } finally {
+        vi.resetModules();
+        if (previousWindow === undefined) {
+          delete (globalThis as any).window;
+        } else {
+          (globalThis as any).window = previousWindow;
+        }
+        globalThis.fetch = originalFetch;
+      }
+    },
+  );
+
   it("does not double-prefix basePath for middleware data redirects", async () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;

@@ -485,7 +485,11 @@ function getPagesRouterRuntimeComponents(): PagesRouterRuntimeComponents {
 
 function resolveUrl(url: string | UrlObject): string {
   if (typeof url === "string") return url;
-  let result = url.pathname ?? "/";
+  let result =
+    url.pathname ??
+    (typeof window === "undefined"
+      ? "/"
+      : stripBasePath(window.location.pathname, __basePath) || "/");
   if (url.query) {
     const params = urlQueryToSearchParams(url.query);
     result = appendSearchParamsToUrl(result, params);
@@ -2340,22 +2344,32 @@ async function performNavigation(
   if (mode === "push") saveScrollPosition();
   const isQueryUpdating = options?._h === 1;
   let completedBrowserUrl = full;
+  const isQueryOnlyNavigation =
+    typeof url !== "string" && url.pathname === undefined && as === undefined;
   cancelActiveNavigation(shallow);
   if (!isQueryUpdating) {
     routerEvents.emit("routeChangeStart", full, { shallow });
+  }
+  if (isQueryOnlyNavigation) {
+    routerEvents.emit("beforeHistoryChange", full, { shallow });
+    updateHistory(mode, full, navState);
   }
   if (!shallow) {
     const result = await runNavigateClient(full, full, htmlFetchUrl, {
       ...navigateOptions,
       commitNavigation(browserUrl) {
         completedBrowserUrl = browserUrl;
-        routerEvents.emit("beforeHistoryChange", browserUrl, { shallow });
-        updateHistory(mode, browserUrl, navState);
+        if (isQueryOnlyNavigation) {
+          if (browserUrl !== full) updateHistory("replace", browserUrl, navState);
+        } else {
+          routerEvents.emit("beforeHistoryChange", browserUrl, { shallow });
+          updateHistory(mode, browserUrl, navState);
+        }
       },
     });
     if (result === "cancelled") return true;
     if (result === "failed") return false;
-  } else {
+  } else if (!isQueryOnlyNavigation) {
     routerEvents.emit("beforeHistoryChange", full, { shallow });
     updateHistory(mode, full, navState);
     // Shallow navigations skip the render-commit path, so apply the scroll
