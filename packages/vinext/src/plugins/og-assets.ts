@@ -277,7 +277,13 @@ export function copyMissingOgWasm(opts: {
  * The decision keys off "did the bundler emit this asset?", never the deploy
  * target — so it helps Node/self-hosted builds as well as Cloudflare Workers.
  */
-export function createOgAssetsPlugin(): Plugin {
+export function createOgAssetsPlugin(
+  resolveOgDistDir: () => string = () => {
+    const require = createRequire(import.meta.url);
+    const ogPkgPath = require.resolve("@vercel/og/package.json");
+    return path.join(path.dirname(ogPkgPath), "dist");
+  },
+): Plugin {
   // Bases whose fallback reference was rewritten to an emitted asset in
   // generateBundle; writeBundle must NOT copy a second root copy for these.
   //
@@ -391,9 +397,7 @@ export function createOgAssetsPlugin(): Plugin {
         // Find @vercel/og in node_modules. The yoga.wasm source is written
         // there by the vinext:og-font-patch transform earlier in the build.
         try {
-          const require = createRequire(import.meta.url);
-          const ogPkgPath = require.resolve("@vercel/og/package.json");
-          const ogDistDir = path.join(path.dirname(ogPkgPath), "dist");
+          const ogDistDir = resolveOgDistDir();
 
           for (const asset of referencedAssets) {
             const directories = fallbackDirectories.get(asset) ?? new Set(["."]);

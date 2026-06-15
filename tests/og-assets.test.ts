@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll } from "vite-plus/test";
 import vinext from "../packages/vinext/src/index.js";
-import { copyMissingOgWasm } from "../packages/vinext/src/plugins/og-assets.js";
+import {
+  copyMissingOgWasm,
+  createOgAssetsPlugin as createOgAssetsPluginImpl,
+} from "../packages/vinext/src/plugins/og-assets.js";
 import type { Plugin } from "vite-plus";
 import fsp from "node:fs/promises";
 import fs from "node:fs";
@@ -13,7 +16,10 @@ function unwrapHook(hook: any): Function {
   return typeof hook === "function" ? hook : hook?.handler;
 }
 
-function createOgAssetsPlugin(): Plugin {
+function createOgAssetsPlugin(resolveOgDistDir?: () => string): Plugin {
+  if (resolveOgDistDir) {
+    return createOgAssetsPluginImpl(resolveOgDistDir);
+  }
   const plugins = vinext() as Plugin[];
   const plugin = plugins.find((p) => p.name === "vinext:og-assets");
   if (!plugin) throw new Error("vinext:og-assets plugin not found");
@@ -221,7 +227,12 @@ describe("vinext:og-assets plugin", () => {
 
   describe("Pages Router SSR output", () => {
     it("copies referenced fallback WASM assets into the server output", async () => {
-      const plugin = createOgAssetsPlugin();
+      const sourceDir = path.join(tmpDir, "pages-ssr-og-dist");
+      await fsp.mkdir(sourceDir, { recursive: true });
+      await fsp.writeFile(path.join(sourceDir, "resvg.wasm"), Buffer.from([0, 1, 2]));
+      await fsp.writeFile(path.join(sourceDir, "yoga.wasm"), Buffer.from([3, 4, 5]));
+
+      const plugin = createOgAssetsPlugin(() => sourceDir);
       const generateBundle = unwrapHook(plugin.generateBundle);
       const writeBundle = unwrapHook(plugin.writeBundle);
       const outDir = path.join(tmpDir, "pages-ssr");
