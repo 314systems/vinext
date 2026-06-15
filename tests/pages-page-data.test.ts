@@ -1469,6 +1469,7 @@ describe("pages page data", () => {
     await expect(
       resolvePagesPageData(
         createOptions({
+          isBuildTimePrerendering: true,
           pageModule: {
             async getStaticProps() {
               return { props: { date: new Date(0) } };
@@ -1483,22 +1484,46 @@ describe("pages page data", () => {
     );
   });
 
-  it("throws a Next.js-style error when getServerSideProps returns non-serializable props", async () => {
-    await expect(
-      resolvePagesPageData(
-        createOptions({
-          pageModule: {
-            async getServerSideProps() {
-              return { props: { fn: () => "nope" } };
-            },
+  it("allows non-serializable getServerSideProps values in production", async () => {
+    const date = new Date(0);
+    const result = await resolvePagesPageData(
+      createOptions({
+        pageModule: {
+          async getServerSideProps() {
+            return { props: { date } };
           },
-          routePattern: "/gssp-bad",
-          routeUrl: "/gssp-bad",
-        }),
-      ),
-    ).rejects.toThrow(
-      /Error serializing `\.fn` returned from `getServerSideProps` in "\/gssp-bad"\.\s*Reason: `function` cannot be serialized as JSON/,
+        },
+        routePattern: "/non-json",
+        routeUrl: "/non-json",
+      }),
     );
+
+    expect(result).toMatchObject({
+      kind: "render",
+      pageProps: { date },
+      props: { __N_SSP: true, pageProps: { date } },
+    });
+  });
+
+  it("allows non-serializable getStaticProps values during runtime regeneration", async () => {
+    const date = new Date(0);
+    const result = await resolvePagesPageData(
+      createOptions({
+        pageModule: {
+          async getStaticProps() {
+            return { props: { date } };
+          },
+        },
+        routePattern: "/non-json",
+        routeUrl: "/non-json",
+      }),
+    );
+
+    expect(result).toMatchObject({
+      kind: "render",
+      pageProps: { date },
+      props: { pageProps: { date } },
+    });
   });
 
   // ── x-nextjs-deployment-id header ─────────────────────────────────────────
