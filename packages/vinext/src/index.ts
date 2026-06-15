@@ -1684,6 +1684,23 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         const hasClientBuildEnvironment =
           hasAppDir || hasCloudflarePlugin || hasNitroPlugin || shouldInjectPlainPagesEnvironments;
         const clientAssetsDir = resolveAssetsDir(nextConfig.assetPrefix ?? "");
+        const workerOutputDir = `${clientAssetsDir}/workers`;
+        const workerEntryFileNames = `${workerOutputDir}/[name]-[hash].js`;
+        const workerChunkFileNames = `${workerOutputDir}/[name]-[hash].js`;
+        const workerBundlerOptions =
+          viteMajorVersion >= 8 ? config.worker?.rolldownOptions : config.worker?.rollupOptions;
+        const workerOutputs = workerBundlerOptions?.output;
+        const workerOutput = Array.isArray(workerOutputs)
+          ? workerOutputs.map((output) => ({
+              ...output,
+              entryFileNames: workerEntryFileNames,
+              chunkFileNames: workerChunkFileNames,
+            }))
+          : {
+              ...workerOutputs,
+              entryFileNames: workerEntryFileNames,
+              chunkFileNames: workerChunkFileNames,
+            };
         // Next emits CSS url() deps as files, not inlined data URLs. A user's
         // explicit `build.assetsInlineLimit` always wins.
         clientAssetsInlineLimit = config.build?.assetsInlineLimit ?? 0;
@@ -1877,6 +1894,22 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 : {}),
             }),
           },
+          worker: {
+            ...config.worker,
+            ...(viteMajorVersion >= 8
+              ? {
+                  rolldownOptions: {
+                    ...config.worker?.rolldownOptions,
+                    output: workerOutput,
+                  },
+                }
+              : {
+                  rollupOptions: {
+                    ...config.worker?.rollupOptions,
+                    output: workerOutput,
+                  },
+                }),
+          },
           // Let OPTIONS requests pass through Vite's CORS middleware to our
           // route handlers so they can set the Allow header and run user-defined
           // OPTIONS handlers. Without this, Vite's CORS middleware responds to
@@ -1991,6 +2024,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                       nextConfig.assetPrefix,
                       nextConfig.deploymentId,
                       context.hostType,
+                      context.hostId,
                     ),
                 },
               }
