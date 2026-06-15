@@ -395,6 +395,92 @@ describe("runtime-specific package export conditions", () => {
     ]);
     expect(virtualLoadCount).toBe(1);
   });
+
+  it("proxies arbitrary NUL virtual IDs without appending runtime queries", async () => {
+    const root = await createFixture();
+    const nodeEntry = path.join(root, "nul-node-entry.js");
+    const edgeEntry = path.join(root, "nul-edge-entry.js");
+    const virtualDependency = "virtual:dep";
+    const resolvedVirtualDependency = "\0dep";
+    await writeFile(
+      nodeEntry,
+      `import value from ${JSON.stringify(virtualDependency)}; console.log("node", value);`,
+    );
+    await writeFile(
+      edgeEntry,
+      `import value from ${JSON.stringify(virtualDependency)}; console.log("edge", value);`,
+    );
+    const loadedIds: string[] = [];
+    let virtualLoadCount = 0;
+
+    const result = await build({
+      root,
+      configFile: false,
+      logLevel: "silent",
+      plugins: [
+        runtimeExportConditionsPlugin(),
+        {
+          name: "runtime-export-arbitrary-nul-module",
+          resolveId(source) {
+            if (source === resolvedVirtualDependency) return source;
+            if (source === virtualDependency) return resolvedVirtualDependency;
+            return null;
+          },
+          load(id) {
+            loadedIds.push(id);
+            if (id === resolvedVirtualDependency) {
+              virtualLoadCount++;
+              return 'import value from "library-with-exports/server-favoring-edge"; export default value;';
+            }
+            return null;
+          },
+        },
+      ],
+      ssr: { noExternal: true },
+      build: {
+        write: false,
+        ssr: true,
+        minify: false,
+        rolldownOptions: {
+          input: {
+            node: nodeEntry,
+            edge: withRuntimeExportCondition(edgeEntry, "edge-light-react-server"),
+          },
+          output: { entryFileNames: "nul-[name].js" },
+        },
+      },
+    });
+    if (!Array.isArray(result) && !("output" in result)) {
+      throw new Error("Unexpected watch result from one-shot build");
+    }
+    const output = Array.isArray(result) ? result[0]!.output : result.output;
+    const nodeCode = output.find(
+      (item) => item.type === "chunk" && item.fileName === "nul-node.js",
+    )!;
+    const edgeCode = output.find(
+      (item) => item.type === "chunk" && item.fileName === "nul-edge.js",
+    )!;
+    expect(nodeCode.type === "chunk" && nodeCode.code).toContain('console.log("node", "node")');
+    expect(edgeCode.type === "chunk" && edgeCode.code).toContain(
+      'console.log("edge", "edge-light")',
+    );
+    const nodeVirtualModules =
+      nodeCode.type === "chunk"
+        ? Object.keys(nodeCode.modules).filter((id) => id.startsWith("\0vinext-runtime-virtual:"))
+        : [];
+    const edgeVirtualModules =
+      edgeCode.type === "chunk"
+        ? Object.keys(edgeCode.modules).filter((id) => id.startsWith("\0vinext-runtime-virtual:"))
+        : [];
+    expect(nodeVirtualModules).toHaveLength(1);
+    expect(edgeVirtualModules).toHaveLength(1);
+    expect(nodeVirtualModules[0]).not.toBe(edgeVirtualModules[0]);
+    expect(loadedIds.filter((id) => id.startsWith("\0"))).toEqual([resolvedVirtualDependency]);
+    expect(
+      loadedIds.some((id) => id.startsWith("\0") && id.includes("?__vinext_runtime_condition")),
+    ).toBe(false);
+    expect(virtualLoadCount).toBe(1);
+  });
 });
 
 async function symlinkWorkspaceNodeModules(root: string): Promise<void> {

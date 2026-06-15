@@ -6,6 +6,9 @@ export type RuntimeExportCondition = "edge-light" | "edge-light-react-server" | 
 const RUNTIME_CONDITION_QUERY = "__vinext_runtime_condition";
 const RUNTIME_VIRTUAL_PREFIX = "\0vinext-runtime-virtual:";
 const NODE_BUILTINS = new Set([...builtinModules, ...builtinModules.map((name) => `node:${name}`)]);
+const RUNTIME_VIRTUAL_PROXIES = new Map<string, VirtualProxy>();
+const RUNTIME_VIRTUAL_PROXY_IDS = new Map<string, string>();
+let runtimeVirtualProxyIndex = 0;
 
 export function withRuntimeExportCondition(
   specifier: string,
@@ -37,7 +40,10 @@ function stripRuntimeExportCondition(specifier: string): string {
 }
 
 function isVirtualId(specifier: string): boolean {
-  return specifier.startsWith("virtual:") || specifier.startsWith("\0virtual:");
+  return (
+    specifier.startsWith("virtual:") ||
+    (specifier.startsWith("\0") && !specifier.startsWith(RUNTIME_VIRTUAL_PREFIX))
+  );
 }
 
 function isUnhandledScheme(specifier: string): boolean {
@@ -60,12 +66,29 @@ type VirtualProxy = {
 
 type VirtualEnvironmentState = {
   loadResults: Map<string, Promise<Rollup.LoadResult | null>>;
-  proxies: Map<string, VirtualProxy>;
-  proxyIds: Map<string, string>;
 };
 
-function virtualProxyKey(originalId: string, profile: VirtualProfile): string {
-  return `${profile}\0${originalId}`;
+function createVirtualProxyId(originalId: string, profile: VirtualProfile): string {
+  const key = `${profile}\0${originalId}`;
+  let proxyId = RUNTIME_VIRTUAL_PROXY_IDS.get(key);
+  if (!proxyId) {
+    proxyId = `${RUNTIME_VIRTUAL_PREFIX}${runtimeVirtualProxyIndex++}`;
+    RUNTIME_VIRTUAL_PROXY_IDS.set(key, proxyId);
+    RUNTIME_VIRTUAL_PROXIES.set(proxyId, { originalId, profile });
+  }
+  return proxyId;
+}
+
+function getVirtualEnvironmentState(
+  states: WeakMap<object, VirtualEnvironmentState>,
+  environment: object,
+): VirtualEnvironmentState {
+  let state = states.get(environment);
+  if (!state) {
+    state = { loadResults: new Map() };
+    states.set(environment, state);
+  }
+  return state;
 }
 
 function getLoadHandler(
@@ -77,10 +100,6 @@ function getLoadHandler(
   : never {
   const hook = plugin.load;
   return (typeof hook === "object" && hook !== null ? hook.handler : hook) as never;
-}
-
-function isViteCorePlugin(plugin: Plugin): boolean {
-  return plugin.name.startsWith("vite:") || plugin.name.startsWith("builtin:vite-");
 }
 
 type LoadIdFilter =
@@ -105,6 +124,10 @@ function loadHookMatches(plugin: Plugin, id: string): boolean {
   const hook = plugin.load;
   if (typeof hook !== "object" || hook === null || !("filter" in hook)) return true;
   return matchesLoadIdFilter(hook.filter?.id as LoadIdFilter | undefined, id);
+}
+
+function isViteCorePlugin(plugin: Plugin): boolean {
+  return plugin.name.startsWith("vite:") || plugin.name.startsWith("builtin:vite-");
 }
 
 function runtimeConditions(
@@ -132,7 +155,6 @@ export function runtimeExportConditionsPlugin(): Plugin {
   let config: ResolvedConfig;
   const resolvers = new Map<string, ReturnType<typeof createIdResolver>>();
   const virtualStates = new WeakMap<object, VirtualEnvironmentState>();
-  let virtualProxyIndex = 0;
 
   const plugin: Plugin = {
     name: "vinext:runtime-export-conditions",
@@ -148,16 +170,8 @@ export function runtimeExportConditionsPlugin(): Plugin {
 
     async resolveId(source, importer, options) {
       const environment = this.environment;
-      let virtualState = virtualStates.get(environment);
-      if (!virtualState) {
-        virtualState = {
-          loadResults: new Map(),
-          proxies: new Map(),
-          proxyIds: new Map(),
-        };
-        virtualStates.set(environment, virtualState);
-      }
-      const importerProfile = importer ? virtualState.proxies.get(importer)?.profile : undefined;
+      if (source.startsWith(RUNTIME_VIRTUAL_PREFIX)) return source;
+      const importerProfile = importer ? RUNTIME_VIRTUAL_PROXIES.get(importer)?.profile : undefined;
       const condition =
         readRuntimeExportCondition(source) ??
         readRuntimeExportCondition(importer) ??
@@ -176,17 +190,8 @@ export function runtimeExportConditionsPlugin(): Plugin {
         if (!pluginResolved || pluginResolved.external || !isVirtualId(pluginResolved.id)) {
           return null;
         }
-        const key = virtualProxyKey(pluginResolved.id, "default");
-        let proxyId = virtualState.proxyIds.get(key);
-        if (!proxyId) {
-          proxyId = `${RUNTIME_VIRTUAL_PREFIX}${virtualProxyIndex++}`;
-          virtualState.proxyIds.set(key, proxyId);
-          virtualState.proxies.set(proxyId, {
-            originalId: pluginResolved.id,
-            profile: "default",
-          });
-        }
-        return { ...pluginResolved, id: proxyId };
+        if (pluginResolved.id.startsWith("\0vite/")) return null;
+        return { ...pluginResolved, id: createVirtualProxyId(pluginResolved.id, "default") };
       }
 
       const conditions = runtimeConditions(
@@ -214,14 +219,7 @@ export function runtimeExportConditionsPlugin(): Plugin {
 
       const resolvedId = resolved.id;
       if (isVirtualId(resolvedId)) {
-        const key = virtualProxyKey(resolvedId, condition);
-        let proxyId = virtualState.proxyIds.get(key);
-        if (!proxyId) {
-          proxyId = `${RUNTIME_VIRTUAL_PREFIX}${virtualProxyIndex++}`;
-          virtualState.proxyIds.set(key, proxyId);
-          virtualState.proxies.set(proxyId, { originalId: resolvedId, profile: condition });
-        }
-        return { ...metadata, id: proxyId };
+        return { ...metadata, id: createVirtualProxyId(resolvedId, condition) };
       }
       if (
         !resolvedId.startsWith("\0") &&
@@ -239,15 +237,16 @@ export function runtimeExportConditionsPlugin(): Plugin {
 
     async load(id, options) {
       if (!id.startsWith(RUNTIME_VIRTUAL_PREFIX)) return null;
-      const virtualState = virtualStates.get(this.environment);
-      const proxy = virtualState?.proxies.get(id);
-      if (!virtualState || !proxy) return null;
+      const virtualState = getVirtualEnvironmentState(virtualStates, this.environment);
+      const proxy = RUNTIME_VIRTUAL_PROXIES.get(id);
+      if (!proxy) return null;
 
       let loadResult = virtualState.loadResults.get(proxy.originalId);
       if (!loadResult) {
         loadResult = (async () => {
           for (const candidate of this.environment.config.plugins) {
-            if (candidate === plugin || isViteCorePlugin(candidate)) continue;
+            if (candidate === plugin) continue;
+            if (isViteCorePlugin(candidate) && !proxy.originalId.startsWith("\0vite/")) continue;
             if (!loadHookMatches(candidate, proxy.originalId)) continue;
             const handler = getLoadHandler(candidate);
             if (typeof handler !== "function") continue;
