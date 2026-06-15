@@ -43,6 +43,10 @@ import {
   prependToHtmlHead,
   safeJsonStringify,
 } from "./html.js";
+import {
+  applyDocumentAssetProps,
+  extractDocumentAssetProps,
+} from "./pages-document-asset-props.js";
 import { getClientTraceMetadataHTML } from "./client-trace-metadata.js";
 import { getScriptNonceFromNodeHeaderSources } from "./csp.js";
 import { mergeRouteParamsIntoQuery, parseQueryString as parseQuery } from "../utils/query.js";
@@ -216,6 +220,7 @@ async function streamPageToResponse(
     setDocumentInitialHead?: (head: React.ReactNode[]) => void;
     /** Buffer the body before writing headers so error-page fallback remains safe. */
     bufferBodyBeforeHeaders?: boolean;
+    crossOrigin?: string;
   },
 ): Promise<void> {
   const {
@@ -232,6 +237,7 @@ async function streamPageToResponse(
     documentContext,
     setDocumentInitialHead,
     bufferBodyBeforeHeaders = false,
+    crossOrigin,
   } = options;
 
   // Custom `_document.getInitialProps()` may opt in to wrapping the page tree
@@ -284,13 +290,13 @@ async function streamPageToResponse(
 
   // Now that the shell has rendered (and any _document.getInitialProps
   // has injected its tags), collect head HTML.
-  let headHTML = getHeadHTML();
-  if (documentRenderPage.status === "rendered" && documentRenderPage.stylesHTML) {
-    headHTML += `\n  ${documentRenderPage.stylesHTML}`;
-  }
+  const headHTML = getHeadHTML();
+  const documentStylesHTML =
+    documentRenderPage.status === "rendered" ? documentRenderPage.stylesHTML : "";
 
   // Build the document shell with a placeholder for the body
   let shellTemplate: string;
+  let documentAssetProps = {};
 
   if (DocumentComponent) {
     // When the renderPage path already invoked getInitialProps, reuse its
@@ -303,19 +309,30 @@ async function streamPageToResponse(
     const docElement = docProps
       ? React.createElement(DocumentComponent, docProps)
       : React.createElement(DocumentComponent);
-    let docHtml = await renderToStringAsync(docElement);
+    const renderedDocument = extractDocumentAssetProps(await renderToStringAsync(docElement));
+    documentAssetProps = renderedDocument.props;
+    let docHtml = renderedDocument.html;
+    const generatedFontHeadHTML = applyDocumentAssetProps(
+      fontHeadHTML,
+      { headNonce: renderedDocument.props.headNonce },
+      renderedDocument.props.headCrossOrigin ?? crossOrigin,
+    );
+    const generatedScripts = applyDocumentAssetProps(scripts, renderedDocument.props, crossOrigin);
     // Replace __NEXT_MAIN__ with our stream marker
     docHtml = docHtml.replace("__NEXT_MAIN__", STREAM_BODY_MARKER);
     if (headHTML) {
       docHtml = prependToHtmlHead(docHtml, `\n  ${headHTML}\n`);
     }
-    if (fontHeadHTML) {
-      docHtml = docHtml.replace("</head>", `  ${fontHeadHTML}</head>`);
+    if (generatedFontHeadHTML || documentStylesHTML) {
+      docHtml = docHtml.replace(
+        "</head>",
+        `  ${generatedFontHeadHTML}${documentStylesHTML}\n</head>`,
+      );
     }
     // Inject scripts: replace placeholder or append before </body>
-    docHtml = docHtml.replace("<!-- __NEXT_SCRIPTS__ -->", scripts);
+    docHtml = docHtml.replace("<!-- __NEXT_SCRIPTS__ -->", generatedScripts);
     if (!docHtml.includes("__NEXT_DATA__")) {
-      docHtml = docHtml.replace("</body>", `  ${scripts}\n</body>`);
+      docHtml = docHtml.replace("</body>", `  ${generatedScripts}\n</body>`);
     }
     shellTemplate = docHtml;
   } else {
@@ -325,7 +342,7 @@ async function streamPageToResponse(
     shellTemplate = `<!DOCTYPE html>
 <html>
 <head>
-  ${fontHeadHTML}${headHTML}
+  ${fontHeadHTML}${headHTML}${documentStylesHTML}
 </head>
 <body>
   <div id="__next">${STREAM_BODY_MARKER}</div>
@@ -447,6 +464,7 @@ export function createSSRHandler(
    */
   clientTraceMetadata?: readonly string[],
   htmlLimitedBots?: string,
+  crossOrigin?: string,
 ) {
   const matcher = fileMatcher ?? createValidFileMatcher();
 
@@ -1798,6 +1816,7 @@ hydrate();
               ? headShim.setDocumentInitialHead
               : undefined,
           bufferBodyBeforeHeaders: true,
+          crossOrigin,
         });
         _renderEnd = now();
 
