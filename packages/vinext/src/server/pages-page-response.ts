@@ -167,6 +167,7 @@ type RenderPagesPageResponseOptions = {
   isrCacheKey: (router: string, pathname: string) => string;
   expireSeconds?: number;
   isrRevalidateSeconds: number | null;
+  awaitIsrCacheWrite?: boolean;
   isrSet: (
     key: string,
     data: CachedPagesValue,
@@ -404,6 +405,8 @@ async function reportPagesIsrCacheWriteError(
   }
 }
 
+const pendingPagesIsrCacheWrites = new Map<string, Promise<void>>();
+
 function schedulePagesIsrCacheWrite(options: {
   cacheKey: string;
   expireSeconds?: number;
@@ -415,9 +418,11 @@ function schedulePagesIsrCacheWrite(options: {
   status: number;
   stream: ReadableStream<Uint8Array>;
   setCache: RenderPagesPageResponseOptions["isrSet"];
-}): void {
-  const cacheWritePromise = readStreamAsText(options.stream)
-    .then((bodyHtml) =>
+}): Promise<void> {
+  const bodyHtmlPromise = readStreamAsText(options.stream);
+  const previousWrite = pendingPagesIsrCacheWrites.get(options.cacheKey) ?? Promise.resolve();
+  const cacheWritePromise = Promise.all([previousWrite, bodyHtmlPromise])
+    .then(([, bodyHtml]) =>
       options.setCache(
         options.cacheKey,
         {
@@ -434,9 +439,16 @@ function schedulePagesIsrCacheWrite(options: {
     )
     .catch((error: unknown) =>
       reportPagesIsrCacheWriteError(error, options.cacheKey, options.routePattern),
-    );
+    )
+    .finally(() => {
+      if (pendingPagesIsrCacheWrites.get(options.cacheKey) === cacheWritePromise) {
+        pendingPagesIsrCacheWrites.delete(options.cacheKey);
+      }
+    });
 
+  pendingPagesIsrCacheWrites.set(options.cacheKey, cacheWritePromise);
   getRequestExecutionContext()?.waitUntil(cacheWritePromise);
+  return cacheWritePromise;
 }
 
 function applyGsspHeaders(
@@ -610,7 +622,7 @@ export async function renderPagesPageResponse(
     const isrPathname = options.routeUrl.split("?")[0];
     const cacheKey = options.isrCacheKey("pages", isrPathname);
 
-    schedulePagesIsrCacheWrite({
+    const cacheWritePromise = schedulePagesIsrCacheWrite({
       cacheKey,
       expireSeconds: options.expireSeconds,
       pageData: options.pageProps,
@@ -622,6 +634,9 @@ export async function renderPagesPageResponse(
       status: finalStatus,
       stream: cacheBodyStream,
     });
+    if (options.awaitIsrCacheWrite) {
+      await cacheWritePromise;
+    }
   }
 
   const compositeStream = await buildPagesCompositeStream(

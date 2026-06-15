@@ -536,6 +536,9 @@ export function createPagesPageHandler(
         const parsedRouteUrl = new URL(routeUrl, originalRequestUrl);
         const routePathname = parsedRouteUrl.pathname || "/";
         const pagesResolvedUrl = routePathname + originalRequestUrl.search;
+        const isOnDemandRevalidate = isOnDemandRevalidateRequest(
+          request.headers.get(PRERENDER_REVALIDATE_HEADER),
+        );
 
         const pageDataResult = await resolvePagesPageData({
           isDataReq,
@@ -577,9 +580,7 @@ export function createPagesPageHandler(
           // mirrors Next.js's `checkIsOnDemandRevalidate`, preventing an
           // external client from forcing synchronous regeneration via an
           // arbitrary header value (cache-stampede/DoS vector).
-          isOnDemandRevalidate: isOnDemandRevalidateRequest(
-            request.headers.get(PRERENDER_REVALIDATE_HEADER),
-          ),
+          isOnDemandRevalidate,
           pageModule,
           AppComponent,
           params,
@@ -714,6 +715,7 @@ export function createPagesPageHandler(
 
         return await renderPagesPageResponse({
           assetTags,
+          awaitIsrCacheWrite: isOnDemandRevalidate,
           buildId,
           clearSsrContext() {
             if (typeof setSSRContext === "function") setSSRContext(null);

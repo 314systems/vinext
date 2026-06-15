@@ -964,6 +964,8 @@ export async function resolvePagesPageData(
 
     if (typeof result?.revalidate === "number" && result.revalidate > 0) {
       isrRevalidateSeconds = result.revalidate;
+    } else if (options.isOnDemandRevalidate) {
+      isrRevalidateSeconds = cached?.value.cacheControl?.revalidate ?? 31_536_000;
     } else if (cachedValue?.kind === "PAGES" && cachedValue.generatedFromDataRequest) {
       isrRevalidateSeconds = cached?.value.cacheControl?.revalidate ?? 31_536_000;
     }

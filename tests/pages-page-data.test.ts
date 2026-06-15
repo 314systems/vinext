@@ -1205,6 +1205,23 @@ describe("pages page data", () => {
     expect(received).toBe("on-demand");
   });
 
+  it("persists on-demand output for static pages without an explicit revalidate value", async () => {
+    const result = await resolvePagesPageData(
+      createOptions({
+        isOnDemandRevalidate: true,
+        pageModule: {
+          async getStaticProps() {
+            return { props: { reason: "on-demand" } };
+          },
+        },
+      }),
+    );
+
+    expect(result.kind).toBe("render");
+    if (result.kind !== "render") throw new Error("expected render result");
+    expect(result.isrRevalidateSeconds).toBe(31_536_000);
+  });
+
   it("passes revalidateReason: 'stale' to getStaticProps for runtime cache-miss requests", async () => {
     let received: unknown = "untouched";
     await resolvePagesPageData(
