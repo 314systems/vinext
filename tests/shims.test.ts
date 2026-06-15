@@ -15920,6 +15920,14 @@ describe("Pages Router concurrent navigation", () => {
       vi.resetModules();
       const routerModule = await import("../packages/vinext/src/shims/router.js");
       const Router = routerModule.default;
+      const events: string[] = [];
+      Router.events.on("routeChangeStart", (url: unknown) => events.push(`start:${String(url)}`));
+      Router.events.on("beforeHistoryChange", (url: unknown) =>
+        events.push(`before:${String(url)}`),
+      );
+      Router.events.on("routeChangeComplete", (url: unknown) =>
+        events.push(`complete:${String(url)}`),
+      );
 
       const result = await Router.push("/old-home");
 
@@ -15939,6 +15947,11 @@ describe("Pages Router concurrent navigation", () => {
         "/docs/new-home",
       );
       expect(win.location.href).toBe("http://localhost/docs/new-home");
+      expect(events).toEqual([
+        "start:/docs/old-home",
+        "before:/docs/new-home",
+        "complete:/docs/new-home",
+      ]);
       expect(render).toHaveBeenCalled();
     } finally {
       vi.resetModules();

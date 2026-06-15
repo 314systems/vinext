@@ -2339,6 +2339,7 @@ async function performNavigation(
 
   if (mode === "push") saveScrollPosition();
   const isQueryUpdating = options?._h === 1;
+  let completedBrowserUrl = full;
   cancelActiveNavigation(shallow);
   if (!isQueryUpdating) {
     routerEvents.emit("routeChangeStart", full, { shallow });
@@ -2347,6 +2348,7 @@ async function performNavigation(
     const result = await runNavigateClient(full, full, htmlFetchUrl, {
       ...navigateOptions,
       commitNavigation(browserUrl) {
+        completedBrowserUrl = browserUrl;
         routerEvents.emit("beforeHistoryChange", browserUrl, { shallow });
         updateHistory(mode, browserUrl, navState);
       },
@@ -2368,13 +2370,14 @@ async function performNavigation(
   }
   onStateUpdate?.();
   if (!isQueryUpdating) {
-    routerEvents.emit("routeChangeComplete", full, { shallow });
+    routerEvents.emit("routeChangeComplete", completedBrowserUrl, { shallow });
   }
   // Hash scrolling after routeChangeComplete, matching Next.js ordering:
   // x/y restoration happens during the render commit, then hash scrolling
   // happens after the completion event.
-  if (doScroll && hash && !shallow) {
-    scrollToHashTarget(hash);
+  if (doScroll && !shallow) {
+    const completedHash = extractHash(completedBrowserUrl);
+    if (completedHash) scrollToHashTarget(completedHash);
   }
   dispatchNavigateEvent();
   return true;
