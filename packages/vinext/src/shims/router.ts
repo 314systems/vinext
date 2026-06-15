@@ -1284,7 +1284,7 @@ function cancelPreviousRenderCommit(): void {
   routerRuntimeState.cancelPendingRenderCommit = null;
 }
 
-function cancelActiveNavigation(): void {
+function cancelActiveNavigation(shallow = false): void {
   const cancelledEventUrl = routerRuntimeState.activeNavigationEventUrl;
   const controller = routerRuntimeState.activeAbortController;
   if (!controller || !cancelledEventUrl) return;
@@ -1297,7 +1297,7 @@ function cancelActiveNavigation(): void {
 
   routerRuntimeState.cancellationEventEmittedControllers.add(controller);
   routerEvents.emit("routeChangeError", new NavigationCancelledError(), cancelledEventUrl, {
-    shallow: false,
+    shallow,
   });
 }
 
@@ -2289,7 +2289,7 @@ async function performNavigation(
 
   // Hash-only change — no page fetch needed
   if (options?._h !== 1 && isHashOnlyChange(full)) {
-    cancelActiveNavigation();
+    cancelActiveNavigation(shallow);
     // Snapshot the outgoing entry's scroll before updateHistory mints a new
     // key, so a later back-popstate restores the position the user had
     // reached here rather than {x: 0, y: 0}. Upstream snapshots inside
@@ -2331,7 +2331,7 @@ async function performNavigation(
     (appPathEntry !== undefined && "__appRouter" in appPathEntry && appPathEntry.__appRouter) ||
     ["app", "document"].includes(resolveHybridClientRouteOwner(resolved, __basePath) ?? "");
   if (appRouteDetected) {
-    cancelActiveNavigation();
+    cancelActiveNavigation(shallow);
     if (mode === "push") window.location.assign(full);
     else window.location.replace(full);
     return new Promise<boolean>(() => {});
@@ -2339,7 +2339,7 @@ async function performNavigation(
 
   if (mode === "push") saveScrollPosition();
   const isQueryUpdating = options?._h === 1;
-  cancelActiveNavigation();
+  cancelActiveNavigation(shallow);
   if (!isQueryUpdating) {
     routerEvents.emit("routeChangeStart", full, { shallow });
   }

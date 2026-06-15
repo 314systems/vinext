@@ -14244,11 +14244,16 @@ describe("Pages Router concurrent navigation", () => {
     try {
       vi.resetModules();
       const Router = (await import("../packages/vinext/src/shims/router.js")).default;
+      const routeChangeErrors: unknown[][] = [];
+      Router.events.on("routeChangeError", (...args: unknown[]) => routeChangeErrors.push(args));
 
       const slowNavigation = Router.push("/slow-route");
       await Promise.resolve();
       await expect(Router.push("/?tab=next", undefined, { shallow: true })).resolves.toBe(true);
       expect(slowSignal?.aborted).toBe(true);
+      expect(routeChangeErrors).toHaveLength(1);
+      expect((routeChangeErrors[0]![0] as Error & { cancelled?: boolean }).cancelled).toBe(true);
+      expect(routeChangeErrors[0]!.slice(1)).toEqual(["/slow-route", { shallow: true }]);
 
       slowResponse.resolve(new Response(buildNavHtml("/slow-route", pageModuleUrl)));
       await expect(slowNavigation).resolves.toBe(true);
