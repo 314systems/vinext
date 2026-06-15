@@ -1646,6 +1646,8 @@ async function navigateClientData(
     );
   }
 
+  options.commitNavigation?.(url);
+
   // Lazy-load `_app` if we have an app loader and haven't cached it yet.
   let AppComponent = window.__VINEXT_APP__;
   if (!AppComponent && typeof window.__VINEXT_APP_LOADER__ === "function") {
@@ -1722,7 +1724,6 @@ async function navigateClientData(
   // has passed assertStillCurrent(). The post-render await below waits for the
   // stable Pages Router commit boundary before routeChangeComplete, matching
   // Next.js's client Root callback without remounting the page tree.
-  options.commitNavigation?.(url);
   window.__NEXT_DATA__ = nextData;
   applyVinextLocaleGlobals(window, nextData);
   await renderPagesRouterElement(element, options.scroll);
@@ -1851,6 +1852,8 @@ async function navigateClientHtml(
     );
   }
 
+  options.commitNavigation?.(browserUrl);
+
   // Import React for createElement
   const React = (await import("react")).default;
   assertStillCurrent();
@@ -1892,7 +1895,6 @@ async function navigateClientHtml(
   // has passed assertStillCurrent(). The post-render await below waits for the
   // stable Pages Router commit boundary before routeChangeComplete, matching
   // Next.js's client Root callback without remounting the page tree.
-  options.commitNavigation?.(browserUrl);
   window.__NEXT_DATA__ = nextData;
   applyVinextLocaleGlobals(window, nextData);
   await renderPagesRouterElement(element, options.scroll);
@@ -2350,26 +2352,19 @@ async function performNavigation(
   if (!isQueryUpdating) {
     routerEvents.emit("routeChangeStart", full, { shallow });
   }
-  if (isQueryOnlyNavigation) {
-    routerEvents.emit("beforeHistoryChange", full, { shallow });
-    updateHistory(mode, full, navState);
-  }
   if (!shallow) {
     const result = await runNavigateClient(full, full, htmlFetchUrl, {
       ...navigateOptions,
       commitNavigation(browserUrl) {
-        completedBrowserUrl = browserUrl;
-        if (isQueryOnlyNavigation) {
-          if (browserUrl !== full) updateHistory("replace", browserUrl, navState);
-        } else {
-          routerEvents.emit("beforeHistoryChange", browserUrl, { shallow });
-          updateHistory(mode, browserUrl, navState);
-        }
+        const historyUrl = isQueryOnlyNavigation ? full : browserUrl;
+        completedBrowserUrl = historyUrl;
+        routerEvents.emit("beforeHistoryChange", historyUrl, { shallow });
+        updateHistory(mode, historyUrl, navState);
       },
     });
     if (result === "cancelled") return true;
     if (result === "failed") return false;
-  } else if (!isQueryOnlyNavigation) {
+  } else {
     routerEvents.emit("beforeHistoryChange", full, { shallow });
     updateHistory(mode, full, navState);
     // Shallow navigations skip the render-commit path, so apply the scroll
