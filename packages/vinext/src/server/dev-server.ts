@@ -1209,11 +1209,7 @@ export function createSSRHandler(
                         viteBase,
                       );
                       const regenAppUrl = RegenApp
-                        ? createPagesDevModuleUrl(
-                            viteRoot,
-                            path.join(pagesDir, "_app"),
-                            viteBase,
-                          )
+                        ? createPagesDevModuleUrl(viteRoot, path.join(pagesDir, "_app"), viteBase)
                         : null;
                       const freshPagesNextData = {
                         ...pagesNextData,

@@ -9,20 +9,19 @@ describe("createPagesDevModuleUrl", () => {
   });
 
   it("preserves root-base behavior", () => {
-    expect(createPagesDevModuleUrl("/repo", "/repo/pages/about.tsx", "/")).toBe(
-      "/pages/about.tsx",
-    );
+    expect(createPagesDevModuleUrl("/repo", "/repo/pages/about.tsx", "/")).toBe("/pages/about.tsx");
   });
 
   it("normalizes Windows paths", () => {
-    expect(
-      createPagesDevModuleUrl("C:\\repo", "C:\\repo\\pages\\about.tsx", "/docs/"),
-    ).toBe("/docs/pages/about.tsx");
+    expect(createPagesDevModuleUrl("C:\\repo", "C:\\repo\\pages\\about.tsx", "/docs/")).toBe(
+      "/docs/pages/about.tsx",
+    );
   });
 
   it("encodes path query and fragment delimiters", () => {
-    expect(createPagesDevModuleUrl("/repo", "/repo/pages/what?#.tsx", "/docs/"))
-      .toBe("/docs/pages/what%3F%23.tsx");
+    expect(createPagesDevModuleUrl("/repo", "/repo/pages/what?#.tsx", "/docs/")).toBe(
+      "/docs/pages/what%3F%23.tsx",
+    );
   });
 
   it("returns a stable URL for Vite HMR module identity", () => {
