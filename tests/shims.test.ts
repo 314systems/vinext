@@ -13965,6 +13965,376 @@ describe("Pages Router concurrent navigation", () => {
     return assignments;
   }
 
+  // Ported from Next.js: test/e2e/basepath/router-events.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/basepath/router-events.test.ts
+  it("Pages Router events include basePath for successful navigations", async () => {
+    const previousWindow = (globalThis as any).window;
+    const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
+    const originalFetch = globalThis.fetch;
+    const { win } = createNavWindow();
+    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    win.location.pathname = "/docs/hello";
+    win.location.href = "http://localhost/docs/hello";
+    (globalThis as any).window = win;
+    process.env.__NEXT_ROUTER_BASEPATH = "/docs";
+    globalThis.fetch = vi.fn(async () => new Response(buildNavHtml("/other-page", pageModuleUrl)));
+    const events: unknown[][] = [];
+
+    try {
+      vi.resetModules();
+      const Router = (await import("../packages/vinext/src/shims/router.js")).default;
+      for (const event of ["routeChangeStart", "beforeHistoryChange", "routeChangeComplete"]) {
+        Router.events.on(event, (...args: unknown[]) => events.push([event, ...args]));
+      }
+
+      await expect(Router.push("/other-page")).resolves.toBe(true);
+      expect(events).toEqual([
+        ["routeChangeStart", "/docs/other-page", { shallow: false }],
+        ["beforeHistoryChange", "/docs/other-page", { shallow: false }],
+        ["routeChangeComplete", "/docs/other-page", { shallow: false }],
+      ]);
+    } finally {
+      if (previousBasePath === undefined) delete process.env.__NEXT_ROUTER_BASEPATH;
+      else process.env.__NEXT_ROUTER_BASEPATH = previousBasePath;
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+      vi.resetModules();
+    }
+  });
+
+  it("Pages Router hash events include basePath", async () => {
+    const previousWindow = (globalThis as any).window;
+    const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
+    const originalFetch = globalThis.fetch;
+    const { win } = createNavWindow();
+    win.location.pathname = "/docs/hello";
+    win.location.href = "http://localhost/docs/hello";
+    (globalThis as any).window = win;
+    process.env.__NEXT_ROUTER_BASEPATH = "/docs";
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error("hash-only navigation must not fetch");
+    });
+    const events: unknown[][] = [];
+
+    try {
+      vi.resetModules();
+      const Router = (await import("../packages/vinext/src/shims/router.js")).default;
+      for (const event of ["hashChangeStart", "hashChangeComplete"]) {
+        Router.events.on(event, (...args: unknown[]) => events.push([event, ...args]));
+      }
+
+      await expect(Router.push("/hello#some-hash", undefined, { scroll: false })).resolves.toBe(
+        true,
+      );
+      expect(events).toEqual([
+        ["hashChangeStart", "/docs/hello#some-hash", { shallow: false }],
+        ["hashChangeComplete", "/docs/hello#some-hash", { shallow: false }],
+      ]);
+    } finally {
+      if (previousBasePath === undefined) delete process.env.__NEXT_ROUTER_BASEPATH;
+      else process.env.__NEXT_ROUTER_BASEPATH = previousBasePath;
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+      vi.resetModules();
+    }
+  });
+
+  it("Pages Router cancelled events match Next basePath, shape, and timing", async () => {
+    const previousWindow = (globalThis as any).window;
+    const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
+    const originalFetch = globalThis.fetch;
+    const { win } = createNavWindow();
+    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const slowResponse = createDeferred<Response>();
+    win.location.pathname = "/docs/hello";
+    win.location.href = "http://localhost/docs/hello";
+    (globalThis as any).window = win;
+    process.env.__NEXT_ROUTER_BASEPATH = "/docs";
+    globalThis.fetch = vi
+      .fn()
+      .mockImplementationOnce(() => slowResponse.promise)
+      .mockResolvedValueOnce(new Response(buildNavHtml("/other-page", pageModuleUrl)));
+    const events: unknown[][] = [];
+
+    try {
+      vi.resetModules();
+      const Router = (await import("../packages/vinext/src/shims/router.js")).default;
+      Router.events.on("routeChangeStart", (...args: unknown[]) =>
+        events.push(["routeChangeStart", ...args]),
+      );
+      Router.events.on("beforeHistoryChange", (...args: unknown[]) =>
+        events.push(["beforeHistoryChange", ...args]),
+      );
+      Router.events.on("routeChangeComplete", (...args: unknown[]) =>
+        events.push(["routeChangeComplete", ...args]),
+      );
+      Router.events.on("routeChangeError", (error: unknown, ...args: unknown[]) => {
+        const routeError = error as Error & { cancelled?: boolean };
+        events.push(["routeChangeError", routeError.message, routeError.cancelled, ...args]);
+      });
+
+      const slowNavigation = Router.push("/slow-route");
+      await Promise.resolve();
+      const completedNavigation = Router.push("/other-page");
+      slowResponse.resolve(new Response(buildNavHtml("/slow-route", pageModuleUrl)));
+      await Promise.all([slowNavigation, completedNavigation]);
+
+      expect(events).toEqual([
+        ["routeChangeStart", "/docs/slow-route", { shallow: false }],
+        ["routeChangeError", "Route Cancelled", true, "/docs/slow-route", { shallow: false }],
+        ["routeChangeStart", "/docs/other-page", { shallow: false }],
+        ["beforeHistoryChange", "/docs/other-page", { shallow: false }],
+        ["routeChangeComplete", "/docs/other-page", { shallow: false }],
+      ]);
+    } finally {
+      if (previousBasePath === undefined) delete process.env.__NEXT_ROUTER_BASEPATH;
+      else process.env.__NEXT_ROUTER_BASEPATH = previousBasePath;
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+      vi.resetModules();
+    }
+  });
+
+  it("Pages Router failed events match Next basePath, shape, and timing", async () => {
+    const previousWindow = (globalThis as any).window;
+    const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
+    const originalFetch = globalThis.fetch;
+    const { win } = createNavWindow();
+    win.location.pathname = "/docs/hello";
+    win.location.href = "http://localhost/docs/hello";
+    Object.assign(win as unknown as Window, {
+      __NEXT_DATA__: { ...win.__NEXT_DATA__, buildId: "test-build" },
+      __VINEXT_PAGE_LOADERS__: {
+        "/error-route": vi.fn(async () => ({ default: () => null })),
+      },
+      __VINEXT_PAGE_PATTERNS__: ["/error-route"],
+    });
+    (globalThis as any).window = win;
+    process.env.__NEXT_ROUTER_BASEPATH = "/docs";
+    globalThis.fetch = vi.fn(async () => new Response("KABOOM!", { status: 500 }));
+    const events: unknown[][] = [];
+
+    try {
+      vi.resetModules();
+      const Router = (await import("../packages/vinext/src/shims/router.js")).default;
+      Router.events.on("routeChangeStart", (...args: unknown[]) =>
+        events.push(["routeChangeStart", ...args]),
+      );
+      Router.events.on("beforeHistoryChange", (...args: unknown[]) =>
+        events.push(["beforeHistoryChange", ...args]),
+      );
+      Router.events.on("routeChangeError", (error: unknown, ...args: unknown[]) => {
+        const routeError = error as Error & { cancelled?: boolean };
+        events.push([
+          "routeChangeError",
+          routeError.message,
+          routeError.cancelled ?? null,
+          ...args,
+        ]);
+      });
+
+      await expect(Router.push("/error-route")).resolves.toBe(false);
+      expect(events).toEqual([
+        ["routeChangeStart", "/docs/error-route", { shallow: false }],
+        [
+          "routeChangeError",
+          "Failed to load static props",
+          null,
+          "/docs/error-route",
+          { shallow: false },
+        ],
+      ]);
+    } finally {
+      if (previousBasePath === undefined) delete process.env.__NEXT_ROUTER_BASEPATH;
+      else process.env.__NEXT_ROUTER_BASEPATH = previousBasePath;
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+      vi.resetModules();
+    }
+  });
+
+  it("does not mutate history for failed or cancelled route loads", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const { win, pushState } = createNavWindow();
+    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const slowResponse = createDeferred<Response>();
+    (globalThis as any).window = win;
+    globalThis.fetch = vi
+      .fn()
+      .mockImplementationOnce(() => slowResponse.promise)
+      .mockResolvedValueOnce(new Response("KABOOM!", { status: 500 }));
+
+    try {
+      vi.resetModules();
+      const Router = (await import("../packages/vinext/src/shims/router.js")).default;
+
+      const cancelledNavigation = Router.push("/slow-route");
+      await Promise.resolve();
+      const failedNavigation = Router.push("/error-route");
+      slowResponse.resolve(new Response(buildNavHtml("/slow-route", pageModuleUrl)));
+
+      await expect(cancelledNavigation).resolves.toBe(true);
+      await expect(failedNavigation).resolves.toBe(false);
+      expect(pushState).not.toHaveBeenCalled();
+      expect(win.location.pathname).toBe("/");
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+      vi.resetModules();
+    }
+  });
+
+  it("hash-only navigation cancels a pending route before it can commit", async () => {
+    const previousWindow = (globalThis as any).window;
+    const previousDocument = (globalThis as any).document;
+    const originalFetch = globalThis.fetch;
+    const { win, render } = createNavWindow();
+    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const slowResponse = createDeferred<Response>();
+    (globalThis as any).window = win;
+    (globalThis as any).document = {
+      getElementById: vi.fn(() => null),
+      getElementsByName: vi.fn(() => []),
+    };
+    globalThis.fetch = vi.fn(() => slowResponse.promise);
+
+    try {
+      vi.resetModules();
+      const Router = (await import("../packages/vinext/src/shims/router.js")).default;
+
+      const slowNavigation = Router.push("/slow-route");
+      await Promise.resolve();
+      await expect(Router.push("#section", undefined, { scroll: false })).resolves.toBe(true);
+      slowResponse.resolve(new Response(buildNavHtml("/slow-route", pageModuleUrl)));
+      await expect(slowNavigation).resolves.toBe(true);
+
+      expect(win.location.pathname).toBe("/");
+      expect(win.location.hash).toBe("#section");
+      expect(win.__NEXT_DATA__.page).toBe("/");
+      expect(render).not.toHaveBeenCalled();
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      if (previousDocument === undefined) delete (globalThis as any).document;
+      else (globalThis as any).document = previousDocument;
+      globalThis.fetch = originalFetch;
+      vi.resetModules();
+    }
+  });
+
+  it("shallow navigation aborts and invalidates a pending route load", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const { win, render } = createNavWindow();
+    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const slowResponse = createDeferred<Response>();
+    let slowSignal: AbortSignal | undefined;
+    (globalThis as any).window = win;
+    globalThis.fetch = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+      slowSignal = init?.signal ?? undefined;
+      return slowResponse.promise;
+    });
+
+    try {
+      vi.resetModules();
+      const Router = (await import("../packages/vinext/src/shims/router.js")).default;
+
+      const slowNavigation = Router.push("/slow-route");
+      await Promise.resolve();
+      await expect(Router.push("/?tab=next", undefined, { shallow: true })).resolves.toBe(true);
+      expect(slowSignal?.aborted).toBe(true);
+
+      slowResponse.resolve(new Response(buildNavHtml("/slow-route", pageModuleUrl)));
+      await expect(slowNavigation).resolves.toBe(true);
+      expect(win.location.pathname).toBe("/");
+      expect(win.location.search).toBe("?tab=next");
+      expect(win.__NEXT_DATA__.page).toBe("/");
+      expect(render).not.toHaveBeenCalled();
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+      vi.resetModules();
+    }
+  });
+
+  it("App Router handoff cancels a pending Pages route load", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const { win } = createNavWindow();
+    const slowResponse = createDeferred<Response>();
+    (globalThis as any).window = win;
+    globalThis.fetch = vi.fn(() => slowResponse.promise);
+
+    try {
+      vi.resetModules();
+      const Router = (await import("../packages/vinext/src/shims/router.js")).default;
+      Router.components["/app-target"] = { __appRouter: true };
+
+      const slowNavigation = Router.push("/slow-route");
+      await Promise.resolve();
+      const appNavigation = Router.push("/app-target");
+
+      expect(win.location.assign).toHaveBeenCalledWith("/app-target");
+      slowResponse.resolve(new Response("stale"));
+      await expect(slowNavigation).resolves.toBe(true);
+      expect(win.__NEXT_DATA__.page).toBe("/");
+      void appNavigation;
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+      vi.resetModules();
+    }
+  });
+
+  it("emits beforeHistoryChange immediately before the successful history write", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const { win, pushState } = createNavWindow();
+    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    (globalThis as any).window = win;
+    globalThis.fetch = vi.fn(async () => new Response(buildNavHtml("/other-page", pageModuleUrl)));
+    const observations: string[] = [];
+
+    try {
+      vi.resetModules();
+      const Router = (await import("../packages/vinext/src/shims/router.js")).default;
+      Router.events.on("routeChangeStart", () => {
+        observations.push(`start:${win.location.pathname}`);
+      });
+      Router.events.on("beforeHistoryChange", () => {
+        observations.push(`before:${win.location.pathname}`);
+      });
+      pushState.mockImplementationOnce((...args: unknown[]) => {
+        observations.push(`write:${win.location.pathname}`);
+        const url = String(args[2]);
+        const parsed = new URL(url, "http://localhost");
+        win.location.pathname = parsed.pathname;
+        win.location.search = parsed.search;
+        win.location.hash = parsed.hash;
+        win.location.href = parsed.href;
+      });
+      Router.events.on("routeChangeComplete", () => {
+        observations.push(`complete:${win.location.pathname}`);
+      });
+
+      await expect(Router.push("/other-page")).resolves.toBe(true);
+      expect(observations).toEqual(["start:/", "before:/", "write:/", "complete:/other-page"]);
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+      vi.resetModules();
+    }
+  });
+
   async function expectPagesRouterPushTrailingSlashNormalization({
     target,
     expectedBrowserUrl,
@@ -14542,20 +14912,12 @@ describe("Pages Router concurrent navigation", () => {
       const Router = routerModule.default;
 
       const result = await Router.push("/failing-page");
-      // Distinguish the history update from the hard-navigation fallback:
-      // pushState writes the absolute browser URL, while the fallback helper
-      // writes the raw app-relative URL. The guard is correct only if each
-      // happens exactly once.
       const fallbackAssignments = hrefAssignments.filter((value) => value === "/failing-page");
-      const pushStateAssignments = hrefAssignments.filter(
-        (value) => value === "http://localhost/failing-page",
-      );
 
       expect(result).toBe(false);
       expect(fallbackAssignments).toHaveLength(1);
-      expect(pushStateAssignments).toHaveLength(1);
-      // Catch-all: exactly one history write plus exactly one hard-nav fallback.
-      expect(hrefAssignments).toHaveLength(2);
+      // Failed route loads must not mutate history before the hard fallback.
+      expect(hrefAssignments).toEqual(["/failing-page"]);
     } finally {
       if (previousWindow === undefined) {
         delete (globalThis as any).window;
@@ -15314,7 +15676,7 @@ describe("Pages Router concurrent navigation", () => {
   it("handles Pages Router middleware internal redirects as client-side redirects", async () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
-    const { win, replaceState, render } = createNavWindow();
+    const { win, render } = createNavWindow();
     const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
     Object.assign(win.location, { origin: "http://localhost" });
     Object.assign(win, {
@@ -15364,7 +15726,11 @@ describe("Pages Router concurrent navigation", () => {
         }),
       );
       expect(fetch).toHaveBeenNthCalledWith(2, "/new-home", expect.any(Object));
-      expect(replaceState).toHaveBeenLastCalledWith({}, "", "/new-home");
+      expect(win.history.pushState).toHaveBeenLastCalledWith(
+        expect.objectContaining({ __N: true }),
+        "",
+        "/new-home",
+      );
       expect(win.location.pathname).toBe("/new-home");
       expect(render).toHaveBeenCalled();
     } finally {
@@ -15511,7 +15877,7 @@ describe("Pages Router concurrent navigation", () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
     const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
-    const { win, replaceState, render } = createNavWindow();
+    const { win, render } = createNavWindow();
     const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
     Object.assign(win.location, {
       origin: "http://localhost",
@@ -15562,7 +15928,11 @@ describe("Pages Router concurrent navigation", () => {
       );
       expect(fetch).toHaveBeenNthCalledWith(2, "/docs/new-home", expect.any(Object));
       expect(fetch).not.toHaveBeenCalledWith("/docs/docs/new-home", expect.any(Object));
-      expect(replaceState).toHaveBeenLastCalledWith({}, "", "/docs/new-home");
+      expect(win.history.pushState).toHaveBeenLastCalledWith(
+        expect.objectContaining({ __N: true }),
+        "",
+        "/docs/new-home",
+      );
       expect(win.location.href).toBe("http://localhost/docs/new-home");
       expect(render).toHaveBeenCalled();
     } finally {
@@ -15634,6 +16004,52 @@ describe("Pages Router concurrent navigation", () => {
     }
   });
 
+  it("does not expose an internal redirect URL when the redirected route fails", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const { win, pushState, replaceState } = createNavWindow();
+    Object.assign(win.location, { origin: "http://localhost" });
+    Object.assign(win.__NEXT_DATA__, {
+      buildId: "build-1",
+      __vinext: { ...win.__NEXT_DATA__.__vinext, hasMiddleware: true },
+    });
+    Object.assign(win, {
+      __VINEXT_PAGE_LOADERS__: {
+        "/new-home": async () => ({ default: () => null }),
+      },
+    });
+    (globalThis as any).window = win;
+
+    globalThis.fetch = vi.fn(async (url: RequestInfo | URL) => {
+      const href = getFetchHref(url);
+      if (href === "/_next/data/build-1/old-home.json") {
+        return new Response("{}", {
+          headers: { "x-nextjs-redirect": "/new-home" },
+          status: 200,
+        });
+      }
+      if (href === "/new-home") {
+        return new Response("KABOOM!", { status: 500 });
+      }
+      throw new Error(`Unexpected fetch: ${href}`);
+    });
+
+    try {
+      vi.resetModules();
+      const Router = (await import("../packages/vinext/src/shims/router.js")).default;
+
+      await expect(Router.push("/old-home")).resolves.toBe(false);
+      expect(pushState).not.toHaveBeenCalled();
+      expect(replaceState).not.toHaveBeenCalledWith(expect.anything(), "", "/new-home");
+      expect(win.location.pathname).toBe("/");
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+      vi.resetModules();
+    }
+  });
+
   it("hard-navigates to the final middleware redirect URL when it is not a page", async () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
@@ -15679,8 +16095,8 @@ describe("Pages Router concurrent navigation", () => {
           headers: expect.objectContaining({ "x-nextjs-data": "1" }),
         }),
       );
-      expect(hrefAssignments).toContain("http://localhost/nl/to?pathname=/api/ok");
       expect(hrefAssignments).toContain("/api/ok");
+      expect(hrefAssignments).not.toContain("http://localhost/nl/to?pathname=/api/ok");
       expect(hrefAssignments).not.toContain("/nl/api/ok");
     } finally {
       vi.resetModules();
@@ -15785,7 +16201,7 @@ describe("Pages Router concurrent navigation", () => {
       browserPath: "/app/router-events-test",
       target: "/router-events-test#section-1",
       expectedBrowserUrl: "/app/router-events-test#section-1",
-      expectedEventUrl: "/router-events-test#section-1",
+      expectedEventUrl: "/app/router-events-test#section-1",
     });
   });
 
@@ -15920,7 +16336,7 @@ describe("Pages Router concurrent navigation", () => {
       browserPath: "/app/app/foo",
       target: "/app/foo#section-1",
       expectedBrowserUrl: "/app/app/foo#section-1",
-      expectedEventUrl: "/app/foo#section-1",
+      expectedEventUrl: "/app/app/foo#section-1",
     });
   });
 
@@ -15972,6 +16388,241 @@ describe("Pages Router concurrent navigation", () => {
       }
       globalThis.fetch = originalFetch;
       (globalThis as any).CustomEvent = originalCustomEvent;
+    }
+  });
+
+  it("hash-only popstate cancels a pending route and uses the browser basePath URL", async () => {
+    const previousWindow = (globalThis as any).window;
+    const previousDocument = (globalThis as any).document;
+    const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
+    const originalFetch = globalThis.fetch;
+    const listeners = new Map<string, (event: any) => void>();
+    const { win, render } = createNavWindow();
+    const slowResponse = createDeferred<Response>();
+    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    process.env.__NEXT_ROUTER_BASEPATH = "/docs";
+    win.location.pathname = "/docs/current";
+    win.location.href = "http://localhost/docs/current";
+    win.addEventListener = vi.fn((type: string, handler: (event: any) => void) => {
+      listeners.set(type, handler);
+    });
+    (globalThis as any).window = win;
+    (globalThis as any).document = {
+      getElementById: vi.fn(() => null),
+      getElementsByName: vi.fn(() => []),
+    };
+    globalThis.fetch = vi.fn(() => slowResponse.promise);
+    const events: unknown[][] = [];
+
+    try {
+      vi.resetModules();
+      const Router = (await import("../packages/vinext/src/shims/router.js")).default;
+      const { installPagesRouterRuntime } =
+        await import("../packages/vinext/src/shims/pages-router-runtime.js");
+      installPagesRouterRuntime();
+      Router.events.on("routeChangeError", (error: unknown, url: unknown) => {
+        events.push(["error", (error as Error).message, url]);
+      });
+      Router.events.on("hashChangeStart", (url: unknown) => events.push(["hashStart", url]));
+      Router.events.on("hashChangeComplete", (url: unknown) => events.push(["hashComplete", url]));
+
+      const slowNavigation = Router.push("/slow-route");
+      await Promise.resolve();
+      win.location.hash = "#section";
+      win.location.href = "http://localhost/docs/current#section";
+      listeners.get("popstate")!({ state: null });
+
+      expect(events).toEqual([
+        ["error", "Route Cancelled", "/docs/slow-route"],
+        ["hashStart", "/docs/current#section"],
+        ["hashComplete", "/docs/current#section"],
+      ]);
+      slowResponse.resolve(new Response(buildNavHtml("/slow-route", pageModuleUrl)));
+      await expect(slowNavigation).resolves.toBe(true);
+      expect(win.__NEXT_DATA__.page).toBe("/");
+      expect(render).not.toHaveBeenCalled();
+    } finally {
+      if (previousBasePath === undefined) delete process.env.__NEXT_ROUTER_BASEPATH;
+      else process.env.__NEXT_ROUTER_BASEPATH = previousBasePath;
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      if (previousDocument === undefined) delete (globalThis as any).document;
+      else (globalThis as any).document = previousDocument;
+      globalThis.fetch = originalFetch;
+      vi.resetModules();
+    }
+  });
+
+  it("full-route popstate cancels before start and delays adoption until load success", async () => {
+    const previousWindow = (globalThis as any).window;
+    const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
+    const originalFetch = globalThis.fetch;
+    const listeners = new Map<string, (event: any) => void>();
+    const { win } = createNavWindow();
+    const slowResponse = createDeferred<Response>();
+    const popResponse = createDeferred<Response>();
+    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    process.env.__NEXT_ROUTER_BASEPATH = "/docs";
+    win.location.pathname = "/docs/current";
+    win.location.href = "http://localhost/docs/current";
+    win.addEventListener = vi.fn((type: string, handler: (event: any) => void) => {
+      listeners.set(type, handler);
+    });
+    (globalThis as any).window = win;
+    globalThis.fetch = vi
+      .fn()
+      .mockImplementationOnce(() => slowResponse.promise)
+      .mockImplementationOnce(() => popResponse.promise);
+    const events: string[] = [];
+
+    try {
+      vi.resetModules();
+      const Router = (await import("../packages/vinext/src/shims/router.js")).default;
+      const { installPagesRouterRuntime } =
+        await import("../packages/vinext/src/shims/pages-router-runtime.js");
+      installPagesRouterRuntime();
+      Router.events.on("routeChangeError", (error: unknown, url: unknown) =>
+        events.push(`error:${String(url)}:${(error as Error).message}`),
+      );
+      Router.events.on("routeChangeStart", (url: unknown) => events.push(`start:${String(url)}`));
+      Router.events.on("beforeHistoryChange", (url: unknown) =>
+        events.push(`before:${String(url)}`),
+      );
+      Router.events.on("routeChangeComplete", (url: unknown) =>
+        events.push(`complete:${String(url)}`),
+      );
+
+      const slowNavigation = Router.push("/slow-route");
+      await Promise.resolve();
+      win.location.pathname = "/docs/next";
+      win.location.href = "http://localhost/docs/next";
+      listeners.get("popstate")!({
+        state: { __N: true, as: "/next", url: "/next", key: "next-key" },
+      });
+
+      expect(events).toEqual([
+        "start:/docs/slow-route",
+        "error:/docs/slow-route:Route Cancelled",
+        "start:/docs/next",
+      ]);
+      popResponse.resolve(new Response(buildNavHtml("/next", pageModuleUrl)));
+      await vi.waitFor(() => expect(events).toContain("complete:/docs/next"));
+      expect(events).toEqual([
+        "start:/docs/slow-route",
+        "error:/docs/slow-route:Route Cancelled",
+        "start:/docs/next",
+        "before:/docs/next",
+        "complete:/docs/next",
+      ]);
+      slowResponse.resolve(new Response(buildNavHtml("/slow-route", pageModuleUrl)));
+      await expect(slowNavigation).resolves.toBe(true);
+      expect(win.__NEXT_DATA__.page).toBe("/next");
+    } finally {
+      if (previousBasePath === undefined) delete process.env.__NEXT_ROUTER_BASEPATH;
+      else process.env.__NEXT_ROUTER_BASEPATH = previousBasePath;
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+      vi.resetModules();
+    }
+  });
+
+  it("failed popstate emits no beforeHistoryChange or completion", async () => {
+    const previousWindow = (globalThis as any).window;
+    const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
+    const originalFetch = globalThis.fetch;
+    const listeners = new Map<string, (event: any) => void>();
+    const { win } = createNavWindow();
+    process.env.__NEXT_ROUTER_BASEPATH = "/docs";
+    win.location.pathname = "/docs/current";
+    win.location.href = "http://localhost/docs/current";
+    win.addEventListener = vi.fn((type: string, handler: (event: any) => void) => {
+      listeners.set(type, handler);
+    });
+    (globalThis as any).window = win;
+    globalThis.fetch = vi.fn(async () => new Response("KABOOM!", { status: 500 }));
+    const events: string[] = [];
+
+    try {
+      vi.resetModules();
+      const Router = (await import("../packages/vinext/src/shims/router.js")).default;
+      const { installPagesRouterRuntime } =
+        await import("../packages/vinext/src/shims/pages-router-runtime.js");
+      installPagesRouterRuntime();
+      for (const event of [
+        "routeChangeStart",
+        "beforeHistoryChange",
+        "routeChangeComplete",
+        "routeChangeError",
+      ]) {
+        Router.events.on(event, (...args: unknown[]) => {
+          const url = event === "routeChangeError" ? args[1] : args[0];
+          events.push(`${event}:${String(url)}`);
+        });
+      }
+
+      win.location.pathname = "/docs/failing";
+      win.location.href = "http://localhost/docs/failing";
+      listeners.get("popstate")!({
+        state: { __N: true, as: "/failing", url: "/failing", key: "fail-key" },
+      });
+      await vi.waitFor(() => expect(events).toContain("routeChangeError:/docs/failing"));
+
+      expect(events).toEqual(["routeChangeStart:/docs/failing", "routeChangeError:/docs/failing"]);
+    } finally {
+      if (previousBasePath === undefined) delete process.env.__NEXT_ROUTER_BASEPATH;
+      else process.env.__NEXT_ROUTER_BASEPATH = previousBasePath;
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+      vi.resetModules();
+    }
+  });
+
+  it("a stale popstate load cannot commit after a newer popstate wins", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const listeners = new Map<string, (event: any) => void>();
+    const { win, render } = createNavWindow();
+    const firstResponse = createDeferred<Response>();
+    const secondResponse = createDeferred<Response>();
+    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    win.addEventListener = vi.fn((type: string, handler: (event: any) => void) => {
+      listeners.set(type, handler);
+    });
+    (globalThis as any).window = win;
+    globalThis.fetch = vi
+      .fn()
+      .mockImplementationOnce(() => firstResponse.promise)
+      .mockImplementationOnce(() => secondResponse.promise);
+
+    try {
+      vi.resetModules();
+      await import("../packages/vinext/src/shims/router.js");
+      const { installPagesRouterRuntime } =
+        await import("../packages/vinext/src/shims/pages-router-runtime.js");
+      installPagesRouterRuntime();
+
+      win.location.pathname = "/first";
+      win.location.href = "http://localhost/first";
+      listeners.get("popstate")!({ state: { __N: true, as: "/first", url: "/first" } });
+      await Promise.resolve();
+      win.location.pathname = "/second";
+      win.location.href = "http://localhost/second";
+      listeners.get("popstate")!({ state: { __N: true, as: "/second", url: "/second" } });
+
+      secondResponse.resolve(new Response(buildNavHtml("/second", pageModuleUrl)));
+      await vi.waitFor(() => expect(win.__NEXT_DATA__.page).toBe("/second"));
+      firstResponse.resolve(new Response(buildNavHtml("/first", pageModuleUrl)));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(win.__NEXT_DATA__.page).toBe("/second");
+      expect(render).toHaveBeenCalledTimes(1);
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+      vi.resetModules();
     }
   });
 
@@ -16315,12 +16966,9 @@ describe("Pages Router concurrent navigation", () => {
     (globalThis as any).window = win;
     vi.resetModules();
 
-    // Capture router state mid-navigation, after pushState has updated
-    // window.location but before navigateClient's dynamic import runs (which
-    // would fail in this test env). useRouter() reads from window.location
-    // and window.__NEXT_DATA__ at provider-mount time, so rendering a Probe
-    // inside the mocked fetch handler observes the post-pushState state —
-    // exactly the code path that #1196 corrupts in Next.js.
+    // Capture router state after the route has loaded and history has committed.
+    // Failed or pending loads must leave the old location visible, so observing
+    // the destination during fetch is no longer a valid contract.
     const React = await import("react");
     const { renderToStaticMarkup } = await import("react-dom/server");
     const routerModule = await import("../packages/vinext/src/shims/router.js");
@@ -16331,26 +16979,18 @@ describe("Pages Router concurrent navigation", () => {
       return React.createElement("span", null, "ok");
     }
 
-    globalThis.fetch = async (_url: any, _init: any) => {
-      renderToStaticMarkup(routerModule.wrapWithRouterContext(React.createElement(Probe)));
-      // Return HTML containing the destination's __NEXT_DATA__. The dynamic
-      // import of the page module fails in this test env, which is fine — the
-      // assertion above has already captured router.query.
-      return new Response(
-        buildNavHtml("/[...path]", "/@fs/pages/catchall.js", { path: ["second"] }),
-      );
-    };
-
-    // Silence the expected routeChangeError from the page-module import failure.
-    const onRouteChangeError = vi.fn();
+    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    globalThis.fetch = async () =>
+      new Response(buildNavHtml("/[...path]", pageModuleUrl, { path: ["second"] }));
 
     try {
       const Router = routerModule.default;
-      Router.events.on("routeChangeError", onRouteChangeError);
 
       // Router.push() takes an app-relative path; basePath is added internally
-      // by performNavigation → toBrowserNavigationHref before pushState.
-      await Router.push("/second");
+      // by performNavigation → toBrowserNavigationHref when the loaded route
+      // commits successfully.
+      await expect(Router.push("/second")).resolves.toBe(true);
+      renderToStaticMarkup(routerModule.wrapWithRouterContext(React.createElement(Probe)));
 
       // pushState has fired, so location.pathname is "/docs/second".
       // stripBasePath() removes "/docs", and the catch-all pattern
@@ -16363,7 +17003,6 @@ describe("Pages Router concurrent navigation", () => {
       expect(capturedRouter.query.path).not.toContain("_next");
       expect(capturedRouter.query.path).not.toContain("data");
     } finally {
-      routerModule.default.events.off("routeChangeError", onRouteChangeError);
       globalThis.fetch = originalFetch;
       if (previousBasePath === undefined) {
         delete process.env.__NEXT_ROUTER_BASEPATH;
