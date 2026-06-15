@@ -963,6 +963,100 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
 
   const imageImportDimCache = new Map<string, { width: number; height: number }>();
 
+  function createWorkerImageImportPlugin(): Plugin {
+    const metadataPrefix = "\0vinext-worker-image-meta:";
+    return {
+      name: "vinext:worker-image-imports",
+      enforce: "pre",
+      watchChange(id) {
+        imageImportDimCache.delete(id);
+      },
+      resolveId(source) {
+        return source.startsWith(metadataPrefix) ? source : null;
+      },
+      async load(id) {
+        if (!id.startsWith(metadataPrefix)) return null;
+        const imagePath = id.slice(metadataPrefix.length);
+        this.addWatchFile(imagePath);
+        let dimensions = imageImportDimCache.get(imagePath);
+        if (!dimensions) {
+          try {
+            const { imageSize } = await import("image-size");
+            const result = imageSize(fs.readFileSync(imagePath));
+            dimensions = { width: result.width ?? 0, height: result.height ?? 0 };
+          } catch {
+            dimensions = { width: 0, height: 0 };
+          }
+          imageImportDimCache.set(imagePath, dimensions);
+        }
+        return `export default ${JSON.stringify(dimensions)};`;
+      },
+      transform(code, id) {
+        const sourceId = id.split("?", 1)[0];
+        if (sourceId.includes("node_modules") || !/\.(?:[cm]?[jt]sx?)$/.test(sourceId)) {
+          return null;
+        }
+        if (!new RegExp(`import\\(\\s*['"][^'"]+\\.(${IMAGE_EXTS})['"]\\s*\\)`).test(code)) {
+          return null;
+        }
+
+        let ast: ReturnType<typeof parseAst>;
+        try {
+          ast = parseAst(code, { lang: sourceId.endsWith(".ts") ? "ts" : "tsx" });
+        } catch {
+          return null;
+        }
+
+        const output = new MagicString(code);
+        const imageExtension = new RegExp(`\\.(${IMAGE_EXTS})$`);
+        let changed = false;
+        const visit = (value: unknown): void => {
+          if (!value || typeof value !== "object") return;
+          const node = value as ASTNode & {
+            type?: string;
+            start?: number;
+            end?: number;
+            source?: { type?: string; value?: unknown };
+          };
+          if (
+            node.type === "ImportExpression" &&
+            typeof node.start === "number" &&
+            typeof node.end === "number" &&
+            node.source?.type === "Literal" &&
+            typeof node.source.value === "string" &&
+            imageExtension.test(node.source.value)
+          ) {
+            const importPath = node.source.value;
+            const imagePath = normalizePathSeparators(
+              path.resolve(path.dirname(sourceId), importPath),
+            );
+            if (fs.existsSync(imagePath)) {
+              output.overwrite(
+                node.start,
+                node.end,
+                `Promise.all([import(${JSON.stringify(importPath)}), import(${JSON.stringify(
+                  metadataPrefix + imagePath,
+                )})]).then(([url, metadata]) => ({ default: { src: url.default, width: metadata.default.width, height: metadata.default.height } }))`,
+              );
+              changed = true;
+              return;
+            }
+          }
+          for (const child of Object.values(node)) {
+            if (Array.isArray(child)) {
+              for (const item of child) visit(item);
+            } else {
+              visit(child);
+            }
+          }
+        };
+        visit(ast);
+        if (!changed) return null;
+        return { code: output.toString(), map: output.generateMap({ hires: "boundary" }) };
+      },
+    };
+  }
+
   // Shared state for the MDX proxy plugin. We auto-inject @mdx-js/rollup when
   // MDX is detected in app/pages during config(), and lazily on first plain
   // .mdx transform for MDX that only enters the graph via import.meta.glob.
@@ -1896,6 +1990,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           },
           worker: {
             ...config.worker,
+            plugins: () => [
+              ...((config.worker?.plugins?.() as PluginOption[] | undefined) ?? []),
+              createWorkerImageImportPlugin(),
+            ],
             ...(viteMajorVersion >= 8
               ? {
                   rolldownOptions: {

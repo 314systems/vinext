@@ -31,8 +31,9 @@ async function createWorkerFixture(): Promise<string> {
     `"use client";
 +export default function Page() {
 +  return <button onClick={() => {
-+    new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
-+    new Worker(new URL("./classic-worker.ts", import.meta.url));
++    new Worker(new URL("./worker", import.meta.url), { type: "module" });
++    new Worker(new URL("./classic-worker", import.meta.url));
++    new Worker(new URL("./png-worker", import.meta.url), { type: "module" });
 +    new Worker("/docs/unbundled-worker.js");
 +  }}>start</button>;
 +}`.replaceAll("\n+", "\n"),
@@ -40,15 +41,22 @@ async function createWorkerFixture(): Promise<string> {
   await fs.writeFile(path.join(root, "app", "worker-dep.ts"), 'export default "worker-dep"');
   await fs.writeFile(
     path.join(root, "app", "worker.ts"),
-    'import imageUrl from "./test-image.png?url"; import("./worker-dep").then(({ default: dependency }) => self.postMessage({ deploymentId: process.env.NEXT_DEPLOYMENT_ID, imageUrl, dependency }));',
+    'import("./worker-dep").then(({ default: dependency }) => self.postMessage({ deploymentId: process.env.NEXT_DEPLOYMENT_ID, dependency }));',
   );
   await fs.writeFile(
     path.join(root, "app", "classic-worker.ts"),
     'import("./worker-dep").then(({ default: dependency }) => self.postMessage(dependency));',
   );
   await fs.writeFile(
+    path.join(root, "app", "png-worker.ts"),
+    'import("./test-image.png").then(({ default: image }) => self.postMessage(image));',
+  );
+  await fs.writeFile(
     path.join(root, "app", "test-image.png"),
-    Buffer.from("89504e470d0a1a0a", "hex"),
+    Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "base64",
+    ),
   );
   await fs.writeFile(
     path.join(root, "public", "unbundled-worker.js"),
@@ -80,6 +88,7 @@ describe("web worker production output", () => {
         build: {},
         plugins: [],
         worker: {
+          plugins: () => [{ name: "user-worker-plugin" }],
           rolldownOptions: {
             output: { exports: "named", sourcemap: true },
           },
@@ -87,7 +96,10 @@ describe("web worker production output", () => {
       },
       { command: "build" },
     )) as {
-      worker: { rolldownOptions: { output: Record<string, unknown> } };
+      worker: {
+        plugins: () => Array<{ name: string }>;
+        rolldownOptions: { output: Record<string, unknown> };
+      };
     };
 
     expect(config.worker.rolldownOptions.output).toMatchObject({
@@ -96,6 +108,10 @@ describe("web worker production output", () => {
       entryFileNames: "_next/static/workers/[name]-[hash].js",
       chunkFileNames: "_next/static/workers/[name]-[hash].js",
     });
+    expect(config.worker.plugins().map((plugin) => plugin.name)).toEqual([
+      "user-worker-plugin",
+      "vinext:worker-image-imports",
+    ]);
   });
 
   it("versions bundled worker graphs and leaves string workers unbundled", async () => {
@@ -117,7 +133,7 @@ describe("web worker production output", () => {
       path.join(root, "dist", "client", "docs", "_next", "static", "workers"),
     );
     const workerFiles = files.filter((file) => file.endsWith(".js"));
-    expect(workerFiles).toHaveLength(2);
+    expect(workerFiles).toHaveLength(3);
 
     const clientFiles = await fs.readdir(
       path.join(root, "dist", "client", "docs", "_next", "static", "chunks"),
@@ -147,7 +163,9 @@ describe("web worker production output", () => {
     ).join("\n");
     expect(workerCode).toContain("worker-deploy-123");
     expect(workerCode).toContain("worker-dep");
-    expect(workerCode).toMatch(/test-image[^`"']*\.png\?dpl=worker-deploy-123/);
+    expect(workerCode).toContain("test-image-");
+    expect(workerCode).toContain(".png?dpl=worker-deploy-123");
+    expect(workerCode).toContain("width:1,height:1");
     expect(
       await fs.readFile(path.join(root, "dist", "client", "unbundled-worker.js"), "utf8"),
     ).toBe('self.postMessage("unbundled")');
