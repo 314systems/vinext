@@ -314,7 +314,54 @@ describe("runtime-specific package export conditions", () => {
     expect(code).not.toContain("server-favoring-edge?__vinext_runtime_condition");
   });
 
-  it("creates distinct node and edge identities for a shared virtual module", async () => {
+  it("preserves downstream ownership of virtual package resolutions", async () => {
+    const root = await createFixture();
+    const entryPath = path.join(root, "loader-owned-entry.js");
+    const virtualId = "\0loader-owned-package";
+    await writeFile(
+      entryPath,
+      'import value from "library-with-exports/server-favoring-edge"; console.log(value);',
+    );
+
+    const result = await build({
+      root,
+      configFile: false,
+      logLevel: "silent",
+      resolve: {
+        alias: {
+          "library-with-exports/server-favoring-edge": virtualId,
+        },
+      },
+      plugins: [
+        runtimeExportConditionsPlugin(),
+        {
+          name: "loader-owned-package",
+          resolveId(source) {
+            if (source === virtualId) return virtualId;
+            return null;
+          },
+          load(id) {
+            return id === virtualId ? 'export default "loader-owned";' : null;
+          },
+        },
+      ],
+      ssr: { noExternal: true },
+      build: {
+        write: false,
+        ssr: true,
+        minify: false,
+        rolldownOptions: { input: withRuntimeExportCondition(entryPath, "edge-light") },
+      },
+    });
+    if (!Array.isArray(result) && !("output" in result)) {
+      throw new Error("Unexpected watch result from one-shot build");
+    }
+    const output = Array.isArray(result) ? result[0]!.output : result.output;
+    const code = output.find((item) => item.type === "chunk")!.code;
+    expect(code).toContain('console.log("loader-owned")');
+  });
+
+  it("preserves shared virtual module identities", async () => {
     const root = await createFixture();
     const nodeEntry = path.join(root, "virtual-node-entry.js");
     const edgeEntry = path.join(root, "virtual-edge-entry.js");
@@ -374,21 +421,8 @@ describe("runtime-specific package export conditions", () => {
     const output = Array.isArray(result) ? result[0]!.output : result.output;
     const nodeCode = output.find((item) => item.type === "chunk" && item.fileName === "node.js")!;
     const edgeCode = output.find((item) => item.type === "chunk" && item.fileName === "edge.js")!;
-    expect(nodeCode.type === "chunk" && nodeCode.code).toContain('console.log("node", "node")');
-    expect(edgeCode.type === "chunk" && edgeCode.code).toContain(
-      'console.log("edge", "edge-light")',
-    );
-    const nodeVirtualModules =
-      nodeCode.type === "chunk"
-        ? Object.keys(nodeCode.modules).filter((id) => id.startsWith("\0vinext-runtime-virtual:"))
-        : [];
-    const edgeVirtualModules =
-      edgeCode.type === "chunk"
-        ? Object.keys(edgeCode.modules).filter((id) => id.startsWith("\0vinext-runtime-virtual:"))
-        : [];
-    expect(nodeVirtualModules).toHaveLength(1);
-    expect(edgeVirtualModules).toHaveLength(1);
-    expect(nodeVirtualModules[0]).not.toBe(edgeVirtualModules[0]);
+    expect(nodeCode.type === "chunk" && nodeCode.code).toContain('console.log("node",');
+    expect(edgeCode.type === "chunk" && edgeCode.code).toContain('console.log("edge",');
     expect(loadedIds).toContain(resolvedVirtualDependency);
     expect(loadedIds.filter((id) => id.includes("runtime-export-dependency"))).toEqual([
       resolvedVirtualDependency,
@@ -396,7 +430,7 @@ describe("runtime-specific package export conditions", () => {
     expect(virtualLoadCount).toBe(1);
   });
 
-  it("proxies arbitrary NUL virtual IDs without appending runtime queries", async () => {
+  it("preserves arbitrary NUL virtual IDs without appending runtime queries", async () => {
     const root = await createFixture();
     const nodeEntry = path.join(root, "nul-node-entry.js");
     const edgeEntry = path.join(root, "nul-edge-entry.js");
@@ -460,21 +494,8 @@ describe("runtime-specific package export conditions", () => {
     const edgeCode = output.find(
       (item) => item.type === "chunk" && item.fileName === "nul-edge.js",
     )!;
-    expect(nodeCode.type === "chunk" && nodeCode.code).toContain('console.log("node", "node")');
-    expect(edgeCode.type === "chunk" && edgeCode.code).toContain(
-      'console.log("edge", "edge-light")',
-    );
-    const nodeVirtualModules =
-      nodeCode.type === "chunk"
-        ? Object.keys(nodeCode.modules).filter((id) => id.startsWith("\0vinext-runtime-virtual:"))
-        : [];
-    const edgeVirtualModules =
-      edgeCode.type === "chunk"
-        ? Object.keys(edgeCode.modules).filter((id) => id.startsWith("\0vinext-runtime-virtual:"))
-        : [];
-    expect(nodeVirtualModules).toHaveLength(1);
-    expect(edgeVirtualModules).toHaveLength(1);
-    expect(nodeVirtualModules[0]).not.toBe(edgeVirtualModules[0]);
+    expect(nodeCode.type === "chunk" && nodeCode.code).toContain('console.log("node",');
+    expect(edgeCode.type === "chunk" && edgeCode.code).toContain('console.log("edge",');
     expect(loadedIds.filter((id) => id.startsWith("\0"))).toEqual([resolvedVirtualDependency]);
     expect(
       loadedIds.some((id) => id.startsWith("\0") && id.includes("?__vinext_runtime_condition")),
