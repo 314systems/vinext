@@ -24,6 +24,12 @@ describe("createPagesDevModuleUrl", () => {
     );
   });
 
+  it("preserves dynamic route brackets for Vite module resolution", () => {
+    expect(createPagesDevModuleUrl("/repo", "/repo/pages/blog/[slug].tsx", "/docs/")).toBe(
+      "/docs/pages/blog/[slug].tsx",
+    );
+  });
+
   it("returns a stable URL for Vite HMR module identity", () => {
     const first = createPagesDevModuleUrl("/repo", "/repo/pages/about.tsx", "/docs/");
     const second = createPagesDevModuleUrl("/repo", "/repo/pages/about.tsx", "/docs/");

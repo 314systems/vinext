@@ -6,7 +6,11 @@ function normalizeBase(base: string): string {
 }
 
 function encodeModulePath(modulePath: string): string {
-  return encodeURI(modulePath).replace(/\?/g, "%3F").replace(/#/g, "%23");
+  return encodeURI(modulePath)
+    .replace(/%5B/gi, "[")
+    .replace(/%5D/gi, "]")
+    .replace(/\?/g, "%3F")
+    .replace(/#/g, "%23");
 }
 
 export function createPagesDevModuleUrl(
