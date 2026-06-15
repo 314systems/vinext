@@ -144,7 +144,12 @@ test.describe("basePath router events", () => {
     await page.locator("#error-route").click();
 
     await expect
-      .poll(() => page.evaluate(() => (window as any)._getEventLog()))
+      .poll(() =>
+        page.evaluate(() => {
+          const data = sessionStorage.getItem("router-event-log");
+          return data ? JSON.parse(data) : [];
+        }),
+      )
       .toEqual([
         ["routeChangeStart", `${basePath}/error-route`, { shallow: false }],
         [
