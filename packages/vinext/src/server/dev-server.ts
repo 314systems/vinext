@@ -296,7 +296,6 @@ async function streamPageToResponse(
 
   // Build the document shell with a placeholder for the body
   let shellTemplate: string;
-  let documentAssetProps = {};
 
   if (DocumentComponent) {
     // When the renderPage path already invoked getInitialProps, reuse its
@@ -310,7 +309,6 @@ async function streamPageToResponse(
       ? React.createElement(DocumentComponent, docProps)
       : React.createElement(DocumentComponent);
     const renderedDocument = extractDocumentAssetProps(await renderToStringAsync(docElement));
-    documentAssetProps = renderedDocument.props;
     let docHtml = renderedDocument.html;
     const generatedFontHeadHTML = applyDocumentAssetProps(
       fontHeadHTML,
