@@ -44,6 +44,7 @@ function createHandler(overrides: Partial<HandlerOptions> = {}) {
 
   return createAppRscHandler<TestRoute>({
     basePath: "/docs",
+    buildId: overrides.buildId ?? "build-id",
     clearRequestContext: overrides.clearRequestContext ?? (() => {}),
     configHeaders: overrides.configHeaders ?? [
       {
@@ -131,7 +132,10 @@ describe("createAppRscHandler", () => {
   });
 
   it("allows independent Next.js blur width and quality exceptions in pure App Router dev", async () => {
-    const handler = createHandler();
+    // The blur quality exception (q=70) is only observable when `qualities` is
+    // configured — with an unset allowlist any quality 1-100 is permitted, so
+    // pin it to [75] to exercise the dev-only exception itself.
+    const handler = createHandler({ imageConfig: { qualities: [75] } });
     for (const query of ["url=%2Fimg.jpg&w=8&q=75", "url=%2Fimg.jpg&w=640&q=70"]) {
       const response = await handler(
         new Request(`https://example.test/docs/_next/image?${query}`),
@@ -142,7 +146,7 @@ describe("createAppRscHandler", () => {
   });
 
   it("rejects Next.js blur width and quality exceptions in production", async () => {
-    const handler = createHandler({ isDev: false });
+    const handler = createHandler({ isDev: false, imageConfig: { qualities: [75] } });
     for (const query of ["url=%2Fimg.jpg&w=8&q=75", "url=%2Fimg.jpg&w=640&q=70"]) {
       const response = await handler(
         new Request(`https://example.test/docs/_next/image?${query}`),
@@ -150,6 +154,17 @@ describe("createAppRscHandler", () => {
       );
       expect(response.status).toBe(400);
     }
+  });
+
+  it("allows any quality 1-100 in production when images.qualities is unset", async () => {
+    // Matches Next.js: an unset `qualities` is not restricted to a single value,
+    // so q=70 (and any 1-100) is a normal quality even in production.
+    const handler = createHandler({ isDev: false });
+    const response = await handler(
+      new Request("https://example.test/docs/_next/image?url=%2Fimg.jpg&w=640&q=70"),
+      null,
+    );
+    expect(response.status).toBe(302);
   });
 
   it("wraps dispatch responses with request-scoped finalization", async () => {
@@ -541,6 +556,23 @@ describe("createAppRscHandler", () => {
     expect(response.headers.get("location")).toBe("/docs/about");
     expect(response.headers.get("x-test-header")).toBeNull();
     expect(dispatchMatchedPage).not.toHaveBeenCalled();
+  });
+
+  it("uses the soft redirect protocol for config redirects on Pages data requests", async () => {
+    const handler = createHandler({
+      configRedirects: [{ source: "/old-about", destination: "/about", permanent: true }],
+      matchRoute: () => null,
+      renderPagesFallback: async () => new Response("pages-data"),
+    });
+
+    const response = await handler(
+      new Request("https://example.test/docs/_next/data/build-id/old-about.json"),
+      null,
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+    expect(response.headers.get("x-nextjs-redirect")).toBe("/docs/about");
   });
 
   it("lets middleware redirect headers override earlier matching config headers", async () => {
@@ -1422,6 +1454,166 @@ describe("createAppRscHandler", () => {
         appRouteMatch: expect.objectContaining({ route: dynamicRoute }),
       }),
     );
+  });
+
+  it("normalizes hybrid Pages data requests before middleware", async () => {
+    let middlewarePathname: string | null = null;
+    let middlewareCf: unknown;
+    let pagesDataCf: unknown;
+    let pagesDataUrl: string | null = null;
+    const renderPagesFallback = vi.fn(async (_options: unknown) => new Response("pages-data"));
+    const handler = createHandler({
+      configHeaders: [],
+      matchRoute: () => null,
+      middlewareModule: {
+        default: (request: Request) => {
+          middlewarePathname = new URL(request.url).pathname;
+          middlewareCf = (request as Request & { cf?: unknown }).cf;
+          return new Response(null, { headers: { "x-middleware-next": "1" } });
+        },
+      },
+      renderPagesFallback: async (options) => {
+        pagesDataCf = (options.pagesDataRequest as (Request & { cf?: unknown }) | null)?.cf;
+        pagesDataUrl = options.pagesDataRequest?.url ?? null;
+        return renderPagesFallback(options);
+      },
+    });
+
+    const request = new Request(
+      "https://example.test/docs/_next/data/build-id/form-search.json?query=basic",
+    );
+    const cf = { colo: "LHR" };
+    Object.defineProperty(request, "cf", { value: cf, enumerable: true });
+    const response = await handler(request, null);
+
+    expect(await response.text()).toBe("pages-data");
+    expect(middlewarePathname).toBe("/docs/form-search");
+    expect(middlewareCf).toBe(cf);
+    expect(pagesDataCf).toBe(cf);
+    expect(pagesDataUrl).toBe(
+      "https://example.test/_next/data/build-id/form-search.json?query=basic",
+    );
+    expect(renderPagesFallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pathname: "/form-search?query=basic",
+        pagesDataRequest: expect.any(Request),
+      }),
+    );
+  });
+
+  it("exposes the rewritten route on hybrid Pages data responses", async () => {
+    const renderPagesFallback = vi.fn(
+      async () =>
+        new Response('{"pageProps":{"query":"basic"}}', {
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const handler = createHandler({
+      configHeaders: [],
+      configRewrites: {
+        beforeFiles: [{ source: "/form-search", destination: "/rewritten-search" }],
+        afterFiles: [],
+        fallback: [],
+      },
+      matchRoute: () => null,
+      renderPagesFallback,
+    });
+
+    const response = await handler(
+      new Request("https://example.test/docs/_next/data/build-id/form-search.json?query=basic"),
+      null,
+    );
+
+    expect(response.headers.get("x-nextjs-rewrite")).toBe("/rewritten-search?query=basic");
+    expect(renderPagesFallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pathname: "/rewritten-search?query=basic",
+        pagesDataRequest: expect.any(Request),
+      }),
+    );
+  });
+
+  it("uses the soft redirect protocol for URL-recognized Pages data requests", async () => {
+    const handler = createHandler({
+      configHeaders: [],
+      matchRoute: () => null,
+      middlewareModule: {
+        default: () => new Response(null, { status: 307, headers: { Location: "/login" } }),
+      },
+      renderPagesFallback: async () => new Response("pages-data"),
+    });
+
+    const response = await handler(
+      new Request("https://example.test/docs/_next/data/build-id/form-search.json"),
+      null,
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+    expect(response.headers.get("x-nextjs-redirect")).toBe("/login");
+  });
+
+  it("returns JSON 404 for stale hybrid Pages data requests before middleware", async () => {
+    const middleware = vi.fn(() => new Response(null, { headers: { "x-middleware-next": "1" } }));
+    const renderPagesFallback = vi.fn(async () => new Response("pages-data"));
+    const handler = createHandler({
+      configHeaders: [],
+      matchRoute: () => null,
+      middlewareModule: { default: middleware },
+      renderPagesFallback,
+    });
+
+    const response = await handler(
+      new Request("https://example.test/docs/_next/data/stale/form-search.json?query=basic"),
+      null,
+    );
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    expect(await response.text()).toBe("{}");
+    expect(middleware).not.toHaveBeenCalled();
+    expect(renderPagesFallback).not.toHaveBeenCalled();
+  });
+
+  it("does not normalize hybrid Pages data requests outside basePath", async () => {
+    const renderPagesFallback = vi.fn(async () => new Response("pages-data"));
+    const handler = createHandler({
+      configHeaders: [],
+      matchRoute: () => null,
+      renderPagesFallback,
+    });
+
+    const response = await handler(
+      new Request("https://example.test/_next/data/build-id/form-search.json?query=basic"),
+      null,
+    );
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get("content-type")).not.toContain("application/json");
+    expect(renderPagesFallback).not.toHaveBeenCalled();
+  });
+
+  it("returns JSON 404 when an App route owns a Pages data URL", async () => {
+    const appRoute = createPageRoute({ pattern: "/app-only" });
+    const dispatchMatchedPage = vi.fn(async () => new Response("app-html"));
+    const renderPagesFallback = vi.fn(async () => null);
+    const handler = createHandler({
+      configHeaders: [],
+      dispatchMatchedPage,
+      matchRoute: (pathname) => (pathname === "/app-only" ? { route: appRoute, params: {} } : null),
+      renderPagesFallback,
+    });
+
+    const response = await handler(
+      new Request("https://example.test/docs/_next/data/build-id/app-only.json"),
+      null,
+    );
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    expect(await response.text()).toBe("{}");
+    expect(renderPagesFallback).not.toHaveBeenCalled();
+    expect(dispatchMatchedPage).not.toHaveBeenCalled();
   });
 
   it("runs afterFiles rewrites before dynamic Pages route ownership", async () => {
