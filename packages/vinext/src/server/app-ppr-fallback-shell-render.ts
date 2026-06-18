@@ -7,15 +7,15 @@ import {
 } from "vinext/shims/ppr-fallback-shell";
 import { readAppPageBinaryStream } from "./app-page-execution.js";
 
-type AppPageBoundaryOnError = (
+export type AppPageBoundaryOnError = (
   error: unknown,
   requestInfo: unknown,
   errorContext: unknown,
 ) => unknown;
 
-type AppPageRenderableElement = ReactNode | Record<string, ReactNode>;
+export type AppPageRenderableElement = ReactNode | Record<string, ReactNode>;
 
-export async function warmPprFallbackShellCaches(options: {
+export type WarmPprFallbackShellCachesOptions = {
   element: AppPageRenderableElement;
   onError: AppPageBoundaryOnError;
   renderToReadableStream: (
@@ -23,7 +23,11 @@ export async function warmPprFallbackShellCaches(options: {
     options: { onError: AppPageBoundaryOnError; signal?: AbortSignal },
   ) => ReadableStream<Uint8Array>;
   state: PprFallbackShellState;
-}): Promise<void> {
+};
+
+export async function warmPprFallbackShellCaches(
+  options: WarmPprFallbackShellCachesOptions,
+): Promise<void> {
   let warmupError: unknown = null;
   const warmupStream = options.renderToReadableStream(options.element, {
     signal: options.state.abortController.signal,
