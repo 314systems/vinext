@@ -2859,6 +2859,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           const routes = await appRouter(appDir, nextConfig?.pageExtensions, fileMatcher);
           const metaRoutes = scanMetadataFiles(appDir);
           const hasServerActions = await resolveHasServerActions(this.environment.config);
+          const hasClientRouterRuntime = await resolveHasClientRouterRuntime(
+            this.environment.config,
+          );
           // Check for global-error.tsx at app root
           const globalErrorPath = findFileWithExts(appDir, "global-error", fileMatcher);
           // Check for global-not-found.tsx at app root (Next.js 16+ feature)
@@ -2900,6 +2903,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               inlineCss: nextConfig?.inlineCss,
               cacheComponents: nextConfig?.cacheComponents,
               hasServerActions,
+              hasClientRouterRuntime,
               i18n: nextConfig?.i18n,
               imageConfig: {
                 deviceSizes: nextConfig?.images?.deviceSizes,

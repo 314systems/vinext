@@ -208,6 +208,17 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
     expect(code).toContain("matchRoute,");
   });
 
+  it("omits client reuse transport when the browser router runtime is unused", () => {
+    const code = generateRscEntry("/tmp/test/app", minimalRoutes, null, [], null, "", false, {
+      hasClientRouterRuntime: false,
+    });
+
+    expect(code).not.toContain("client-reuse-manifest");
+    expect(code).not.toContain("skip-cache-proof");
+    expect(code).not.toContain("parseClientReuseManifestHeader:");
+    expect(code).not.toContain("createClientReuseSkipDisposition:");
+  });
+
   it("describes beforeFiles rewrites in the generated app shape", () => {
     const code = generateRscEntry("/tmp/test/app", minimalRoutes, null, [], null, "", false, {
       rewrites: {

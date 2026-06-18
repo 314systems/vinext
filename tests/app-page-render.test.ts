@@ -27,6 +27,7 @@ import {
   type ClientReuseManifestParseResult,
   type ClientReuseManifestSkipDisposition,
 } from "../packages/vinext/src/server/client-reuse-manifest.js";
+import { createRenderLifecycleSkipDisposition } from "../packages/vinext/src/server/skip-cache-proof.js";
 import { VINEXT_DYNAMIC_STALE_TIME_HEADER } from "../packages/vinext/src/server/headers.js";
 import type { CachedAppPageValue } from "../packages/vinext/src/shims/cache.js";
 import {
@@ -1187,6 +1188,7 @@ describe("layoutFlags injection into RSC payload", () => {
       cleanPathname: overrides.cleanPathname ?? "/test",
       clearRequestContext: vi.fn(),
       consumeDynamicUsage: vi.fn(() => false),
+      createClientReuseSkipDisposition: createRenderLifecycleSkipDisposition,
       createRscOnErrorHandler: () => () => {},
       clientReuseManifest: overrides.clientReuseManifest,
       getDraftModeCookieHeader: () => null,

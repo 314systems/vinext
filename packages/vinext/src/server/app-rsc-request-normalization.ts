@@ -9,10 +9,7 @@ import {
   VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_RSC_RENDER_MODE_HEADER,
 } from "./headers.js";
-import {
-  parseClientReuseManifestHeader,
-  type ClientReuseManifestParseResult,
-} from "./client-reuse-manifest.js";
+import type { ClientReuseManifestParseResult } from "./client-reuse-manifest.js";
 import { normalizeInterceptionContextHeader } from "./app-interception-context-header.js";
 import { normalizeMountedSlotsHeader } from "./app-mounted-slots-header.js";
 import { stripRscSuffix, VINEXT_RSC_CACHE_BUSTING_SEARCH_PARAM } from "./app-rsc-cache-busting.js";
@@ -43,6 +40,10 @@ export type NormalizedRscRequest = {
   /** Parsed ClientReuseManifest hint. Verification and skip authorization happen later. */
   clientReuseManifest: ClientReuseManifestParseResult;
 };
+
+export type ParseClientReuseManifestHeader = (
+  rawHeader: string | null,
+) => ClientReuseManifestParseResult;
 
 /**
  * Normalize an App Router RSC request.
@@ -77,6 +78,7 @@ export type NormalizedRscRequest = {
 export function normalizeRscRequest(
   request: Request,
   basePath: string,
+  parseClientReuseManifestHeader?: ParseClientReuseManifestHeader,
 ): Response | NormalizedRscRequest {
   const url = new URL(request.url);
 
@@ -135,9 +137,10 @@ export function normalizeRscRequest(
   const renderMode = isRscRequest
     ? parseAppRscRenderMode(request.headers.get(VINEXT_RSC_RENDER_MODE_HEADER))
     : APP_RSC_RENDER_MODE_NAVIGATION;
-  const clientReuseManifest = isRscRequest
-    ? parseClientReuseManifestHeader(request.headers.get(VINEXT_CLIENT_REUSE_MANIFEST_HEADER))
-    : ({ kind: "absent" } satisfies ClientReuseManifestParseResult);
+  const clientReuseManifest =
+    isRscRequest && parseClientReuseManifestHeader
+      ? parseClientReuseManifestHeader(request.headers.get(VINEXT_CLIENT_REUSE_MANIFEST_HEADER))
+      : ({ kind: "absent" } satisfies ClientReuseManifestParseResult);
 
   return {
     clientReuseManifest,

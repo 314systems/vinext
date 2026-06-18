@@ -1,10 +1,25 @@
+import type { ReactNode } from "react";
+import { AppElementsWire, isAppElementsRecord } from "./app-elements.js";
+import {
+  getStaticLayoutObservationSkipRejection,
+  type AppLayoutParamAccessTracker,
+  type StaticLayoutObservationSkipRejection,
+} from "./app-layout-param-observation.js";
 import {
   evaluateArtifactCompatibility,
   ARTIFACT_COMPATIBILITY_PROOF_FIELDS,
   type ArtifactCompatibilityEnvelope,
   type ArtifactCompatibilityEvaluationOptions,
 } from "./artifact-compatibility.js";
-import type { StaticLayoutArtifactReuseDecision } from "./cache-proof.js";
+import {
+  buildCacheVariantWithRouteBudget,
+  buildRenderObservation,
+  buildRenderRequestApiObservations,
+  createStaticLayoutArtifactReuseDecision,
+  DEFAULT_CACHE_VARIANT_BUDGET,
+  type StaticLayoutArtifactReuseDecision,
+  type StaticLayoutCacheProofOutputScope,
+} from "./cache-proof.js";
 import {
   CLIENT_REUSE_MANIFEST_SKIP_VERIFICATION_ENTRY_BUDGET,
   createClientReusePayloadHash,
@@ -15,11 +30,16 @@ import {
   type ClientReuseManifestSkipDisposition,
   type ClientReuseManifestTraceFields,
 } from "./client-reuse-manifest.js";
-export {
+import {
   createStaticLayoutClientReuseArtifactCompatibility,
   createStaticLayoutClientReusePayloadHash,
   createStaticLayoutClientReuseRouteId,
 } from "./static-layout-client-reuse-proof.js";
+export {
+  createStaticLayoutClientReuseArtifactCompatibility,
+  createStaticLayoutClientReusePayloadHash,
+  createStaticLayoutClientReuseRouteId,
+};
 
 export type SkipCacheInvalidationProof =
   | Readonly<{ kind: "invalidated"; invalidationEpoch: string | null }>
@@ -80,6 +100,16 @@ type CreateClientReuseSkipTransportPlanInput = Readonly<{
   verifyEntry: (entry: ClientReuseManifestEntry) => SkipCacheCrossCheckResult;
 }>;
 
+export type CreateRenderLifecycleSkipDispositionInput = {
+  artifactCompatibility: ArtifactCompatibilityEnvelope | undefined;
+  cleanPathname: string;
+  clientReuseManifest: ClientReuseManifestParseResult | undefined;
+  element: ReactNode | Readonly<Record<string, ReactNode>>;
+  isRscRequest: boolean;
+  layoutFlags: Readonly<Record<string, "s" | "d">>;
+  layoutParamAccess: AppLayoutParamAccessTracker | undefined;
+};
+
 function createDisabledSkipDisposition(): ClientReuseManifestSkipDisposition {
   return {
     code: "SKIP_MODEL_DISABLED",
@@ -113,6 +143,199 @@ function rejectSkipCacheCrossCheck(
     },
     skipDisposition: createDisabledSkipDisposition(),
   };
+}
+
+function readStringMetadata(
+  element: Readonly<Record<string, unknown>>,
+  key: string,
+): string | null {
+  const value = element[key];
+  return typeof value === "string" ? value : null;
+}
+
+function createStaticLayoutOutputScope(input: {
+  artifactCompatibility: ArtifactCompatibilityEnvelope;
+  element: Readonly<Record<string, unknown>>;
+  layoutId: string;
+}): StaticLayoutCacheProofOutputScope | null {
+  const routeId = readStringMetadata(input.element, AppElementsWire.keys.route);
+  if (routeId === null) return null;
+
+  return {
+    kind: "layout",
+    layoutId: input.layoutId,
+    rootBoundaryId: input.artifactCompatibility.rootBoundaryId,
+    routeId,
+  };
+}
+
+function rejectStaticLayoutObservation(
+  entry: ClientReuseManifestEntry,
+  code: StaticLayoutObservationSkipRejection["code"],
+  fields: ClientReuseManifestTraceFields = {},
+): ReturnType<typeof crossCheckClientReuseManifestEntryWithCache> {
+  return {
+    kind: "rejected",
+    rejection: {
+      code,
+      entryId: entry.id,
+      fields,
+    },
+    skipDisposition: createDisabledSkipDisposition(),
+  };
+}
+
+function rejectUnsafeStaticLayoutObservation(
+  entry: ClientReuseManifestEntry,
+  layoutParamAccess: AppLayoutParamAccessTracker | undefined,
+): ReturnType<typeof crossCheckClientReuseManifestEntryWithCache> | null {
+  const observation = layoutParamAccess?.getLayoutObservation(entry.id);
+  if (!observation) {
+    return rejectStaticLayoutObservation(entry, "SKIP_LAYOUT_PARAMS_OBSERVATION_INCOMPLETE");
+  }
+
+  const observationRejection = getStaticLayoutObservationSkipRejection(observation);
+  if (observationRejection) {
+    return rejectStaticLayoutObservation(
+      entry,
+      observationRejection.code,
+      observationRejection.fields,
+    );
+  }
+
+  return null;
+}
+
+export function createRenderLifecycleSkipDisposition(
+  input: CreateRenderLifecycleSkipDispositionInput,
+): ClientReuseManifestSkipDisposition | undefined {
+  if (!input.isRscRequest || input.clientReuseManifest === undefined) {
+    return undefined;
+  }
+  const clientReuseManifest = input.clientReuseManifest;
+  if (clientReuseManifest.kind !== "parsed" || clientReuseManifest.manifest.entries.length === 0) {
+    return undefined;
+  }
+  if (!isAppElementsRecord(input.element) || input.artifactCompatibility === undefined) {
+    return createDisabledSkipDisposition();
+  }
+  const element = input.element;
+  const artifactCompatibility = input.artifactCompatibility;
+
+  const staticLayoutIds = new Set(
+    Object.entries(input.layoutFlags)
+      .filter(([, flag]) => flag === "s")
+      .map(([layoutId]) => layoutId),
+  );
+  const plan = createClientReuseSkipTransportPlan({
+    manifest: clientReuseManifest,
+    verifyEntry(entry) {
+      if (
+        entry.kind !== "layout" ||
+        !staticLayoutIds.has(entry.id) ||
+        AppElementsWire.parseElementKey(entry.id)?.kind !== "layout"
+      ) {
+        return crossCheckClientReuseManifestEntryWithCache({
+          artifact: {
+            compatibility: artifactCompatibility,
+            invalidation: { kind: "unknown" },
+            payloadHash: null,
+          },
+          cacheDecision: null,
+          entry,
+        });
+      }
+
+      const currentOutput = createStaticLayoutOutputScope({
+        artifactCompatibility,
+        element,
+        layoutId: entry.id,
+      });
+      if (currentOutput === null) {
+        return crossCheckClientReuseManifestEntryWithCache({
+          artifact: {
+            compatibility: artifactCompatibility,
+            invalidation: { kind: "unknown" },
+            payloadHash: null,
+          },
+          cacheDecision: null,
+          entry,
+        });
+      }
+      const observationRejection = rejectUnsafeStaticLayoutObservation(
+        entry,
+        input.layoutParamAccess,
+      );
+      if (observationRejection) {
+        return observationRejection;
+      }
+      const candidateRouteId = createStaticLayoutClientReuseRouteId(entry.id);
+      const candidateOutput: StaticLayoutCacheProofOutputScope = {
+        ...currentOutput,
+        routeId: candidateRouteId,
+      };
+
+      const candidateVariant = buildCacheVariantWithRouteBudget({
+        budget: DEFAULT_CACHE_VARIANT_BUDGET,
+        dimensions: [],
+        output: candidateOutput,
+        routeBudget: {
+          routeId: candidateRouteId,
+          variantCacheKeys: [],
+        },
+      });
+      const skipArtifactCompatibility =
+        candidateVariant.kind === "variant"
+          ? createStaticLayoutClientReuseArtifactCompatibility({
+              artifactCompatibility,
+              layoutId: entry.id,
+              rootBoundaryId: candidateOutput.rootBoundaryId,
+              routeId: candidateOutput.routeId,
+              variantCacheKey: candidateVariant.variant.cacheKey,
+            })
+          : artifactCompatibility;
+      const cacheDecision = createStaticLayoutArtifactReuseDecision({
+        candidateArtifactCompatibility: skipArtifactCompatibility,
+        candidateObservation: buildRenderObservation({
+          boundaryOutcome: { kind: "success" },
+          cacheability: "public",
+          cacheTags: [],
+          completeness: "complete",
+          dynamicFetches: [],
+          output: candidateOutput,
+          pathTags: [input.cleanPathname],
+          requestApis: buildRenderRequestApiObservations({
+            completeness: "complete",
+            observed: [],
+          }),
+        }),
+        candidateVariant,
+        currentArtifactCompatibility: skipArtifactCompatibility,
+        currentOutput,
+      });
+
+      return crossCheckClientReuseManifestEntryWithCache({
+        artifact: {
+          compatibility: skipArtifactCompatibility,
+          invalidation: { kind: "valid" },
+          payloadHash:
+            candidateVariant.kind === "variant"
+              ? createStaticLayoutClientReusePayloadHash({
+                  artifactCompatibility: skipArtifactCompatibility,
+                  layoutId: entry.id,
+                  rootBoundaryId: candidateOutput.rootBoundaryId,
+                  routeId: candidateOutput.routeId,
+                  variantCacheKey: candidateVariant.variant.cacheKey,
+                })
+              : null,
+        },
+        cacheDecision,
+        entry,
+      });
+    },
+  });
+
+  return plan.skipDisposition;
 }
 
 function collectArtifactCompatibilityProofMismatches(

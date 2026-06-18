@@ -29,6 +29,7 @@ import {
 import {
   createClientReuseManifest,
   createClientReusePayloadHash,
+  parseClientReuseManifestHeader,
 } from "../packages/vinext/src/server/client-reuse-manifest.js";
 import { createArtifactCompatibilityEnvelope } from "../packages/vinext/src/server/artifact-compatibility.js";
 import {
@@ -506,7 +507,11 @@ describe("normalizeRscRequest — ClientReuseManifest boundary", () => {
     const header = JSON.stringify(manifest);
 
     const rsc = normalized(
-      normalizeRscRequest(req("/page.rsc", { [VINEXT_CLIENT_REUSE_MANIFEST_HEADER]: header }), ""),
+      normalizeRscRequest(
+        req("/page.rsc", { [VINEXT_CLIENT_REUSE_MANIFEST_HEADER]: header }),
+        "",
+        parseClientReuseManifestHeader,
+      ),
     );
     const nextStyleRsc = normalized(
       normalizeRscRequest(
@@ -515,6 +520,7 @@ describe("normalizeRscRequest — ClientReuseManifest boundary", () => {
           [VINEXT_CLIENT_REUSE_MANIFEST_HEADER]: header,
         }),
         "",
+        parseClientReuseManifestHeader,
       ),
     );
     const html = normalized(
@@ -542,6 +548,7 @@ describe("normalizeRscRequest — ClientReuseManifest boundary", () => {
           }),
         }),
         "",
+        parseClientReuseManifestHeader,
       ),
     );
 

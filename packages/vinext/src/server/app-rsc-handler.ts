@@ -51,7 +51,10 @@ import {
   VINEXT_RSC_CACHE_BUSTING_SEARCH_PARAM,
 } from "./app-rsc-cache-busting.js";
 import { finalizeAppRscResponse } from "./app-rsc-response-finalizer.js";
-import { normalizeRscRequest } from "./app-rsc-request-normalization.js";
+import {
+  normalizeRscRequest,
+  type ParseClientReuseManifestHeader,
+} from "./app-rsc-request-normalization.js";
 import { buildNextDataNotFoundResponse, normalizePagesDataRequest } from "./pages-data-route.js";
 import { normalizeDefaultLocalePathname } from "./pages-i18n.js";
 import { notFoundResponse } from "./http-error-responses.js";
@@ -311,6 +314,7 @@ type CreateAppRscHandlerOptions<TRoute extends AppRscHandlerRoute> = {
   isDev: boolean;
   loadPrerenderPagesRoutes?: () => Promise<unknown>;
   matchRoute: (pathname: string) => AppRscRouteMatch<TRoute> | null;
+  parseClientReuseManifestHeader?: ParseClientReuseManifestHeader;
   runMiddleware?: (options: RunAppMiddlewareOptions) => Promise<ApplyAppMiddlewareResult>;
   publicFiles: ReadonlySet<string>;
   renderNotFound: (options: RenderNotFoundOptions<TRoute>) => Promise<Response | null>;
@@ -483,7 +487,11 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     if (originBlock) return originBlock;
   }
 
-  const normalized = normalizeRscRequest(request, options.basePath);
+  const normalized = normalizeRscRequest(
+    request,
+    options.basePath,
+    options.parseClientReuseManifestHeader,
+  );
   if (normalized instanceof Response) return normalized;
 
   const {

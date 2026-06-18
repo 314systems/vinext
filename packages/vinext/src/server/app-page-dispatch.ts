@@ -77,7 +77,11 @@ import {
 import { shouldServeStreamingMetadata } from "./streaming-metadata.js";
 import { createAppPageTreePath } from "./app-page-route-wiring.js";
 import type { AppPageSsrHandler } from "./app-page-stream.js";
-import type { ClientReuseManifestParseResult } from "./client-reuse-manifest.js";
+import type {
+  ClientReuseManifestParseResult,
+  ClientReuseManifestSkipDisposition,
+} from "./client-reuse-manifest.js";
+import type { CreateRenderLifecycleSkipDispositionInput } from "./skip-cache-proof.js";
 import { buildAppPageTags } from "./implicit-tags.js";
 import type { ISRCacheEntry } from "./isr-cache.js";
 import {
@@ -227,6 +231,9 @@ export type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
     searchParams: URLSearchParams,
     layoutParamAccess?: AppLayoutParamAccessTracker,
   ) => Promise<AppPageElement>;
+  createClientReuseSkipDisposition?: (
+    input: CreateRenderLifecycleSkipDispositionInput,
+  ) => ClientReuseManifestSkipDisposition | undefined;
   clientReuseManifest?: ClientReuseManifestParseResult;
   cleanPathname: string;
   displayPathname?: string;
@@ -904,6 +911,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     consumeDynamicUsage,
     consumeInvalidDynamicUsageError,
     consumeRenderObservationState: consumeAppPageRenderObservationState,
+    createClientReuseSkipDisposition: options.createClientReuseSkipDisposition,
     createRscOnErrorHandler(pathname, routePath) {
       return options.createRscOnErrorHandler(pathname, routePath);
     },

@@ -13,6 +13,7 @@ import { createArtifactCompatibilityEnvelope } from "../packages/vinext/src/serv
 import {
   createClientReuseManifest,
   createClientReusePayloadHash,
+  parseClientReuseManifestHeader,
 } from "../packages/vinext/src/server/client-reuse-manifest.js";
 import { VINEXT_CLIENT_REUSE_MANIFEST_HEADER } from "../packages/vinext/src/server/headers.js";
 import { applyAppMiddleware } from "../packages/vinext/src/server/app-middleware.js";
@@ -109,6 +110,8 @@ function createHandler(overrides: Partial<TestHandlerOptions> = {}) {
               route,
             }
           : null),
+    parseClientReuseManifestHeader:
+      overrides.parseClientReuseManifestHeader ?? parseClientReuseManifestHeader,
     runMiddleware:
       overrides.runMiddleware ??
       (overrides.middlewareModule

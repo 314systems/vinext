@@ -111,6 +111,11 @@ const appHookWarningSuppressionPath = resolveEntryPath(
 );
 const serverGlobalsPath = resolveEntryPath("../server/server-globals.js", import.meta.url);
 const appPagesBridgePath = resolveEntryPath("../server/app-pages-bridge.js", import.meta.url);
+const clientReuseManifestPath = resolveEntryPath(
+  "../server/client-reuse-manifest.js",
+  import.meta.url,
+);
+const skipCacheProofPath = resolveEntryPath("../server/skip-cache-proof.js", import.meta.url);
 
 /**
  * Resolved config options relevant to App Router request handling.
@@ -164,6 +169,8 @@ type AppRouterConfig = {
   cacheComponents?: boolean;
   /** Whether the RSC build discovered any server references. Defaults to true. */
   hasServerActions?: boolean;
+  /** Whether the browser build includes client-side App Router navigation. Defaults to true. */
+  hasClientRouterRuntime?: boolean;
   /** Internationalization routing config for middleware matcher locale handling. */
   i18n?: NextI18nConfig | null;
   imageConfig?: ImageConfig;
@@ -229,6 +236,7 @@ export function generateRscEntry(
   const cacheComponents = config?.cacheComponents === true;
   const isDev = config?.isDev ?? true;
   const hasServerActions = config?.hasServerActions !== false;
+  const hasClientRouterRuntime = config?.hasClientRouterRuntime !== false;
   const hasIsrRuntime = cacheComponents || appRoutesNeedResponseCache(routes);
   const i18nConfig = config?.i18n ?? null;
   const hasPagesDir = config?.hasPagesDir ?? false;
@@ -357,6 +365,12 @@ import { buildAppPageProbes as __buildAppPageProbes } from ${JSON.stringify(appP
 import {
   dispatchAppPage as __dispatchAppPage,
 } from ${JSON.stringify(appPageDispatchPath)};
+${
+  hasClientRouterRuntime
+    ? `import { parseClientReuseManifestHeader as __parseClientReuseManifestHeader } from ${JSON.stringify(clientReuseManifestPath)};
+import { createRenderLifecycleSkipDisposition as __createRenderLifecycleSkipDisposition } from ${JSON.stringify(skipCacheProofPath)};`
+    : ""
+}
 ${
   cacheComponents
     ? `import {
@@ -707,6 +721,7 @@ export default createAppRscHandler({
   imageConfig: __imageConfig,
   isDev: process.env.NODE_ENV !== "production",
   draftModeSecret: __draftModeSecret,
+  ${hasClientRouterRuntime ? "parseClientReuseManifestHeader: __parseClientReuseManifestHeader," : ""}
   dispatchMatchedPage({
     clientReuseManifest,
     cleanPathname,
@@ -751,6 +766,7 @@ export default createAppRscHandler({
       ensureRouteLoaded: __ensureRouteLoaded,
       clientTraceMetadata: __clientTraceMetadata,
       reactMaxHeadersLength: __reactMaxHeadersLength,
+      ${hasClientRouterRuntime ? "createClientReuseSkipDisposition: __createRenderLifecycleSkipDisposition," : ""}
       buildPageElement(targetRoute, targetParams, targetOpts, targetSearchParams, layoutParamAccess) {
         return buildPageElements(targetRoute, targetParams, cleanPathname, {
           opts: targetOpts,

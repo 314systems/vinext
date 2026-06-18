@@ -25,6 +25,7 @@ import {
   parseClientReuseManifestHeader,
   type ClientReuseManifestParseResult,
 } from "../packages/vinext/src/server/client-reuse-manifest.js";
+import { createRenderLifecycleSkipDisposition } from "../packages/vinext/src/server/skip-cache-proof.js";
 import {
   buildRenderObservation,
   buildRenderRequestApiObservations,
@@ -322,6 +323,7 @@ function createDispatchOptions(overrides: CreateDispatchOptionsOverrides = {}) {
     buildPageElement,
     cleanPathname: overrides.cleanPathname ?? "/posts/hello",
     clearRequestContext,
+    createClientReuseSkipDisposition: createRenderLifecycleSkipDisposition,
     createRscOnErrorHandler() {
       return () => null;
     },
