@@ -54,6 +54,15 @@ describe("App Router Production build", () => {
     // Client bundle should exist
     expect(fs.existsSync(path.join(outDir, "client"))).toBe(true);
 
+    const rscEntryCode = fs.readFileSync(path.join(outDir, "server", "index.js"), "utf-8");
+    const rscStaticDir = path.join(outDir, "server", "_next", "static");
+    const groupedPageChunks = fs
+      .readdirSync(rscStaticDir)
+      .filter((file) => file.startsWith("route-pages-") && file.endsWith(".js"));
+    expect(groupedPageChunks.length).toBeGreaterThan(0);
+    expect(rscEntryCode).toMatch(/import\([`"]\.\/_next\/static\/route-pages-/);
+    expect(rscEntryCode).not.toMatch(/from[`"]\.\/_next\/static\/route-pages-/);
+
     // Client JS should land under Next.js's canonical `_next/static/chunks/`
     // directory.
     const clientAssets = fs.readdirSync(path.join(outDir, "client", "_next", "static", "chunks"));

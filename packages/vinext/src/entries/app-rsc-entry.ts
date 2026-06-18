@@ -12,6 +12,7 @@ import {
   appRoutesNeedResponseCache,
   appRoutesNeedStaticParamsEndpoint,
 } from "../build/app-response-cache-capabilities.js";
+import type { AppPageChunkLoader } from "../build/app-page-chunk-groups.js";
 import { buildAppRscManifestCode } from "./app-rsc-manifest.js";
 import { resolveEntryPath } from "./runtime-entry-module.js";
 import { normalizePathSeparators } from "../utils/path.js";
@@ -216,6 +217,8 @@ type AppRouterConfig = {
   publicFiles?: string[];
   /** Server-only token used to validate the draft-mode bypass cookie. */
   draftModeSecret?: string;
+  /** Production-only lazy page-group loaders keyed by absolute page path. */
+  pageChunkLoaders?: ReadonlyMap<string, AppPageChunkLoader>;
 };
 
 /**
@@ -266,6 +269,7 @@ export function generateRscEntry(
   const draftModeSecret = config?.draftModeSecret ?? randomUUID();
   const manifestCode = buildAppRscManifestCode({
     routes,
+    pageChunkLoaders: config?.pageChunkLoaders,
     metadataRoutes,
     globalErrorPath,
     globalNotFoundPath: config?.globalNotFoundPath ?? null,

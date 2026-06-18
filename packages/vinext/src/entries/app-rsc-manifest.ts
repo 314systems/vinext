@@ -6,6 +6,7 @@ import {
 import { createMetadataRouteEntriesSource } from "../server/metadata-route-build-data.js";
 import type { MetadataFileRoute } from "../server/metadata-routes.js";
 import { normalizePathSeparators } from "../utils/path.js";
+import type { AppPageChunkLoader } from "../build/app-page-chunk-groups.js";
 
 type AppRscManifestCode = {
   imports: string[];
@@ -43,6 +44,7 @@ type AppRscManifestCode = {
 
 type BuildAppRscManifestCodeOptions = {
   routes: AppRoute[];
+  pageChunkLoaders?: ReadonlyMap<string, AppPageChunkLoader>;
   metadataRoutes?: MetadataFileRoute[];
   globalErrorPath?: string | null;
   /**
@@ -95,7 +97,9 @@ type ImportAllocator = {
   imports: string[];
 };
 
-function createImportAllocator(): ImportAllocator {
+function createImportAllocator(
+  pageChunkLoaders: ReadonlyMap<string, AppPageChunkLoader> = new Map(),
+): ImportAllocator {
   const imports: string[] = [];
   const importMap = new Map<string, string>();
   const lazyMap = new Map<string, string>();
@@ -120,6 +124,7 @@ function createImportAllocator(): ImportAllocator {
       if (existing) return existing;
 
       const varName = `load_${lazyIdx++}`;
+      const groupedLoader = pageChunkLoaders.get(filePath);
       const absPath = normalizePathSeparators(filePath);
       // `filePath` is a trusted filesystem-scan result (route.pagePath /
       // route.routePath), the same input and trust model as the eager
@@ -127,7 +132,11 @@ function createImportAllocator(): ImportAllocator {
       // above. CodeQL flags the `import()` form as dynamic code construction,
       // but this is a build-time codegen template with a JSON-encoded absolute
       // path, not runtime-attacker-controlled input — a false positive.
-      imports.push(`const ${varName} = () => import(${JSON.stringify(absPath)});`);
+      imports.push(
+        groupedLoader
+          ? `const ${varName} = () => import(${JSON.stringify(groupedLoader.specifier)}).then((group) => group.${groupedLoader.exportName});`
+          : `const ${varName} = () => import(${JSON.stringify(absPath)});`,
+      );
       lazyMap.set(filePath, varName);
       return varName;
     },
@@ -449,7 +458,7 @@ function buildRootParamNameEntries(namesByPattern: Map<string, string[]>): strin
 export function buildAppRscManifestCode(
   options: BuildAppRscManifestCodeOptions,
 ): AppRscManifestCode {
-  const imports = createImportAllocator();
+  const imports = createImportAllocator(options.pageChunkLoaders);
   const metadataRoutes = options.metadataRoutes ?? [];
 
   registerRouteModules(options.routes, imports);

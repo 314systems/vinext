@@ -99,6 +99,12 @@ import {
 import { PHASE_PRODUCTION_BUILD, PHASE_DEVELOPMENT_SERVER } from "vinext/shims/constants";
 import { precompressAssets } from "./build/precompress.js";
 import { ensureAssetsIgnore } from "./build/assets-ignore.js";
+import {
+  createAppPageChunkGroupPlan,
+  generateAppPageChunkGroupModule,
+  VIRTUAL_RSC_PAGE_GROUP_PREFIX,
+  type AppPageChunkGroup,
+} from "./build/app-page-chunk-groups.js";
 import { emitNextClientRuntimeManifests } from "./build/next-client-runtime-manifests.js";
 import { collectInlineCssManifest, injectInlineCssManifestGlobal } from "./build/inline-css.js";
 import { validateDevRequest } from "./server/dev-origin-check.js";
@@ -547,6 +553,7 @@ const RESOLVED_CLIENT_ENTRY = VIRTUAL_PREFIX + VIRTUAL_CLIENT_ENTRY;
 // Virtual module IDs for App Router entries
 const VIRTUAL_RSC_ENTRY = "virtual:vinext-rsc-entry";
 const RESOLVED_RSC_ENTRY = VIRTUAL_PREFIX + VIRTUAL_RSC_ENTRY;
+const RESOLVED_RSC_PAGE_GROUP_PREFIX = VIRTUAL_PREFIX + VIRTUAL_RSC_PAGE_GROUP_PREFIX;
 const VIRTUAL_APP_SSR_ENTRY = "virtual:vinext-app-ssr-entry";
 const RESOLVED_APP_SSR_ENTRY = VIRTUAL_PREFIX + VIRTUAL_APP_SSR_ENTRY;
 const VIRTUAL_APP_BROWSER_ENTRY = "virtual:vinext-app-browser-entry";
@@ -921,6 +928,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
 
   // Shim alias map — populated in config(), used by resolveId() for .js variants
   let nextShimMap: Record<string, string> = {};
+  let rscPageChunkGroups = new Map<string, AppPageChunkGroup>();
 
   /**
    * Generate the virtual SSR server entry module.
@@ -2794,6 +2802,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           }
           // App Router virtual modules
           if (cleanId === VIRTUAL_RSC_ENTRY) return RESOLVED_RSC_ENTRY;
+          if (cleanId.startsWith(VIRTUAL_RSC_PAGE_GROUP_PREFIX)) {
+            return VIRTUAL_PREFIX + cleanId;
+          }
           if (cleanId === VIRTUAL_APP_SSR_ENTRY) return RESOLVED_APP_SSR_ENTRY;
           if (cleanId === VIRTUAL_APP_BROWSER_ENTRY) return RESOLVED_APP_BROWSER_ENTRY;
           if (cleanId === VIRTUAL_APP_CAPABILITIES) return RESOLVED_APP_CAPABILITIES;
@@ -2872,6 +2883,12 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         // App Router virtual modules
         if (id === RESOLVED_RSC_ENTRY && hasAppDir) {
           const routes = await appRouter(appDir, nextConfig?.pageExtensions, fileMatcher);
+          const pageChunkPlan = isDevCommand
+            ? { groups: [], loaders: new Map() }
+            : createAppPageChunkGroupPlan(appDir, routes);
+          rscPageChunkGroups = new Map(
+            pageChunkPlan.groups.map((group) => [VIRTUAL_PREFIX + group.specifier, group]),
+          );
           const metaRoutes = scanMetadataFiles(appDir);
           const hasServerActions = await resolveHasServerActions(this.environment.config);
           const hasClientRouterRuntime = await resolveHasClientRouterRuntime(
@@ -2943,9 +2960,14 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               publicFiles: scanPublicFileRoutes(root),
               globalNotFoundPath,
               draftModeSecret,
+              pageChunkLoaders: pageChunkPlan.loaders,
             },
             instrumentationPath,
           );
+        }
+        if (id.startsWith(RESOLVED_RSC_PAGE_GROUP_PREFIX)) {
+          const group = rscPageChunkGroups.get(id);
+          if (group) return generateAppPageChunkGroupModule(group);
         }
         if (id === RESOLVED_ROOT_PARAMS) {
           const routes = hasAppDir

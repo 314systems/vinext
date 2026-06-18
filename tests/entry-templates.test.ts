@@ -409,6 +409,35 @@ describe("App Router generated manifest construction", () => {
     ]);
   });
 
+  it("loads grouped page modules through a lazy virtual module", () => {
+    const pagePath = "/tmp/test/app/about/page.tsx";
+    const manifest = buildAppRscManifestCode({
+      routes: [
+        {
+          ...minimalAppRoutes[0],
+          pagePath,
+          pattern: "/about",
+          patternParts: ["about"],
+          routeSegments: ["about"],
+        },
+      ],
+      pageChunkLoaders: new Map([
+        [
+          pagePath,
+          {
+            exportName: "page_2",
+            specifier: "virtual:vinext-rsc-page-group/route-pages-0",
+          },
+        ],
+      ]),
+    });
+
+    expect(manifest.imports).toContain(
+      'const load_0 = () => import("virtual:vinext-rsc-page-group/route-pages-0").then((group) => group.page_2);',
+    );
+    expect(manifest.routeEntries[0]).toContain("\n    load_0,");
+  });
+
   it("derives route-miss root boundaries when the app has no root page", () => {
     const routes = [
       {
