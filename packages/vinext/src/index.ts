@@ -6,7 +6,6 @@ import type {
   UserConfig,
   ViteDevServer,
 } from "vite";
-import type { ServerFunctionDirectiveContext } from "@vitejs/plugin-rsc/plugin";
 import { loadEnv, parseAst, transformWithOxc } from "vite";
 import {
   pagesRouter,
@@ -118,7 +117,10 @@ import { createMiddlewareServerOnlyPlugin } from "./plugins/middleware-server-on
 import { createOptimizeImportsPlugin } from "./plugins/optimize-imports.js";
 import { createDynamicPreloadMetadataPlugin } from "./plugins/dynamic-preload-metadata.js";
 import { createOgInlineFetchAssetsPlugin, createOgAssetsPlugin } from "./plugins/og-assets.js";
-import { createServerFunctionDirectivePlugins } from "./plugins/server-function-directives.js";
+import {
+  createServerFunctionDirectivePlugins,
+  type ServerFunctionDirectiveContext,
+} from "./plugins/server-function-directives.js";
 import { generateRouteTypes } from "./typegen.js";
 import {
   mergeOptimizeDepsExclude,

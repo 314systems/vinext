@@ -3,7 +3,6 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { RscPluginManager, ServerFunctionDirective } from "@vitejs/plugin-rsc/plugin";
 import type { SourceMap } from "magic-string";
 import type { Plugin, Rollup, ViteDevServer } from "vite";
 import { parseAstAsync, transformWithOxc } from "vite";
@@ -11,11 +10,42 @@ import { isUnknownRecord } from "../utils/record.js";
 import { escapeRegExp } from "../utils/regex.js";
 
 type RscTransforms = typeof import("@vitejs/plugin-rsc/transforms");
+type RscPluginManager = NonNullable<
+  ReturnType<typeof import("@vitejs/plugin-rsc").getPluginApi>
+>["manager"];
 type Program = Parameters<RscTransforms["transformDirectiveProxyExport"]>[0];
 type ModuleDirective = NonNullable<
   Parameters<RscTransforms["transformServerActionServer"]>[2]["moduleDirective"]
 > & { start?: number };
 type StringDirective = ModuleDirective & { type: "Literal"; value: string };
+type ExportFilter = NonNullable<Parameters<RscTransforms["transformWrapExport"]>[2]["filter"]>;
+type ExportMeta = Parameters<ExportFilter>[1];
+type FunctionParameters = NonNullable<ExportMeta["parameters"]>;
+
+export type ServerFunctionDirectiveContext = {
+  value: string;
+  name: string;
+  id: string;
+  directiveMatch: RegExpMatchArray;
+  location: "inline" | "module";
+  hasBoundArgs: boolean;
+  parameters?: FunctionParameters;
+  runtime?: string;
+  meta?: ExportMeta;
+};
+
+export type ServerFunctionDirective = {
+  directive: string | RegExp;
+  test?: (code: string) => boolean;
+  filter?: (id: string) => boolean;
+  validate?: (context: { id: string; directive: string; location: "inline" | "module" }) => void;
+  rejectNonAsyncFunction?: boolean;
+  rejectNonAsyncModule?: boolean;
+  runtime?: string;
+  wrap: (context: ServerFunctionDirectiveContext) => string;
+  filterExport?: (context: { name: string; id: string; meta: ExportMeta }) => boolean;
+  clientError?: (context: { id: string; environment: string }) => string;
+};
 
 type Options = {
   projectRoot: string;
