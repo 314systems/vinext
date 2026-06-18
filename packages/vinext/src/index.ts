@@ -118,7 +118,7 @@ import { createMiddlewareServerOnlyPlugin } from "./plugins/middleware-server-on
 import { createOptimizeImportsPlugin } from "./plugins/optimize-imports.js";
 import { createDynamicPreloadMetadataPlugin } from "./plugins/dynamic-preload-metadata.js";
 import { createOgInlineFetchAssetsPlugin, createOgAssetsPlugin } from "./plugins/og-assets.js";
-import { createUseCacheServerFunctionPlugins } from "./plugins/use-cache-server-functions.js";
+import { createServerFunctionDirectivePlugins } from "./plugins/server-function-directives.js";
 import { generateRouteTypes } from "./typegen.js";
 import {
   mergeOptimizeDepsExclude,
@@ -944,7 +944,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             client: VIRTUAL_APP_BROWSER_ENTRY,
           },
         });
-        const [serverFunctionPlugin, metadataPlugin] = await createUseCacheServerFunctionPlugins({
+        const [serverFunctionPlugin, metadataPlugin] = await createServerFunctionDirectivePlugins({
           projectRoot: earlyBaseDir,
           definitions: [
             {

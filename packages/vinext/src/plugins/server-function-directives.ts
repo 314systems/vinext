@@ -165,7 +165,7 @@ async function expandExportAll(
   });
 }
 
-export async function createUseCacheServerFunctionPlugins(options: Options): Promise<Plugin[]> {
+export async function createServerFunctionDirectivePlugins(options: Options): Promise<Plugin[]> {
   const rscModulePath = resolvePluginRscModule(options.projectRoot, "@vitejs/plugin-rsc");
   const transformsPath = resolvePluginRscModule(
     options.projectRoot,
@@ -192,7 +192,7 @@ export async function createUseCacheServerFunctionPlugins(options: Options): Pro
   const ownedReferences = new Map<string, OwnedServerReference>();
 
   const transformPlugin: Plugin = {
-    name: "vinext:use-cache-server-functions",
+    name: "vinext:server-function-directives",
 
     configResolved(config) {
       manager = getPluginApi(config)?.manager;
@@ -418,7 +418,7 @@ export async function createUseCacheServerFunctionPlugins(options: Options): Pro
   };
 
   const metadataPlugin: Plugin = {
-    name: "vinext:use-cache-server-function-metadata",
+    name: "vinext:server-function-directive-metadata",
     transform: {
       handler(_code, id) {
         if (!manager) return;
