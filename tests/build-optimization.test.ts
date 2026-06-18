@@ -675,6 +675,12 @@ describe("process.env.NODE_ENV define", () => {
       expect(result.define?.["process.env.__VINEXT_HAS_CLIENT_REWRITES"]).toBe(
         JSON.stringify("false"),
       );
+      expect(result.define?.["process.env.__VINEXT_HAS_CONFIG_REDIRECTS"]).toBe(
+        JSON.stringify("false"),
+      );
+      expect(result.define?.["process.env.__VINEXT_HAS_CONFIG_REWRITES"]).toBe(
+        JSON.stringify("false"),
+      );
     } finally {
       await fsp.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     }
@@ -708,6 +714,12 @@ describe("process.env.NODE_ENV define", () => {
         JSON.stringify("false"),
       );
       expect(result.define?.["process.env.__VINEXT_HAS_CLIENT_REWRITES"]).toBe(
+        JSON.stringify("false"),
+      );
+      expect(result.define?.["process.env.__VINEXT_HAS_CONFIG_REDIRECTS"]).toBe(
+        JSON.stringify("false"),
+      );
+      expect(result.define?.["process.env.__VINEXT_HAS_CONFIG_REWRITES"]).toBe(
         JSON.stringify("false"),
       );
     } finally {

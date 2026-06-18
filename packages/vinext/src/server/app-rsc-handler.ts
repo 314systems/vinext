@@ -91,6 +91,8 @@ import {
 type AppPageParams = Record<string, string | string[]>;
 type RequestContext = ReturnType<typeof requestContextFromRequest>;
 const STATIC_METADATA_CONFIG_HEADER_OVERRIDES = new Set(["cache-control"]);
+const HAS_CONFIG_REDIRECTS = process.env.__VINEXT_HAS_CONFIG_REDIRECTS !== "false";
+const HAS_CONFIG_REWRITES = process.env.__VINEXT_HAS_CONFIG_REWRITES !== "false";
 type StaticParamsMap = AppPrerenderStaticParamsMap;
 type RootParamNamesMap = AppPrerenderRootParamNamesMap;
 
@@ -548,35 +550,37 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   const matchPathname = (p: string): string =>
     normalizeDefaultLocalePathname(p, options.i18nConfig, { hostname: url.hostname });
 
-  const redirectPathname = matchPathname(stripRscSuffix(pathname));
-  const redirect = matchRedirect(
-    redirectPathname,
-    options.configRedirects,
-    preMiddlewareRequestContext,
-    basePathState,
-  );
-  if (redirect) {
-    const destination = sanitizeDestination(
-      redirectDestinationWithBasePath(redirect.destination, options.basePath),
+  if (HAS_CONFIG_REDIRECTS) {
+    const redirectPathname = matchPathname(stripRscSuffix(pathname));
+    const redirect = matchRedirect(
+      redirectPathname,
+      options.configRedirects,
+      preMiddlewareRequestContext,
+      basePathState,
     );
-    // For RSC navigations `createRscRedirectLocation` recomputes the
-    // cache-busting `_rsc` param onto the Location. For plain (document)
-    // requests, carry the original request query onto the Location so it
-    // survives the redirect, mirroring Next.js resolve-routes.ts (issue #1529).
-    const location =
-      isRscRequest && request.headers.get(RSC_HEADER) === "1"
-        ? await createRscRedirectLocation(destination, request)
-        : preserveRedirectDestinationQuery(destination, url.search);
-    if (isDataRequest) {
+    if (redirect) {
+      const destination = sanitizeDestination(
+        redirectDestinationWithBasePath(redirect.destination, options.basePath),
+      );
+      // For RSC navigations `createRscRedirectLocation` recomputes the
+      // cache-busting `_rsc` param onto the Location. For plain (document)
+      // requests, carry the original request query onto the Location so it
+      // survives the redirect, mirroring Next.js resolve-routes.ts (issue #1529).
+      const location =
+        isRscRequest && request.headers.get(RSC_HEADER) === "1"
+          ? await createRscRedirectLocation(destination, request)
+          : preserveRedirectDestinationQuery(destination, url.search);
+      if (isDataRequest) {
+        return new Response(null, {
+          status: 200,
+          headers: { "x-nextjs-redirect": location },
+        });
+      }
       return new Response(null, {
-        status: 200,
-        headers: { "x-nextjs-redirect": location },
+        status: redirect.permanent ? 308 : 307,
+        headers: { Location: location },
       });
     }
-    return new Response(null, {
-      status: redirect.permanent ? 308 : 307,
-      headers: { Location: location },
-    });
   }
 
   const rscCacheBustingRedirect = await resolveInvalidRscCacheBustingRequest({
@@ -629,27 +633,29 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   // itself continues to use the un-prefixed `cleanPathname` because App
   // Router files live under `app/...` with no locale segment. See issue
   // #1336 item 4 / pages-i18n.normalizeDefaultLocalePathname.
-  for (const rewrite of options.configRewrites.beforeFiles) {
-    const beforeFilesRewrite = await applyRewrite(
-      {
-        basePathState,
-        clearRequestContext: options.clearRequestContext,
-        // External RSC rewrites must forward the validated `_rsc` token so the
-        // destination server can validate the request without the original URL.
-        request: normalizedUserlandRequest,
-        requestContext: requestContextForResolvedUrl(
-          postMiddlewareRequestContext,
-          resolvedUrl,
-          url,
-        ),
-        rewrites: [rewrite],
-      },
-      matchPathname(cleanPathname),
-    );
-    if (beforeFilesRewrite instanceof Response) return beforeFilesRewrite;
-    if (beforeFilesRewrite) {
-      resolvedUrl = mergeRewriteQuery(resolvedUrl, beforeFilesRewrite);
-      cleanPathname = pathnameForResolvedUrl(resolvedUrl);
+  if (HAS_CONFIG_REWRITES) {
+    for (const rewrite of options.configRewrites.beforeFiles) {
+      const beforeFilesRewrite = await applyRewrite(
+        {
+          basePathState,
+          clearRequestContext: options.clearRequestContext,
+          // External RSC rewrites must forward the validated `_rsc` token so the
+          // destination server can validate the request without the original URL.
+          request: normalizedUserlandRequest,
+          requestContext: requestContextForResolvedUrl(
+            postMiddlewareRequestContext,
+            resolvedUrl,
+            url,
+          ),
+          rewrites: [rewrite],
+        },
+        matchPathname(cleanPathname),
+      );
+      if (beforeFilesRewrite instanceof Response) return beforeFilesRewrite;
+      if (beforeFilesRewrite) {
+        resolvedUrl = mergeRewriteQuery(resolvedUrl, beforeFilesRewrite);
+        cleanPathname = pathnameForResolvedUrl(resolvedUrl);
+      }
     }
   }
 
@@ -808,7 +814,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     options.clearRequestContext();
     return staticPagesFallbackResponse;
   }
-  if (!match || match.route.isDynamic) {
+  if (HAS_CONFIG_REWRITES && (!match || match.route.isDynamic)) {
     for (const rewrite of options.configRewrites.afterFiles) {
       const afterFilesRewrite = await applyRewrite(
         {
@@ -850,7 +856,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     return dynamicPagesFallbackResponse;
   }
 
-  if (!match) {
+  if (HAS_CONFIG_REWRITES && !match) {
     for (const rewrite of options.configRewrites.fallback) {
       const fallbackRewrite = await applyRewrite(
         {
