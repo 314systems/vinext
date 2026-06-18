@@ -48,7 +48,7 @@ import {
   runWithUnifiedStateMutation,
 } from "./unified-request-context.js";
 import { markDynamicUsage } from "./headers.js";
-import { trackPprFallbackShellCacheTask } from "./ppr-fallback-shell.js";
+import { trackPprFallbackShellCacheTask } from "./ppr-fallback-shell-hooks.js";
 import { isMarkedAppPagePropsObject } from "./internal/app-page-props-cache-key.js";
 
 export { markAppPagePropsForUseCache } from "./internal/app-page-props-cache-key.js";

@@ -1,7 +1,7 @@
 import {
   createPprFallbackShellSuspensePromiseForState,
   getPprFallbackShellState,
-} from "./ppr-fallback-shell.js";
+} from "./ppr-fallback-shell-hooks.js";
 
 function hasParamProperty<T extends Record<string, unknown>>(obj: T, prop: PropertyKey): boolean {
   return Object.prototype.hasOwnProperty.call(obj, prop);

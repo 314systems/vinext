@@ -1,5 +1,7 @@
 import { makeHangingPromise } from "./internal/make-hanging-promise.js";
 import { getOrCreateAls } from "./internal/als-registry.js";
+import { registerPprFallbackShellHooks } from "./ppr-fallback-shell-hooks.js";
+export { isPprFallbackShellAbortError } from "./ppr-fallback-shell-error.js";
 
 export type PprFallbackShellState = {
   abortController: AbortController;
@@ -279,13 +281,10 @@ export function beginPprFallbackShellFinalRender(state: PprFallbackShellState): 
   scheduleAbortIfReady(state);
 }
 
-export function isPprFallbackShellAbortError(error: unknown): boolean {
-  if (
-    typeof DOMException !== "undefined" &&
-    error instanceof DOMException &&
-    error.name === "AbortError"
-  ) {
-    return true;
-  }
-  return error instanceof Error && error.name === "HangingPromiseRejectionError";
-}
+registerPprFallbackShellHooks({
+  createSuspensePromise: createPprFallbackShellSuspensePromise,
+  createSuspensePromiseForState: createPprFallbackShellSuspensePromiseForState,
+  getState: getPprFallbackShellState,
+  markDynamicBoundary: markPprFallbackShellDynamicBoundary,
+  trackCacheTask: trackPprFallbackShellCacheTask,
+});

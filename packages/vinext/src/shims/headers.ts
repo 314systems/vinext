@@ -22,7 +22,7 @@ import {
   getRequestContext,
   runWithUnifiedStateMutation,
 } from "./unified-request-context.js";
-import { createPprFallbackShellSuspensePromise } from "./ppr-fallback-shell.js";
+import { createPprFallbackShellSuspensePromise } from "./ppr-fallback-shell-hooks.js";
 import type { RenderRequestApiKind } from "../server/cache-proof.js";
 
 // ---------------------------------------------------------------------------

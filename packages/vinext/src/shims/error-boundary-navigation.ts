@@ -2,7 +2,7 @@ import * as React from "react";
 import { stripBasePath } from "../utils/base-path.js";
 import { getNavigationContext } from "./navigation-server.js";
 import { AppRouterContext, type AppRouterInstance } from "./internal/app-router-context.js";
-import { markPprFallbackShellDynamicBoundary } from "./ppr-fallback-shell.js";
+import { markPprFallbackShellDynamicBoundary } from "./ppr-fallback-shell-hooks.js";
 
 const CLIENT_NAVIGATION_STATE_KEY = Symbol.for("vinext.clientNavigationState");
 const CLIENT_NAVIGATION_RENDER_CONTEXT_KEY = Symbol.for("vinext.clientNavigationRenderContext");

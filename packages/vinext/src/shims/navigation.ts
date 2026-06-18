@@ -34,7 +34,7 @@ import { isAbsoluteOrProtocolRelativeUrl, toSameOriginAppPath, withBasePath } fr
 import { stripBasePath } from "../utils/base-path.js";
 import { ReadonlyURLSearchParams } from "./readonly-url-search-params.js";
 import { assertSafeNavigationUrl } from "./url-safety.js";
-import { markPprFallbackShellDynamicBoundary } from "./ppr-fallback-shell.js";
+import { markPprFallbackShellDynamicBoundary } from "./ppr-fallback-shell-hooks.js";
 import { AppRouterContext, type AppRouterInstance } from "./internal/app-router-context.js";
 import { getPagesNavigationContext as _getPagesNavigationContext } from "./internal/pages-router-accessor.js";
 import { retryScrollTo, scrollToHashTarget } from "./hash-scroll.js";
