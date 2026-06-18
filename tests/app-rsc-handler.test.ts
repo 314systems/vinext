@@ -16,6 +16,10 @@ import {
 } from "../packages/vinext/src/server/client-reuse-manifest.js";
 import { VINEXT_CLIENT_REUSE_MANIFEST_HEADER } from "../packages/vinext/src/server/headers.js";
 import { applyAppMiddleware } from "../packages/vinext/src/server/app-middleware.js";
+import {
+  handleMetadataRouteRequest,
+  type MetadataRuntimeRoute,
+} from "../packages/vinext/src/server/metadata-route-response.js";
 import type { MiddlewareModule } from "../packages/vinext/src/server/middleware-runtime.js";
 import { makeThenableParams } from "../packages/vinext/src/shims/thenable-params.js";
 
@@ -31,6 +35,7 @@ type TestRoute = {
 type HandlerOptions = Parameters<typeof createAppRscHandler<TestRoute>>[0];
 type TestHandlerOptions = HandlerOptions & {
   isMiddlewareProxy?: boolean;
+  metadataRoutes?: readonly MetadataRuntimeRoute[];
   middlewareModule?: MiddlewareModule | null;
 };
 type DispatchMatchedRouteHandler = HandlerOptions["dispatchMatchedRouteHandler"];
@@ -72,11 +77,20 @@ function createHandler(overrides: Partial<TestHandlerOptions> = {}) {
       overrides.dispatchMatchedRouteHandler ?? (async () => new Response("route", { status: 200 })),
     ensureInstrumentation: overrides.ensureInstrumentation,
     handleProgressiveActionRequest: overrides.handleProgressiveActionRequest ?? (async () => null),
+    handleMetadataRouteRequest:
+      overrides.handleMetadataRouteRequest ??
+      (overrides.metadataRoutes?.length
+        ? (cleanPathname) =>
+            handleMetadataRouteRequest({
+              metadataRoutes: overrides.metadataRoutes!,
+              cleanPathname,
+              makeThenableParams,
+            })
+        : undefined),
     handleServerActionRequest: overrides.handleServerActionRequest ?? (async () => null),
     i18nConfig: overrides.i18nConfig ?? null,
     imageConfig: overrides.imageConfig,
     isDev: overrides.isDev ?? true,
-    makeThenableParams,
     matchRoute:
       overrides.matchRoute ??
       ((pathname: string) =>
@@ -86,7 +100,6 @@ function createHandler(overrides: Partial<TestHandlerOptions> = {}) {
               route,
             }
           : null),
-    metadataRoutes: overrides.metadataRoutes ?? [],
     runMiddleware:
       overrides.runMiddleware ??
       (overrides.middlewareModule
