@@ -65,6 +65,10 @@ const appPageRouteWiringPath = resolveEntryPath(
 );
 const appPageProbePath = resolveEntryPath("../server/app-page-probe.js", import.meta.url);
 const appPageDispatchPath = resolveEntryPath("../server/app-page-dispatch.js", import.meta.url);
+const appPageCacheRuntimePath = resolveEntryPath(
+  "../server/app-page-cache-runtime.js",
+  import.meta.url,
+);
 const appPagePprRuntimePath = resolveEntryPath(
   "../server/app-page-ppr-runtime.js",
   import.meta.url,
@@ -381,6 +385,11 @@ import { buildAppPageProbes as __buildAppPageProbes } from ${JSON.stringify(appP
 import {
   dispatchAppPage as __dispatchAppPage,
 } from ${JSON.stringify(appPageDispatchPath)};
+${
+  hasIsrRuntime
+    ? `import * as __appPageCacheRuntime from ${JSON.stringify(appPageCacheRuntimePath)};`
+    : ""
+}
 ${
   hasClientRouterRuntime
     ? `import { parseClientReuseManifestHeader as __parseClientReuseManifestHeader } from ${JSON.stringify(clientReuseManifestPath)};
@@ -868,7 +877,8 @@ export default createAppRscHandler({
       routeSegments: route.routeSegments,
     });
     const _asyncRouteParams = makeThenableParams(params);
-    return __dispatchAppPage({
+      return __dispatchAppPage({
+      ${hasIsrRuntime ? "appPageCacheRuntime: __appPageCacheRuntime," : ""}
       basePath: __basePath,
       ensureRouteLoaded: __ensureRouteLoaded,
       clientTraceMetadata: __clientTraceMetadata,

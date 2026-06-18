@@ -921,6 +921,47 @@ describe("App Router entry templates", () => {
     expect(withFetchCache).toContain('import "vinext/shims/fetch-cache";');
   });
 
+  it("generateRscEntry only includes the App page cache runtime for cacheable routes", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-entry-page-cache-runtime-"));
+    const layoutPath = path.join(tmpDir, "layout.tsx");
+    const pagePath = path.join(tmpDir, "page.tsx");
+    fs.writeFileSync(layoutPath, 'export const dynamic = "force-dynamic";');
+    fs.writeFileSync(pagePath, "export default function Page() { return null; }");
+
+    try {
+      const forceDynamicRoute: AppRoute = {
+        ...minimalAppRoutes[0],
+        layouts: [layoutPath],
+        pagePath,
+      };
+      const withoutPageCache = generateRscEntry(
+        tmpDir,
+        [forceDynamicRoute],
+        null,
+        [],
+        null,
+        "",
+        false,
+      );
+      const withPageCache = generateRscEntry(
+        "/tmp/test/app",
+        minimalAppRoutes,
+        null,
+        [],
+        null,
+        "",
+        false,
+      );
+
+      expect(withoutPageCache).not.toContain("app-page-cache-runtime.js");
+      expect(withoutPageCache).not.toContain("appPageCacheRuntime:");
+      expect(withPageCache).toContain("app-page-cache-runtime.js");
+      expect(withPageCache).toContain("appPageCacheRuntime: __appPageCacheRuntime");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("generateRscEntry only includes metadata route response handling when routes exist", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-entry-metadata-runtime-"));
     const filePath = path.join(tmpDir, "sitemap.ts");

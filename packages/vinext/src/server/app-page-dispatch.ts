@@ -21,9 +21,7 @@ import {
   setHeadersContext,
 } from "vinext/shims/headers";
 import { getRequestExecutionContext } from "vinext/shims/request-context";
-import { createRequestContext, runWithRequestContext } from "vinext/shims/unified-request-context";
 import {
-  ensureFetchPatch,
   getCollectedFetchTags,
   peekDynamicFetchObservations,
   runWithFetchDedupe,
@@ -34,6 +32,7 @@ import {
 import { createAppPayloadLayoutId, type AppOutgoingElements } from "./app-elements.js";
 import type { AppPagePprFallbackCacheShell } from "./app-ppr-fallback-shell.js";
 import type { WarmPprFallbackShellCachesOptions } from "./app-ppr-fallback-shell-render.js";
+import type * as AppPageCacheRuntime from "./app-page-cache-runtime.js";
 import {
   resolveAppPageParentHttpAccessBoundary,
   resolveAppPageParentHttpAccessBoundaryModule,
@@ -282,6 +281,7 @@ export type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
     interceptionContext?: string | null,
   ) => string;
   isrSet: AppPageCacheSetter;
+  appPageCacheRuntime?: typeof AppPageCacheRuntime;
   loadSsrHandler: () => Promise<AppPageSsrHandler>;
   middlewareContext: AppPageMiddlewareContext;
   mountedSlotsHeader?: string | null;
@@ -449,52 +449,6 @@ export function hasSearchParams(searchParams: URLSearchParams | null | undefined
   return searchParams !== null && searchParams !== undefined && searchParams.size > 0;
 }
 
-async function runAppPageRevalidationContext<
-  TResult extends {
-    html: string;
-    tags: string[];
-  },
->(
-  options: {
-    cleanPathname: string;
-    displayPathname?: string;
-    currentFetchCacheMode?: FetchCacheMode | null;
-    draftModeSecret: string;
-    dynamicConfig?: string;
-    params: AppPageParams;
-    routePattern: string;
-    routeSegments: readonly string[];
-    setNavigationContext: DispatchAppPageOptions<AppPageDispatchRoute>["setNavigationContext"];
-  },
-  renderFn: () => Promise<TResult>,
-): Promise<TResult> {
-  const { createStaticGenerationHeadersContext } = await import("./app-static-generation.js");
-  const headersContext = createStaticGenerationHeadersContext({
-    draftModeSecret: options.draftModeSecret,
-    dynamicConfig: options.dynamicConfig,
-    routeKind: "page",
-    routePattern: options.routePattern,
-  });
-  const requestContext = createRequestContext({
-    headersContext,
-    currentFetchCacheMode: options.currentFetchCacheMode ?? null,
-    currentForceDynamicFetchDefault: options.dynamicConfig === "force-dynamic",
-    executionContext: getRequestExecutionContext(),
-    unstableCacheRevalidation: "foreground",
-  });
-
-  return runWithRequestContext(requestContext, async () => {
-    ensureFetchPatch();
-    setCurrentFetchSoftTags(buildAppPageTags(options.cleanPathname, [], options.routeSegments));
-    options.setNavigationContext({
-      pathname: options.displayPathname ?? options.cleanPathname,
-      searchParams: new URLSearchParams(),
-      params: options.params,
-    });
-    return await runWithFetchDedupe(renderFn);
-  });
-}
-
 function toInterceptOptions(
   interceptionContext: string | null,
   intercept: AppPageDispatchIntercept,
@@ -580,6 +534,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
   }
 
   if (
+    options.appPageCacheRuntime &&
     shouldReadAppPageCache({
       isDraftMode,
       isForceDynamic,
@@ -590,8 +545,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
       scriptNonce: options.scriptNonce,
     })
   ) {
-    const { readAppPageCacheResponse } = await import("./app-page-cache.js");
-    const cachedPageResponse = await readAppPageCacheResponse({
+    const cachedPageResponse = await options.appPageCacheRuntime.readAppPageCacheResponse({
       cleanPathname: options.cleanPathname,
       clearRequestContext: options.clearRequestContext,
       hasRequestSearchParams: !isForceStatic && hasSearchParams(options.searchParams),
@@ -644,7 +598,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
         // Hydrate the (possibly different) source route before reading its
         // page module for fetch-cache-mode resolution.
         await options.ensureRouteLoaded?.(revalidationTarget.route);
-        return runAppPageRevalidationContext(
+        return options.appPageCacheRuntime!.runAppPageRevalidationContext(
           {
             cleanPathname: options.cleanPathname,
             displayPathname: options.displayPathname,
@@ -661,7 +615,6 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
             setNavigationContext: options.setNavigationContext,
           },
           async () => {
-            const { renderAppPageCacheArtifacts } = await import("./app-page-cache-render.js");
             const revalidatedElement = await options.buildPageElement(
               revalidationTarget.route,
               revalidationTarget.params,
@@ -674,7 +627,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
             );
             // No inner runWithFetchDedupe here: this renderFn is already
             // wrapped in runWithFetchDedupe by runAppPageRevalidationContext.
-            const rendered = await renderAppPageCacheArtifacts({
+            const rendered = await options.appPageCacheRuntime!.renderAppPageCacheArtifacts({
               basePath: options.basePath,
               captureRscData: true,
               cleanPathname: options.cleanPathname,

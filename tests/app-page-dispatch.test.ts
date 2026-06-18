@@ -6,6 +6,7 @@ import {
   AppElementsWire,
 } from "../packages/vinext/src/server/app-elements.js";
 import { dispatchAppPage } from "../packages/vinext/src/server/app-page-dispatch.js";
+import * as appPageCacheRuntime from "../packages/vinext/src/server/app-page-cache-runtime.js";
 import { createClientReuseManifestHeaderFromVisibleAppState } from "../packages/vinext/src/server/app-browser-client-reuse-manifest.js";
 import type { AppLayoutParamAccessTracker } from "../packages/vinext/src/server/app-layout-param-observation.js";
 import {
@@ -320,6 +321,7 @@ function createDispatchOptions(overrides: CreateDispatchOptionsOverrides = {}) {
       },
     }));
   const options: DispatchOptions = {
+    appPageCacheRuntime,
     buildPageElement,
     cleanPathname: overrides.cleanPathname ?? "/posts/hello",
     clearRequestContext,
