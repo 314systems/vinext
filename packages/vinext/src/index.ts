@@ -1058,6 +1058,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     if (
       config.command !== "build" ||
       hasPagesDir ||
+      nextConfig.i18n !== null ||
       instrumentationClientPath !== null ||
       clientRouterRuntimeRequired !== false
     ) {
@@ -5640,6 +5641,19 @@ export const loadServerActionClient = ${
         ],
         onClientRouterRuntimeAnalysis(required) {
           clientRouterRuntimeRequired = required;
+        },
+        rewriteClientReferenceImportId(importId, { hasServerActions }) {
+          if (
+            clientRouterRuntimeRequired === false &&
+            !hasPagesDir &&
+            nextConfig.i18n === null &&
+            instrumentationClientPath === null &&
+            !hasServerActions &&
+            importId === resolveShimModulePath(_shimsDir, "link")
+          ) {
+            return resolveShimModulePath(_shimsDir, "link-document");
+          }
+          return importId;
         },
       }),
     );
