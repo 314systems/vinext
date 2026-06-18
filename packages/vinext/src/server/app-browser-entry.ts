@@ -28,7 +28,6 @@ import {
   createClientNavigationRenderSnapshot,
   getClientNavigationRenderContext,
   getBfcacheIdMapContext,
-  getPrefetchCache,
   hasPrefetchCacheEntryForNavigation,
   invalidatePrefetchCache,
   decodeRedirectError,
@@ -36,7 +35,6 @@ import {
   pushHistoryStateWithoutNotify,
   replaceClientParamsWithoutNotify,
   replaceHistoryStateWithoutNotify,
-  resolvePrefetchCacheEntryMountedSlotsHeader,
   restoreRscResponse,
   saveScrollPosition,
   setClientParams,
@@ -44,9 +42,7 @@ import {
   setMountedSlotsHeader,
   setNavigationContext,
   useRouter,
-  type CachedRscResponse,
   type ClientNavigationRenderSnapshot,
-  type PrefetchCacheEntry,
 } from "vinext/shims/navigation";
 import {
   getNavigationRuntime,
@@ -108,8 +104,6 @@ import {
   createBfcacheSegmentStateKeyMap,
   createInitialBfcacheIdMap,
   isCacheRestorableAppPayloadMetadata,
-  readHistoryStatePreviousNextUrl,
-  resolveInterceptionContextFromPreviousNextUrl,
   resolveServerActionRequestState,
   type AppNavigationPayloadOrigin,
   type AppRouterState,
@@ -117,7 +111,6 @@ import {
   type OperationLane,
 } from "./app-browser-state.js";
 import { AppBrowserHistoryController } from "./app-browser-history-controller.js";
-import type { VisitedResponseCacheEntry } from "./app-visited-response-cache.js";
 import {
   createPopstateRestoreHandler,
   restoreSynchronousPopstateScrollPosition,
@@ -156,7 +149,7 @@ import {
   VINEXT_RSC_CONTENT_TYPE,
 } from "./app-rsc-cache-busting.js";
 import { APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI } from "./app-rsc-render-mode.js";
-import type { OptimisticRouteTemplate } from "./app-browser-navigation-support.js";
+import type { NavigationKind } from "./app-browser-navigation-support.js";
 import {
   VINEXT_CLIENT_REUSE_MANIFEST_HEADER,
   VINEXT_PARAMS_HEADER,
@@ -169,45 +162,17 @@ import type {
 } from "./navigation-planner.js";
 
 type SearchParamInput = ConstructorParameters<typeof URLSearchParams>[0];
-type NavigationPlanner = typeof import("./navigation-planner.js").navigationPlanner;
 type AppBrowserNavigationSupport = typeof import("./app-browser-navigation-support.js");
 
 type ServerActionResult = AppBrowserServerActionResult<AppWireElements>;
 
-type NavigationKind = "navigate" | "traverse" | "refresh";
 type MpaNavigationState = {
   href: string;
   historyUpdateMode: HistoryUpdateMode;
   kind: "mpa-navigation";
 };
 
-// Maps NavigationKind to the AppRouterAction type used by the reducer.
-// "refresh" is intentionally treated as "navigate" (merge, preserve absent slots).
-// Both call sites must stay in sync — update here if NavigationKind gains new values.
-function toActionType(kind: NavigationKind): "navigate" | "traverse" {
-  return kind === "traverse" ? "traverse" : "navigate";
-}
-
-function toOperationLane(kind: NavigationKind): OperationLane {
-  switch (kind) {
-    case "navigate":
-      return "navigation";
-    case "refresh":
-      return "refresh";
-    case "traverse":
-      return "traverse";
-    default: {
-      const _exhaustive: never = kind;
-      throw new Error("[vinext] Unknown navigation kind: " + String(_exhaustive));
-    }
-  }
-}
-
-const MAX_VISITED_RESPONSE_CACHE_SIZE = 50;
 const CLIENT_RSC_COMPATIBILITY_ID = getVinextRscCompatibilityId();
-const optimisticRouteTemplates = new Map<string, OptimisticRouteTemplate>();
-const optimisticRouteTemplateSources = new Set<string>();
-const optimisticRouteTemplateLearning = new Map<string, Promise<void>>();
 let appBrowserNavigationSupport: AppBrowserNavigationSupport | null = null;
 let appBrowserNavigationSupportPromise: Promise<AppBrowserNavigationSupport> | null = null;
 
@@ -330,7 +295,6 @@ function isRouterStatePromise(
 }
 
 let latestClientParams: Record<string, string | string[]> = {};
-const visitedResponseCache = new Map<string, VisitedResponseCacheEntry>();
 // Sticky bit: stays true once BrowserRoot has committed at least once. Used by
 // the HMR handler to distinguish "still hydrating" (wait) from "was up, then
 // torn down by a render error" (full reload to recover).
@@ -412,121 +376,10 @@ function stageClientParams(params: Record<string, string | string[]>): void {
   replaceClientParamsWithoutNotify(params);
 }
 
-function clearVisitedResponseCache(): void {
-  visitedResponseCache.clear();
-}
-
-function clearPrefetchState(): void {
-  invalidatePrefetchCache();
-  optimisticRouteTemplates.clear();
-  optimisticRouteTemplateSources.clear();
-  optimisticRouteTemplateLearning.clear();
-}
-
 function clearClientNavigationCaches(): void {
-  clearVisitedResponseCache();
-  clearPrefetchState();
+  invalidatePrefetchCache();
+  appBrowserNavigationSupport?.clearAppBrowserNavigationState();
   historyController.invalidateRestorableClientState();
-}
-
-function isSettledPrefetchCacheEntry(
-  entry: PrefetchCacheEntry,
-): entry is PrefetchCacheEntry & { snapshot: CachedRscResponse } {
-  return (
-    entry.outcome === "cache-seeded" && entry.pending === undefined && entry.snapshot !== undefined
-  );
-}
-
-function parsePrefetchCacheKey(cacheKey: string): {
-  interceptionContext: string | null;
-  rscUrl: string;
-} {
-  const separatorIndex = cacheKey.indexOf("\0");
-  if (separatorIndex === -1) {
-    return { interceptionContext: null, rscUrl: cacheKey };
-  }
-  return {
-    interceptionContext: cacheKey.slice(separatorIndex + 1),
-    rscUrl: cacheKey.slice(0, separatorIndex),
-  };
-}
-
-async function learnOptimisticRouteTemplateFromPrefetch(options: {
-  cacheKey: string;
-  entry: PrefetchCacheEntry & { snapshot: CachedRscResponse };
-  interceptionContext: string | null;
-  mountedSlotsHeader: string | null;
-  routeManifest: RouteManifest;
-}): Promise<boolean> {
-  const source = parsePrefetchCacheKey(options.cacheKey);
-  if (source.interceptionContext !== options.interceptionContext) return false;
-  if (resolvePrefetchCacheEntryMountedSlotsHeader(options.entry) !== options.mountedSlotsHeader) {
-    return false;
-  }
-  if (options.interceptionContext !== null) return false;
-
-  const elements = await decodeAppElementsPromise(
-    createFromFetch<AppWireElements>(Promise.resolve(restoreRscResponse(options.entry.snapshot))),
-  );
-  const template = getAppBrowserNavigationSupport().createOptimisticRouteTemplate({
-    allowLoadingShell: options.entry.optimisticRouteShell === true,
-    basePath: __basePath,
-    elements,
-    href: options.entry.snapshot.url || source.rscUrl,
-    interceptionContext: options.interceptionContext,
-    mountedSlotsHeader: options.mountedSlotsHeader,
-    routeManifest: options.routeManifest,
-  });
-  if (template === null) return false;
-
-  optimisticRouteTemplates.set(
-    getAppBrowserNavigationSupport().getOptimisticRouteTemplateKey({
-      interceptionContext: options.interceptionContext,
-      mountedSlotsHeader: options.mountedSlotsHeader,
-      routeId: template.routeId,
-    }),
-    template,
-  );
-  return true;
-}
-
-async function learnOptimisticRouteTemplatesFromPrefetchCache(options: {
-  interceptionContext: string | null;
-  mountedSlotsHeader: string | null;
-  routeManifest: RouteManifest | null;
-}): Promise<void> {
-  if (options.routeManifest === null) return;
-
-  const learning: Promise<void>[] = [...optimisticRouteTemplateLearning.values()];
-  for (const [cacheKey, entry] of getPrefetchCache()) {
-    const sourceKey = getAppBrowserNavigationSupport().getOptimisticPrefetchSourceKey({
-      cacheKey,
-      interceptionContext: options.interceptionContext,
-      mountedSlotsHeader: options.mountedSlotsHeader,
-    });
-    if (optimisticRouteTemplateSources.has(sourceKey)) continue;
-    if (optimisticRouteTemplateLearning.has(sourceKey)) continue;
-    if (!isSettledPrefetchCacheEntry(entry)) continue;
-
-    const promise = learnOptimisticRouteTemplateFromPrefetch({
-      cacheKey,
-      entry,
-      interceptionContext: options.interceptionContext,
-      mountedSlotsHeader: options.mountedSlotsHeader,
-      routeManifest: options.routeManifest,
-    })
-      .then((learned) => {
-        if (learned) optimisticRouteTemplateSources.add(sourceKey);
-      })
-      .finally(() => {
-        optimisticRouteTemplateLearning.delete(sourceKey);
-      });
-    optimisticRouteTemplateLearning.set(sourceKey, promise);
-    learning.push(promise);
-  }
-
-  if (learning.length === 0) return;
-  await Promise.allSettled(learning);
 }
 
 function createActionInitiationSnapshot() {
@@ -648,230 +501,6 @@ async function commitSameUrlNavigatePayload(
       targetHref: actionInitiation.href,
     },
   );
-}
-
-function evictVisitedResponseCacheIfNeeded(): void {
-  while (visitedResponseCache.size >= MAX_VISITED_RESPONSE_CACHE_SIZE) {
-    const oldest = visitedResponseCache.keys().next().value;
-    if (oldest === undefined) {
-      return;
-    }
-    visitedResponseCache.delete(oldest);
-  }
-}
-
-type VisitedResponseCacheCandidate =
-  | {
-      cacheKey: string;
-      entry: VisitedResponseCacheEntry;
-      facts: Extract<VisitedResponseCacheCandidateFacts, { candidate: "present" }>;
-    }
-  | {
-      cacheKey: string;
-      entry: null;
-      facts: Extract<VisitedResponseCacheCandidateFacts, { candidate: "missing" }>;
-    };
-
-function readVisitedResponseCacheCandidate(
-  rscUrl: string,
-  interceptionContext: string | null,
-  mountedSlotsHeader: string | null,
-  navigationKind: NavigationKind,
-): VisitedResponseCacheCandidate {
-  const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
-  const cached = visitedResponseCache.get(cacheKey);
-  if (!cached) {
-    return {
-      cacheKey,
-      entry: null,
-      facts: {
-        candidate: "missing",
-        navigationKind,
-      },
-    };
-  }
-
-  return {
-    cacheKey,
-    entry: cached,
-    facts: {
-      candidate: "present",
-      fresh: getAppBrowserNavigationSupport().isVisitedResponseCacheEntryFresh(cached, {
-        navigationKind,
-        now: Date.now(),
-      }),
-      mountedSlotsMatch: (cached.response.mountedSlotsHeader ?? null) === mountedSlotsHeader,
-      navigationKind,
-    },
-  };
-}
-
-function applyVisitedResponseCacheCandidateDecision(
-  candidate: VisitedResponseCacheCandidate,
-  decision: ReturnType<NavigationPlanner["classifyVisitedResponseCacheCandidate"]>,
-): VisitedResponseCacheEntry | null {
-  if (candidate.entry === null) {
-    return null;
-  }
-
-  if (decision.kind === "reuse") {
-    // LRU: promote to most-recently-used
-    visitedResponseCache.delete(candidate.cacheKey);
-    visitedResponseCache.set(candidate.cacheKey, candidate.entry);
-    return candidate.entry;
-  }
-
-  // Stale, slot-mismatched, and refresh entries are evicted on read. A refresh
-  // intentionally drops any prior snapshot here — the navigation re-fetches and
-  // re-stores a fresh one, so leaving the old entry around would only risk a
-  // later non-refresh navigation reusing a snapshot the user explicitly
-  // refreshed.
-  visitedResponseCache.delete(candidate.cacheKey);
-  return null;
-}
-
-function deleteVisitedResponse(rscUrl: string, interceptionContext: string | null): void {
-  visitedResponseCache.delete(AppElementsWire.encodeCacheKey(rscUrl, interceptionContext));
-}
-
-function storeVisitedResponseSnapshot(
-  rscUrl: string,
-  interceptionContext: string | null,
-  snapshot: CachedRscResponse,
-  params: Record<string, string | string[]>,
-): void {
-  const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
-  visitedResponseCache.delete(cacheKey);
-  evictVisitedResponseCacheIfNeeded();
-  const now = Date.now();
-  visitedResponseCache.set(
-    cacheKey,
-    getAppBrowserNavigationSupport().createVisitedResponseCacheEntry({
-      now,
-      params,
-      response: snapshot,
-    }),
-  );
-}
-
-// Build the absolute current-document href the early-intent planner compares
-// against the navigation target. The committed snapshot carries a base-stripped
-// pathname plus parsed search params; the planner re-strips the base (a no-op on
-// an already-stripped path) so both sides reduce to the same canonical form.
-function clientNavigationSnapshotHref(snapshot: ClientNavigationRenderSnapshot): string {
-  return `${window.location.origin}${createSnapshotPathAndSearch(snapshot)}`;
-}
-
-type NavigationRequestState = {
-  interceptionContext: string | null;
-  previousNextUrl: string | null;
-};
-
-function getRequestState(
-  navigationKind: NavigationKind,
-  targetPathname: string,
-  previousNextUrlOverride?: string | null,
-  traverseHistoryState?: unknown,
-): NavigationRequestState {
-  if (previousNextUrlOverride !== undefined) {
-    return {
-      interceptionContext: resolveInterceptionContextFromPreviousNextUrl(
-        previousNextUrlOverride,
-        __basePath,
-      ),
-      previousNextUrl: previousNextUrlOverride,
-    };
-  }
-
-  // Three branches for "navigate":
-  // 1. previousNextUrl !== null → a committed intercepted navigation set this
-  //    in browser state (requires proof). This is the proven interception path.
-  // 2. route manifest declares current URL can intercept target URL → ask the
-  //    server for an intercepted payload using manifest route facts only.
-  // 3. otherwise, send no interception context.
-  switch (navigationKind) {
-    case "navigate": {
-      const currentPreviousNextUrl = getBrowserRouterState().previousNextUrl;
-      if (currentPreviousNextUrl !== null) {
-        return {
-          interceptionContext: resolveInterceptionContextFromPreviousNextUrl(
-            currentPreviousNextUrl,
-            __basePath,
-          ),
-          previousNextUrl: currentPreviousNextUrl,
-        };
-      }
-      const manifestInterceptionContext =
-        getAppBrowserNavigationSupport().resolveManifestNavigationInterceptionContext({
-          basePath: __basePath,
-          currentPathname: window.location.pathname,
-          routeManifest: getBrowserRouteManifest(),
-          targetPathname,
-        });
-      if (manifestInterceptionContext !== null) {
-        return {
-          interceptionContext: manifestInterceptionContext,
-          previousNextUrl: window.location.pathname + window.location.search,
-        };
-      }
-      // Fallback: when the current page is a declared interception source and
-      // the target URL still matches the declared target prefix, send the
-      // current pathname as context so the server can fire interception for
-      // middleware-rewritten targets. The client manifest check above only
-      // matches the pre-middleware target URL against the declared pattern;
-      // when middleware adds a segment (e.g. locale prefix), the pre-rewrite
-      // URL is shorter than the pattern and the match fails. Sending the
-      // current pathname lets the server re-check after applying the rewrite.
-      //
-      // We gate on source plus target prefix rather than always sending
-      // context, to preserve prefetch cache reuse for ordinary navigations
-      // where interception cannot apply.
-      const middlewareRewriteInterceptionContext =
-        getAppBrowserNavigationSupport().resolveMiddlewareRewriteNavigationInterceptionContext({
-          basePath: __basePath,
-          currentPathname: window.location.pathname,
-          routeManifest: getBrowserRouteManifest(),
-          targetPathname,
-        });
-      if (middlewareRewriteInterceptionContext !== null) {
-        const currentHrefForFallback = window.location.pathname + window.location.search;
-        return {
-          interceptionContext: middlewareRewriteInterceptionContext,
-          previousNextUrl: currentHrefForFallback,
-        };
-      }
-      return {
-        interceptionContext: null,
-        previousNextUrl: null,
-      };
-    }
-    case "traverse": {
-      const previousNextUrl = readHistoryStatePreviousNextUrl(
-        traverseHistoryState ?? window.history.state,
-      );
-      return {
-        interceptionContext: resolveInterceptionContextFromPreviousNextUrl(
-          previousNextUrl,
-          __basePath,
-        ),
-        previousNextUrl,
-      };
-    }
-    case "refresh": {
-      const currentPreviousNextUrl = getBrowserRouterState().previousNextUrl;
-      return {
-        interceptionContext: resolveInterceptionContextFromPreviousNextUrl(
-          currentPreviousNextUrl,
-          __basePath,
-        ),
-        previousNextUrl: currentPreviousNextUrl,
-      };
-    }
-    default: {
-      const _exhaustive: never = navigationKind;
-      throw new Error("[vinext] Unknown navigation kind: " + String(_exhaustive));
-    }
-  }
 }
 
 // Dev-only callback invoked when DevRecoveryBoundary catches. The replaced
@@ -1575,12 +1204,17 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
 
       while (true) {
         const url = new URL(currentHref, window.location.origin);
-        const requestState = getRequestState(
+        const requestState = getAppBrowserNavigationSupport().getNavigationRequestState({
+          basePath: __basePath,
+          currentPathname: window.location.pathname,
+          currentPreviousNextUrl: getBrowserRouterState().previousNextUrl,
+          currentSearch: window.location.search,
           navigationKind,
-          url.pathname,
-          currentPrevNextUrl,
-          activeTraversalIntent?.historyState,
-        );
+          previousNextUrlOverride: currentPrevNextUrl,
+          routeManifest: getBrowserRouteManifest(),
+          targetPathname: url.pathname,
+          traverseHistoryState: activeTraversalIntent?.historyState,
+        });
         const requestInterceptionContext = requestState.interceptionContext;
         const requestPreviousNextUrl = requestState.previousNextUrl;
         if (navigationKind === "refresh") {
@@ -1610,7 +1244,9 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
           navigationKind === "navigate"
             ? navigationPlanner.classifyEarlyNavigationIntent({
                 basePath: __basePath,
-                currentHref: clientNavigationSnapshotHref(routerStateAtNavStart.navigationSnapshot),
+                currentHref: getAppBrowserNavigationSupport().clientNavigationSnapshotHref(
+                  routerStateAtNavStart.navigationSnapshot,
+                ),
                 // This loop only consumes the flight-navigation cache policy;
                 // hash-only intents already return before a request is queued.
                 mode: "push",
@@ -1642,7 +1278,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
                 navigationKind,
               } satisfies Extract<VisitedResponseCacheCandidateFacts, { candidate: "missing" }>,
             }
-          : readVisitedResponseCacheCandidate(
+          : getAppBrowserNavigationSupport().readVisitedResponseCacheCandidate(
               rscUrl,
               requestInterceptionContext,
               mountedSlotsHeader,
@@ -1651,10 +1287,11 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
         const visitedResponseDecision = navigationPlanner.classifyVisitedResponseCacheCandidate(
           visitedResponseCandidate.facts,
         );
-        const cachedRoute = applyVisitedResponseCacheCandidateDecision(
-          visitedResponseCandidate,
-          visitedResponseDecision,
-        );
+        const cachedRoute =
+          getAppBrowserNavigationSupport().applyVisitedResponseCacheCandidateDecision(
+            visitedResponseCandidate,
+            visitedResponseDecision,
+          );
         const visitedResponse: NavigationReuseFacts["visitedResponse"] =
           cachedRoute === null ? { status: "unavailable" } : { status: "available" };
         const prefetchProbeDecision = navigationPlanner.classifyNavigationPrefetchProbe({
@@ -1750,8 +1387,8 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
             requestPreviousNextUrl,
             detachedNavigationCommits ? null : pendingRouterState,
             VISITED_CACHE_APP_NAVIGATION_PAYLOAD_ORIGIN,
-            toActionType(navigationKind),
-            toOperationLane(navigationKind),
+            getAppBrowserNavigationSupport().toNavigationActionType(navigationKind),
+            getAppBrowserNavigationSupport().toNavigationOperationLane(navigationKind),
             activeTraversalIntent,
             scrollIntent,
             restoredBfcacheIds,
@@ -1759,7 +1396,10 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
             visibleCommitMode,
           );
           if (cachedRenderOutcome === "no-commit") {
-            deleteVisitedResponse(rscUrl, requestInterceptionContext);
+            getAppBrowserNavigationSupport().deleteVisitedResponse(
+              rscUrl,
+              requestInterceptionContext,
+            );
             continue;
           }
           return;
@@ -1810,7 +1450,8 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
         // that is always superseded by the authoritative fetch — the same as
         // cross-route navigations — so it never persists stale page content.
         if (!navResponse && fallbackReuseDecision.kind === "attemptOptimisticRouteShell") {
-          await learnOptimisticRouteTemplatesFromPrefetchCache({
+          await getAppBrowserNavigationSupport().learnOptimisticRouteTemplatesFromPrefetchCache({
+            basePath: __basePath,
             interceptionContext: requestInterceptionContext,
             mountedSlotsHeader,
             routeManifest,
@@ -1819,13 +1460,12 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
 
           if (routeManifest !== null) {
             const optimisticPayload =
-              getAppBrowserNavigationSupport().resolveOptimisticNavigationPayload({
+              getAppBrowserNavigationSupport().resolveOptimisticNavigationPayloadFromCache({
                 basePath: __basePath,
                 href: currentHref,
                 interceptionContext: requestInterceptionContext,
                 mountedSlotsHeader,
                 routeManifest,
-                templates: optimisticRouteTemplates,
               });
 
             if (optimisticPayload !== null) {
@@ -1850,8 +1490,8 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
                 requestPreviousNextUrl,
                 null,
                 FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
-                toActionType(navigationKind),
-                toOperationLane(navigationKind),
+                getAppBrowserNavigationSupport().toNavigationActionType(navigationKind),
+                getAppBrowserNavigationSupport().toNavigationOperationLane(navigationKind),
                 activeTraversalIntent,
                 scrollIntent,
                 restoredBfcacheIds,
@@ -1998,8 +1638,8 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
           requestPreviousNextUrl,
           detachedNavigationCommits ? null : pendingRouterState,
           FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
-          toActionType(navigationKind),
-          toOperationLane(navigationKind),
+          getAppBrowserNavigationSupport().toNavigationActionType(navigationKind),
+          getAppBrowserNavigationSupport().toNavigationOperationLane(navigationKind),
           activeTraversalIntent,
           scrollIntent,
           restoredBfcacheIds,
@@ -2022,7 +1662,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
             return;
           }
           const cacheBuffer = await cacheBufferPromise;
-          storeVisitedResponseSnapshot(
+          getAppBrowserNavigationSupport().storeVisitedResponseSnapshot(
             rscUrl,
             getAppBrowserNavigationSupport().resolveVisitedResponseInterceptionContext(
               requestInterceptionContext,
