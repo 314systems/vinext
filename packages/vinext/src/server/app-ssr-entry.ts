@@ -43,7 +43,11 @@ import { deferUntilStreamConsumed } from "./defer-until-stream-consumed.js";
 import { createSsrErrorMetaRenderer } from "./app-ssr-error-meta.js";
 import { createInitialDevServerErrorScript } from "./dev-initial-server-error.js";
 import { getClientTraceMetadataHTML } from "./client-trace-metadata.js";
-import { AppElementsWire, type AppWireElements } from "./app-elements.js";
+import {
+  readAppElementsMetadata,
+  normalizeAppElements,
+  type AppWireElements,
+} from "./app-elements.js";
 import {
   createBfcacheSegmentStateKeyMap,
   createInitialBfcacheIdMap,
@@ -422,8 +426,8 @@ export async function handleSsr(
             flightRoot = createFromReadableStream<AppWireElements>(ssrStream);
           }
           const wireElements = use(flightRoot);
-          const elements = AppElementsWire.decode(wireElements);
-          const metadata = AppElementsWire.readMetadata(elements);
+          const elements = normalizeAppElements(wireElements);
+          const metadata = readAppElementsMetadata(elements);
           const routeTree = createReactElement(
             ElementsContext.Provider,
             { value: elements },

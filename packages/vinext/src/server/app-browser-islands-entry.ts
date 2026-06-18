@@ -9,17 +9,22 @@ import {
   createProgressiveRscStream,
   getVinextBrowserGlobal,
 } from "./app-browser-stream.js";
-import { AppElementsWire, type AppElements, type AppWireElements } from "./app-elements.js";
+import {
+  readAppElementsMetadata,
+  normalizeAppElements,
+  type AppElements,
+  type AppWireElements,
+} from "./app-elements.js";
 import { ElementsContext, Slot } from "vinext/shims/slot";
 import { installWindowNext } from "../client/window-next.js";
 
 function decodeAppElementsPromise(payload: Promise<AppWireElements>): Promise<AppElements> {
-  return Promise.resolve(payload).then((elements) => AppElementsWire.decode(elements));
+  return Promise.resolve(payload).then((elements) => normalizeAppElements(elements));
 }
 
 function BrowserRoot({ initialElements }: { initialElements: Promise<AppElements> }) {
   const elements = use(initialElements);
-  const metadata = AppElementsWire.readMetadata(elements);
+  const metadata = readAppElementsMetadata(elements);
 
   useEffect(() => {
     const hydratedAt = performance.now();

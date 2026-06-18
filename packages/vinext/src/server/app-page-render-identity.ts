@@ -1,5 +1,9 @@
 import { normalizePathnameForRouteMatch } from "../routing/utils.js";
-import { AppElementsWire, type AppElementsInterception } from "./app-elements.js";
+import {
+  createAppPayloadRouteId,
+  createAppPayloadPageId,
+  type AppElementsInterception,
+} from "./app-elements.js";
 import { isInterceptionMatchedUrlPath, normalizePath } from "./normalize-path.js";
 
 type AppPageRenderIdentityInput = {
@@ -41,17 +45,17 @@ export function createAppPageRenderIdentity(
   );
   const slotId = input.interceptSlotId ?? null;
   const matchedRoutePathname = sourceMatchedPathname ?? targetMatchedPathname;
-  const routeId = AppElementsWire.encodeRouteId(matchedRoutePathname, null);
-  const pageId = AppElementsWire.encodePageId(matchedRoutePathname, null);
+  const routeId = createAppPayloadRouteId(matchedRoutePathname, null);
+  const pageId = createAppPayloadPageId(matchedRoutePathname, null);
   const interception =
     sourceMatchedPathname === null || slotId === null
       ? null
       : {
           sourceMatchedUrl: sourceMatchedPathname,
-          sourceRouteId: AppElementsWire.encodeRouteId(sourceMatchedPathname, null),
+          sourceRouteId: createAppPayloadRouteId(sourceMatchedPathname, null),
           slotId,
           targetMatchedUrl: targetMatchedPathname,
-          targetRouteId: AppElementsWire.encodeRouteId(targetMatchedPathname, null),
+          targetRouteId: createAppPayloadRouteId(targetMatchedPathname, null),
         };
 
   return {

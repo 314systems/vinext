@@ -7,7 +7,12 @@ import {
   consumeInvalidDynamicUsageError,
   consumeRenderRequestApiUsage,
 } from "vinext/shims/headers";
-import { AppElementsWire, isAppElementsRecord } from "./app-elements.js";
+import {
+  createAppPayloadRouteId,
+  APP_ROUTE_KEY,
+  APP_ROOT_LAYOUT_KEY,
+  isAppElementsRecord,
+} from "./app-elements.js";
 import { normalizeMountedSlotsHeader } from "./app-mounted-slots-header.js";
 import {
   buildRenderObservation,
@@ -26,7 +31,7 @@ export type AppPageRenderObservationState = Readonly<{
 }>;
 
 function readRootBoundaryId(element: Readonly<Record<string, unknown>>): string | null {
-  const rootLayoutTreePath = element[AppElementsWire.keys.rootLayout];
+  const rootLayoutTreePath = element[APP_ROOT_LAYOUT_KEY];
   return typeof rootLayoutTreePath === "string" ? rootLayoutTreePath : null;
 }
 
@@ -35,13 +40,13 @@ function readRouteId(
   routePattern: string,
 ): string {
   if (isAppElementsRecord(element)) {
-    const routeId = element[AppElementsWire.keys.route];
+    const routeId = element[APP_ROUTE_KEY];
     if (typeof routeId === "string") {
       return routeId;
     }
   }
 
-  return AppElementsWire.encodeRouteId(routePattern, null);
+  return createAppPayloadRouteId(routePattern, null);
 }
 
 function createMountedSlotsFingerprint(

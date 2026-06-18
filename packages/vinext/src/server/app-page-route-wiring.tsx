@@ -1,6 +1,12 @@
 import { Fragment, Suspense, type ComponentType, type ReactNode } from "react";
 import {
-  AppElementsWire,
+  createAppPayloadTemplateId,
+  createAppPayloadSlotId,
+  createAppPayloadRouteId,
+  createAppPayloadPageId,
+  createAppPayloadLayoutId,
+  createAppElementsWireMetadataEntries,
+  APP_UNMATCHED_SLOT_WIRE_VALUE,
   APP_PREFETCH_LOADING_SHELL_MARKER_KEY,
   APP_STATIC_SIBLINGS_KEY,
   normalizeAppElementsSlotBindings,
@@ -279,7 +285,7 @@ export function probeAppPageLayoutWithTracking<TModule extends AppPageModule>(op
 }): unknown {
   const treePosition = options.route.layoutTreePositions?.[options.layoutIndex] ?? 0;
   const treePath = createAppPageTreePath(options.route.routeSegments, treePosition);
-  const layoutId = AppElementsWire.encodeLayoutId(treePath);
+  const layoutId = createAppPayloadLayoutId(treePath);
   const probe = () => {
     const layoutModule = options.route.layouts[options.layoutIndex];
     const LayoutComponent = getDefaultExport(layoutModule);
@@ -336,7 +342,7 @@ export function createAppPageLayoutEntries<
     return {
       errorModule: route.errorTreePositions ? null : (route.errors?.[index] ?? null),
       forbiddenModule: route.forbiddens?.[index] ?? null,
-      id: AppElementsWire.encodeLayoutId(treePath),
+      id: createAppPayloadLayoutId(treePath),
       layoutModule,
       notFoundModule: route.notFounds?.[index] ?? null,
       unauthorizedModule: route.unauthorizeds?.[index] ?? null,
@@ -356,7 +362,7 @@ function createAppPageTemplateEntries<TModule extends AppPageModule>(
     const treePosition = route.templateTreePositions?.[index] ?? 0;
     const treePath = createAppPageTreePath(route.routeSegments, treePosition);
     return {
-      id: AppElementsWire.encodeTemplateId(treePath),
+      id: createAppPayloadTemplateId(treePath),
       templateModule,
       treePath,
       treePosition,
@@ -420,7 +426,7 @@ function createAppPageParallelSlotEntries<
 }
 
 function resolveAppPageSlotId(slot: AppPageRouteWiringSlot, treePath: string): string {
-  const slotId = AppElementsWire.encodeSlotId(slot.name, treePath);
+  const slotId = createAppPayloadSlotId(slot.name, treePath);
   if (slot.id && slot.id !== slotId) {
     throw new Error(
       `[vinext] App Router slot id mismatch for @${slot.name}: graph id ${slot.id} does not match wire id ${slotId}`,
@@ -467,7 +473,7 @@ function createAppPageSlotBindings<
       state === "active"
         ? options.interception?.slotId === slotId
           ? options.interception.targetRouteId
-          : AppElementsWire.encodeRouteId(options.routePath, null)
+          : createAppPayloadRouteId(options.routePath, null)
         : null;
     bindings.push({
       ...(activeRouteId !== null ? { activeRouteId } : {}),
@@ -527,10 +533,9 @@ export function buildAppPageElements<
   const routeSegments = options.route.routeSegments ?? [];
   const routeResetKey = resolveAppPageRouteStateKey(routeSegments, options.matchedParams);
   const routeId =
-    renderIdentity?.routeId ??
-    AppElementsWire.encodeRouteId(options.routePath, interceptionContext);
+    renderIdentity?.routeId ?? createAppPayloadRouteId(options.routePath, interceptionContext);
   const pageId =
-    renderIdentity?.pageId ?? AppElementsWire.encodePageId(options.routePath, interceptionContext);
+    renderIdentity?.pageId ?? createAppPayloadPageId(options.routePath, interceptionContext);
   const layoutEntries = createAppPageLayoutEntries(options.route);
   const templateEntries = createAppPageTemplateEntries(options.route);
   const errorEntries = createAppPageErrorEntries(options.route);
@@ -594,7 +599,7 @@ export function buildAppPageElements<
     | readonly AppElementsSlotBinding[]
     | readonly string[]
   > = {
-    ...AppElementsWire.createMetadataEntries({
+    ...createAppElementsWireMetadataEntries({
       interception: renderIdentity?.interception ?? options.interception ?? null,
       interceptionContext,
       layoutIds: options.route.ids?.layouts ?? layoutEntries.map((entry) => entry.id),
@@ -769,7 +774,7 @@ export function buildAppPageElements<
     const slotComponent = overrideOrPageComponent ?? defaultComponent;
 
     if (!slotComponent) {
-      elements[slotId] = AppElementsWire.unmatchedSlotValue;
+      elements[slotId] = APP_UNMATCHED_SLOT_WIRE_VALUE;
       continue;
     }
 

@@ -1,7 +1,10 @@
 import { stripBasePath } from "../utils/base-path.js";
 import type { RouteManifest } from "../routing/app-route-graph.js";
 import {
-  AppElementsWire,
+  readAppElementsMetadata,
+  parseAppElementsWireElementKey,
+  createAppPayloadRouteId,
+  createAppPayloadLayoutId,
   getMountedSlotIds,
   getMountedSlotIdsHeader,
   type AppElements,
@@ -203,14 +206,14 @@ function createRouteSnapshotRouteId(options: {
 }): string {
   if (options.interception !== null) return options.routeId;
 
-  const parsed = AppElementsWire.parseElementKey(options.routeId);
+  const parsed = parseAppElementsWireElementKey(options.routeId);
   if (parsed?.kind !== "route" || parsed.interceptionContext === null) {
     return options.routeId;
   }
 
   // A context suffix keeps AppElements render keys partitioned, but without
   // explicit interception proof it is not semantic route authority.
-  return AppElementsWire.encodeRouteId(parsed.path, null);
+  return createAppPayloadRouteId(parsed.path, null);
 }
 
 export function resolveInterceptionContextFromPreviousNextUrl(
@@ -353,10 +356,10 @@ function createMountedParallelSlotSnapshots(
 ): readonly MountedParallelSlotSnapshot[] {
   const snapshots: MountedParallelSlotSnapshot[] = [];
   for (const slotId of getMountedSlotIds(elements)) {
-    const parsed = AppElementsWire.parseElementKey(slotId);
+    const parsed = parseAppElementsWireElementKey(slotId);
     if (parsed?.kind !== "slot") continue;
     snapshots.push({
-      ownerLayoutId: AppElementsWire.encodeLayoutId(parsed.treePath),
+      ownerLayoutId: createAppPayloadLayoutId(parsed.treePath),
       slotId,
     });
   }
@@ -519,7 +522,7 @@ function mergeSkippedLayoutPreservation(options: {
 
   for (const id of options.pending.skippedLayoutIds) {
     if (seenPreservedIds.has(id)) continue;
-    if (AppElementsWire.parseElementKey(id)?.kind !== "layout") continue;
+    if (parseAppElementsWireElementKey(id)?.kind !== "layout") continue;
     // Set membership here is intentionally broader than the planner's
     // prefix-based persistence (resolveSameLayoutAncestorPersistenceForTopologies
     // breaks at the first divergence). A layout present in both the current and
@@ -603,7 +606,7 @@ export async function createPendingNavigationCommit(options: {
   type: "navigate" | "replace" | "traverse";
 }): Promise<PendingNavigationCommit> {
   const elements = await options.nextElements;
-  const metadata = AppElementsWire.readMetadata(elements);
+  const metadata = readAppElementsMetadata(elements);
   const cacheEntryReuseProof =
     metadata.cacheEntryReuseProof ??
     (requiresCacheEntryReuseProof(options.payloadOrigin)

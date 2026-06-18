@@ -4,7 +4,12 @@ import type { NavigationContext } from "vinext/shims/navigation";
 import type { CachedAppPageValue } from "vinext/shims/cache-handler";
 import type { RootParams } from "vinext/shims/root-params";
 import { runWithFetchDedupe } from "vinext/shims/fetch-cache";
-import { AppElementsWire, isAppElementsRecord, type AppOutgoingElements } from "./app-elements.js";
+import {
+  buildOutgoingAppPayload,
+  APP_ROOT_LAYOUT_KEY,
+  isAppElementsRecord,
+  type AppOutgoingElements,
+} from "./app-elements.js";
 import { hasDigest } from "./app-rsc-errors.js";
 import {
   finalizeAppPageHtmlCacheResponse,
@@ -233,7 +238,7 @@ function applyRequestCacheLife(options: {
 }
 
 function readRootBoundaryId(element: Readonly<Record<string, unknown>>): string | null {
-  const rootLayoutTreePath = element[AppElementsWire.keys.rootLayout];
+  const rootLayoutTreePath = element[APP_ROOT_LAYOUT_KEY];
   return typeof rootLayoutTreePath === "string" ? rootLayoutTreePath : null;
 }
 
@@ -413,7 +418,7 @@ export async function renderAppPageLifecycle(
     });
   const shouldBypassRscCacheForSkipTransport =
     options.isRscRequest && isSkipTransportEnabled(skipDisposition);
-  const outgoingElement = AppElementsWire.encodeOutgoingPayload({
+  const outgoingElement = buildOutgoingAppPayload({
     element: options.element,
     layoutFlags,
     ...(artifactCompatibility ? { artifactCompatibility } : {}),

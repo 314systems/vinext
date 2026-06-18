@@ -31,7 +31,7 @@ import {
   setCurrentForceDynamicFetchDefault,
   setCurrentFetchSoftTags,
 } from "vinext/shims/fetch-cache";
-import { AppElementsWire, type AppOutgoingElements } from "./app-elements.js";
+import { createAppPayloadLayoutId, type AppOutgoingElements } from "./app-elements.js";
 import type { AppPagePprFallbackCacheShell } from "./app-ppr-fallback-shell.js";
 import type { WarmPprFallbackShellCachesOptions } from "./app-ppr-fallback-shell-render.js";
 import {
@@ -982,7 +982,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     classification: {
       getLayoutId(index) {
         const treePosition = route.layoutTreePositions?.[index] ?? 0;
-        return AppElementsWire.encodeLayoutId(
+        return createAppPayloadLayoutId(
           createAppPageTreePath([...route.routeSegments], treePosition),
         );
       },

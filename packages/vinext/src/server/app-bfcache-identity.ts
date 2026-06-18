@@ -1,4 +1,9 @@
-import { AppElementsWire, type AppElements, type AppElementsSlotBinding } from "./app-elements.js";
+import {
+  parseAppElementsWireElementKey,
+  readAppElementsMetadata as readAppElementsWireMetadata,
+  type AppElements,
+  type AppElementsSlotBinding,
+} from "./app-elements.js";
 import {
   countConsumedPathnameSegments,
   isInvisibleSegment,
@@ -48,7 +53,7 @@ function getTreePathIdentityPrefix(pathname: string, treePath: string): string {
   return `/${pathnameSegments.slice(0, consumedPathnameSegments).join("/")}`;
 }
 
-type AppElementsMetadata = ReturnType<typeof AppElementsWire.readMetadata>;
+type AppElementsMetadata = ReturnType<typeof readAppElementsWireMetadata>;
 
 /**
  * Metadata parsed once per element map, with an index that keeps per-slot
@@ -62,7 +67,7 @@ type ParsedAppElementsMetadata = {
 function readAppElementsMetadata(elements: AppElements): ParsedAppElementsMetadata | null {
   let metadata: AppElementsMetadata;
   try {
-    metadata = AppElementsWire.readMetadata(elements);
+    metadata = readAppElementsWireMetadata(elements);
   } catch {
     // Some low-level tests pass partial element maps without metadata.
     return null;
@@ -97,7 +102,7 @@ function createBfcacheSegmentIdentity(
   id: string,
   options: { metadata: ParsedAppElementsMetadata | null; pathname: string },
 ): string | null {
-  const parsed = AppElementsWire.parseElementKey(id);
+  const parsed = parseAppElementsWireElementKey(id);
   if (!parsed) return null;
 
   if (parsed.kind === "page") {

@@ -17,7 +17,8 @@ import {
   type OptimisticRouteTemplate,
 } from "./app-optimistic-routing.js";
 import {
-  AppElementsWire,
+  normalizeAppElements,
+  createAppPayloadCacheKey,
   resolveVisitedResponseInterceptionContext,
   type AppWireElements,
 } from "./app-elements.js";
@@ -120,7 +121,7 @@ async function learnOptimisticRouteTemplateFromPrefetch(options: {
   const template = createOptimisticRouteTemplate({
     allowLoadingShell: options.entry.optimisticRouteShell === true,
     basePath: options.basePath,
-    elements: AppElementsWire.decode(wireElements),
+    elements: normalizeAppElements(wireElements),
     href: options.entry.snapshot.url || source.rscUrl,
     interceptionContext: options.interceptionContext,
     mountedSlotsHeader: options.mountedSlotsHeader,
@@ -199,7 +200,7 @@ export function readVisitedResponseCacheCandidate(
   mountedSlotsHeader: string | null,
   navigationKind: NavigationKind,
 ): VisitedResponseCacheCandidate {
-  const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
+  const cacheKey = createAppPayloadCacheKey(rscUrl, interceptionContext);
   const cached = visitedResponseCache.get(cacheKey);
   if (!cached) {
     return {
@@ -246,7 +247,7 @@ export function applyVisitedResponseCacheCandidateDecision(
 }
 
 export function deleteVisitedResponse(rscUrl: string, interceptionContext: string | null): void {
-  visitedResponseCache.delete(AppElementsWire.encodeCacheKey(rscUrl, interceptionContext));
+  visitedResponseCache.delete(createAppPayloadCacheKey(rscUrl, interceptionContext));
 }
 
 export function storeVisitedResponseSnapshot(
@@ -255,7 +256,7 @@ export function storeVisitedResponseSnapshot(
   snapshot: CachedRscResponse,
   params: Record<string, string | string[]>,
 ): void {
-  const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
+  const cacheKey = createAppPayloadCacheKey(rscUrl, interceptionContext);
   visitedResponseCache.delete(cacheKey);
   while (visitedResponseCache.size >= MAX_VISITED_RESPONSE_CACHE_SIZE) {
     const oldest = visitedResponseCache.keys().next().value;

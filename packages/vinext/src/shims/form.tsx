@@ -43,7 +43,7 @@ import {
 import { isDangerousScheme } from "./url-safety.js";
 import { toSameOriginPath, withBasePath } from "./url-utils.js";
 import { createRscRequestHeaders, createRscRequestUrl } from "../server/app-rsc-cache-busting.js";
-import { AppElementsWire } from "../server/app-elements.js";
+import { createAppPayloadCacheKey } from "../server/app-elements.js";
 import { VINEXT_MOUNTED_SLOTS_HEADER } from "../server/headers.js";
 
 // Mirrors `__NEXT_ROUTER_BASEPATH` exposure in `next/link` / `next/router`.
@@ -340,7 +340,7 @@ const Form = forwardRef(function Form(props: FormProps, ref: ForwardedRef<HTMLFo
                 headers.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
               }
               const rscUrl = await createRscRequestUrl(actionHref, headers);
-              const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
+              const cacheKey = createAppPayloadCacheKey(rscUrl, interceptionContext);
               // Dedup: skip if already in-flight or a fresh cache entry exists,
               // matching the gate link.tsx applies to avoid double-fetching a
               // payload that a nearby <Link> already prefetched.

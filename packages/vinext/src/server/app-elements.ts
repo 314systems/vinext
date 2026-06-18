@@ -1,5 +1,5 @@
 import { normalizeMountedSlotsHeader } from "./app-mounted-slots-header.js";
-import { AppElementsWire, UNMATCHED_SLOT, type AppElements } from "./app-elements-wire.js";
+import { isAppElementsWireSlotId, UNMATCHED_SLOT, type AppElements } from "./app-elements-wire.js";
 
 export const APP_PREFETCH_LOADING_SHELL_MARKER_KEY = "__prefetchLoadingShell";
 
@@ -22,9 +22,18 @@ export {
   UNMATCHED_SLOT,
   buildOutgoingAppPayload,
   compareAppElementsSlotIds,
+  createAppElementsWireMetadataEntries,
+  createAppPayloadCacheKey,
+  createAppPayloadLayoutId,
+  createAppPayloadPageId,
+  createAppPayloadRouteId,
+  createAppPayloadSlotId,
+  createAppPayloadTemplateId,
+  isAppElementsWireSlotId,
   isAppElementsRecord,
   normalizeAppElementsSlotBindings,
   normalizeAppElements,
+  parseAppElementsWireElementKey,
   readAppElementsMetadata,
   withLayoutFlags,
   type AppElementValue,
@@ -43,7 +52,7 @@ export function getMountedSlotIds(elements: AppElements): string[] {
     .filter((key) => {
       const value = elements[key];
       return (
-        AppElementsWire.isSlotId(key) &&
+        isAppElementsWireSlotId(key) &&
         value !== null &&
         value !== undefined &&
         value !== UNMATCHED_SLOT

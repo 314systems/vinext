@@ -299,27 +299,36 @@ function appendInterceptionContext(identity: string, interceptionContext: string
     : `${identity}${APP_INTERCEPTION_SEPARATOR}${interceptionContext}`;
 }
 
-function createAppPayloadRouteId(routePath: string, interceptionContext: string | null): string {
+export function createAppPayloadRouteId(
+  routePath: string,
+  interceptionContext: string | null,
+): string {
   return appendInterceptionContext(`route:${routePath}`, interceptionContext);
 }
 
-function createAppPayloadPageId(routePath: string, interceptionContext: string | null): string {
+export function createAppPayloadPageId(
+  routePath: string,
+  interceptionContext: string | null,
+): string {
   return appendInterceptionContext(`page:${routePath}`, interceptionContext);
 }
 
-function createAppPayloadLayoutId(treePath: string): string {
+export function createAppPayloadLayoutId(treePath: string): string {
   return `layout:${treePath}`;
 }
 
-function createAppPayloadTemplateId(treePath: string): string {
+export function createAppPayloadTemplateId(treePath: string): string {
   return `template:${treePath}`;
 }
 
-function createAppPayloadSlotId(slotName: string, treePath: string): string {
+export function createAppPayloadSlotId(slotName: string, treePath: string): string {
   return `slot:${slotName}:${treePath}`;
 }
 
-function createAppPayloadCacheKey(rscUrl: string, interceptionContext: string | null): string {
+export function createAppPayloadCacheKey(
+  rscUrl: string,
+  interceptionContext: string | null,
+): string {
   return appendInterceptionContext(rscUrl, interceptionContext);
 }
 
@@ -345,7 +354,7 @@ function parseTreePath(input: string): string | null {
   return input.startsWith("/") ? input : null;
 }
 
-function parseAppElementsWireElementKey(key: string): AppElementsWireElementKey | null {
+export function parseAppElementsWireElementKey(key: string): AppElementsWireElementKey | null {
   if (key.startsWith("route:")) {
     const parsed = parsePathWithInterception(key.slice("route:".length));
     if (!parsed) return null;
@@ -380,14 +389,14 @@ function parseAppElementsWireElementKey(key: string): AppElementsWireElementKey 
   return null;
 }
 
-function isAppElementsWireSlotId(key: string): boolean {
+export function isAppElementsWireSlotId(key: string): boolean {
   if (!key.startsWith("slot:")) return false;
   const body = key.slice("slot:".length);
   const separatorIndex = body.indexOf(":");
   return separatorIndex > 0 && body.charCodeAt(separatorIndex + 1) === 0x2f;
 }
 
-function createAppElementsWireMetadataEntries(
+export function createAppElementsWireMetadataEntries(
   input: AppElementsWireMetadataInput,
 ): AppElementsWireMetadataEntries {
   const layoutIds = [...(input.layoutIds ?? [])];

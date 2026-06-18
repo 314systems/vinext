@@ -16,7 +16,7 @@ import {
 } from "./app-browser-action-result.js";
 import { applyServerActionResultDecision } from "./app-browser-server-action-navigation.js";
 import { resolveServerActionRequestState, type AppRouterState } from "./app-browser-state.js";
-import { AppElementsWire, type AppElements, type AppWireElements } from "./app-elements.js";
+import { normalizeAppElements, type AppElements, type AppWireElements } from "./app-elements.js";
 import {
   createServerActionRequestUrl,
   VINEXT_RSC_COMPATIBILITY_ID_HEADER,
@@ -213,7 +213,7 @@ export async function invokeClientServerAction(
   if (actionRedirectTarget) {
     if (isServerActionResult(result) && result.root !== undefined) {
       deps.renderRedirectPayload(
-        AppElementsWire.decode(result.root),
+        normalizeAppElements(result.root),
         actionRedirectTarget,
         actionInitiation,
       );
@@ -236,7 +236,7 @@ export async function invokeClientServerAction(
             }
           : result.returnValue;
       return deps.commitSameUrlNavigatePayload(
-        Promise.resolve(AppElementsWire.decode(result.root)),
+        Promise.resolve(normalizeAppElements(result.root)),
         actionInitiation,
         returnValue,
         revalidation,
@@ -252,7 +252,7 @@ export async function invokeClientServerAction(
   }
 
   return deps.commitSameUrlNavigatePayload(
-    Promise.resolve(AppElementsWire.decode(result)),
+    Promise.resolve(normalizeAppElements(result)),
     actionInitiation,
     undefined,
     revalidation,

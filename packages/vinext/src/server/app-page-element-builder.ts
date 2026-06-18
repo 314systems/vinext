@@ -15,7 +15,11 @@ import {
   type AppPageRouteWiringRoute,
   type AppPageSlotOverride,
 } from "./app-page-route-wiring.js";
-import { AppElementsWire, type AppElements } from "./app-elements.js";
+import {
+  createAppPayloadLayoutId,
+  createAppElementsWireMetadataEntries,
+  type AppElements,
+} from "./app-elements.js";
 import type { AppPageParams } from "./app-page-boundary.js";
 import { DEFAULT_GLOBAL_ERROR_MODULE } from "./default-global-error-module.js";
 import { matchRoutePattern } from "../routing/route-pattern.js";
@@ -212,7 +216,7 @@ export async function buildPageElements<
     const noExportLayoutIds =
       route.ids?.layouts ??
       route.layouts.map((_, index) =>
-        AppElementsWire.encodeLayoutId(
+        createAppPayloadLayoutId(
           createAppPageTreePath(route.routeSegments, route.layoutTreePositions?.[index] ?? 0),
         ),
       );
@@ -221,7 +225,7 @@ export async function buildPageElements<
       noExportRootLayout = createAppPageTreePath(route.routeSegments, treePosition);
     }
     return {
-      ...AppElementsWire.createMetadataEntries({
+      ...createAppElementsWireMetadataEntries({
         interception: renderIdentity.interception,
         interceptionContext: renderIdentity.interceptionContext,
         layoutIds: noExportLayoutIds,

@@ -354,7 +354,8 @@ import {
   createAppFallbackRenderer as __createAppFallbackRenderer,
 } from ${JSON.stringify(appFallbackRendererPath)};
 import {
-  AppElementsWire as __AppElementsWire,
+  createAppElementsWireMetadataEntries as __createAppElementsWireMetadataEntries,
+  createAppPayloadRouteId as __createAppPayloadRouteId,
 } from ${JSON.stringify(appElementsPath)};
 import {
   probeAppPageLayoutWithTracking as __probeAppPageLayoutWithTracking,
@@ -1065,7 +1066,7 @@ export default createAppRscHandler({
       contentType,
       createNotFoundElement(actionRouteId) {
         return {
-          ...__AppElementsWire.createMetadataEntries({
+          ...__createAppElementsWireMetadataEntries({
             interceptionContext: null,
             rootLayoutTreePath: null,
             routeId: actionRouteId,
@@ -1074,7 +1075,7 @@ export default createAppRscHandler({
         };
       },
       createPayloadRouteId(pathnameToRender, currentInterceptionContext) {
-        return __AppElementsWire.encodeRouteId(pathnameToRender, currentInterceptionContext);
+        return __createAppPayloadRouteId(pathnameToRender, currentInterceptionContext);
       },
       createRscOnErrorHandler(actionRequest, actionPathname, routePattern) {
         return createRscOnErrorHandler(actionRequest, actionPathname, routePattern);

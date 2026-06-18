@@ -2,8 +2,8 @@
 
 import * as React from "react";
 import {
+  isAppElementsWireSlotId,
   APP_SKIPPED_LAYOUT_IDS_KEY,
-  AppElementsWire,
   UNMATCHED_SLOT,
   type AppElementValue,
   type AppElements,
@@ -383,7 +383,7 @@ export function mergeElements(
   }
 
   const slotKeys = new Set(
-    [...Object.keys(prev), ...Object.keys(next)].filter((key) => AppElementsWire.isSlotId(key)),
+    [...Object.keys(prev), ...Object.keys(next)].filter((key) => isAppElementsWireSlotId(key)),
   );
   // On traversal (browser back/forward), the server renders the full destination
   // route tree. A slot absent from next means the destination route tree does not
@@ -411,7 +411,7 @@ export function mergeElements(
   // loop intentionally runs after clear/preserve element handling so planner-
   // approved slot content and binding proof win the final merged value.
   for (const id of preservePreviousSlotIds) {
-    if (!AppElementsWire.isSlotId(id)) continue;
+    if (!isAppElementsWireSlotId(id)) continue;
     if (!Object.hasOwn(prev, id)) continue;
     const value = prev[id];
     if (value !== undefined && value !== UNMATCHED_SLOT) {
@@ -434,7 +434,7 @@ export function Slot({
   const elements = React.useContext(ElementsContext);
 
   if (!Object.hasOwn(elements, id)) {
-    if (process.env.NODE_ENV !== "production" && !AppElementsWire.isSlotId(id)) {
+    if (process.env.NODE_ENV !== "production" && !isAppElementsWireSlotId(id)) {
       if (!warnedMissingEntryIds.has(id)) {
         warnedMissingEntryIds.add(id);
         console.warn("[vinext] Missing App Router element entry during render: " + id);

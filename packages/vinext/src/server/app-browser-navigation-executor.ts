@@ -11,7 +11,8 @@ import { clearAppNavigationFailureTarget } from "../client/app-nav-failure-handl
 import type { NavigationRuntimeVisibleCommitMode } from "../client/navigation-runtime.js";
 import * as appBrowserNavigationSupport from "./app-browser-navigation-support.js";
 import {
-  AppElementsWire,
+  readAppElementsMetadata,
+  createAppPayloadCacheKey,
   getMountedSlotIdsHeader,
   type AppElements,
   type AppWireElements,
@@ -242,7 +243,7 @@ export async function executeClientNavigation(
       const rscUrl = await createRscRequestUrl(url.pathname + url.search, requestHeaders);
       const visitedResponseCandidate = shouldBypassNavigationCache
         ? {
-            cacheKey: AppElementsWire.encodeCacheKey(rscUrl, requestInterceptionContext),
+            cacheKey: createAppPayloadCacheKey(rscUrl, requestInterceptionContext),
             entry: null,
             facts: {
               candidate: "missing",
@@ -622,7 +623,7 @@ export async function executeClientNavigation(
       // never actually rendered successfully.
       try {
         const renderedElements = await rscPayload;
-        const metadata = AppElementsWire.readMetadata(renderedElements);
+        const metadata = readAppElementsMetadata(renderedElements);
         if (!isCacheRestorableAppPayloadMetadata(metadata)) {
           void cacheBufferPromise.catch(() => {});
           return;

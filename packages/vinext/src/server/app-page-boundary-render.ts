@@ -22,7 +22,11 @@ import {
   renderAppPageHtmlResponse,
   type AppPageSsrHandler,
 } from "./app-page-stream.js";
-import { AppElementsWire, type AppElements } from "./app-elements.js";
+import {
+  createAppPayloadRouteId,
+  createAppElementsWireMetadataEntries,
+  type AppElements,
+} from "./app-elements.js";
 import { createAppPageLayoutEntries, createAppPageSourcePage } from "./app-page-route-wiring.js";
 import { NEVER_CACHE_CONTROL } from "./cache-control.js";
 
@@ -250,12 +254,12 @@ function resolveHttpAccessFallbackHeadLayoutTreePositions<TModule extends AppPag
 function createAppPageBoundaryRscPayload<TModule extends AppPageModule>(
   options: AppPageBoundaryRscPayloadOptions<TModule>,
 ): AppElements {
-  const routeId = AppElementsWire.encodeRouteId(options.pathname, null);
+  const routeId = createAppPayloadRouteId(options.pathname, null);
   const layoutEntries = createAppPageBoundaryLayoutEntries(options.route, options.layoutModules);
   const sourcePageSegments = options.sourcePageSegments ?? options.route?.routeSegments;
 
   return {
-    ...AppElementsWire.createMetadataEntries({
+    ...createAppElementsWireMetadataEntries({
       interceptionContext: null,
       layoutIds: layoutEntries.map((entry) => entry.id),
       rootLayoutTreePath: layoutEntries[0]?.treePath ?? null,

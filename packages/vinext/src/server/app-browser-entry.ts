@@ -82,7 +82,8 @@ import {
   hydrateRootInTransition,
 } from "./app-browser-hydration.js";
 import {
-  AppElementsWire,
+  readAppElementsMetadata,
+  normalizeAppElements,
   getMountedSlotIdsHeader,
   type AppElements,
   type AppWireElements,
@@ -515,7 +516,7 @@ function decodeAppElementsPromise(payload: Promise<AppWireElements>): Promise<Ap
   // Wrap in Promise.resolve() because createFromReadableStream() returns a
   // React Flight thenable whose .then() returns undefined (not a new Promise).
   // Without the wrap, chaining .then() produces undefined → use() crashes.
-  return Promise.resolve(payload).then((elements) => AppElementsWire.decode(elements));
+  return Promise.resolve(payload).then((elements) => normalizeAppElements(elements));
 }
 
 function BrowserRoot({
@@ -526,7 +527,7 @@ function BrowserRoot({
   initialNavigationSnapshot: ClientNavigationRenderSnapshot;
 }) {
   const resolvedElements = use(initialElements);
-  const initialMetadata = AppElementsWire.readMetadata(resolvedElements);
+  const initialMetadata = readAppElementsMetadata(resolvedElements);
   const [treeStateValue, setTreeStateValue] = useState<
     AppRouterState | Promise<AppRouterState> | MpaNavigationState
   >(() => ({
@@ -619,7 +620,7 @@ function BrowserRoot({
   }, [treeState]);
 
   useEffect(() => {
-    setWindowNextInternalSourcePage(AppElementsWire.readMetadata(treeState.elements).sourcePage);
+    setWindowNextInternalSourcePage(readAppElementsMetadata(treeState.elements).sourcePage);
   }, [treeState.elements]);
 
   useLayoutEffect(() => {

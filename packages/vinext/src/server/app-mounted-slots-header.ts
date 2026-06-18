@@ -18,7 +18,7 @@
  *   - Each token capped at MAX_TOKEN_LENGTH bytes.
  *   - Token count capped at MAX_SLOT_TOKENS (extras are dropped after sort + dedup).
  *   - Each token must match the legitimate slot-id shape, as defined by the
- *     AppElements wire codec (`AppElementsWire.isSlotId`). Wire-format details
+ *     AppElements wire codec (`isAppElementsWireSlotId`). Wire-format details
  *     are intentionally kept inside the codec so this module does not duplicate
  *     them. Malformed tokens are dropped silently rather than rejecting the
  *     whole request — this matches the prior forgiving behavior for browsers
@@ -30,7 +30,7 @@
  *   - isr-cache (RSC cache key generation)
  */
 
-import { AppElementsWire } from "./app-elements-wire.js";
+import { isAppElementsWireSlotId } from "./app-elements-wire.js";
 
 /** Hard cap on the raw header value byte length. Real values are <1 KB. */
 const MAX_RAW_HEADER_LENGTH = 4096;
@@ -47,7 +47,7 @@ const MAX_SLOT_TOKENS = 16;
  */
 function isValidSlotToken(token: string): boolean {
   if (token.length === 0 || token.length > MAX_TOKEN_LENGTH) return false;
-  return AppElementsWire.isSlotId(token);
+  return isAppElementsWireSlotId(token);
 }
 
 export function normalizeMountedSlotsHeader(raw: string | null | undefined): string | null {

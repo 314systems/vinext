@@ -17,7 +17,7 @@ import {
   type NavigationRuntimeVisibleCommitMode,
 } from "../client/navigation-runtime.js";
 import { INITIAL_BFCACHE_ID, PUBLIC_INITIAL_BFCACHE_ID } from "../server/app-bfcache-id.js";
-import { AppElementsWire } from "../server/app-elements.js";
+import { createAppPayloadCacheKey } from "../server/app-elements.js";
 import { resolveManifestNavigationInterceptionContext } from "../server/app-browser-interception-context.js";
 import { createExternalHistoryStatePreservingMetadata } from "../server/app-history-state.js";
 import {
@@ -383,7 +383,7 @@ function findPrefetchCacheEntryForNavigation(
   interceptionContext: string | null,
   mountedSlotsHeader: string | null,
 ): { cacheKey: string; entry: PrefetchCacheEntry } | null {
-  const exactCacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
+  const exactCacheKey = createAppPayloadCacheKey(rscUrl, interceptionContext);
   const cache = getPrefetchCache();
   const exactEntry = cache.get(exactCacheKey);
   if (
@@ -589,7 +589,7 @@ export function storePrefetchResponse(
   interceptionContext: string | null = null,
   options?: PrefetchOptions,
 ): void {
-  const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
+  const cacheKey = createAppPayloadCacheKey(rscUrl, interceptionContext);
   evictPrefetchCacheIfNeeded();
   const entry: PrefetchCacheEntry = {
     mountedSlotsHeader: null,
@@ -698,7 +698,7 @@ export function prefetchRscResponse(
   options?: PrefetchOptions,
   behavior: { cacheForNavigation?: boolean; optimisticRouteShell?: boolean } = {},
 ): void {
-  const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
+  const cacheKey = createAppPayloadCacheKey(rscUrl, interceptionContext);
   const cache = getPrefetchCache();
   const prefetched = getPrefetchedUrls();
   const now = Date.now();
@@ -754,7 +754,7 @@ export function consumePrefetchResponse(
   mountedSlotsHeader: string | null = null,
 ): CachedRscResponse | null {
   const cache = getPrefetchCache();
-  const exactCacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
+  const exactCacheKey = createAppPayloadCacheKey(rscUrl, interceptionContext);
   const exactEntry = cache.get(exactCacheKey);
   if (
     exactEntry &&

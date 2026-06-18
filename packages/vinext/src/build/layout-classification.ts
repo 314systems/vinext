@@ -14,7 +14,7 @@
  */
 
 import { classifyLayoutSegmentConfig } from "./report.js";
-import { AppElementsWire } from "../server/app-elements.js";
+import { createAppPayloadLayoutId } from "../server/app-elements.js";
 import { createAppPageTreePath } from "../server/app-page-route-wiring.js";
 import type {
   ClassificationReason,
@@ -141,7 +141,7 @@ export function classifyAllRouteLayouts(
 
   for (const route of routes) {
     for (const layout of route.layouts) {
-      const layoutId = AppElementsWire.encodeLayoutId(
+      const layoutId = createAppPayloadLayoutId(
         createAppPageTreePath(route.routeSegments, layout.treePosition),
       );
 

@@ -712,6 +712,16 @@ describe("App Router generated manifest construction", () => {
 // ── App Router entry template error paths ────────────────────────────
 
 describe("App Router entry templates", () => {
+  it("imports named AppElements wire operations so unused codec branches can tree-shake", () => {
+    const code = generateRscEntry("/tmp/test/app", minimalAppRoutes, null, [], null, "", false);
+
+    expect(code).toContain(
+      "createAppElementsWireMetadataEntries as __createAppElementsWireMetadataEntries",
+    );
+    expect(code).toContain("createAppPayloadRouteId as __createAppPayloadRouteId");
+    expect(code).not.toContain("AppElementsWire as __AppElementsWire");
+  });
+
   it("installs server globals before App Router user modules are imported", () => {
     const code = generateRscEntry("/tmp/test/app", minimalAppRoutes, null, [], null, "", false);
 

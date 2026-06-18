@@ -6,7 +6,8 @@ import type { RouteManifest, RouteManifestRoute } from "../routing/app-route-gra
 import { matchRoutePattern } from "../routing/route-pattern.js";
 import { stripRscCacheBustingSearchParam, stripRscSuffix } from "./app-rsc-cache-busting.js";
 import {
-  AppElementsWire,
+  readAppElementsMetadata,
+  parseAppElementsWireElementKey,
   APP_PREFETCH_LOADING_SHELL_MARKER_KEY,
   type AppElementValue,
   type AppElements,
@@ -276,7 +277,7 @@ function elementHasSuspenseFallback(value: unknown, depth = 0): boolean {
 
 function getPageElementIds(elements: AppElements): string[] {
   return Object.keys(elements)
-    .filter((key) => AppElementsWire.parseElementKey(key)?.kind === "page")
+    .filter((key) => parseAppElementsWireElementKey(key)?.kind === "page")
     .sort();
 }
 
@@ -301,7 +302,7 @@ export function createOptimisticRouteTemplate(options: {
   if (match === null || (!options.allowLoadingShell && !match.route.isDynamic)) return null;
   if (options.interceptionContext !== null) return null;
 
-  const metadata = AppElementsWire.readMetadata(options.elements);
+  const metadata = readAppElementsMetadata(options.elements);
   if (metadata.interception !== null || metadata.interceptionContext !== null) return null;
 
   const routeElement = options.elements[metadata.routeId];

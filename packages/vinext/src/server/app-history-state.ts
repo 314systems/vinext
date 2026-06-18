@@ -1,4 +1,4 @@
-import { AppElementsWire } from "./app-elements.js";
+import { parseAppElementsWireElementKey } from "./app-elements.js";
 import type { TraverseDirection } from "./navigation-planner.js";
 import { isNonNegativeSafeInteger } from "../utils/number.js";
 
@@ -270,7 +270,7 @@ export function readHistoryStatePreviousNextUrl(state: unknown): string | null {
 }
 
 export function isBfcacheSegmentId(id: string): boolean {
-  const parsed = AppElementsWire.parseElementKey(id);
+  const parsed = parseAppElementsWireElementKey(id);
   return (
     parsed?.kind === "layout" ||
     parsed?.kind === "page" ||

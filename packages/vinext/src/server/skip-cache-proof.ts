@@ -1,5 +1,9 @@
 import type { ReactNode } from "react";
-import { AppElementsWire, isAppElementsRecord } from "./app-elements.js";
+import {
+  parseAppElementsWireElementKey,
+  APP_ROUTE_KEY,
+  isAppElementsRecord,
+} from "./app-elements.js";
 import {
   getStaticLayoutObservationSkipRejection,
   type AppLayoutParamAccessTracker,
@@ -158,7 +162,7 @@ function createStaticLayoutOutputScope(input: {
   element: Readonly<Record<string, unknown>>;
   layoutId: string;
 }): StaticLayoutCacheProofOutputScope | null {
-  const routeId = readStringMetadata(input.element, AppElementsWire.keys.route);
+  const routeId = readStringMetadata(input.element, APP_ROUTE_KEY);
   if (routeId === null) return null;
 
   return {
@@ -233,7 +237,7 @@ export function createRenderLifecycleSkipDisposition(
       if (
         entry.kind !== "layout" ||
         !staticLayoutIds.has(entry.id) ||
-        AppElementsWire.parseElementKey(entry.id)?.kind !== "layout"
+        parseAppElementsWireElementKey(entry.id)?.kind !== "layout"
       ) {
         return crossCheckClientReuseManifestEntryWithCache({
           artifact: {

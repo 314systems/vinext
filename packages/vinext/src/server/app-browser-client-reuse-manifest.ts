@@ -10,7 +10,11 @@ import {
   DEFAULT_CLIENT_REUSE_MANIFEST_LIMITS,
   serializeClientReuseManifest,
 } from "./client-reuse-manifest.js";
-import { AppElementsWire, type AppElements } from "./app-elements.js";
+import {
+  readAppElementsMetadata,
+  parseAppElementsWireElementKey,
+  type AppElements,
+} from "./app-elements.js";
 import {
   createStaticLayoutClientReuseArtifactCompatibility,
   createStaticLayoutClientReusePayloadHash,
@@ -137,7 +141,7 @@ export function createClientReuseManifestHeaderFromVisibleAppState(
   const limits = capClientReuseManifestProducerLimits(
     options.limits ?? DEFAULT_CLIENT_REUSE_MANIFEST_LIMITS,
   );
-  const metadata = AppElementsWire.readMetadata(state.elements);
+  const metadata = readAppElementsMetadata(state.elements);
   const entries: BrowserClientReuseManifestEntry[] = [];
 
   for (const layoutId of metadata.layoutIds) {
@@ -146,7 +150,7 @@ export function createClientReuseManifestHeaderFromVisibleAppState(
     if (metadata.layoutFlags[layoutId] !== "s") continue;
     if (!hasRetainedElement(state.elements, layoutId)) continue;
 
-    const parsedKey = AppElementsWire.parseElementKey(layoutId);
+    const parsedKey = parseAppElementsWireElementKey(layoutId);
     if (parsedKey?.kind !== "layout") continue;
 
     const entry = createStaticLayoutEntry({

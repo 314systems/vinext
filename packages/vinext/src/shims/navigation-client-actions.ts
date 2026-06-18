@@ -12,7 +12,7 @@ import {
   clearAppNavigationFailureTarget,
   stageAppNavigationFailureTarget,
 } from "../client/app-nav-failure-handler.js";
-import { AppElementsWire } from "../server/app-elements.js";
+import { createAppPayloadCacheKey } from "../server/app-elements.js";
 import { createHashOnlyHistoryStatePreservingNavigationMetadata } from "../server/app-history-state.js";
 import { hasPendingAppRouterPageRedirect } from "../server/app-browser-mpa-navigation.js";
 import { createRscRequestHeaders, createRscRequestUrl } from "../server/app-rsc-cache-busting.js";
@@ -201,7 +201,7 @@ export async function prefetchAppRoute(href: string, options?: PrefetchOptions):
   const headers = createRscRequestHeaders({ interceptionContext });
   if (mountedSlotsHeader) headers.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
   const rscUrl = await createRscRequestUrl(fullHref, headers);
-  const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
+  const cacheKey = createAppPayloadCacheKey(rscUrl, interceptionContext);
   const prefetched = getPrefetchedUrls();
   if (prefetched.has(cacheKey)) {
     attachPrefetchInvalidationCallback(cacheKey, options?.onInvalidate);
