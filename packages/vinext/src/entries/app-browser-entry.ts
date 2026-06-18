@@ -7,6 +7,8 @@ import type { AppRoute } from "../routing/app-router.js";
 import type { RouteManifest } from "../routing/app-route-graph.js";
 import type { NextRewrite } from "../config/next-config.js";
 
+export const VIRTUAL_APP_ROUTE_MANIFEST = "virtual:vinext-app-route-manifest";
+
 /**
  * Generate the virtual browser entry module.
  *
@@ -40,9 +42,21 @@ window.__VINEXT_LINK_PREFETCH_ROUTES__ = ${JSON.stringify(prefetchRoutes)};
 window.__VINEXT_PAGES_LINK_PREFETCH_ROUTES__ = ${JSON.stringify(pagesPrefetchRoutes)};
 window.__VINEXT_CLIENT_REWRITES__ = ${JSON.stringify(rewrites)};
 registerNavigationRuntimeBootstrap({
-    routeManifest: ${buildRouteManifestExpression(routeManifest)}
+    routeManifest: null,${
+      routeManifest === null
+        ? ""
+        : `
+    loadRouteManifest: () =>
+      import(${JSON.stringify(VIRTUAL_APP_ROUTE_MANIFEST)}).then(
+        ({ default: routeManifest }) => routeManifest,
+      ),`
+    }
 });
 import ${JSON.stringify(entryPath)};`;
+}
+
+export function generateBrowserRouteManifestModule(routeManifest: RouteManifest): string {
+  return `export default ${buildRouteManifestExpression(routeManifest)};`;
 }
 
 /**

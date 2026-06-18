@@ -64,6 +64,7 @@ export type NavigationRuntimeFunctions = {
 };
 
 export type NavigationRuntimeBootstrap = {
+  loadRouteManifest?: () => Promise<RouteManifest | null>;
   routeManifest: RouteManifest | null;
   rsc: NavigationRuntimeRscBootstrap | undefined;
 };
@@ -226,9 +227,11 @@ function isNavigationRuntimeRouteManifest(value: unknown): value is RouteManifes
 
 function isNavigationRuntimeBootstrap(value: unknown): value is NavigationRuntimeBootstrap {
   if (!isUnknownRecord(value)) return false;
+  const loadRouteManifest = Reflect.get(value, "loadRouteManifest");
   const routeManifest = Reflect.get(value, "routeManifest");
   const rsc = Reflect.get(value, "rsc");
   return (
+    isOptionalRuntimeFunction(loadRouteManifest) &&
     (routeManifest === null || isNavigationRuntimeRouteManifest(routeManifest)) &&
     (rsc === undefined || isNavigationRuntimeRscBootstrap(rsc))
   );
@@ -281,6 +284,37 @@ export function registerNavigationRuntimeBootstrap(
     ...bootstrap,
   };
   return runtime;
+}
+
+const routeManifestLoads = new WeakMap<NavigationRuntime, Promise<RouteManifest | null>>();
+
+export function loadNavigationRuntimeRouteManifest(): Promise<RouteManifest | null> {
+  const runtime = getNavigationRuntime();
+  if (runtime === null) return Promise.resolve(null);
+  if (runtime.bootstrap.routeManifest !== null) {
+    return Promise.resolve(runtime.bootstrap.routeManifest);
+  }
+
+  const loader = runtime.bootstrap.loadRouteManifest;
+  if (loader === undefined) return Promise.resolve(null);
+
+  const existingLoad = routeManifestLoads.get(runtime);
+  if (existingLoad !== undefined) return existingLoad;
+
+  const load = loader()
+    .then((routeManifest) => {
+      if (routeManifest !== null && !isNavigationRuntimeRouteManifest(routeManifest)) {
+        throw new Error("[vinext] Loaded App Router route manifest is invalid");
+      }
+      runtime.bootstrap.routeManifest = routeManifest;
+      return routeManifest;
+    })
+    .catch((error: unknown) => {
+      routeManifestLoads.delete(runtime);
+      throw error;
+    });
+  routeManifestLoads.set(runtime, load);
+  return load;
 }
 
 export function registerNavigationRuntimeFunctions(

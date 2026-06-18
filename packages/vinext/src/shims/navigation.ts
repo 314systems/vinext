@@ -14,6 +14,7 @@ import * as React from "react";
 import {
   getNavigationRuntime,
   hasAppNavigationRuntime,
+  loadNavigationRuntimeRouteManifest,
   type NavigationRuntimeVisibleCommitMode,
 } from "../client/navigation-runtime.js";
 import { notifyAppRouterTransitionStart } from "../client/instrumentation-client-state.js";
@@ -1888,6 +1889,7 @@ const _appRouter: AppRouterInstance = {
       // We must add to prefetchedUrls manually for deduplication.
       // prefetchRscResponse only manages the cache Map, not the URL set.
       const fullHref = toBrowserNavigationHref(prefetchHref, window.location.href, __basePath);
+      await loadNavigationRuntimeRouteManifest();
       const interceptionContext = getPrefetchInterceptionContext(fullHref);
       const mountedSlotsHeader = getMountedSlotsHeader();
       const headers = createRscRequestHeaders({ interceptionContext });

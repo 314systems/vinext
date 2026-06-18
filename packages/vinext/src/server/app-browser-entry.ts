@@ -52,6 +52,7 @@ import {
 } from "vinext/shims/navigation";
 import {
   getNavigationRuntime,
+  loadNavigationRuntimeRouteManifest,
   registerNavigationRuntimeBootstrap,
   registerNavigationRuntimeFunctions,
   type NavigationRuntimeNavigate,
@@ -248,6 +249,10 @@ function markInitialAppRouterBootstrapHydrated(): void {
 
 function getBrowserRouteManifest(): RouteManifest | null {
   return getNavigationRuntime()?.bootstrap.routeManifest ?? null;
+}
+
+function loadBrowserRouteManifestIfNeeded(): Promise<RouteManifest | null> | null {
+  return getBrowserRouteManifest() === null ? loadNavigationRuntimeRouteManifest() : null;
 }
 
 const MAX_HISTORY_STATE_SNAPSHOTS = 50;
@@ -1416,6 +1421,8 @@ function applyRuntimeRscBootstrap(rsc: NavigationRuntimeRscBootstrap): void {
 
 function registerServerActionCallback(): void {
   const serverActionCallback: Parameters<typeof setServerCallback>[0] = async (id, args) => {
+    const routeManifestLoad = loadBrowserRouteManifestIfNeeded();
+    if (routeManifestLoad !== null) await routeManifestLoad;
     syncServerActionHttpFallbackHead(null);
     const temporaryReferences = createTemporaryReferenceSet();
     // Carry the interception context + mounted slots from the current router
@@ -1700,6 +1707,8 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
     scrollIntent?: AppRouterScrollIntent | null,
     visibleCommitMode: NavigationRuntimeVisibleCommitMode = "transition",
   ): Promise<void> {
+    const routeManifestLoad = loadBrowserRouteManifestIfNeeded();
+    if (routeManifestLoad !== null) await routeManifestLoad;
     activeNavigationAbortController?.abort();
     const navigationAbortController = new AbortController();
     activeNavigationAbortController = navigationAbortController;
@@ -2281,7 +2290,9 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
     shouldSkipScrollRestore: (navId) => synchronousPopstateScrollRestoreNavigationId === navId,
   });
 
-  window.addEventListener("popstate", (event) => {
+  const handleBrowserPopstate = async (event: PopStateEvent): Promise<void> => {
+    const routeManifestLoad = loadBrowserRouteManifestIfNeeded();
+    if (routeManifestLoad !== null) await routeManifestLoad;
     // The browser has already applied the history entry by the time popstate
     // fires. App Router state does not include hashes, so matching the
     // committed pathname/search proves this traversal does not need a new RSC
@@ -2328,6 +2339,13 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
         event.state,
       );
     }
+  };
+
+  window.addEventListener("popstate", (event) => {
+    void handleBrowserPopstate(event).catch((error: unknown) => {
+      console.error("[vinext] Failed to load App Router navigation metadata:", error);
+      window.location.reload();
+    });
   });
 
   if (import.meta.hot) {

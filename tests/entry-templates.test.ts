@@ -9,7 +9,10 @@ import fs from "node:fs";
 import os from "node:os";
 import vm from "node:vm";
 import { describe, it, expect } from "vite-plus/test";
-import { generateBrowserEntry } from "../packages/vinext/src/entries/app-browser-entry.js";
+import {
+  generateBrowserEntry,
+  generateBrowserRouteManifestModule,
+} from "../packages/vinext/src/entries/app-browser-entry.js";
 import { buildAppRscManifestCode } from "../packages/vinext/src/entries/app-rsc-manifest.js";
 import { generateRscEntry } from "../packages/vinext/src/entries/app-rsc-entry.js";
 import { generateClientEntry } from "../packages/vinext/src/entries/pages-client-entry.js";
@@ -233,7 +236,7 @@ describe("App Router generated manifest construction", () => {
     );
   });
 
-  it("embeds the RouteManifest read model in the browser entry", async () => {
+  it("loads the RouteManifest read model from a lazy browser chunk", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-browser-route-manifest-"));
     const appDir = path.join(tmpDir, "app");
     try {
@@ -247,13 +250,16 @@ describe("App Router generated manifest construction", () => {
 
       const graph = await buildAppRouteGraph(appDir, createValidFileMatcher());
       const code = generateBrowserEntry(graph.routes, graph.routeManifest);
+      const manifestCode = generateBrowserRouteManifestModule(graph.routeManifest);
 
       expect(code).toContain("registerNavigationRuntimeBootstrap({");
-      expect(code).toContain("graphVersion:");
-      expect(code).toContain("routes: new Map(");
-      expect(code).toContain("rootBoundaries: new Map(");
-      expect(code).toContain('"route:/dashboard"');
-      expect(code).toContain('"root-boundary:/"');
+      expect(code).toContain('import("virtual:vinext-app-route-manifest")');
+      expect(code).not.toContain('"route:/dashboard"');
+      expect(manifestCode).toContain("graphVersion:");
+      expect(manifestCode).toContain("routes: new Map(");
+      expect(manifestCode).toContain("rootBoundaries: new Map(");
+      expect(manifestCode).toContain('"route:/dashboard"');
+      expect(manifestCode).toContain('"root-boundary:/"');
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

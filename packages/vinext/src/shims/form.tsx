@@ -27,7 +27,10 @@ import {
   type FormHTMLAttributes,
   type ForwardedRef,
 } from "react";
-import { hasAppNavigationRuntime } from "../client/navigation-runtime.js";
+import {
+  hasAppNavigationRuntime,
+  loadNavigationRuntimeRouteManifest,
+} from "../client/navigation-runtime.js";
 import { useMergedRef } from "./use-merged-ref.js";
 import {
   getMountedSlotsHeader,
@@ -329,6 +332,7 @@ const Form = forwardRef(function Form(props: FormProps, ref: ForwardedRef<HTMLFo
               // this, intercepted routes or pages with mounted parallel slots
               // would key under a different context and miss the cached payload.
               // (See link.tsx:373-389 and navigation.ts:1909-1916.)
+              await loadNavigationRuntimeRouteManifest();
               const interceptionContext = getPrefetchInterceptionContext(actionHref);
               const mountedSlotsHeader = getMountedSlotsHeader();
               const headers = createRscRequestHeaders({ interceptionContext });

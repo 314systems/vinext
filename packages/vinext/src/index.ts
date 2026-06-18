@@ -48,7 +48,9 @@ import {
   type VinextCacheConfig,
 } from "./cache/cache-adapters-virtual.js";
 import {
+  VIRTUAL_APP_ROUTE_MANIFEST,
   generateBrowserEntry,
+  generateBrowserRouteManifestModule,
   isLinkPrefetchRoute,
   toDocumentOnlyAppRoute,
   toLinkPrefetchRoute,
@@ -548,6 +550,7 @@ const VIRTUAL_APP_SSR_ENTRY = "virtual:vinext-app-ssr-entry";
 const RESOLVED_APP_SSR_ENTRY = VIRTUAL_PREFIX + VIRTUAL_APP_SSR_ENTRY;
 const VIRTUAL_APP_BROWSER_ENTRY = "virtual:vinext-app-browser-entry";
 const RESOLVED_APP_BROWSER_ENTRY = VIRTUAL_PREFIX + VIRTUAL_APP_BROWSER_ENTRY;
+const RESOLVED_APP_ROUTE_MANIFEST = VIRTUAL_PREFIX + VIRTUAL_APP_ROUTE_MANIFEST;
 const VIRTUAL_ROOT_PARAMS = "virtual:vinext-root-params";
 const RESOLVED_ROOT_PARAMS = VIRTUAL_PREFIX + VIRTUAL_ROOT_PARAMS;
 /** Virtual module that registers config-driven cache adapters (see VinextOptions.cache). */
@@ -2718,6 +2721,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           if (cleanId === VIRTUAL_RSC_ENTRY) return RESOLVED_RSC_ENTRY;
           if (cleanId === VIRTUAL_APP_SSR_ENTRY) return RESOLVED_APP_SSR_ENTRY;
           if (cleanId === VIRTUAL_APP_BROWSER_ENTRY) return RESOLVED_APP_BROWSER_ENTRY;
+          if (cleanId === VIRTUAL_APP_ROUTE_MANIFEST) return RESOLVED_APP_ROUTE_MANIFEST;
           if (cleanId === "next/root-params" || cleanId === "next/root-params.js") {
             return RESOLVED_ROOT_PARAMS;
           }
@@ -2748,6 +2752,12 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             cleanId.endsWith("\\" + VIRTUAL_APP_BROWSER_ENTRY)
           ) {
             return RESOLVED_APP_BROWSER_ENTRY;
+          }
+          if (
+            cleanId.endsWith("/" + VIRTUAL_APP_ROUTE_MANIFEST) ||
+            cleanId.endsWith("\\" + VIRTUAL_APP_ROUTE_MANIFEST)
+          ) {
+            return RESOLVED_APP_ROUTE_MANIFEST;
           }
           if (
             cleanId.includes("/" + VIRTUAL_GOOGLE_FONTS + "?") ||
@@ -2883,6 +2893,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             pagesPrefetchRoutes,
             nextConfig.rewrites,
           );
+        }
+        if (id === RESOLVED_APP_ROUTE_MANIFEST && hasAppDir) {
+          const graph = await appRouteGraph(appDir, nextConfig?.pageExtensions, fileMatcher);
+          return generateBrowserRouteManifestModule(graph.routeManifest);
         }
         if (id.startsWith(RESOLVED_VIRTUAL_GOOGLE_FONTS + "?")) {
           return generateGoogleFontsVirtualModule(id, _fontGoogleShimPath);

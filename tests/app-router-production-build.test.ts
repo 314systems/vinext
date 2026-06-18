@@ -77,8 +77,17 @@ describe("App Router Production build", () => {
       const source = entry?.src?.replaceAll("\\", "/") ?? key.replaceAll("\\", "/");
       return entry?.name === "link" || /\/shims\/link\.(?:js|tsx)$/.test(source);
     });
+    const routeManifestEntryKey = Object.keys(clientManifest).find((key) => {
+      const entry = clientManifest[key];
+      const source = entry?.src?.replaceAll("\\", "/") ?? key.replaceAll("\\", "/");
+      return (
+        entry?.name?.includes("vinext-app-route-manifest") === true ||
+        source.includes("virtual:vinext-app-route-manifest")
+      );
+    });
     expect(browserEntryKey).toBeDefined();
     expect(linkEntryKey).toBeDefined();
+    expect(routeManifestEntryKey).toBeDefined();
 
     const eagerKeys = new Set<string>();
     const visitEagerImports = (key: string): void => {
@@ -90,6 +99,7 @@ describe("App Router Production build", () => {
     };
     if (browserEntryKey) visitEagerImports(browserEntryKey);
     expect(linkEntryKey ? eagerKeys.has(linkEntryKey) : true).toBe(false);
+    expect(routeManifestEntryKey ? eagerKeys.has(routeManifestEntryKey) : true).toBe(false);
 
     // RSC bundle should contain route handling code
     const rscEntry = fs.readFileSync(path.join(outDir, "server", "index.js"), "utf-8");

@@ -22,6 +22,7 @@ import React, {
 import {
   getNavigationRuntime,
   hasAppNavigationRuntime,
+  loadNavigationRuntimeRouteManifest,
   registerNavigationRuntimeFunctions,
 } from "../client/navigation-runtime.js";
 // Import shared RSC prefetch utilities from navigation shim (relative path
@@ -438,6 +439,7 @@ function prefetchUrl(href: string, mode: LinkPrefetchMode, priority: "low" | "hi
             : { cacheForNavigation: true, prefetchShellFirst: true, shouldPrefetch: true };
         if (!autoPrefetch.shouldPrefetch) return;
 
+        await loadNavigationRuntimeRouteManifest();
         const interceptionContext = getPrefetchInterceptionContext(fullHref);
         const mountedSlotsHeader = getMountedSlotsHeader();
         const isOptimisticRouteShellPrefetch = !autoPrefetch.cacheForNavigation;

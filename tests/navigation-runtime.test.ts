@@ -3,6 +3,7 @@ import {
   NAVIGATION_RUNTIME_KEY,
   getNavigationRuntime,
   hasAppNavigationRuntime,
+  loadNavigationRuntimeRouteManifest,
   registerNavigationRuntimeBootstrap,
   registerNavigationRuntimeFunctions,
   subscribeNavigationRuntimeRscChunk,
@@ -40,6 +41,43 @@ describe("navigation runtime contract", () => {
 
     expect(getNavigationRuntime()?.bootstrap.rsc?.params?.id).toBe("123");
     expect(getNavigationRuntime()?.bootstrap.routeManifest).toBeNull();
+  });
+
+  it("loads and caches the route manifest on first navigation demand", async () => {
+    Reflect.set(globalThis, "window", {});
+    const routeManifest = {
+      graphVersion: "test",
+      segmentGraph: Object.fromEntries(
+        [
+          "boundaries",
+          "defaults",
+          "interceptions",
+          "interceptionsBySlotId",
+          "layouts",
+          "pages",
+          "rootBoundaries",
+          "routeHandlers",
+          "routes",
+          "slotBindings",
+          "slots",
+          "templates",
+        ].map((key) => [key, new Map()]),
+      ),
+    } as unknown as NavigationRuntimeBootstrap["routeManifest"];
+    let loadCount = 0;
+
+    registerNavigationRuntimeBootstrap({
+      loadRouteManifest: async () => {
+        loadCount += 1;
+        return routeManifest;
+      },
+    });
+
+    await expect(
+      Promise.all([loadNavigationRuntimeRouteManifest(), loadNavigationRuntimeRouteManifest()]),
+    ).resolves.toEqual([routeManifest, routeManifest]);
+    expect(loadCount).toBe(1);
+    expect(getNavigationRuntime()?.bootstrap.routeManifest).toBe(routeManifest);
   });
 
   it("creates the RSC bootstrap buffer when subscribing the first chunk", () => {
