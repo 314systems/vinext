@@ -92,6 +92,8 @@ type NavigateEvent = {
   defaultPrevented: boolean;
 };
 
+const HAS_PAGES_ROUTER = process.env.__VINEXT_HAS_PAGES_ROUTER !== "false";
+
 type LinkProps = {
   href: string | { pathname?: string; query?: UrlQuery };
   /** URL displayed in the browser (when href is a route pattern like /user/[id]) */
@@ -198,6 +200,7 @@ function resolveHref(href: LinkProps["href"]): string {
 }
 
 function resolvePagesQueryOnlyHref(href: string): string {
+  if (!HAS_PAGES_ROUTER) return href;
   if (!href.startsWith("?") || typeof window === "undefined") return href;
 
   const pagesRouter = window.next?.appDir === true ? undefined : window.next?.router;
@@ -530,7 +533,7 @@ function prefetchUrl(href: string, mode: LinkPrefetchMode, priority: "low" | "hi
             optimisticRouteShell: isOptimisticRouteShellPrefetch,
           },
         );
-      } else if (window.__NEXT_DATA__) {
+      } else if (HAS_PAGES_ROUTER && window.__NEXT_DATA__) {
         // Pages Router prefetch. When a code-split loader is registered for
         // the target route (prod builds expose them on window via the
         // generated client entry), prefetch the data JSON + warm the page
@@ -989,9 +992,10 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
     e.preventDefault();
 
     const hasAppNavigationRuntime = Boolean(getNavigationRuntime()?.functions.navigate);
-    const pagesNavigateHref = resolvedHref.startsWith("?")
-      ? resolvePagesLinkNavigationHref(resolvedHref, locale)
-      : navigateHref;
+    const pagesNavigateHref =
+      HAS_PAGES_ROUTER && resolvedHref.startsWith("?")
+        ? resolvePagesLinkNavigationHref(resolvedHref, locale)
+        : navigateHref;
     // Resolve relative hrefs (#hash, ?query) for onNavigate and the hard-navigation fallback.
     // Pages query-only links must use the rewrite-aware target resolved above,
     // so callbacks and router-error fallback agree with the actual navigation.
@@ -1068,7 +1072,7 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
         );
       });
       return;
-    } else {
+    } else if (HAS_PAGES_ROUTER) {
       // Next.js only consumes onRouterTransitionStart in the App Router.
       // Pages Router still executes instrumentation-client side effects
       // during startup, but it does not invoke the named export on navigation.
@@ -1095,6 +1099,10 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
           window.dispatchEvent(new PopStateEvent("popstate"));
         },
       });
+    } else if (replace) {
+      window.location.replace(absoluteFullHref);
+    } else {
+      window.location.assign(absoluteFullHref);
     }
   };
 
