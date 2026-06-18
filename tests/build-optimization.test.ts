@@ -129,6 +129,9 @@ describe("clientManualChunks", () => {
     expect(appClientManualChunks("/vinext/shims/router.ts")).toBeUndefined();
     expect(appClientManualChunks("/vinext/shims/image.tsx?client")).toBeUndefined();
     expect(appClientManualChunks("/vinext/shims/layout-segment-context.js")).toBeUndefined();
+    expect(appClientManualChunks("/vinext/shims/pages-router-runtime.js")).toBeUndefined();
+    expect(appClientManualChunks("/vinext/shims/internal/pages-data-target.js")).toBeUndefined();
+    expect(appClientManualChunks("/vinext/shims/internal/link-status-registry.js")).toBeUndefined();
   });
 
   it("handles pnpm-style nested node_modules paths", () => {
@@ -668,6 +671,45 @@ describe("process.env.NODE_ENV define", () => {
       });
 
       expect(result.define?.["process.env.NODE_ENV"]).toBe(JSON.stringify("production"));
+      expect(result.define?.["process.env.__VINEXT_HAS_PAGES_ROUTER"]).toBe(JSON.stringify("true"));
+      expect(result.define?.["process.env.__VINEXT_HAS_CLIENT_REWRITES"]).toBe(
+        JSON.stringify("false"),
+      );
+    } finally {
+      await fsp.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }, 15000);
+
+  it("injects App-only client route ownership flags", async () => {
+    const vinext = (await import("../packages/vinext/src/index.js")).default;
+    const plugins = vinext();
+    const mainPlugin = plugins.find(
+      (p: any) => p.name === "vinext:config" && typeof p.config === "function",
+    );
+    expect(mainPlugin).toBeDefined();
+
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "vinext-app-only-flags-"));
+    const rootNodeModules = path.resolve(import.meta.dirname, "../node_modules");
+    await fsp.symlink(rootNodeModules, path.join(tmpDir, "node_modules"), "junction");
+    await fsp.mkdir(path.join(tmpDir, "app"), { recursive: true });
+    await fsp.writeFile(
+      path.join(tmpDir, "app", "page.tsx"),
+      `export default function Home() { return <h1>Home</h1>; }`,
+    );
+    await fsp.writeFile(path.join(tmpDir, "next.config.mjs"), `export default {};`);
+
+    try {
+      const result = await (mainPlugin as any).config(
+        { root: tmpDir, build: {}, plugins: [] },
+        { command: "build", mode: "production" },
+      );
+
+      expect(result.define?.["process.env.__VINEXT_HAS_PAGES_ROUTER"]).toBe(
+        JSON.stringify("false"),
+      );
+      expect(result.define?.["process.env.__VINEXT_HAS_CLIENT_REWRITES"]).toBe(
+        JSON.stringify("false"),
+      );
     } finally {
       await fsp.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     }

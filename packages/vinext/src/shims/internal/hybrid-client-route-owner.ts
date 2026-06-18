@@ -86,6 +86,8 @@ function resolveClientRewrite(
 
 const appRouteTrieCache = createRouteTrieCache<VinextLinkPrefetchRoute>();
 const pagesRouteTrieCache = createRouteTrieCache<VinextPagesLinkPrefetchRoute>();
+const HAS_PAGES_ROUTER = process.env.__VINEXT_HAS_PAGES_ROUTER !== "false";
+const HAS_CLIENT_REWRITES = process.env.__VINEXT_HAS_CLIENT_REWRITES !== "false";
 
 /**
  * Build a `/`-joined pattern from a manifest's `patternParts`. Mirrors the
@@ -154,7 +156,15 @@ function matchPagesRoute(
  * matcher trie produces the same result the server will see when the
  * request lands.
  */
-export function resolveHybridClientRouteOwner(
+function resolveAppOnlyClientRouteOwner(href: string, basePath: string): HybridClientOwner | null {
+  if (typeof window === "undefined") return null;
+  const appRoutes = window.__VINEXT_LINK_PREFETCH_ROUTES__;
+  const appMatch = appRoutes ? matchAppRoute(href, basePath, appRoutes) : null;
+  if (appMatch === null) return null;
+  return appMatch.documentOnly ? "document" : "app";
+}
+
+function resolveConfiguredClientRouteOwner(
   href: string,
   basePath: string,
 ): HybridClientOwner | null {
@@ -212,4 +222,16 @@ export function resolveHybridClientRouteOwner(
   );
   const winningRoute = owner === "app" ? appMatch : pagesMatch;
   return winningRoute.documentOnly ? "document" : owner;
+}
+
+const resolveClientRouteOwner =
+  HAS_PAGES_ROUTER || HAS_CLIENT_REWRITES
+    ? resolveConfiguredClientRouteOwner
+    : resolveAppOnlyClientRouteOwner;
+
+export function resolveHybridClientRouteOwner(
+  href: string,
+  basePath: string,
+): HybridClientOwner | null {
+  return resolveClientRouteOwner(href, basePath);
 }

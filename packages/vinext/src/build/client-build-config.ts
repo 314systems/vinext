@@ -22,9 +22,18 @@ const ROUTE_OWNED_CLIENT_SHIMS = new Set([
   "image",
   "layout-segment-context",
   "link",
+  "link-prefetch",
   "offline",
+  "pages-router-runtime",
   "router",
   "script",
+  "client-locale",
+  "internal/app-route-detection",
+  "internal/link-status-registry",
+  "internal/pages-data-fetch-dedup",
+  "internal/pages-data-target",
+  "internal/pages-data-url",
+  "internal/route-pattern-for-warning",
 ]);
 
 // Next.js emits CSS under `static/css/` and CSS url() dependencies (images,
