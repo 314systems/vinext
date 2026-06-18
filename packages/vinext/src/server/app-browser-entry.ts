@@ -132,6 +132,7 @@ import {
 } from "./app-rsc-cache-busting.js";
 import { VINEXT_PARAMS_HEADER } from "./headers.js";
 import { removeStylesheetLinksCoveredByInlineCss } from "./app-inline-css-client.js";
+import { hasServerActions, loadServerActionClient } from "virtual:vinext-app-capabilities";
 
 type SearchParamInput = ConstructorParameters<typeof URLSearchParams>[0];
 type AppBrowserNavigationSupport = typeof import("./app-browser-navigation-support.js");
@@ -213,19 +214,25 @@ const browserNavigationController = createAppBrowserNavigationController({
   syncHistoryStatePreviousNextUrl: (previousNextUrl, bfcacheIds) =>
     historyController.syncCurrentHistoryStatePreviousNextUrl(previousNextUrl, bfcacheIds),
 });
-const discardedServerActionRefreshScheduler = createDiscardedServerActionRefreshScheduler({
-  runRefresh() {
-    clearClientNavigationCaches();
-    void getNavigationRuntime()?.functions.navigate?.(
-      window.location.href,
-      0,
-      "refresh",
-      undefined,
-      undefined,
-      true,
-    );
-  },
-});
+const discardedServerActionRefreshScheduler = hasServerActions
+  ? createDiscardedServerActionRefreshScheduler({
+      runRefresh() {
+        clearClientNavigationCaches();
+        void getNavigationRuntime()?.functions.navigate?.(
+          window.location.href,
+          0,
+          "refresh",
+          undefined,
+          undefined,
+          true,
+        );
+      },
+    })
+  : {
+      markNavigationSettled() {},
+      markNavigationStart() {},
+      schedule() {},
+    };
 const NavigationCommitSignal = browserNavigationController.NavigationCommitSignal;
 const ACTION_HTTP_FALLBACK_ROBOTS_META_ATTR = "data-vinext-action-http-fallback";
 
@@ -896,7 +903,7 @@ function applyRuntimeRscBootstrap(rsc: NavigationRuntimeRscBootstrap): void {
 function registerServerActionCallback(): void {
   setServerCallback((id, args) => {
     const releaseCacheInvalidationGuard = historyController.beginCacheInvalidationGuard();
-    return import("./app-browser-server-action-client.js")
+    return loadServerActionClient!()
       .then(({ invokeClientServerAction }) =>
         invokeClientServerAction(id, args, {
           basePath: __basePath,
@@ -946,7 +953,7 @@ function registerServerActionCallback(): void {
 async function main(): Promise<void> {
   if (!claimInitialAppRouterBootstrap()) return;
 
-  registerServerActionCallback();
+  if (hasServerActions) registerServerActionCallback();
   installAppNavigationFailureListeners();
 
   if (import.meta.env.DEV) {
