@@ -1056,6 +1056,42 @@ describe("App Router entry templates", () => {
     );
   });
 
+  it("uses the lightweight dispatcher for provably simple route handlers", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-simple-route-entry-"));
+    const routePath = path.join(tmpDir, "app", "api", "route.ts");
+    fs.mkdirSync(path.dirname(routePath), { recursive: true });
+    fs.writeFileSync(
+      routePath,
+      'export function GET() { return Response.json({ status: "ok" }); }',
+    );
+
+    try {
+      const code = generateRscEntry(
+        path.join(tmpDir, "app"),
+        [
+          {
+            ...minimalAppRoutes[0],
+            pagePath: null,
+            pattern: "/api",
+            patternParts: ["api"],
+            routePath,
+            routeSegments: ["api"],
+          },
+        ],
+        null,
+        [],
+        null,
+        "",
+        false,
+      );
+
+      expect(code).toContain("app-route-handler-simple-dispatch.js");
+      expect(code).not.toContain("app-route-handler-dispatch.js");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("generateRscEntry omits server action imports when no server references were found", () => {
     const code = generateRscEntry("/tmp/test/app", minimalAppRoutes, null, [], null, "", false, {
       hasServerActions: false,

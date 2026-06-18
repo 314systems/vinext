@@ -13,6 +13,7 @@ import {
   appRoutesNeedStaticParamsEndpoint,
 } from "../build/app-response-cache-capabilities.js";
 import type { AppPageChunkLoader } from "../build/app-page-chunk-groups.js";
+import { appRoutesCanUseSimpleRouteHandlerRuntime } from "../build/app-route-handler-capabilities.js";
 import { buildAppRscManifestCode } from "./app-rsc-manifest.js";
 import { resolveEntryPath } from "./runtime-entry-module.js";
 import { normalizePathSeparators } from "../utils/path.js";
@@ -41,6 +42,10 @@ const middlewareRequestHeadersPath = resolveEntryPath(
 const normalizePathModulePath = resolveEntryPath("../server/normalize-path.js", import.meta.url);
 const appRouteHandlerDispatchPath = resolveEntryPath(
   "../server/app-route-handler-dispatch.js",
+  import.meta.url,
+);
+const appRouteHandlerSimpleDispatchPath = resolveEntryPath(
+  "../server/app-route-handler-simple-dispatch.js",
   import.meta.url,
 );
 const appRouteHandlerResponsePath = resolveEntryPath(
@@ -265,6 +270,9 @@ export function generateRscEntry(
   const i18nConfig = config?.i18n ?? null;
   const hasPagesDir = config?.hasPagesDir ?? false;
   const hasPrerenderEndpoint = hasPagesDir || appRoutesNeedStaticParamsEndpoint(routes);
+  const routeHandlerDispatchPath = appRoutesCanUseSimpleRouteHandlerRuntime(routes)
+    ? appRouteHandlerSimpleDispatchPath
+    : appRouteHandlerDispatchPath;
   const publicFiles = config?.publicFiles ?? [];
   const draftModeSecret = config?.draftModeSecret ?? randomUUID();
   const manifestCode = buildAppRscManifestCode({
@@ -353,7 +361,7 @@ ${
 } from ${JSON.stringify(appRouteHandlerResponsePath)};`
     : ""
 }
-const __loadAppRouteHandlerDispatch = () => import(${JSON.stringify(appRouteHandlerDispatchPath)});
+const __loadAppRouteHandlerDispatch = () => import(${JSON.stringify(routeHandlerDispatchPath)});
 ${
   hasServerActions
     ? `const __loadAppServerActionExecution = () => import(${JSON.stringify(appServerActionExecutionPath)});`
