@@ -8,6 +8,7 @@ import {
   type createAppBrowserNavigationController,
 } from "./app-browser-navigation-controller.js";
 import type { AppBrowserHistoryController } from "./app-browser-history-controller.js";
+import { navigationControllerRuntime } from "./app-browser-navigation-controller-runtime.js";
 import {
   createPopstateRestoreHandler,
   restoreSynchronousPopstateScrollPosition,
@@ -61,6 +62,7 @@ function restoreHistoryStateSnapshot(
         deps.browserNavigationController.restoreHistorySnapshotVisibleState({
           beforeCommit,
           navId,
+          runtime: navigationControllerRuntime,
           state,
           targetHref: window.location.href,
         }),

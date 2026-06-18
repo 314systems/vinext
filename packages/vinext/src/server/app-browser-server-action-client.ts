@@ -15,7 +15,7 @@ import {
   type ServerActionRevalidationKind,
 } from "./app-browser-action-result.js";
 import { applyServerActionResultDecision } from "./app-browser-server-action-navigation.js";
-import type { AppRouterState } from "./app-browser-state.js";
+import { resolveServerActionRequestState, type AppRouterState } from "./app-browser-state.js";
 import { AppElementsWire, type AppElements, type AppWireElements } from "./app-elements.js";
 import {
   createServerActionRequestUrl,
@@ -62,10 +62,6 @@ export type ClientServerActionDeps = {
     target: ActionRedirectTarget,
     actionInitiation: ClientServerActionInitiation,
   ): void;
-  resolveServerActionRequestHeaders(
-    actionId: string,
-    actionInitiation: ClientServerActionInitiation,
-  ): Headers;
   syncCurrentHistoryState(
     previousNextUrl: string | null,
     bfcacheIds: Readonly<Record<string, string>>,
@@ -141,7 +137,12 @@ export async function invokeClientServerAction(
     actionInitiation.routerState.bfcacheIds,
   );
   const body = await encodeReply(args, { temporaryReferences });
-  const headers = deps.resolveServerActionRequestHeaders(id, actionInitiation);
+  const headers = resolveServerActionRequestState({
+    actionId: id,
+    basePath: deps.basePath,
+    elements: actionInitiation.routerState.elements,
+    previousNextUrl: actionInitiation.routerState.previousNextUrl,
+  }).headers;
   const fetchResponse = await fetch(createServerActionRequestUrl(actionInitiation.path), {
     method: "POST",
     headers,

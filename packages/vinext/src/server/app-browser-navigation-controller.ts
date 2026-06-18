@@ -20,32 +20,34 @@ import {
 } from "vinext/shims/app-router-scroll-state";
 import type { RouteManifest } from "../routing/app-route-graph.js";
 import { stripBasePath } from "../utils/base-path.js";
-import {
-  FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
-  createPendingNavigationCommit,
-  type AppNavigationPayloadOrigin,
-  type AppRouterState,
-  type OperationLane,
-  type PendingNavigationCommit,
-  type PendingOperationRecord,
+import type {
+  AppNavigationPayloadOrigin,
+  AppRouterState,
+  OperationLane,
+  PendingNavigationCommit,
+  PendingOperationRecord,
 } from "./app-browser-state.js";
-import {
-  applyApprovedVisibleCommit,
-  approveHmrVisibleCommit,
-  approvePendingNavigationCommit,
-  resolveAndClassifyNavigationCommit,
-  type ApprovedVisibleCommit,
-} from "./app-browser-visible-commit.js";
-import {
-  shouldScheduleRefreshForDiscardedServerAction,
-  type ServerActionRevalidationKind,
-} from "./app-browser-action-result.js";
+import type { ApprovedVisibleCommit } from "./app-browser-visible-commit.js";
+import type { ServerActionRevalidationKind } from "./app-browser-action-result.js";
+import type { navigationControllerRuntime } from "./app-browser-navigation-controller-runtime.js";
 import type { AppElements } from "./app-elements.js";
 import type { NavigationRuntimeVisibleCommitMode } from "../client/navigation-runtime.js";
 import {
   clearAppNavigationFailureTarget,
   getAppNavigationFailureTarget,
 } from "../client/app-nav-failure-handler.js";
+
+type NavigationControllerRuntime = typeof navigationControllerRuntime;
+
+let navigationControllerRuntimePromise: Promise<NavigationControllerRuntime> | null = null;
+
+function loadNavigationControllerRuntime(): Promise<NavigationControllerRuntime> {
+  navigationControllerRuntimePromise ??=
+    import("./app-browser-navigation-controller-runtime.js").then(
+      (module) => module.navigationControllerRuntime,
+    );
+  return navigationControllerRuntimePromise;
+}
 
 export type HistoryUpdateMode = "push" | "replace";
 
@@ -108,6 +110,7 @@ type BrowserNavigationController = {
   restoreHistorySnapshotVisibleState(options: {
     beforeCommit?: () => void;
     navId: number;
+    runtime: NavigationControllerRuntime;
     state: AppRouterState;
     targetHref: string;
   }): boolean;
@@ -406,11 +409,12 @@ export function createAppBrowserNavigationController(
   function resolvePendingBrowserRouterState(
     pending: PendingBrowserRouterState | null | undefined,
     commit: ApprovedVisibleCommit,
+    runtime: NavigationControllerRuntime,
   ): void {
     if (!pending || pending.settled) return;
 
     pending.settled = true;
-    pending.resolve(applyApprovedVisibleCommit(getBrowserRouterState(), commit));
+    pending.resolve(runtime.applyApprovedVisibleCommit(getBrowserRouterState(), commit));
 
     if (activePendingBrowserRouterState === pending) {
       activePendingBrowserRouterState = null;
@@ -485,14 +489,15 @@ export function createAppBrowserNavigationController(
   ): Promise<void> {
     if (!hasBrowserRouterState()) return;
 
+    const runtime = await loadNavigationControllerRuntime();
     const currentState = getBrowserRouterState();
     const renderId = allocateRenderId();
-    const pending = await createPendingNavigationCommit({
+    const pending = await runtime.createPendingNavigationCommit({
       currentState,
       nextElements,
       navigationSnapshot,
       operationLane: "hmr",
-      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
+      payloadOrigin: runtime.FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       renderId,
       type: "replace",
     });
@@ -503,7 +508,7 @@ export function createAppBrowserNavigationController(
     // initialized-setter error.
     if (!hasBrowserRouterState()) return;
 
-    dispatchSynchronousVisibleCommit(approveHmrVisibleCommit(pending));
+    dispatchSynchronousVisibleCommit(runtime.approveHmrVisibleCommit(pending), runtime);
   }
 
   function NavigationCommitSignal(
@@ -541,6 +546,7 @@ export function createAppBrowserNavigationController(
   function dispatchApprovedVisibleCommit(
     commit: ApprovedVisibleCommit,
     pendingRouterState: PendingBrowserRouterState | null,
+    runtime: NavigationControllerRuntime,
     visibleCommitMode: NavigationRuntimeVisibleCommitMode,
   ): void {
     const setter = getBrowserRouterStateSetter();
@@ -549,7 +555,7 @@ export function createAppBrowserNavigationController(
       // The programmatic navigation is already running inside React.startTransition
       // (from router.push/replace/refresh/Link), so resolving the deferred promise
       // is sufficient.
-      resolvePendingBrowserRouterState(pendingRouterState, commit);
+      resolvePendingBrowserRouterState(pendingRouterState, commit, runtime);
       return;
     }
 
@@ -567,19 +573,22 @@ export function createAppBrowserNavigationController(
     // consolidate the two.
     if (visibleCommitMode === "synchronous") {
       flushSync(() => {
-        setter(applyApprovedVisibleCommit(getBrowserRouterState(), commit));
+        setter(runtime.applyApprovedVisibleCommit(getBrowserRouterState(), commit));
       });
       return;
     }
 
     startTransition(() => {
-      setter(applyApprovedVisibleCommit(getBrowserRouterState(), commit));
+      setter(runtime.applyApprovedVisibleCommit(getBrowserRouterState(), commit));
     });
   }
 
-  function dispatchSynchronousVisibleCommit(commit: ApprovedVisibleCommit): void {
+  function dispatchSynchronousVisibleCommit(
+    commit: ApprovedVisibleCommit,
+    runtime: NavigationControllerRuntime,
+  ): void {
     const setter = getBrowserRouterStateSetter();
-    setter(applyApprovedVisibleCommit(getBrowserRouterState(), commit));
+    setter(runtime.applyApprovedVisibleCommit(getBrowserRouterState(), commit));
   }
 
   function createRestoredHistorySnapshotCommit(options: {
@@ -625,6 +634,7 @@ export function createAppBrowserNavigationController(
   function restoreHistorySnapshotVisibleState(options: {
     beforeCommit?: () => void;
     navId: number;
+    runtime: NavigationControllerRuntime;
     state: AppRouterState;
     targetHref: string;
   }): boolean {
@@ -638,7 +648,7 @@ export function createAppBrowserNavigationController(
       renderId: allocateRenderId(),
       restoredState: options.state,
     });
-    const approval = approvePendingNavigationCommit({
+    const approval = options.runtime.approvePendingNavigationCommit({
       activeNavigationId,
       currentState,
       pending,
@@ -652,15 +662,16 @@ export function createAppBrowserNavigationController(
     }
 
     options.beforeCommit?.();
-    dispatchSynchronousVisibleCommit(approval.approvedCommit);
+    dispatchSynchronousVisibleCommit(approval.approvedCommit, options.runtime);
     return true;
   }
 
   function notifyDiscardedServerActionRevalidation(
     lifecycleOptions: SameUrlServerActionLifecycleOptions | undefined,
+    runtime: NavigationControllerRuntime,
   ): void {
     const revalidation = lifecycleOptions?.revalidation ?? "none";
-    if (!shouldScheduleRefreshForDiscardedServerAction(revalidation)) return;
+    if (!runtime.shouldScheduleRefreshForDiscardedServerAction(revalidation)) return;
 
     lifecycleOptions?.onDiscardedRevalidation?.();
   }
@@ -684,6 +695,7 @@ export function createAppBrowserNavigationController(
     navId: number;
     visibleCommitMode?: NavigationRuntimeVisibleCommitMode;
   }): Promise<NavigationPayloadOutcome> {
+    const runtimeLoad = loadNavigationControllerRuntime();
     const renderId = allocateRenderId();
     const failureTarget = getAppNavigationFailureTarget(options.targetHref);
     if (failureTarget) {
@@ -697,8 +709,9 @@ export function createAppBrowserNavigationController(
 
     let snapshotActivated = false;
     try {
+      const runtime = await runtimeLoad;
       const startedState = getBrowserRouterState();
-      const pending = await createPendingNavigationCommit({
+      const pending = await runtime.createPendingNavigationCommit({
         currentState: startedState,
         nextElements: options.nextElements,
         navigationSnapshot: options.navigationSnapshot,
@@ -711,7 +724,7 @@ export function createAppBrowserNavigationController(
         type: options.actionType,
       });
 
-      const approval = approvePendingNavigationCommit({
+      const approval = runtime.approvePendingNavigationCommit({
         activeNavigationId,
         currentState: getBrowserRouterState(),
         pending,
@@ -769,6 +782,7 @@ export function createAppBrowserNavigationController(
       dispatchApprovedVisibleCommit(
         approvedCommit,
         options.pendingRouterState,
+        runtime,
         options.visibleCommitMode ?? "transition",
       );
     } catch (error) {
@@ -793,6 +807,7 @@ export function createAppBrowserNavigationController(
     actionInitiationState?: AppRouterState,
     lifecycleOptions?: SameUrlServerActionLifecycleOptions,
   ): Promise<unknown> {
+    const runtime = await loadNavigationControllerRuntime();
     const currentState = actionInitiationState ?? getBrowserRouterState();
     const startedNavigationId = lifecycleOptions?.startedNavigationId ?? activeNavigationId;
     const targetHref = lifecycleOptions?.targetHref ?? window.location.href;
@@ -804,7 +819,7 @@ export function createAppBrowserNavigationController(
       // same-URL action path can consume this trace once later lifecycle gates
       // need an observable commit explanation.
       trace: _navigationTrace,
-    } = await resolveAndClassifyNavigationCommit({
+    } = await runtime.resolveAndClassifyNavigationCommit({
       activeNavigationId,
       currentState,
       getActiveNavigationId: () => activeNavigationId,
@@ -813,7 +828,7 @@ export function createAppBrowserNavigationController(
       nextElements,
       renderId: allocateRenderId(),
       operationLane: "server-action",
-      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
+      payloadOrigin: runtime.FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       startedNavigationId,
       routeManifest: getRouteManifest(),
       targetHref,
@@ -831,7 +846,7 @@ export function createAppBrowserNavigationController(
     if (approvedCommit) {
       // The helper approval and this continuation are separated by a microtask
       // boundary, so re-check lifecycle authority before mutating visible UI.
-      const latestApproval = approvePendingNavigationCommit({
+      const latestApproval = runtime.approvePendingNavigationCommit({
         activeNavigationId,
         currentState: getBrowserRouterState(),
         pending,
@@ -848,16 +863,16 @@ export function createAppBrowserNavigationController(
       }
 
       if (latestApproval.approvedCommit) {
-        dispatchSynchronousVisibleCommit(latestApproval.approvedCommit);
+        dispatchSynchronousVisibleCommit(latestApproval.approvedCommit, runtime);
         syncHistoryStatePreviousNextUrl(
           latestApproval.approvedCommit.previousNextUrl,
           latestApproval.approvedCommit.action.bfcacheIds,
         );
       } else {
-        notifyDiscardedServerActionRevalidation(lifecycleOptions);
+        notifyDiscardedServerActionRevalidation(lifecycleOptions, runtime);
       }
     } else if (decision.disposition === "no-commit") {
-      notifyDiscardedServerActionRevalidation(lifecycleOptions);
+      notifyDiscardedServerActionRevalidation(lifecycleOptions, runtime);
     }
 
     // Same-URL server actions still return their action value even if the UI

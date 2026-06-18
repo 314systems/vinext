@@ -30,6 +30,7 @@ import {
   hydrateRootInTransition,
 } from "../packages/vinext/src/server/app-browser-hydration.js";
 import { createAppBrowserNavigationController } from "../packages/vinext/src/server/app-browser-navigation-controller.js";
+import { navigationControllerRuntime } from "../packages/vinext/src/server/app-browser-navigation-controller-runtime.js";
 import {
   createPopstateRestoreHandler,
   restoreSynchronousPopstateScrollPosition,
@@ -1286,6 +1287,7 @@ describe("app browser entry navigation scheduling", () => {
 
     const restored = controller.restoreHistorySnapshotVisibleState({
       navId,
+      runtime: navigationControllerRuntime,
       state: snapshotState,
       targetHref: "https://example.com/scroll-restoration",
     });
@@ -1327,6 +1329,7 @@ describe("app browser entry navigation scheduling", () => {
 
     const restored = controller.restoreHistorySnapshotVisibleState({
       navId,
+      runtime: navigationControllerRuntime,
       state: snapshotState,
       targetHref: "https://example.com/docs/scroll-restoration?q=a%20b",
     });
@@ -1352,6 +1355,7 @@ describe("app browser entry navigation scheduling", () => {
 
     const restored = controller.restoreHistorySnapshotVisibleState({
       navId: staleNavId,
+      runtime: navigationControllerRuntime,
       state: snapshotState,
       targetHref: "https://example.com/scroll-restoration",
     });
@@ -1375,6 +1379,7 @@ describe("app browser entry navigation scheduling", () => {
 
     const restored = controller.restoreHistorySnapshotVisibleState({
       navId,
+      runtime: navigationControllerRuntime,
       state: snapshotState,
       targetHref: "https://example.com/scroll-restoration/other",
     });
@@ -2660,13 +2665,8 @@ describe("app browser navigation controller", () => {
         navId,
       });
 
-      // Yield microticks so the async function reaches dispatch and sets state.
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-
       // renderId is 1 (first render allocation), independent from navId = 3.
-      expect(stateRef.current.renderId).toBe(1);
+      await vi.waitFor(() => expect(stateRef.current.renderId).toBe(1));
       expect(stateRef.current.routeId).toBe("route:/dashboard");
     } finally {
       clearSpy.mockRestore();

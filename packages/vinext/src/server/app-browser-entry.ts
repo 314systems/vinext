@@ -88,15 +88,15 @@ import {
   type AppWireElements,
 } from "./app-elements.js";
 import {
-  FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
-  createBfcacheSegmentStateKeyMap,
-  createInitialBfcacheIdMap,
-  resolveServerActionRequestState,
   type AppNavigationPayloadOrigin,
   type AppRouterState,
-  type HistoryTraversalIntent,
   type OperationLane,
 } from "./app-browser-state.js";
+import {
+  createBfcacheSegmentStateKeyMap,
+  createInitialBfcacheIdMap,
+} from "./app-bfcache-identity.js";
+import type { HistoryTraversalIntent } from "./app-history-state.js";
 import { AppBrowserHistoryController } from "./app-browser-history-controller.js";
 import {
   DevRecoveryBoundary,
@@ -137,6 +137,10 @@ type SearchParamInput = ConstructorParameters<typeof URLSearchParams>[0];
 type AppBrowserNavigationSupport = typeof import("./app-browser-navigation-support.js");
 
 type ServerActionResult = AppBrowserServerActionResult<AppWireElements>;
+
+const FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN: AppNavigationPayloadOrigin = {
+  origin: "fresh",
+};
 
 type MpaNavigationState = {
   href: string;
@@ -929,14 +933,6 @@ function registerServerActionCallback(): void {
             ).catch(() => {
               browserNavigationController.performHardNavigation(target.href);
             });
-          },
-          resolveServerActionRequestHeaders(actionId, actionInitiation) {
-            return resolveServerActionRequestState({
-              actionId,
-              basePath: __basePath,
-              elements: actionInitiation.routerState.elements,
-              previousNextUrl: actionInitiation.routerState.previousNextUrl,
-            }).headers;
           },
           syncCurrentHistoryState: (previousNextUrl, bfcacheIds) =>
             historyController.syncCurrentHistoryStatePreviousNextUrl(previousNextUrl, bfcacheIds),
