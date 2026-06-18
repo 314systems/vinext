@@ -8,6 +8,7 @@
  * Previously housed in server/app-dev-server.ts.
  */
 import { randomUUID } from "node:crypto";
+import { appRoutesCanUseSimpleRouteHandlerRuntime } from "../build/app-route-handler-capabilities.js";
 import { buildAppRscManifestCode } from "./app-rsc-manifest.js";
 import { resolveEntryPath } from "./runtime-entry-module.js";
 import { normalizePathSeparators } from "../utils/path.js";
@@ -37,6 +38,10 @@ const middlewareRequestHeadersPath = resolveEntryPath(
 const normalizePathModulePath = resolveEntryPath("../server/normalize-path.js", import.meta.url);
 const appRouteHandlerDispatchPath = resolveEntryPath(
   "../server/app-route-handler-dispatch.js",
+  import.meta.url,
+);
+const appRouteHandlerSimpleDispatchPath = resolveEntryPath(
+  "../server/app-route-handler-simple-dispatch.js",
   import.meta.url,
 );
 const appRouteHandlerResponsePath = resolveEntryPath(
@@ -228,6 +233,9 @@ export function generateRscEntry(
   const hasServerActions = config?.hasServerActions !== false;
   const i18nConfig = config?.i18n ?? null;
   const hasPagesDir = config?.hasPagesDir ?? false;
+  const routeHandlerDispatchPath = appRoutesCanUseSimpleRouteHandlerRuntime(routes)
+    ? appRouteHandlerSimpleDispatchPath
+    : appRouteHandlerDispatchPath;
   const publicFiles = config?.publicFiles ?? [];
   const draftModeSecret = config?.draftModeSecret ?? randomUUID();
   const imageAllowedWidths = [
@@ -321,7 +329,7 @@ ${
 } from ${JSON.stringify(appRouteHandlerResponsePath)};`
     : ""
 }
-const __loadAppRouteHandlerDispatch = () => import(${JSON.stringify(appRouteHandlerDispatchPath)});
+const __loadAppRouteHandlerDispatch = () => import(${JSON.stringify(routeHandlerDispatchPath)});
 ${
   hasServerActions
     ? `const __loadAppServerActionExecution = () => import(${JSON.stringify(appServerActionExecutionPath)});`
