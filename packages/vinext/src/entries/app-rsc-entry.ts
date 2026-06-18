@@ -8,7 +8,10 @@
  * Previously housed in server/app-dev-server.ts.
  */
 import { randomUUID } from "node:crypto";
-import { appRoutesNeedResponseCache } from "../build/app-response-cache-capabilities.js";
+import {
+  appRoutesNeedResponseCache,
+  appRoutesNeedStaticParamsEndpoint,
+} from "../build/app-response-cache-capabilities.js";
 import { buildAppRscManifestCode } from "./app-rsc-manifest.js";
 import { resolveEntryPath } from "./runtime-entry-module.js";
 import { normalizePathSeparators } from "../utils/path.js";
@@ -67,6 +70,10 @@ const appPageProbePath = resolveEntryPath("../server/app-page-probe.js", import.
 const appPageDispatchPath = resolveEntryPath("../server/app-page-dispatch.js", import.meta.url);
 const appPageCacheRuntimePath = resolveEntryPath(
   "../server/app-page-cache-runtime.js",
+  import.meta.url,
+);
+const appPrerenderEndpointsPath = resolveEntryPath(
+  "../server/app-prerender-endpoints.js",
   import.meta.url,
 );
 const appPagePprRuntimePath = resolveEntryPath(
@@ -254,6 +261,7 @@ export function generateRscEntry(
   const hasIsrRuntime = cacheComponents || appRoutesNeedResponseCache(routes);
   const i18nConfig = config?.i18n ?? null;
   const hasPagesDir = config?.hasPagesDir ?? false;
+  const hasPrerenderEndpoint = hasPagesDir || appRoutesNeedStaticParamsEndpoint(routes);
   const publicFiles = config?.publicFiles ?? [];
   const draftModeSecret = config?.draftModeSecret ?? randomUUID();
   const manifestCode = buildAppRscManifestCode({
@@ -385,6 +393,11 @@ import { buildAppPageProbes as __buildAppPageProbes } from ${JSON.stringify(appP
 import {
   dispatchAppPage as __dispatchAppPage,
 } from ${JSON.stringify(appPageDispatchPath)};
+${
+  hasPrerenderEndpoint
+    ? `import { handleAppPrerenderEndpoint as __handleAppPrerenderEndpoint } from ${JSON.stringify(appPrerenderEndpointsPath)};`
+    : ""
+}
 ${
   hasIsrRuntime
     ? `import * as __appPageCacheRuntime from ${JSON.stringify(appPageCacheRuntimePath)};`
@@ -835,6 +848,7 @@ export default createAppRscHandler({
   configRedirects: __configRedirects,
   configRewrites: __configRewrites,
   imageConfig: __imageConfig,
+  ${hasPrerenderEndpoint ? "handlePrerenderEndpoint: __handleAppPrerenderEndpoint," : ""}
   isDev: process.env.NODE_ENV !== "production",
   draftModeSecret: __draftModeSecret,
   ${hasClientRouterRuntime ? "parseClientReuseManifestHeader: __parseClientReuseManifestHeader," : ""}

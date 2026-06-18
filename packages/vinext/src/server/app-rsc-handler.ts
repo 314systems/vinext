@@ -306,6 +306,7 @@ type CreateAppRscHandlerOptions<TRoute extends AppRscHandlerRoute> = {
     options: HandleProgressiveActionRequestOptions,
   ) => Promise<Response | ProgressiveActionFormStateResult | null>;
   handleMetadataRouteRequest?: (cleanPathname: string) => Promise<Response | null>;
+  handlePrerenderEndpoint?: typeof import("./app-prerender-endpoints.js").handleAppPrerenderEndpoint;
   createPprFallbackShells?: (
     route: Pick<AppRscHandlerRoute, "params" | "pattern" | "rootParamNames">,
     params: AppPageParams,
@@ -529,11 +530,11 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   const basePathState = { basePath: options.basePath, hadBasePath: true };
 
   if (
-    pathname === VINEXT_PRERENDER_STATIC_PARAMS_PATH ||
-    pathname === VINEXT_PRERENDER_PAGES_STATIC_PATHS_PATH
+    options.handlePrerenderEndpoint &&
+    (pathname === VINEXT_PRERENDER_STATIC_PARAMS_PATH ||
+      pathname === VINEXT_PRERENDER_PAGES_STATIC_PATHS_PATH)
   ) {
-    const { handleAppPrerenderEndpoint } = await import("./app-prerender-endpoints.js");
-    const prerenderEndpointResponse = await handleAppPrerenderEndpoint(request, {
+    const prerenderEndpointResponse = await options.handlePrerenderEndpoint(request, {
       isPrerenderEnabled() {
         return process.env.VINEXT_PRERENDER === "1";
       },

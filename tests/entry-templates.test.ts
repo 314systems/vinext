@@ -931,6 +931,7 @@ describe("App Router entry templates", () => {
     try {
       const forceDynamicRoute: AppRoute = {
         ...minimalAppRoutes[0],
+        isDynamic: true,
         layouts: [layoutPath],
         pagePath,
       };
@@ -955,8 +956,12 @@ describe("App Router entry templates", () => {
 
       expect(withoutPageCache).not.toContain("app-page-cache-runtime.js");
       expect(withoutPageCache).not.toContain("appPageCacheRuntime:");
+      expect(withoutPageCache).not.toContain("app-prerender-endpoints.js");
+      expect(withoutPageCache).not.toContain("handlePrerenderEndpoint:");
       expect(withPageCache).toContain("app-page-cache-runtime.js");
       expect(withPageCache).toContain("appPageCacheRuntime: __appPageCacheRuntime");
+      expect(withPageCache).toContain("app-prerender-endpoints.js");
+      expect(withPageCache).toContain("handlePrerenderEndpoint: __handleAppPrerenderEndpoint");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

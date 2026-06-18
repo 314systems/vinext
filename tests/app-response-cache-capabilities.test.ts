@@ -2,7 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { appRoutesNeedResponseCache } from "../packages/vinext/src/build/app-response-cache-capabilities.js";
+import {
+  appRoutesNeedResponseCache,
+  appRoutesNeedStaticParamsEndpoint,
+} from "../packages/vinext/src/build/app-response-cache-capabilities.js";
 import type { AppRoute } from "../packages/vinext/src/routing/app-router.js";
 
 const temporaryDirectories: string[] = [];
@@ -91,6 +94,52 @@ describe("appRoutesNeedResponseCache", () => {
     expect(
       appRoutesNeedResponseCache([
         makeRoute({ pagePath: "/missing/app/page.tsx", layouts: ["/missing/app/layout.tsx"] }),
+      ]),
+    ).toBe(true);
+  });
+});
+
+describe("appRoutesNeedStaticParamsEndpoint", () => {
+  it("omits the endpoint when dynamic route modules have no generateStaticParams export", () => {
+    const layoutPath = writeRouteFile("app/layout.tsx", "export default function Layout() {}");
+    const pagePath = writeRouteFile("app/[slug]/page.tsx", "export default function Page() {}");
+
+    expect(
+      appRoutesNeedStaticParamsEndpoint([
+        makeRoute({ isDynamic: true, layouts: [layoutPath], pagePath }),
+      ]),
+    ).toBe(false);
+  });
+
+  it("retains the endpoint for layout, page, and route-handler exports", () => {
+    const layoutPath = writeRouteFile(
+      "app/[lang]/layout.tsx",
+      "export function generateStaticParams() { return []; }",
+    );
+    const pagePath = writeRouteFile(
+      "app/[slug]/page.tsx",
+      "export const generateStaticParams = () => [];",
+    );
+    const routePath = writeRouteFile(
+      "app/api/[id]/route.ts",
+      "export { generateStaticParams } from './params';",
+    );
+
+    expect(
+      appRoutesNeedStaticParamsEndpoint([makeRoute({ isDynamic: true, layouts: [layoutPath] })]),
+    ).toBe(true);
+    expect(appRoutesNeedStaticParamsEndpoint([makeRoute({ isDynamic: true, pagePath })])).toBe(
+      true,
+    );
+    expect(appRoutesNeedStaticParamsEndpoint([makeRoute({ isDynamic: true, routePath })])).toBe(
+      true,
+    );
+  });
+
+  it("retains the endpoint when a dynamic route module cannot be inspected", () => {
+    expect(
+      appRoutesNeedStaticParamsEndpoint([
+        makeRoute({ isDynamic: true, pagePath: "/missing/app/[slug]/page.tsx" }),
       ]),
     ).toBe(true);
   });

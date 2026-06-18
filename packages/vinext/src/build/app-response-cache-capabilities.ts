@@ -78,3 +78,36 @@ export function appRoutesNeedResponseCache(routes: readonly AppRoute[]): boolean
       (route.routePath !== null && routeHandlerCanUseResponseCache(route.routePath, sourceCache)),
   );
 }
+
+function routeModulePaths(route: AppRoute): string[] {
+  return [
+    ...route.layouts,
+    route.pagePath,
+    route.routePath,
+    ...route.parallelSlots.flatMap((slot) => [slot.layoutPath, slot.pagePath, slot.defaultPath]),
+  ].filter((path): path is string => path !== null);
+}
+
+/**
+ * Returns whether the build-time prerender worker may need to invoke an App
+ * Router `generateStaticParams` export.
+ */
+export function appRoutesNeedStaticParamsEndpoint(routes: readonly AppRoute[]): boolean {
+  const sourceCache = new Map<string, string | null>();
+  const inspected = new Set<string>();
+
+  for (const route of routes) {
+    if (!route.isDynamic) continue;
+
+    for (const modulePath of routeModulePaths(route)) {
+      if (inspected.has(modulePath)) continue;
+      inspected.add(modulePath);
+      const source = readRouteSource(modulePath, sourceCache);
+      if (source === null || hasNamedExport(source, "generateStaticParams")) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
