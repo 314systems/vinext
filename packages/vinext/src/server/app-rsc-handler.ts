@@ -55,7 +55,10 @@ import {
   normalizeRscRequest,
   type ParseClientReuseManifestHeader,
 } from "./app-rsc-request-normalization.js";
-import { buildNextDataNotFoundResponse, normalizePagesDataRequest } from "./pages-data-route.js";
+import type {
+  buildNextDataNotFoundResponse,
+  normalizePagesDataRequest,
+} from "./pages-data-route.js";
 import { normalizeDefaultLocalePathname } from "./pages-i18n.js";
 import { notFoundResponse } from "./http-error-responses.js";
 import { getRenderedConcreteUrlPathsForRoute } from "./pregenerated-concrete-paths.js";
@@ -97,6 +100,7 @@ const STATIC_METADATA_CONFIG_HEADER_OVERRIDES = new Set(["cache-control"]);
 const HAS_CONFIG_HEADERS = process.env.__VINEXT_HAS_CONFIG_HEADERS !== "false";
 const HAS_CONFIG_REDIRECTS = process.env.__VINEXT_HAS_CONFIG_REDIRECTS !== "false";
 const HAS_CONFIG_REWRITES = process.env.__VINEXT_HAS_CONFIG_REWRITES !== "false";
+const HAS_PAGES_ROUTER = process.env.__VINEXT_HAS_PAGES_ROUTER !== "false";
 type StaticParamsMap = AppPrerenderStaticParamsMap;
 type RootParamNamesMap = AppPrerenderRootParamNamesMap;
 
@@ -315,6 +319,8 @@ type CreateAppRscHandlerOptions<TRoute extends AppRscHandlerRoute> = {
   loadPrerenderPagesRoutes?: () => Promise<unknown>;
   matchRoute: (pathname: string) => AppRscRouteMatch<TRoute> | null;
   parseClientReuseManifestHeader?: ParseClientReuseManifestHeader;
+  normalizePagesDataRequest?: typeof normalizePagesDataRequest;
+  buildNextDataNotFoundResponse?: typeof buildNextDataNotFoundResponse;
   runMiddleware?: (options: RunAppMiddlewareOptions) => Promise<ApplyAppMiddlewareResult>;
   publicFiles: ReadonlySet<string>;
   renderNotFound: (options: RenderNotFoundOptions<TRoute>) => Promise<Response | null>;
@@ -794,34 +800,36 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   }
 
   let match = preActionMatch;
-  const renderPagesForMatchKind = async (
-    matchKind: "dynamic" | "static",
-  ): Promise<Response | null> => {
-    const response =
-      match === null || match.route.isDynamic
-        ? ((await options.renderPagesFallback?.({
-            appRouteMatch: match ?? null,
-            allowRscDocumentFallback: didMiddlewareRewrite,
-            isDataRequest,
-            isRscRequest,
-            matchKind,
-            middlewareContext,
-            pathname: resolvedUrl,
-            pagesDataRequest,
-            request,
-            url,
-          })) ?? null)
-        : null;
-    if (!response || !pagesDataRequest || resolvedUrl === originalResolvedUrl) return response;
+  const renderPagesForMatchKind: (matchKind: "dynamic" | "static") => Promise<Response | null> =
+    HAS_PAGES_ROUTER
+      ? async (matchKind) => {
+          const response =
+            match === null || match.route.isDynamic
+              ? ((await options.renderPagesFallback?.({
+                  appRouteMatch: match ?? null,
+                  allowRscDocumentFallback: didMiddlewareRewrite,
+                  isDataRequest,
+                  isRscRequest,
+                  matchKind,
+                  middlewareContext,
+                  pathname: resolvedUrl,
+                  pagesDataRequest,
+                  request,
+                  url,
+                })) ?? null)
+              : null;
+          if (!response || !pagesDataRequest || resolvedUrl === originalResolvedUrl)
+            return response;
 
-    const headers = new Headers(response.headers);
-    headers.set("x-nextjs-rewrite", resolvedUrl);
-    return new Response(response.body, {
-      headers,
-      status: response.status,
-      statusText: response.statusText,
-    });
-  };
+          const headers = new Headers(response.headers);
+          headers.set("x-nextjs-rewrite", resolvedUrl);
+          return new Response(response.body, {
+            headers,
+            status: response.status,
+            statusText: response.statusText,
+          });
+        }
+      : async () => null;
   const staticPagesFallbackResponse = await renderPagesForMatchKind("static");
   if (staticPagesFallbackResponse) {
     options.clearRequestContext();
@@ -905,9 +913,9 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     }
   }
 
-  if (pagesDataRequest) {
+  if (HAS_PAGES_ROUTER && pagesDataRequest) {
     options.clearRequestContext();
-    return buildNextDataNotFoundResponse();
+    return options.buildNextDataNotFoundResponse!();
   }
 
   if (!match) {
@@ -1132,19 +1140,22 @@ export function createAppRscHandler<TRoute extends AppRscHandlerRoute>(
     // protocol needs to know whether the inbound request was a `_next/data`
     // fetch to emit `x-nextjs-redirect` instead of an HTTP redirect.
     const hasDataRequestHeader = rawRequest.headers.get("x-nextjs-data") === "1";
-    const pagesDataUrl = new URL(rawRequest.url);
-    const pagesDataInScope =
-      !options.basePath || hasBasePath(pagesDataUrl.pathname, options.basePath);
-    if (pagesDataInScope) {
-      pagesDataUrl.pathname = stripBasePath(pagesDataUrl.pathname, options.basePath);
-    }
-    const pagesDataCandidate = pagesDataInScope
-      ? cloneRequestWithUrl(rawRequest, pagesDataUrl.toString())
-      : null;
-    const pagesDataNormalization =
-      options.renderPagesFallback && pagesDataCandidate
-        ? normalizePagesDataRequest(pagesDataCandidate, options.buildId)
+    const pagesData =
+      HAS_PAGES_ROUTER && options.renderPagesFallback && options.normalizePagesDataRequest
+        ? (() => {
+            const pagesDataUrl = new URL(rawRequest.url);
+            const pagesDataInScope =
+              !options.basePath || hasBasePath(pagesDataUrl.pathname, options.basePath);
+            if (!pagesDataInScope) return null;
+            pagesDataUrl.pathname = stripBasePath(pagesDataUrl.pathname, options.basePath);
+            const request = cloneRequestWithUrl(rawRequest, pagesDataUrl.toString());
+            return {
+              normalization: options.normalizePagesDataRequest!(request, options.buildId),
+              request,
+            };
+          })()
         : null;
+    const pagesDataNormalization = pagesData?.normalization;
     if (pagesDataNormalization?.notFoundResponse) {
       return pagesDataNormalization.notFoundResponse;
     }
@@ -1172,11 +1183,11 @@ export function createAppRscHandler<TRoute extends AppRscHandlerRoute>(
     if (pagesDataNormalization?.isDataReq) {
       const appRequestUrl = new URL(pagesDataNormalization.request.url);
       appRequestUrl.pathname = addBasePathToPathname(appRequestUrl.pathname, options.basePath);
-      appRequest = cloneRequestWithUrl(pagesDataCandidate!, appRequestUrl.toString());
+      appRequest = cloneRequestWithUrl(pagesData!.request, appRequestUrl.toString());
     }
     const request = cloneRequestWithHeaders(appRequest, filteredHeaders);
     const pagesDataRequest = pagesDataNormalization?.isDataReq
-      ? cloneRequestWithHeaders(pagesDataCandidate!, filteredHeaders)
+      ? cloneRequestWithHeaders(pagesData!.request, filteredHeaders)
       : null;
 
     const executionContext = isExecutionContextLike(ctx)

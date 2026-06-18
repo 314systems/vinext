@@ -143,6 +143,9 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
 
     expect(code).toContain("renderPagesFallback as __renderPagesFallback");
     expect(code).toContain("server/app-pages-bridge.js");
+    expect(code).toContain("server/pages-data-route.js");
+    expect(code).toContain("normalizePagesDataRequest: __normalizePagesDataRequest");
+    expect(code).toContain("buildNextDataNotFoundResponse: __buildNextDataNotFoundResponse");
     expect(code).toContain("return __renderPagesFallback(");
     expect(code).toContain("pagesDataRequest");
     expect(code).toContain('return import.meta.viteRsc.loadModule("ssr", "index");');
@@ -160,6 +163,7 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
     });
 
     expect(appOnlyCode).toContain("export const __hasPagesDir = false;");
+    expect(appOnlyCode).not.toContain("server/pages-data-route.js");
     expect(hybridCode).toContain("export const __hasPagesDir = true;");
   });
 

@@ -18,6 +18,10 @@ import {
 import { VINEXT_CLIENT_REUSE_MANIFEST_HEADER } from "../packages/vinext/src/server/headers.js";
 import { applyAppMiddleware } from "../packages/vinext/src/server/app-middleware.js";
 import {
+  buildNextDataNotFoundResponse,
+  normalizePagesDataRequest,
+} from "../packages/vinext/src/server/pages-data-route.js";
+import {
   handleMetadataRouteRequest,
   type MetadataRuntimeRoute,
 } from "../packages/vinext/src/server/metadata-route-response.js";
@@ -112,6 +116,12 @@ function createHandler(overrides: Partial<TestHandlerOptions> = {}) {
           : null),
     parseClientReuseManifestHeader:
       overrides.parseClientReuseManifestHeader ?? parseClientReuseManifestHeader,
+    normalizePagesDataRequest:
+      overrides.normalizePagesDataRequest ??
+      (overrides.renderPagesFallback ? normalizePagesDataRequest : undefined),
+    buildNextDataNotFoundResponse:
+      overrides.buildNextDataNotFoundResponse ??
+      (overrides.renderPagesFallback ? buildNextDataNotFoundResponse : undefined),
     runMiddleware:
       overrides.runMiddleware ??
       (overrides.middlewareModule

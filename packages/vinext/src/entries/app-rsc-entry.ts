@@ -111,6 +111,7 @@ const appHookWarningSuppressionPath = resolveEntryPath(
 );
 const serverGlobalsPath = resolveEntryPath("../server/server-globals.js", import.meta.url);
 const appPagesBridgePath = resolveEntryPath("../server/app-pages-bridge.js", import.meta.url);
+const pagesDataRoutePath = resolveEntryPath("../server/pages-data-route.js", import.meta.url);
 const clientReuseManifestPath = resolveEntryPath(
   "../server/client-reuse-manifest.js",
   import.meta.url,
@@ -445,7 +446,11 @@ function _getSSRFontPreloads() { return [${
 ${
   hasPagesDir
     ? `// Pages Router routes are loaded lazily from the SSR environment for internal prerender requests.
-import { renderPagesFallback as __renderPagesFallback } from ${JSON.stringify(appPagesBridgePath)};`
+import { renderPagesFallback as __renderPagesFallback } from ${JSON.stringify(appPagesBridgePath)};
+import {
+  buildNextDataNotFoundResponse as __buildNextDataNotFoundResponse,
+  normalizePagesDataRequest as __normalizePagesDataRequest,
+} from ${JSON.stringify(pagesDataRoutePath)};`
     : ""
 }
 
@@ -1176,6 +1181,8 @@ export default createAppRscHandler({
       : ""
   }
   matchRoute,
+  ${hasPagesDir ? `normalizePagesDataRequest: __normalizePagesDataRequest,` : ""}
+  ${hasPagesDir ? `buildNextDataNotFoundResponse: __buildNextDataNotFoundResponse,` : ""}
   ${
     middlewarePath
       ? `runMiddleware({ cleanPathname, context, isDataRequest, request }) {
