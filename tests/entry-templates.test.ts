@@ -393,17 +393,12 @@ describe("App Router generated manifest construction", () => {
     expect(manifest.globalErrorVar).toBe("mod_15");
 
     const dynamicRouteEntry = manifest.routeEntries[1];
-    expect(dynamicRouteEntry).toContain('"route":"route:/dashboard/:id"');
-    expect(dynamicRouteEntry).toContain(
-      '"modal:/tmp/test/app/dashboard/@modal":"slot:modal:/dashboard"',
-    );
+    expect(dynamicRouteEntry).toContain("\n    true,");
     expect(dynamicRouteEntry).toContain('id: "slot:modal:/dashboard"');
-    expect(dynamicRouteEntry).toContain('pattern: "/dashboard/:id"');
-    expect(dynamicRouteEntry).toContain("page: null");
-    expect(dynamicRouteEntry).toContain("__loadPage: load_1");
-    expect(dynamicRouteEntry).toContain("routeHandler: null");
-    expect(dynamicRouteEntry).toContain("__loadRouteHandler: load_2");
-    expect(dynamicRouteEntry).toContain("layouts: [mod_0, mod_4]");
+    expect(dynamicRouteEntry).toContain('\n    "/dashboard/:id",');
+    expect(dynamicRouteEntry).toContain("\n    load_1,");
+    expect(dynamicRouteEntry).toContain("\n    load_2,");
+    expect(dynamicRouteEntry).toContain("\n    [mod_0, mod_4],");
     expect(dynamicRouteEntry).toContain('"modal:/tmp/test/app/dashboard/@modal": {');
     expect(dynamicRouteEntry).toContain("interceptLayouts: [mod_14]");
     expect(dynamicRouteEntry).toContain("page: null");
@@ -623,18 +618,14 @@ describe("App Router generated manifest construction", () => {
       });
 
       const routeEntry = manifest.routeEntries.find((entry) =>
-        entry.includes('pattern: "/blog/:slug"'),
+        entry.includes('\n    "/blog/:slug",'),
       );
 
       expect(routeEntry).toBeDefined();
       expect(routeEntry).not.toContain(appDir);
-      expect(routeEntry).toContain('"route":"route:/blog/:slug"');
-      expect(routeEntry).toContain('"page":"page:/blog/:slug"');
-      expect(routeEntry).toContain('"layout:/(marketing)/blog/[slug]"');
-      expect(routeEntry).toContain('"template:/(marketing)/blog/[slug]"');
-      expect(routeEntry).toContain(
-        '"modal@(marketing)/blog/[slug]/@modal":"slot:modal:/(marketing)/blog/[slug]"',
-      );
+      expect(routeEntry).toContain("\n    true,");
+      expect(routeEntry).toContain('\n    "/blog/:slug",');
+      expect(routeEntry).toContain('["(marketing)","blog","[slug]"]');
       expect(routeEntry).toContain('id: "slot:modal:/(marketing)/blog/[slug]"');
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -823,6 +814,14 @@ describe("App Router entry templates", () => {
     const code = generateRscEntry("/tmp/test/app", minimalAppRoutes, null, [], null, "", false);
 
     expect(code).toContain('import { createAppRscHandler } from "vinext/server/app-rsc-handler";');
+    expect(code).toContain("function __createRoute(");
+    expect(code).toContain("__buildTimeClassifications: __VINEXT_CLASS(routeIdx)");
+    expect(code).toContain("__loadRouteHandler: loadRouteHandler");
+    expect(code).toContain('route: "route:" + pattern');
+    expect(code).toContain(
+      'layouts: layoutTreePositions.map((position) => treeId("layout:", position))',
+    );
+    expect(code).toContain("Object.entries(slots).map(([key, slot]) => [key, slot.id])");
     expect(code).toContain("export default createAppRscHandler({");
     expect(code).not.toContain("computeRscCacheBustingSearchParam(");
   });

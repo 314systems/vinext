@@ -550,6 +550,77 @@ function __VINEXT_CLASS_REASONS(routeIdx) {
   return null;
 }
 
+function __createRoute(
+  routeIdx,
+  hasIds,
+  pattern,
+  patternParts,
+  isDynamic,
+  params,
+  staticSiblings,
+  rootParamNames,
+  loadPage,
+  loadRouteHandler,
+  layouts,
+  routeSegments,
+  layoutTreePositions,
+  details = {},
+) {
+  const templateTreePositions = details.tp ?? [];
+  const slots = details.sl ?? {};
+  const treeId = (prefix, treePosition) => {
+    const segments = routeSegments.slice(0, treePosition);
+    return prefix + (segments.length === 0 ? "/" : "/" + segments.join("/"));
+  };
+  const ids = hasIds
+    ? {
+        route: "route:" + pattern,
+        page: loadPage ? "page:" + pattern : null,
+        routeHandler: loadRouteHandler ? "route-handler:" + pattern : null,
+        rootBoundary:
+          layouts.length > 0 ? treeId("root-boundary:", layoutTreePositions[0]) : null,
+        layouts: layoutTreePositions.map((position) => treeId("layout:", position)),
+        templates: templateTreePositions.map((position) => treeId("template:", position)),
+        slots: Object.fromEntries(
+          Object.entries(slots).map(([key, slot]) => [key, slot.id]),
+        ),
+      }
+    : null;
+  return {
+    __buildTimeClassifications: __VINEXT_CLASS(routeIdx),
+    __buildTimeReasons: __classDebug ? __VINEXT_CLASS_REASONS(routeIdx) : null,
+    ids,
+    pattern,
+    patternParts,
+    isDynamic,
+    params,
+    staticSiblings,
+    rootParamNames,
+    page: null,
+    __loadPage: loadPage,
+    routeHandler: null,
+    __loadRouteHandler: loadRouteHandler,
+    layouts,
+    routeSegments,
+    templateTreePositions,
+    layoutTreePositions,
+    templates: details.t ?? [],
+    errors: details.e ?? Array(layouts.length).fill(null),
+    errorPaths: details.ep ?? [],
+    errorTreePositions: details.et === undefined ? [] : details.et,
+    slots,
+    siblingIntercepts: details.si ?? [],
+    loading: details.l ?? null,
+    error: details.er ?? null,
+    notFound: details.nf ?? null,
+    notFounds: details.nfs ?? Array(layouts.length).fill(null),
+    forbidden: details.f ?? null,
+    forbiddens: details.fs ?? Array(layouts.length).fill(null),
+    unauthorized: details.u ?? null,
+    unauthorizeds: details.us ?? Array(layouts.length).fill(null),
+  };
+}
+
 const routes = [
 ${routeEntries.join(",\n")}
 ];

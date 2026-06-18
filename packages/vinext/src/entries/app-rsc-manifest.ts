@@ -277,43 +277,62 @@ ${interceptEntries.join(",\n")}
     const loadRouteHandlerField = route.routePath
       ? imports.getLazyLoaderVar(route.routePath)
       : "null";
-    return `  {
-    __buildTimeClassifications: __VINEXT_CLASS(${routeIdx}), // evaluated once at module load
-    __buildTimeReasons: __classDebug ? __VINEXT_CLASS_REASONS(${routeIdx}) : null,
-    ids: ${JSON.stringify(route.ids ?? null)},
-    pattern: ${JSON.stringify(route.pattern)},
-    patternParts: ${JSON.stringify(route.patternParts)},
-    isDynamic: ${route.isDynamic},
-    params: ${JSON.stringify(route.params)},
-    staticSiblings: ${JSON.stringify(staticSiblings)},
-    rootParamNames: ${JSON.stringify(route.rootParamNames ?? [])},
-    page: null,
-    __loadPage: ${loadPageField},
-    routeHandler: null,
-    __loadRouteHandler: ${loadRouteHandlerField},
-    layouts: [${layoutVars.join(", ")}],
-    routeSegments: ${JSON.stringify(route.routeSegments)},
-    templateTreePositions: ${JSON.stringify(route.templateTreePositions)},
-    layoutTreePositions: ${JSON.stringify(route.layoutTreePositions)},
-    templates: [${templateVars.join(", ")}],
-    errors: [${layoutErrorVars.join(", ")}],
-    errorPaths: [${errorVars.join(", ")}],
-    errorTreePositions: ${JSON.stringify(route.errorTreePositions ?? null)},
-    slots: {
+    const details: string[] = [];
+    if ((route.templateTreePositions?.length ?? 0) > 0) {
+      details.push(`tp: ${JSON.stringify(route.templateTreePositions)}`);
+    }
+    if (templateVars.length > 0) details.push(`t: [${templateVars.join(", ")}]`);
+    if (layoutErrorVars.some((value) => value !== "null")) {
+      details.push(`e: [${layoutErrorVars.join(", ")}]`);
+    }
+    if (errorVars.length > 0) details.push(`ep: [${errorVars.join(", ")}]`);
+    if (route.errorTreePositions === undefined) {
+      details.push("et: null");
+    } else if (route.errorTreePositions.length > 0) {
+      details.push(`et: ${JSON.stringify(route.errorTreePositions)}`);
+    }
+    if (slotEntries.length > 0) {
+      details.push(`sl: {
 ${slotEntries.join(",\n")}
-    },
-    siblingIntercepts: [
+    }`);
+    }
+    if (siblingInterceptEntries.length > 0) {
+      details.push(`si: [
 ${siblingInterceptEntries.join(",\n")}
-    ],
-    loading: ${route.loadingPath ? imports.getImportVar(route.loadingPath) : "null"},
-    error: ${route.errorPath ? imports.getImportVar(route.errorPath) : "null"},
-    notFound: ${route.notFoundPath ? imports.getImportVar(route.notFoundPath) : "null"},
-    notFounds: [${notFoundVars.join(", ")}],
-    forbidden: ${route.forbiddenPath ? imports.getImportVar(route.forbiddenPath) : "null"},
-    forbiddens: [${forbiddenVars.join(", ")}],
-    unauthorized: ${route.unauthorizedPath ? imports.getImportVar(route.unauthorizedPath) : "null"},
-    unauthorizeds: [${unauthorizedVars.join(", ")}],
-  }`;
+    ]`);
+    }
+    if (route.loadingPath) details.push(`l: ${imports.getImportVar(route.loadingPath)}`);
+    if (route.errorPath) details.push(`er: ${imports.getImportVar(route.errorPath)}`);
+    if (route.notFoundPath) details.push(`nf: ${imports.getImportVar(route.notFoundPath)}`);
+    if (notFoundVars.some((value) => value !== "null")) {
+      details.push(`nfs: [${notFoundVars.join(", ")}]`);
+    }
+    if (route.forbiddenPath) details.push(`f: ${imports.getImportVar(route.forbiddenPath)}`);
+    if (forbiddenVars.some((value) => value !== "null")) {
+      details.push(`fs: [${forbiddenVars.join(", ")}]`);
+    }
+    if (route.unauthorizedPath) {
+      details.push(`u: ${imports.getImportVar(route.unauthorizedPath)}`);
+    }
+    if (unauthorizedVars.some((value) => value !== "null")) {
+      details.push(`us: [${unauthorizedVars.join(", ")}]`);
+    }
+    return `  __createRoute(
+    ${routeIdx},
+    ${route.ids ? "true" : "false"},
+    ${JSON.stringify(route.pattern)},
+    ${JSON.stringify(route.patternParts)},
+    ${route.isDynamic},
+    ${JSON.stringify(route.params)},
+    ${JSON.stringify(staticSiblings)},
+    ${JSON.stringify(route.rootParamNames ?? [])},
+    ${loadPageField},
+    ${loadRouteHandlerField},
+    [${layoutVars.join(", ")}],
+    ${JSON.stringify(route.routeSegments)},
+    ${JSON.stringify(route.layoutTreePositions)},
+    {${details.length > 0 ? `\n      ${details.join(",\n      ")}\n    ` : ""}},
+  )`;
   });
 }
 
