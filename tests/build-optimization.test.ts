@@ -3503,6 +3503,7 @@ describe("createRscFrameworkChunkOutputConfig", () => {
     expect(config).not.toHaveProperty("manualChunks");
     expect(config).toEqual({
       codeSplitting: {
+        minSize: 40_000,
         groups: [
           {
             name: "framework",
@@ -3516,6 +3517,7 @@ describe("createRscFrameworkChunkOutputConfig", () => {
     // Vite 9+ uses the same Rolldown shape.
     expect(createRscFrameworkChunkOutputConfig(9)).toEqual({
       codeSplitting: {
+        minSize: 40_000,
         groups: [
           {
             name: "framework",

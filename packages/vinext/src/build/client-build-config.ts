@@ -266,6 +266,11 @@ export function createRscFrameworkChunkOutputConfig(viteMajorVersion: number) {
   if (viteMajorVersion >= 8) {
     return {
       codeSplitting: {
+        // Merge undersized shared RSC runtime chunks when Rolldown can do so
+        // without crossing dynamic entry boundaries. Route-owned page chunks
+        // remain lazy entries; this primarily avoids mixed framework/runtime
+        // fragments that restart compression for a few kilobytes of code.
+        minSize: 40_000,
         groups: [
           {
             name: "framework",
