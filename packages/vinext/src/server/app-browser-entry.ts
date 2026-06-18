@@ -88,10 +88,6 @@ import {
 } from "./app-browser-navigation-controller.js";
 import { AppBrowserMpaNavigationScheduler } from "./app-browser-mpa-navigation.js";
 import {
-  resolveManifestNavigationInterceptionContext,
-  resolveMiddlewareRewriteNavigationInterceptionContext,
-} from "./app-browser-interception-context.js";
-import {
   createDiscardedServerActionRefreshScheduler,
   createServerActionInitiationSnapshot,
   createServerActionResultFacts,
@@ -112,7 +108,6 @@ import {
 import {
   AppElementsWire,
   getMountedSlotIdsHeader,
-  resolveVisitedResponseInterceptionContext,
   type AppElements,
   type AppWireElements,
 } from "./app-elements.js";
@@ -131,11 +126,7 @@ import {
   type OperationLane,
 } from "./app-browser-state.js";
 import { AppBrowserHistoryController } from "./app-browser-history-controller.js";
-import {
-  createVisitedResponseCacheEntry,
-  isVisitedResponseCacheEntryFresh,
-  type VisitedResponseCacheEntry,
-} from "./app-visited-response-cache.js";
+import type { VisitedResponseCacheEntry } from "./app-visited-response-cache.js";
 import {
   createPopstateRestoreHandler,
   restoreSynchronousPopstateScrollPosition,
@@ -159,7 +150,6 @@ import {
   clearAppNavigationFailureTarget,
   installAppNavigationFailureListeners,
 } from "../client/app-nav-failure-handler.js";
-import { createClientReuseManifestHeaderFromVisibleAppState } from "./app-browser-client-reuse-manifest.js";
 import {
   devOnCaughtError,
   dismissOverlay,
@@ -178,14 +168,7 @@ import {
   VINEXT_RSC_CONTENT_TYPE,
 } from "./app-rsc-cache-busting.js";
 import { APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI } from "./app-rsc-render-mode.js";
-import { blockDangerousStreamedRscRedirect } from "./app-browser-rsc-redirect.js";
-import {
-  createOptimisticRouteTemplate,
-  getOptimisticPrefetchSourceKey,
-  getOptimisticRouteTemplateKey,
-  resolveOptimisticNavigationPayload,
-  type OptimisticRouteTemplate,
-} from "./app-optimistic-routing.js";
+import type { OptimisticRouteTemplate } from "./app-browser-navigation-support.js";
 import {
   ACTION_REDIRECT_HEADER,
   ACTION_REDIRECT_STATUS_HEADER,
@@ -202,6 +185,7 @@ import type {
 
 type SearchParamInput = ConstructorParameters<typeof URLSearchParams>[0];
 type NavigationPlanner = typeof import("./navigation-planner.js").navigationPlanner;
+type AppBrowserNavigationSupport = typeof import("./app-browser-navigation-support.js");
 
 type ServerActionResult = AppBrowserServerActionResult<AppWireElements>;
 
@@ -239,6 +223,25 @@ const CLIENT_RSC_COMPATIBILITY_ID = getVinextRscCompatibilityId();
 const optimisticRouteTemplates = new Map<string, OptimisticRouteTemplate>();
 const optimisticRouteTemplateSources = new Set<string>();
 const optimisticRouteTemplateLearning = new Map<string, Promise<void>>();
+let appBrowserNavigationSupport: AppBrowserNavigationSupport | null = null;
+let appBrowserNavigationSupportPromise: Promise<AppBrowserNavigationSupport> | null = null;
+
+function loadAppBrowserNavigationSupport(): Promise<AppBrowserNavigationSupport> {
+  appBrowserNavigationSupportPromise ??= import("./app-browser-navigation-support.js").then(
+    (support) => {
+      appBrowserNavigationSupport = support;
+      return support;
+    },
+  );
+  return appBrowserNavigationSupportPromise;
+}
+
+function getAppBrowserNavigationSupport(): AppBrowserNavigationSupport {
+  if (appBrowserNavigationSupport === null) {
+    throw new Error("[vinext] App Router navigation support was not loaded");
+  }
+  return appBrowserNavigationSupport;
+}
 
 function claimInitialAppRouterBootstrap(): boolean {
   if (window.__VINEXT_RSC_ROOT__ || window.__VINEXT_RSC_BOOTSTRAP_STATE__) {
@@ -263,6 +266,9 @@ function loadBrowserNavigationDependenciesIfNeeded(): Promise<unknown> | null {
   }
   if (!isClientNavigationPlannerModuleLoaded()) {
     loads.push(loadClientNavigationPlannerModule());
+  }
+  if (appBrowserNavigationSupport === null) {
+    loads.push(loadAppBrowserNavigationSupport());
   }
   return loads.length === 0 ? null : Promise.all(loads);
 }
@@ -477,7 +483,7 @@ async function learnOptimisticRouteTemplateFromPrefetch(options: {
   const elements = await decodeAppElementsPromise(
     createFromFetch<AppWireElements>(Promise.resolve(restoreRscResponse(options.entry.snapshot))),
   );
-  const template = createOptimisticRouteTemplate({
+  const template = getAppBrowserNavigationSupport().createOptimisticRouteTemplate({
     allowLoadingShell: options.entry.optimisticRouteShell === true,
     basePath: __basePath,
     elements,
@@ -489,7 +495,7 @@ async function learnOptimisticRouteTemplateFromPrefetch(options: {
   if (template === null) return false;
 
   optimisticRouteTemplates.set(
-    getOptimisticRouteTemplateKey({
+    getAppBrowserNavigationSupport().getOptimisticRouteTemplateKey({
       interceptionContext: options.interceptionContext,
       mountedSlotsHeader: options.mountedSlotsHeader,
       routeId: template.routeId,
@@ -508,7 +514,7 @@ async function learnOptimisticRouteTemplatesFromPrefetchCache(options: {
 
   const learning: Promise<void>[] = [...optimisticRouteTemplateLearning.values()];
   for (const [cacheKey, entry] of getPrefetchCache()) {
-    const sourceKey = getOptimisticPrefetchSourceKey({
+    const sourceKey = getAppBrowserNavigationSupport().getOptimisticPrefetchSourceKey({
       cacheKey,
       interceptionContext: options.interceptionContext,
       mountedSlotsHeader: options.mountedSlotsHeader,
@@ -767,7 +773,7 @@ function readVisitedResponseCacheCandidate(
     entry: cached,
     facts: {
       candidate: "present",
-      fresh: isVisitedResponseCacheEntryFresh(cached, {
+      fresh: getAppBrowserNavigationSupport().isVisitedResponseCacheEntryFresh(cached, {
         navigationKind,
         now: Date.now(),
       }),
@@ -817,7 +823,7 @@ function storeVisitedResponseSnapshot(
   const now = Date.now();
   visitedResponseCache.set(
     cacheKey,
-    createVisitedResponseCacheEntry({
+    getAppBrowserNavigationSupport().createVisitedResponseCacheEntry({
       now,
       params,
       response: snapshot,
@@ -872,12 +878,13 @@ function getRequestState(
           previousNextUrl: currentPreviousNextUrl,
         };
       }
-      const manifestInterceptionContext = resolveManifestNavigationInterceptionContext({
-        basePath: __basePath,
-        currentPathname: window.location.pathname,
-        routeManifest: getBrowserRouteManifest(),
-        targetPathname,
-      });
+      const manifestInterceptionContext =
+        getAppBrowserNavigationSupport().resolveManifestNavigationInterceptionContext({
+          basePath: __basePath,
+          currentPathname: window.location.pathname,
+          routeManifest: getBrowserRouteManifest(),
+          targetPathname,
+        });
       if (manifestInterceptionContext !== null) {
         return {
           interceptionContext: manifestInterceptionContext,
@@ -897,7 +904,7 @@ function getRequestState(
       // context, to preserve prefetch cache reuse for ordinary navigations
       // where interception cannot apply.
       const middlewareRewriteInterceptionContext =
-        resolveMiddlewareRewriteNavigationInterceptionContext({
+        getAppBrowserNavigationSupport().resolveMiddlewareRewriteNavigationInterceptionContext({
           basePath: __basePath,
           currentPathname: window.location.pathname,
           routeManifest: getBrowserRouteManifest(),
@@ -2029,14 +2036,15 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
           if (!browserNavigationController.isCurrentNavigation(navId)) return;
 
           if (routeManifest !== null) {
-            const optimisticPayload = resolveOptimisticNavigationPayload({
-              basePath: __basePath,
-              href: currentHref,
-              interceptionContext: requestInterceptionContext,
-              mountedSlotsHeader,
-              routeManifest,
-              templates: optimisticRouteTemplates,
-            });
+            const optimisticPayload =
+              getAppBrowserNavigationSupport().resolveOptimisticNavigationPayload({
+                basePath: __basePath,
+                href: currentHref,
+                interceptionContext: requestInterceptionContext,
+                mountedSlotsHeader,
+                routeManifest,
+                templates: optimisticRouteTemplates,
+              });
 
             if (optimisticPayload !== null) {
               detachedNavigationCommits = true;
@@ -2083,7 +2091,9 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
           // the request would have carried if produced earlier.
           if (navigationKind === "navigate") {
             const clientReuseManifestHeader =
-              createClientReuseManifestHeaderFromVisibleAppState(routerStateAtNavStart);
+              getAppBrowserNavigationSupport().createClientReuseManifestHeaderFromVisibleAppState(
+                routerStateAtNavStart,
+              );
             if (clientReuseManifestHeader !== null) {
               requestHeaders.set(VINEXT_CLIENT_REUSE_MANIFEST_HEADER, clientReuseManifestHeader);
             }
@@ -2099,7 +2109,12 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
 
         const navContentType = navResponse.headers.get("content-type") ?? "";
         const streamedRedirectTarget = navResponse.headers.get(VINEXT_RSC_REDIRECT_HEADER);
-        if (blockDangerousStreamedRscRedirect(navResponse, streamedRedirectTarget)) {
+        if (
+          getAppBrowserNavigationSupport().blockDangerousStreamedRscRedirect(
+            navResponse,
+            streamedRedirectTarget,
+          )
+        ) {
           return;
         }
         const liveFetchDecision = navigationPlanner.classifyRscFetchResult({
@@ -2227,7 +2242,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
           const cacheBuffer = await cacheBufferPromise;
           storeVisitedResponseSnapshot(
             rscUrl,
-            resolveVisitedResponseInterceptionContext(
+            getAppBrowserNavigationSupport().resolveVisitedResponseInterceptionContext(
               requestInterceptionContext,
               metadata.interceptionContext,
             ),

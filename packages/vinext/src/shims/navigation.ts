@@ -14,59 +14,31 @@ import * as React from "react";
 import {
   getNavigationRuntime,
   hasAppNavigationRuntime,
-  loadNavigationRuntimeRouteManifest,
   type NavigationRuntimeVisibleCommitMode,
 } from "../client/navigation-runtime.js";
-import {
-  getClientNavigationPlannerModule,
-  loadClientNavigationPlannerModule,
-} from "../client/navigation-planner-runtime.js";
-import { notifyAppRouterTransitionStart } from "../client/instrumentation-client-state.js";
-import {
-  clearAppNavigationFailureTarget,
-  stageAppNavigationFailureTarget,
-} from "../client/app-nav-failure-handler.js";
 import { INITIAL_BFCACHE_ID, PUBLIC_INITIAL_BFCACHE_ID } from "../server/app-bfcache-id.js";
 import { AppElementsWire } from "../server/app-elements.js";
 import { resolveManifestNavigationInterceptionContext } from "../server/app-browser-interception-context.js";
+import { createExternalHistoryStatePreservingMetadata } from "../server/app-history-state.js";
 import {
-  createExternalHistoryStatePreservingMetadata,
-  createHashOnlyHistoryStatePreservingNavigationMetadata,
-} from "../server/app-history-state.js";
-import {
-  createRscRequestHeaders,
-  createRscRequestUrl,
   stripRscCacheBustingSearchParam,
   VINEXT_RSC_COMPATIBILITY_ID_HEADER,
   VINEXT_RSC_CONTENT_TYPE,
 } from "../server/app-rsc-cache-busting.js";
-import { hasPendingAppRouterPageRedirect } from "../server/app-browser-mpa-navigation.js";
 import {
   VINEXT_DYNAMIC_STALE_TIME_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_PARAMS_HEADER,
 } from "../server/headers.js";
-import {
-  isAbsoluteOrProtocolRelativeUrl,
-  toBrowserNavigationHref,
-  toSameOriginAppPath,
-  withBasePath,
-} from "./url-utils.js";
+import { isAbsoluteOrProtocolRelativeUrl, toSameOriginAppPath, withBasePath } from "./url-utils.js";
 import { stripBasePath } from "../utils/base-path.js";
 import { ReadonlyURLSearchParams } from "./readonly-url-search-params.js";
 import { assertSafeNavigationUrl } from "./url-safety.js";
 import { markPprFallbackShellDynamicBoundary } from "./ppr-fallback-shell.js";
 import { AppRouterContext, type AppRouterInstance } from "./internal/app-router-context.js";
 import { getPagesNavigationContext as _getPagesNavigationContext } from "./internal/pages-router-accessor.js";
-import { resolveHybridClientRouteOwner } from "./internal/hybrid-client-route-owner.js";
 import { retryScrollTo, scrollToHashTarget } from "./hash-scroll.js";
-import {
-  beginAppRouterScrollIntent,
-  clearAppRouterScrollIntent,
-  consumeAppRouterScrollIntent,
-  getPendingAppRouterScrollIntent,
-  type AppRouterScrollIntent,
-} from "./app-router-scroll-state.js";
+import type { AppRouterScrollIntent } from "./app-router-scroll-state.js";
 import {
   clearClientHydrationContext,
   getBfcacheIdMapContext,
@@ -570,7 +542,7 @@ function addPrefetchInvalidationCallback(
   entry.onInvalidateCallbacks.add(onInvalidate);
 }
 
-function attachPrefetchInvalidationCallback(
+export function attachPrefetchInvalidationCallback(
   cacheKey: string,
   onInvalidate: (() => void) | undefined,
 ): void {
@@ -1372,13 +1344,6 @@ export function useParams<
 }
 /* oxlint-enable eslint-plugin-react-hooks/rules-of-hooks */
 
-/**
- * Check if a href is an external URL (any URL scheme per RFC 3986, or protocol-relative).
- */
-function isExternalUrl(href: string): boolean {
-  return isAbsoluteOrProtocolRelativeUrl(href);
-}
-
 // ---------------------------------------------------------------------------
 // History method wrappers — suppress notifications for internal updates
 // ---------------------------------------------------------------------------
@@ -1491,21 +1456,6 @@ export function saveScrollPosition(): void {
   );
 }
 
-function commitHashOnlyHistoryState(href: string, mode: "push" | "replace", scroll: boolean): void {
-  const commitAppRouterHashNavigation = getNavigationRuntime()?.functions.commitHashNavigation;
-  if (commitAppRouterHashNavigation) {
-    commitAppRouterHashNavigation(href, mode, scroll);
-    return;
-  }
-
-  const historyState = createHashOnlyHistoryStatePreservingNavigationMetadata(window.history.state);
-  if (mode === "replace") {
-    replaceHistoryStateWithoutNotify(historyState, "", href);
-  } else {
-    pushHistoryStateWithoutNotify(historyState, "", href);
-  }
-}
-
 // Exported for direct unit coverage of the document-top fallback decision; not
 // part of the next/navigation public API. The fallback runs after a committed
 // navigation declined to consume its scroll intent (see navigateClientSide).
@@ -1531,15 +1481,6 @@ export function applyAppRouterScrollFallback(intent: AppRouterScrollIntent): voi
   }
 
   document.documentElement.scrollTop = 0;
-}
-
-function scheduleAppRouterScrollFallback(intent: AppRouterScrollIntent): void {
-  queueMicrotask(() => {
-    const pendingIntent = getPendingAppRouterScrollIntent();
-    if (pendingIntent === null || pendingIntent.id !== intent.id) return;
-    const fallbackIntent = consumeAppRouterScrollIntent(intent);
-    if (fallbackIntent) applyAppRouterScrollFallback(fallbackIntent);
-  });
 }
 
 /**
@@ -1584,17 +1525,13 @@ function restoreScrollPosition(state: unknown): void {
  * semantics. Used for URLs the App Router cannot serve (Pages-owned
  * targets in a hybrid build) and for catch-all RSC failures.
  */
-function hardNavigateTo(fullHref: string, mode: "push" | "replace"): void {
-  if (mode === "replace") {
-    window.location.replace(fullHref);
-  } else {
-    window.location.assign(fullHref);
-  }
+let clientActionsPromise: Promise<typeof import("./navigation-client-actions.js")> | null = null;
+
+function loadClientActions(): Promise<typeof import("./navigation-client-actions.js")> {
+  clientActionsPromise ??= import("./navigation-client-actions.js");
+  return clientActionsPromise;
 }
 
-/**
- * Navigate to a URL, handling external URLs, hash-only changes, and RSC navigation.
- */
 export async function navigateClientSide(
   href: string,
   mode: "push" | "replace",
@@ -1602,149 +1539,13 @@ export async function navigateClientSide(
   programmaticTransition = false,
   visibleCommitMode: NavigationRuntimeVisibleCommitMode = "transition",
 ): Promise<void> {
-  // Reset any link still showing a `useLinkStatus()` pending state that did not
-  // initiate this navigation (e.g. a programmatic router.push or form submit).
-  // A <Link> click registers itself first, so the hook keeps that link pending.
-  getNavigationRuntime()?.functions.notifyLinkNavigationStart?.();
-
-  // Normalize same-origin absolute URLs to local paths for SPA navigation
-  let normalizedHref = href;
-  if (isExternalUrl(href)) {
-    const localPath = toSameOriginAppPath(href, __basePath);
-    if (localPath == null) {
-      notifyAppRouterTransitionStart(href, mode);
-
-      const externalNavigate = getNavigationRuntime()?.functions.navigateExternal;
-      if (externalNavigate) {
-        await externalNavigate(href, mode);
-        return;
-      }
-
-      hardNavigateTo(href, mode);
-      await new Promise<void>(() => {});
-      return;
-    }
-    normalizedHref = localPath;
-  }
-
-  // Hybrid ownership: when both an App and a Pages route can match the
-  // destination, defer to the shared `compareHybridRoutePatterns` decision
-  // (the same logic the server uses for direct document loads). If Pages
-  // owns the URL, hard-navigate so the Pages handler renders the page
-  // instead of the App catch-all — soft-navigating through RSC would
-  // either return null (because `renderPagesFallback` short-circuits RSC
-  // requests) or render the App catch-all's path array. This is the
-  // programmatic equivalent of the link click / prefetch check in
-  // `link.tsx`.
-  const hybridOwner = resolveHybridClientRouteOwner(normalizedHref, __basePath);
-  if (hybridOwner === "pages" || hybridOwner === "document") {
-    const fullHref = toBrowserNavigationHref(normalizedHref, window.location.href, __basePath);
-    notifyAppRouterTransitionStart(fullHref, mode);
-    if (mode === "push") {
-      saveScrollPosition();
-    }
-    hardNavigateTo(fullHref, mode);
-    await new Promise<void>(() => {});
-    return;
-  }
-
-  const fullHref = toBrowserNavigationHref(normalizedHref, window.location.href, __basePath);
-  stageAppNavigationFailureTarget(fullHref);
-  // Match Next.js: App Router reports navigation start before dispatching,
-  // including hash-only navigations that short-circuit after URL update.
-  notifyAppRouterTransitionStart(fullHref, mode);
-
-  // Save scroll position before navigating (for back/forward restoration)
-  if (mode === "push") {
-    saveScrollPosition();
-  }
-
-  // The planner classifies the early navigation intent from the URL delta. A
-  // same-document scroll updates the URL and scrolls to the hash target without
-  // an RSC fetch; everything else proceeds to the RSC navigation below.
-  await loadClientNavigationPlannerModule();
-  const navigationPlanner = getClientNavigationPlannerModule().navigationPlanner;
-  const earlyIntent = navigationPlanner.classifyEarlyNavigationIntent({
-    basePath: __basePath,
-    currentHref: window.location.href,
+  return (await loadClientActions()).navigateClientSide(
+    href,
     mode,
     scroll,
-    targetHref: fullHref,
-  });
-  if (earlyIntent.kind === "sameDocumentScroll") {
-    clearAppRouterScrollIntent();
-    commitHashOnlyHistoryState(fullHref, earlyIntent.mode, earlyIntent.scroll);
-    clearAppNavigationFailureTarget(fullHref);
-    commitClientNavigationState();
-    if (earlyIntent.scroll) {
-      scrollToHashTarget(earlyIntent.hash);
-    }
-    return;
-  }
-
-  // Next.js treats a streamed redirect meta tag as an MPA-navigation marker.
-  // A soft RSC redirect would leave the source document alive long enough for
-  // the delayed meta refresh to fire and render the target a second time.
-  if (hasPendingAppRouterPageRedirect(typeof document === "undefined" ? undefined : document)) {
-    const mpaNavigate = getNavigationRuntime()?.functions.navigateExternal;
-    if (mpaNavigate) {
-      await mpaNavigate(fullHref, mode);
-      return;
-    }
-
-    hardNavigateTo(fullHref, mode);
-    await new Promise<void>(() => {});
-    return;
-  }
-
-  // Extract hash for post-navigation scrolling
-  const hashIdx = fullHref.indexOf("#");
-  const hash = hashIdx !== -1 ? fullHref.slice(hashIdx) : "";
-  const scrollIntent = scroll ? beginAppRouterScrollIntent(hash || null) : null;
-  if (!scroll) {
-    clearAppRouterScrollIntent();
-  }
-
-  // Trigger RSC re-fetch if available, and wait for the new content to render
-  // before scrolling. This prevents the old page from visibly jumping to the
-  // top before the new content paints.
-  //
-  // History is NOT pushed here for RSC navigations — the commit effect inside
-  // navigateRsc owns the push/replace exclusively. This avoids a fragile
-  // double-push and ensures window.location still reflects the *current* URL
-  // when navigateRsc publishes the committed URL.
-  const appNavigate = getNavigationRuntime()?.functions.navigate;
-  try {
-    if (appNavigate) {
-      await appNavigate(
-        fullHref,
-        0,
-        "navigate",
-        mode,
-        undefined,
-        programmaticTransition,
-        undefined,
-        scrollIntent,
-        visibleCommitMode,
-      );
-    } else {
-      if (mode === "replace") {
-        replaceHistoryStateWithoutNotify(null, "", fullHref);
-      } else {
-        pushHistoryStateWithoutNotify(null, "", fullHref);
-      }
-      commitClientNavigationState();
-    }
-  } catch (error) {
-    if (scrollIntent) {
-      consumeAppRouterScrollIntent(scrollIntent);
-    }
-    throw error;
-  }
-
-  if (scrollIntent) {
-    scheduleAppRouterScrollFallback(scrollIntent);
-  }
+    programmaticTransition,
+    visibleCommitMode,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1868,61 +1669,11 @@ const _appRouter: AppRouterInstance = {
     } catch {
       throw new Error(`Cannot prefetch '${href}' because it cannot be converted to a URL.`);
     }
-    void (async () => {
-      // Normalize same-origin absolute URLs to local paths; no-op for external
-      // origins so we don't pollute the prefetch cache with a same-path .rsc on
-      // the current origin. Mirrors Link's prefetchUrl and navigateClientSide.
-      let prefetchHref = href;
-      if (isAbsoluteOrProtocolRelativeUrl(href)) {
-        const localPath = toSameOriginAppPath(href, __basePath);
-        if (localPath == null) return;
-        prefetchHref = localPath;
-      }
-
-      // Hybrid ownership: when a Pages route owns the URL, the App Router
-      // cannot serve it (Pages produces HTML documents / `_next/data` JSON,
-      // not RSC streams). Prefetching an RSC URL would either 404 or warm
-      // an unusable cache entry. The matching `push`/`replace` call will
-      // hard-navigate via `window.location`, so a no-op here is correct —
-      // the document prefetch the link shim emits on hover still runs.
-      const hybridOwner = resolveHybridClientRouteOwner(prefetchHref, __basePath);
-      if (hybridOwner === "pages" || hybridOwner === "document") {
-        return;
-      }
-
-      // Prefetch the RSC payload for the target route and store in cache.
-      // We must add to prefetchedUrls manually for deduplication.
-      // prefetchRscResponse only manages the cache Map, not the URL set.
-      const fullHref = toBrowserNavigationHref(prefetchHref, window.location.href, __basePath);
-      await loadNavigationRuntimeRouteManifest();
-      const interceptionContext = getPrefetchInterceptionContext(fullHref);
-      const mountedSlotsHeader = getMountedSlotsHeader();
-      const headers = createRscRequestHeaders({ interceptionContext });
-      if (mountedSlotsHeader) {
-        headers.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
-      }
-      const rscUrl = await createRscRequestUrl(fullHref, headers);
-      const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
-      const prefetched = getPrefetchedUrls();
-      if (prefetched.has(cacheKey)) {
-        attachPrefetchInvalidationCallback(cacheKey, options?.onInvalidate);
-        return;
-      }
-      prefetched.add(cacheKey);
-      prefetchRscResponse(
-        rscUrl,
-        fetch(rscUrl, {
-          headers,
-          credentials: "include",
-          priority: "low" as RequestInit["priority"],
-        }),
-        interceptionContext,
-        mountedSlotsHeader,
-        options,
-      );
-    })().catch((error) => {
-      console.error("[vinext] RSC prefetch setup error:", error);
-    });
+    void loadClientActions()
+      .then((actions) => actions.prefetchAppRoute(href, options))
+      .catch((error) => {
+        console.error("[vinext] RSC prefetch setup error:", error);
+      });
   },
 };
 

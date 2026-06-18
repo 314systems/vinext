@@ -23,6 +23,7 @@ const ROUTE_OWNED_CLIENT_SHIMS = new Set([
   "layout-segment-context",
   "link",
   "link-prefetch",
+  "navigation-client-actions",
   "offline",
   "pages-router-runtime",
   "router",

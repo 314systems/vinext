@@ -487,9 +487,8 @@ const Form = forwardRef(function Form(props: FormProps, ref: ForwardedRef<HTMLFo
     <form
       ref={setRefs}
       action={actionHref}
-      onSubmit={(event) => {
-        void handleSubmit(event);
-      }}
+      // oxlint-disable-next-line typescript/no-misused-promises -- React ignores the returned promise; tests await it to observe async navigation completion.
+      onSubmit={(event) => handleSubmit(event)}
       {...cleanRest}
     />
   );
