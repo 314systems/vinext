@@ -54,12 +54,7 @@ type Options = {
   browserEnvironmentName: string;
 };
 
-type OwnedServerReference = {
-  referenceKey: string;
-  exportNames: string[];
-};
-
-const SERVER_FUNCTION_DIRECTIVE_MARKER = "/* __vinext_server_function_directives__ */";
+const SERVER_FUNCTION_DIRECTIVE_MARKER = "/* __vite_rsc_server_function_directives__ */";
 
 function resolvePluginRscModule(projectRoot: string, specifier: string): string {
   try {
@@ -219,7 +214,6 @@ export async function createServerFunctionDirectivePlugins(options: Options): Pr
   const transforms: RscTransforms = await import(pathToFileURL(transformsPath).href);
   const { getPluginApi } = rscModule;
   let manager: RscPluginManager | undefined;
-  const ownedReferences = new Map<string, OwnedServerReference>();
 
   const transformPlugin: Plugin = {
     name: "vinext:server-function-directives",
@@ -239,10 +233,7 @@ export async function createServerFunctionDirectivePlugins(options: Options): Pr
         );
         const isServer = this.environment.name === options.serverEnvironmentName;
         if (active.length === 0) {
-          if (isServer) {
-            ownedReferences.delete(id);
-            if (manager) delete manager.serverReferenceMetaMap[id];
-          }
+          if (isServer && manager) delete manager.serverReferenceMetaMap[id];
           return;
         }
         if (!manager) {
@@ -297,14 +288,10 @@ export async function createServerFunctionDirectivePlugins(options: Options): Pr
               `$$ReactClient.createServerReference(${JSON.stringify(`${normalizedId}#${name}`)},$$ReactClient.callServer,undefined,${this.environment.mode === "dev" ? "$$ReactClient.findSourceMapURL" : "undefined"},${JSON.stringify(name)})`,
           });
           if (!result?.output.hasChanged()) return;
-          const ownedReference = {
-            referenceKey: normalizedId,
-            exportNames: result.exportNames,
-          };
-          ownedReferences.set(id, ownedReference);
           manager.serverReferenceMetaMap[id] = {
             importId: id,
-            ...ownedReference,
+            referenceKey: normalizedId,
+            exportNames: result.exportNames,
           };
           result.output.prepend(
             `${SERVER_FUNCTION_DIRECTIVE_MARKER}\nimport * as $$ReactClient from ${JSON.stringify(this.environment.name === options.browserEnvironmentName ? browserRuntime : ssrRuntime)};\n`,
@@ -419,17 +406,12 @@ export async function createServerFunctionDirectivePlugins(options: Options): Pr
 
         if (!useServerBoundary) {
           if (exportNames.size === 0) {
-            ownedReferences.delete(id);
             delete manager.serverReferenceMetaMap[id];
           } else {
-            const ownedReference = {
-              referenceKey: normalizedId,
-              exportNames: [...exportNames],
-            };
-            ownedReferences.set(id, ownedReference);
             manager.serverReferenceMetaMap[id] = {
               importId: id,
-              ...ownedReference,
+              referenceKey: normalizedId,
+              exportNames: [...exportNames],
             };
           }
         }
@@ -447,25 +429,5 @@ export async function createServerFunctionDirectivePlugins(options: Options): Pr
     },
   };
 
-  const metadataPlugin: Plugin = {
-    name: "vinext:server-function-directive-metadata",
-    transform: {
-      handler(_code, id) {
-        if (!manager) return;
-        const ownedReference = ownedReferences.get(id);
-        if (!ownedReference) return;
-
-        const existing = manager.serverReferenceMetaMap[id];
-        manager.serverReferenceMetaMap[id] = {
-          importId: id,
-          referenceKey: ownedReference.referenceKey,
-          exportNames: existing
-            ? [...new Set([...existing.exportNames, ...ownedReference.exportNames])]
-            : ownedReference.exportNames,
-        };
-      },
-    },
-  };
-
-  return [transformPlugin, metadataPlugin];
+  return [transformPlugin];
 }

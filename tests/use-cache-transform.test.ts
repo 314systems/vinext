@@ -56,22 +56,14 @@ async function configurePluginRsc(plugins: Plugin[]) {
 }
 
 describe("plugin-rsc inline use-cache references", () => {
-  it("restores user-land reference metadata after rsc:use-server clears it", async () => {
+  it("preserves user-land reference metadata through rsc:use-server", async () => {
     const plugins = await getPlugins();
     const manager = await configurePluginRsc(plugins);
     const useCacheIndex = plugins.findIndex(
       (candidate) => candidate.name === "vinext:server-function-directives",
     );
     const useServerIndex = plugins.findIndex((candidate) => candidate.name === "rsc:use-server");
-    const metadataIndex = plugins.findIndex(
-      (candidate) => candidate.name === "vinext:server-function-directive-metadata",
-    );
-    const manifestIndex = plugins.findIndex(
-      (candidate) => candidate.name === "rsc:virtual-vite-rsc/server-references",
-    );
     expect(useCacheIndex).toBeLessThan(useServerIndex);
-    expect(metadataIndex).toBeGreaterThan(useServerIndex);
-    expect(metadataIndex).toBeLessThan(manifestIndex);
 
     const context = { environment: { name: "rsc", mode: "build" } };
     const transformed = await unwrapHook(plugins[useCacheIndex]!.transform)!.call(
@@ -86,9 +78,6 @@ describe("plugin-rsc inline use-cache references", () => {
       transformed!.code,
       moduleId,
     );
-    expect(manager.serverReferenceMetaMap[moduleId]).toBeUndefined();
-
-    unwrapHook(plugins[metadataIndex]!.transform)!.call(context, transformed!.code, moduleId);
     expect(manager.serverReferenceMetaMap[moduleId]).toBeDefined();
 
     const ssrContext = { environment: { name: "ssr", mode: "build" } };
@@ -98,9 +87,6 @@ describe("plugin-rsc inline use-cache references", () => {
       moduleId,
     );
     await unwrapHook(plugins[useServerIndex]!.transform)!.call(ssrContext, proxied!.code, moduleId);
-    expect(manager.serverReferenceMetaMap[moduleId]).toBeUndefined();
-
-    unwrapHook(plugins[metadataIndex]!.transform)!.call(ssrContext, proxied!.code, moduleId);
     expect(manager.serverReferenceMetaMap[moduleId]).toMatchObject({
       importId: moduleId,
       exportNames: ["getData"],

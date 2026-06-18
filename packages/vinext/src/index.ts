@@ -946,7 +946,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             client: VIRTUAL_APP_BROWSER_ENTRY,
           },
         });
-        const [serverFunctionPlugin, metadataPlugin] = await createServerFunctionDirectivePlugins({
+        const [serverFunctionPlugin] = await createServerFunctionDirectivePlugins({
           projectRoot: earlyBaseDir,
           definitions: [
             {
@@ -1012,11 +1012,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           browserEnvironmentName: "client",
         });
         const useServerIndex = plugins.findIndex((plugin) => plugin.name === "rsc:use-server");
-        if (useServerIndex === -1 || !serverFunctionPlugin || !metadataPlugin) {
+        if (useServerIndex === -1 || !serverFunctionPlugin) {
           throw new Error("vinext: Failed to locate @vitejs/plugin-rsc use-server plugin.");
         }
         plugins.splice(useServerIndex, 0, serverFunctionPlugin);
-        plugins.splice(useServerIndex + 2, 0, metadataPlugin);
         return plugins;
       })
       .catch((cause) => {
