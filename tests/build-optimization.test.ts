@@ -678,6 +678,9 @@ describe("process.env.NODE_ENV define", () => {
       expect(result.define?.["process.env.__VINEXT_HAS_CONFIG_REDIRECTS"]).toBe(
         JSON.stringify("false"),
       );
+      expect(result.define?.["process.env.__VINEXT_HAS_CONFIG_HEADERS"]).toBe(
+        JSON.stringify("false"),
+      );
       expect(result.define?.["process.env.__VINEXT_HAS_CONFIG_REWRITES"]).toBe(
         JSON.stringify("false"),
       );
@@ -717,6 +720,9 @@ describe("process.env.NODE_ENV define", () => {
         JSON.stringify("false"),
       );
       expect(result.define?.["process.env.__VINEXT_HAS_CONFIG_REDIRECTS"]).toBe(
+        JSON.stringify("false"),
+      );
+      expect(result.define?.["process.env.__VINEXT_HAS_CONFIG_HEADERS"]).toBe(
         JSON.stringify("false"),
       );
       expect(result.define?.["process.env.__VINEXT_HAS_CONFIG_REWRITES"]).toBe(

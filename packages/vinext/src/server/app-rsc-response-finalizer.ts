@@ -29,6 +29,8 @@ type FinalizeAppRscResponseOptions = {
   requestContext: RequestContext;
 };
 
+const HAS_CONFIG_HEADERS = process.env.__VINEXT_HAS_CONFIG_HEADERS !== "false";
+
 /**
  * Apply App Router response finalization that must happen outside individual
  * route dispatchers.
@@ -68,7 +70,7 @@ export function finalizeAppRscResponse(
     applyCdnResponseHeaders(response.headers, { cacheControl: "" });
   }
 
-  if (!options.configHeaders.length) {
+  if (!HAS_CONFIG_HEADERS || !options.configHeaders.length) {
     return response;
   }
 

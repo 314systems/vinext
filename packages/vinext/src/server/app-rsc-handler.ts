@@ -91,6 +91,7 @@ import {
 type AppPageParams = Record<string, string | string[]>;
 type RequestContext = ReturnType<typeof requestContextFromRequest>;
 const STATIC_METADATA_CONFIG_HEADER_OVERRIDES = new Set(["cache-control"]);
+const HAS_CONFIG_HEADERS = process.env.__VINEXT_HAS_CONFIG_HEADERS !== "false";
 const HAS_CONFIG_REDIRECTS = process.env.__VINEXT_HAS_CONFIG_REDIRECTS !== "false";
 const HAS_CONFIG_REWRITES = process.env.__VINEXT_HAS_CONFIG_REWRITES !== "false";
 type StaticParamsMap = AppPrerenderStaticParamsMap;
@@ -609,12 +610,14 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       request: userlandRequest,
     });
     if (middlewareResult.kind === "response") {
-      return applyConfigHeadersToMiddlewareRedirect(middlewareResult.response, {
-        basePathState,
-        configHeaders: options.configHeaders,
-        pathname: matchPathname(cleanPathname),
-        requestContext: preMiddlewareRequestContext,
-      });
+      return HAS_CONFIG_HEADERS
+        ? applyConfigHeadersToMiddlewareRedirect(middlewareResult.response, {
+            basePathState,
+            configHeaders: options.configHeaders,
+            pathname: matchPathname(cleanPathname),
+            requestContext: preMiddlewareRequestContext,
+          })
+        : middlewareResult.response;
     }
 
     cleanPathname = middlewareResult.cleanPathname;
@@ -677,13 +680,15 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   if (options.handleMetadataRouteRequest) {
     const metadataRouteResponse = await options.handleMetadataRouteRequest(cleanPathname);
     if (metadataRouteResponse) {
-      applyConfigHeadersToResponse(metadataRouteResponse.headers, {
-        basePathState,
-        configHeaders: options.configHeaders,
-        overwriteExisting: STATIC_METADATA_CONFIG_HEADER_OVERRIDES,
-        pathname: matchPathname(cleanPathname),
-        requestContext: preMiddlewareRequestContext,
-      });
+      if (HAS_CONFIG_HEADERS) {
+        applyConfigHeadersToResponse(metadataRouteResponse.headers, {
+          basePathState,
+          configHeaders: options.configHeaders,
+          overwriteExisting: STATIC_METADATA_CONFIG_HEADER_OVERRIDES,
+          pathname: matchPathname(cleanPathname),
+          requestContext: preMiddlewareRequestContext,
+        });
+      }
       return applyMiddlewareContextToResponse(metadataRouteResponse, middlewareContext);
     }
   }

@@ -1431,6 +1431,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         defines["process.env.__VINEXT_HAS_CONFIG_REDIRECTS"] = JSON.stringify(
           String(nextConfig.redirects.length > 0),
         );
+        defines["process.env.__VINEXT_HAS_CONFIG_HEADERS"] = JSON.stringify(
+          String(nextConfig.headers.length > 0),
+        );
         defines["process.env.__VINEXT_HAS_CONFIG_REWRITES"] = JSON.stringify(
           String(
             nextConfig.rewrites.beforeFiles.length > 0 ||
