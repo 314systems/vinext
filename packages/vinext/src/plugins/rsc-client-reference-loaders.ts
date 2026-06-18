@@ -29,6 +29,10 @@ type ClientRouterRuntimeAnalysisOptions = {
 type RscClientReferenceLoadersPluginOptions = {
   internalRoot?: string;
   onClientRouterRuntimeAnalysis?: (required: boolean) => void;
+  rewriteClientReferenceImportId?: (
+    importId: string,
+    context: { hasServerActions: boolean },
+  ) => string;
   routerRuntimeImportSpecifiers?: readonly string[];
   routerRuntimeModuleIds?: readonly string[];
 };
@@ -184,12 +188,15 @@ function generateClientReferenceObject(meta: RscClientReferenceMeta): string {
   return exports ? `{\n${exports}\n    }` : "{}";
 }
 
-function generateDirectClientReferenceLoaders(metas: RscClientReferenceMeta[]): string {
+function generateDirectClientReferenceLoaders(
+  metas: RscClientReferenceMeta[],
+  resolveImportId: (importId: string) => string,
+): string {
   const entries = metas
     .slice()
     .sort((a, b) => a.referenceKey.localeCompare(b.referenceKey))
     .map((meta) => {
-      const importId = withResolvedIdProxy(meta.importId);
+      const importId = withResolvedIdProxy(resolveImportId(meta.importId));
       return [
         `  ${JSON.stringify(meta.referenceKey)}: async () => {`,
         `    const m = await import(${JSON.stringify(importId)});`,
@@ -242,7 +249,13 @@ export function createRscClientReferenceLoadersPlugin(
       }
 
       return {
-        code: generateDirectClientReferenceLoaders(metas),
+        code: generateDirectClientReferenceLoaders(metas, (importId) =>
+          options.rewriteClientReferenceImportId
+            ? options.rewriteClientReferenceImportId(importId, {
+                hasServerActions: Object.keys(manager.serverReferenceMetaMap).length > 0,
+              })
+            : importId,
+        ),
         map: null,
       };
     },
