@@ -1,7 +1,8 @@
-import { describe, it, expect } from "vite-plus/test";
+import { describe, it, expect, vi } from "vite-plus/test";
 import path from "node:path";
 import vinext from "../packages/vinext/src/index.js";
 import localFont, { getSSRFontStyles } from "../packages/vinext/src/shims/font-local.js";
+import { createLocalFontsPlugin } from "../packages/vinext/src/plugins/fonts.js";
 import type { Plugin } from "vite-plus";
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -30,6 +31,21 @@ function getLocalFontsPlugin(): Plugin {
 // ── Plugin existence ─────────────────────────────────────────
 
 describe("vinext:local-fonts plugin", () => {
+  it("reports user module font imports for build capability detection", () => {
+    const onFontUsage = vi.fn();
+    const shimsDir = path.dirname(FONT_LOCAL_SHIM_PATH) + path.sep;
+    const plugin = createLocalFontsPlugin(shimsDir, onFontUsage);
+    const transform = unwrapHook(plugin.transform);
+
+    transform.call(
+      plugin,
+      `import localFont from "next/font/local";\nconst f = localFont({ src: "./font.woff2" });`,
+      "/app/layout.tsx",
+    );
+
+    expect(onFontUsage).toHaveBeenCalled();
+  });
+
   it("exists in the plugin array", () => {
     const plugin = getLocalFontsPlugin();
     expect(plugin.name).toBe("vinext:local-fonts");

@@ -171,6 +171,10 @@ type AppRouterConfig = {
   hasServerActions?: boolean;
   /** Whether the browser build includes client-side App Router navigation. Defaults to true. */
   hasClientRouterRuntime?: boolean;
+  /** Whether the module graph imports next/font/google. Defaults to true. */
+  hasGoogleFonts?: boolean;
+  /** Whether the module graph imports next/font/local. Defaults to true. */
+  hasLocalFonts?: boolean;
   /** Internationalization routing config for middleware matcher locale handling. */
   i18n?: NextI18nConfig | null;
   imageConfig?: ImageConfig;
@@ -237,6 +241,8 @@ export function generateRscEntry(
   const isDev = config?.isDev ?? true;
   const hasServerActions = config?.hasServerActions !== false;
   const hasClientRouterRuntime = config?.hasClientRouterRuntime !== false;
+  const hasGoogleFonts = config?.hasGoogleFonts !== false;
+  const hasLocalFonts = config?.hasLocalFonts !== false;
   const hasIsrRuntime = cacheComponents || appRoutesNeedResponseCache(routes);
   const i18nConfig = config?.i18n ?? null;
   const hasPagesDir = config?.hasPagesDir ?? false;
@@ -416,10 +422,26 @@ const __triggerBackgroundRegeneration = () => {};
 // Import server-only state module to register ALS-backed accessors.
 import "vinext/navigation-state";
 import { reportRequestError as _reportRequestError } from "vinext/instrumentation";
-import { getSSRFontLinks as _getSSRFontLinks, getSSRFontStyles as _getSSRFontStylesGoogle, getSSRFontPreloads as _getSSRFontPreloadsGoogle } from "next/font/google";
-import { getSSRFontStyles as _getSSRFontStylesLocal, getSSRFontPreloads as _getSSRFontPreloadsLocal } from "next/font/local";
-function _getSSRFontStyles() { return [..._getSSRFontStylesGoogle(), ..._getSSRFontStylesLocal()]; }
-function _getSSRFontPreloads() { return [..._getSSRFontPreloadsGoogle(), ..._getSSRFontPreloadsLocal()]; }
+${
+  hasGoogleFonts
+    ? `import { getSSRFontLinks as _getSSRFontLinks, getSSRFontStyles as _getSSRFontStylesGoogle, getSSRFontPreloads as _getSSRFontPreloadsGoogle } from "next/font/google";`
+    : "const _getSSRFontLinks = () => [];"
+}
+${
+  hasLocalFonts
+    ? `import { getSSRFontStyles as _getSSRFontStylesLocal, getSSRFontPreloads as _getSSRFontPreloadsLocal } from "next/font/local";`
+    : ""
+}
+function _getSSRFontStyles() { return [${
+    hasGoogleFonts ? "..._getSSRFontStylesGoogle()" : ""
+  }${hasGoogleFonts && hasLocalFonts ? ", " : ""}${
+    hasLocalFonts ? "..._getSSRFontStylesLocal()" : ""
+  }]; }
+function _getSSRFontPreloads() { return [${
+    hasGoogleFonts ? "..._getSSRFontPreloadsGoogle()" : ""
+  }${hasGoogleFonts && hasLocalFonts ? ", " : ""}${
+    hasLocalFonts ? "..._getSSRFontPreloadsLocal()" : ""
+  }]; }
 ${
   hasPagesDir
     ? `// Pages Router routes are loaded lazily from the SSR environment for internal prerender requests.

@@ -219,6 +219,35 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
     expect(code).not.toContain("createClientReuseSkipDisposition:");
   });
 
+  it("omits unused App Router font registries", () => {
+    const code = generateRscEntry("/tmp/test/app", minimalRoutes, null, [], null, "", false, {
+      hasGoogleFonts: false,
+      hasLocalFonts: false,
+    });
+
+    expect(code).not.toContain('from "next/font/google"');
+    expect(code).not.toContain('from "next/font/local"');
+    expect(code).toContain("const _getSSRFontLinks = () => [];");
+    expect(code).toContain("function _getSSRFontStyles() { return []; }");
+    expect(code).toContain("function _getSSRFontPreloads() { return []; }");
+  });
+
+  it("keeps each App Router font registry independently", () => {
+    const googleCode = generateRscEntry("/tmp/test/app", minimalRoutes, null, [], null, "", false, {
+      hasGoogleFonts: true,
+      hasLocalFonts: false,
+    });
+    const localCode = generateRscEntry("/tmp/test/app", minimalRoutes, null, [], null, "", false, {
+      hasGoogleFonts: false,
+      hasLocalFonts: true,
+    });
+
+    expect(googleCode).toContain('from "next/font/google"');
+    expect(googleCode).not.toContain('from "next/font/local"');
+    expect(localCode).not.toContain('from "next/font/google"');
+    expect(localCode).toContain('from "next/font/local"');
+  });
+
   it("describes beforeFiles rewrites in the generated app shape", () => {
     const code = generateRscEntry("/tmp/test/app", minimalRoutes, null, [], null, "", false, {
       rewrites: {

@@ -1051,6 +1051,8 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   }
 
   let clientRouterRuntimeRequired: boolean | null = null;
+  let googleFontRuntimeRequired = false;
+  let localFontRuntimeRequired = false;
 
   async function resolveHasClientRouterRuntime(
     config: Pick<ResolvedConfig, "command" | "plugins">,
@@ -1065,6 +1067,18 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
       return true;
     }
     return await resolveHasServerActions(config);
+  }
+
+  async function resolveDetectedBuildCapability(
+    config: Pick<ResolvedConfig, "command" | "plugins">,
+    detected: boolean,
+  ): Promise<boolean> {
+    if (config.command !== "build" || !rscPluginModulePromise) return true;
+
+    const { getPluginApi } = await rscPluginModulePromise;
+    const pluginApi = getPluginApi(config);
+    if (!pluginApi || pluginApi.manager.isScanBuild) return true;
+    return detected;
   }
 
   const reactOptions = options.react && options.react !== true ? options.react : undefined;
@@ -2862,6 +2876,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           const hasClientRouterRuntime = await resolveHasClientRouterRuntime(
             this.environment.config,
           );
+          const [hasGoogleFonts, hasLocalFonts] = await Promise.all([
+            resolveDetectedBuildCapability(this.environment.config, googleFontRuntimeRequired),
+            resolveDetectedBuildCapability(this.environment.config, localFontRuntimeRequired),
+          ]);
           // Check for global-error.tsx at app root
           const globalErrorPath = findFileWithExts(appDir, "global-error", fileMatcher);
           // Check for global-not-found.tsx at app root (Next.js 16+ feature)
@@ -2904,6 +2922,8 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               cacheComponents: nextConfig?.cacheComponents,
               hasServerActions,
               hasClientRouterRuntime,
+              hasGoogleFonts,
+              hasLocalFonts,
               i18n: nextConfig?.i18n,
               imageConfig: {
                 deviceSizes: nextConfig?.images?.deviceSizes,
@@ -4762,9 +4782,13 @@ export const loadServerActionClient = ${
       },
     } as Plugin & { _dimCache: Map<string, { width: number; height: number }> },
     // Google Fonts import rewrite + self-hosting — see src/plugins/fonts.ts
-    createGoogleFontsPlugin(_fontGoogleShimPath, _shimsDir),
+    createGoogleFontsPlugin(_fontGoogleShimPath, _shimsDir, () => {
+      googleFontRuntimeRequired = true;
+    }),
     // Local font path resolution — see src/plugins/fonts.ts
-    createLocalFontsPlugin(_shimsDir),
+    createLocalFontsPlugin(_shimsDir, () => {
+      localFontRuntimeRequired = true;
+    }),
     // Barrel import optimization:
     // Rewrites `import { Slot } from "radix-ui"` → `import * as Slot from "@radix-ui/react-slot"`
     // for packages listed in optimizePackageImports or DEFAULT_OPTIMIZE_PACKAGES.

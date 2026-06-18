@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vite-plus/test";
+import { describe, it, expect, afterEach, vi } from "vite-plus/test";
 import path from "node:path";
 import fs from "node:fs";
 import { http, HttpResponse } from "msw";
@@ -9,6 +9,7 @@ import {
   _findBalancedObject as findBalancedObject,
   _findCallEnd as findCallEnd,
   _rewriteCachedFontCssToServedUrls as rewriteCachedFontCssToServedUrls,
+  createGoogleFontsPlugin,
 } from "../packages/vinext/src/plugins/fonts.js";
 import type { Plugin } from "vite-plus";
 
@@ -570,6 +571,22 @@ describe("next/font/google shim", () => {
 // ── Plugin tests ──────────────────────────────────────────────
 
 describe("vinext:google-fonts plugin", () => {
+  it("reports user module font imports for build capability detection", async () => {
+    const onFontUsage = vi.fn();
+    const shimsDir = path.resolve(import.meta.dirname, "../packages/vinext/src/shims") + path.sep;
+    const plugin = createGoogleFontsPlugin(
+      path.join(shimsDir, "font-google.ts"),
+      shimsDir,
+      onFontUsage,
+    );
+    initPlugin(plugin, { command: "build" });
+
+    const transform = unwrapHook(plugin.transform);
+    await transform.call(plugin, `import { Inter } from "next/font/google";`, "/app/layout.tsx");
+
+    expect(onFontUsage).toHaveBeenCalled();
+  });
+
   it("exists in the plugin array", () => {
     const plugin = getGoogleFontsPlugin();
     expect(plugin.name).toBe("vinext:google-fonts");

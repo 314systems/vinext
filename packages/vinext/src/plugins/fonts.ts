@@ -650,7 +650,11 @@ export function _findCallEnd(code: string, objEnd: number): number | null {
   return i + 1;
 }
 
-export function createGoogleFontsPlugin(fontGoogleShimPath: string, shimsDir: string): Plugin {
+export function createGoogleFontsPlugin(
+  fontGoogleShimPath: string,
+  shimsDir: string,
+  onFontUsage?: () => void,
+): Plugin {
   // Vite does not bind `this` to the plugin object when calling hooks, so
   // plugin state must be held in closure variables rather than as properties.
   const fontCache = new Map<string, string>(); // url -> local @font-face CSS
@@ -754,6 +758,7 @@ export function createGoogleFontsPlugin(fontGoogleShimPath: string, shimsDir: st
           /^[ \t]*import\s+((?:\{[^}]*?\}|[^;\n])+?)\s+from\s*(["'])next\/font\/google\2\s*;?/gm;
         let importMatch;
         while ((importMatch = importRe.exec(code)) !== null) {
+          onFontUsage?.();
           const [fullMatch, clause] = importMatch;
           const matchStart = importMatch.index;
           const matchEnd = matchStart + fullMatch.length;
@@ -807,6 +812,7 @@ export function createGoogleFontsPlugin(fontGoogleShimPath: string, shimsDir: st
         const exportRe = /^[ \t]*export\s*\{([^}]+)\}\s*from\s*(["'])next\/font\/google\2\s*;?/gm;
         let exportMatch;
         while ((exportMatch = exportRe.exec(code)) !== null) {
+          onFontUsage?.();
           const [fullMatch, specifiers] = exportMatch;
           const matchStart = exportMatch.index;
           const matchEnd = matchStart + fullMatch.length;
@@ -1138,7 +1144,7 @@ export function createGoogleFontsPlugin(fontGoogleShimPath: string, shimsDir: st
  *   mirrors `createGoogleFontsPlugin`, which takes `shimsDir` for the same
  *   reason.
  */
-export function createLocalFontsPlugin(shimsDir: string): Plugin {
+export function createLocalFontsPlugin(shimsDir: string, onFontUsage?: () => void): Plugin {
   return {
     name: "vinext:local-fonts",
     enforce: "pre",
@@ -1179,6 +1185,7 @@ export function createLocalFontsPlugin(shimsDir: string): Plugin {
         const importMatch =
           /\bimport\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+from\s*(['"])next\/font\/local\2/.exec(code);
         if (!importMatch) return null;
+        onFontUsage?.();
         const localFontIdentifier = importMatch[1];
 
         const s = new MagicString(code);
