@@ -1452,6 +1452,13 @@ describe("App Router Production server (startProdServer)", () => {
     expect(res.status).toBe(200);
     const html = await res.text();
 
+    // React Flight encodes server-function props with the `$h` token used by
+    // this React build's SERVER_DECODE_REFERENCE_PREFIX path. Keep this
+    // assertion next to the action round-trip so the test proves both halves:
+    // the payload uses the server-reference encoding and the decoded reference
+    // resolves through vinext's production manifest below.
+    expect(html).toContain('\\"getDate\\":\\"$h');
+
     // The flight payload embeds each cached function prop as a server
     // reference whose id is "<12-hex normalised key>#<hoisted export name>".
     const refIds = [

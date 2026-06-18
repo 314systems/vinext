@@ -6,6 +6,7 @@ import type {
   UserConfig,
   ViteDevServer,
 } from "vite";
+import type { ServerFunctionDirectiveContext } from "@vitejs/plugin-rsc/plugin";
 import { loadEnv, parseAst, transformWithOxc } from "vite";
 import {
   pagesRouter,
@@ -117,6 +118,7 @@ import { createMiddlewareServerOnlyPlugin } from "./plugins/middleware-server-on
 import { createOptimizeImportsPlugin } from "./plugins/optimize-imports.js";
 import { createDynamicPreloadMetadataPlugin } from "./plugins/dynamic-preload-metadata.js";
 import { createOgInlineFetchAssetsPlugin, createOgAssetsPlugin } from "./plugins/og-assets.js";
+import { createUseCacheServerFunctionPlugins } from "./plugins/use-cache-server-functions.js";
 import { generateRouteTypes } from "./typegen.js";
 import {
   mergeOptimizeDepsExclude,
@@ -186,16 +188,6 @@ import fs from "node:fs";
 import { randomBytes, randomUUID } from "node:crypto";
 import commonjs from "vite-plugin-commonjs";
 import { normalizePathSeparators, stripViteModuleQuery } from "./utils/path.js";
-
-type ServerFunctionDirectiveContext = {
-  value: string;
-  name: string;
-  id: string;
-  directiveMatch: RegExpMatchArray;
-  location: "inline" | "module";
-  parameters?: { count: number; hasRest: boolean };
-  runtime?: string;
-};
 
 function parseUseCacheVariant(directive: string): string {
   return directive === "use cache"
@@ -943,15 +935,18 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     }
     const rscImport = import(pathToFileURL(resolvedRscPath).href);
     rscPluginPromise = rscImport
-      .then((mod) => {
+      .then(async (mod) => {
         const rsc = mod.default;
-        return rsc({
+        const plugins: Plugin[] = rsc({
           entries: {
             rsc: VIRTUAL_RSC_ENTRY,
             ssr: VIRTUAL_APP_SSR_ENTRY,
             client: VIRTUAL_APP_BROWSER_ENTRY,
           },
-          serverFunctionDirectives: [
+        });
+        const [serverFunctionPlugin, metadataPlugin] = await createUseCacheServerFunctionPlugins({
+          projectRoot: earlyBaseDir,
+          definitions: [
             {
               directive: /^use cache.*$/,
               test: (code: string) => code.includes("use cache"),
@@ -1002,15 +997,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                     : "";
                 return `${runtime}.registerCachedFunction(${value}, ${JSON.stringify(id + ":" + name)}, ${JSON.stringify(variant)}${pageOptions})`;
               },
-              filterExport: ({
-                name,
-                id,
-                meta,
-              }: {
-                name: string;
-                id: string;
-                meta: { isFunction?: boolean };
-              }) => {
+              filterExport: ({ name, id, meta }) => {
                 if (meta.isFunction === false) return false;
                 if (/\/(layout|template)\.(tsx?|jsx?|mjs)$/.test(id) && name === "default") {
                   return false;
@@ -1019,7 +1006,16 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               },
             },
           ],
+          serverEnvironmentName: "rsc",
+          browserEnvironmentName: "client",
         });
+        const useServerIndex = plugins.findIndex((plugin) => plugin.name === "rsc:use-server");
+        if (useServerIndex === -1 || !serverFunctionPlugin || !metadataPlugin) {
+          throw new Error("vinext: Failed to locate @vitejs/plugin-rsc use-server plugin.");
+        }
+        plugins.splice(useServerIndex, 0, serverFunctionPlugin);
+        plugins.splice(useServerIndex + 2, 0, metadataPlugin);
+        return plugins;
       })
       .catch((cause) => {
         throw new Error("vinext: Failed to load @vitejs/plugin-rsc.", {

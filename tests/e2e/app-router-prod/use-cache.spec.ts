@@ -1,6 +1,14 @@
 import { expect, test } from "@playwright/test";
 
 test.describe('production "use cache" server function references', () => {
+  test("invokes file-level cached exports imported by a Client Component", async ({ page }) => {
+    await page.goto("/use-cache-client-import");
+    await page.locator("#call-client-imported-cache").click();
+    await expect(page.getByTestId("client-imported-cache-result")).toHaveText(
+      /^client-cache:direct:[0-9.e+-]+$/,
+    );
+  });
+
   test("replays cached RSC through SSR and invokes nested functions from the browser", async ({
     page,
   }) => {

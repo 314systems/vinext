@@ -1,6 +1,6 @@
 /**
- * Tests the plugin-rsc serverFunctionDirectives integration used for function-level
- * "use cache" directives. Vinext supplies cache wrapper expressions; plugin-rsc
+ * Tests the vinext user-land server function directive integration used for function-level
+ * "use cache" directives. Vinext owns the directive plugin while plugin-rsc
  * owns directive discovery, closure hoisting, encryption, reference ids, and
  * server-reference manifest metadata.
  */
@@ -47,16 +47,97 @@ async function configurePluginRsc(plugins: Plugin[]) {
       rsc: { build: { outDir: path.join(APP_FIXTURE_DIR, "dist/rsc") } },
     },
   });
+  const useCachePlugin = plugins.find(
+    (plugin) => plugin.name === "vinext:use-cache-server-functions",
+  )!;
+  unwrapHook(useCachePlugin.configResolved)!.call(useCachePlugin, { plugins });
   // oxlint-disable-next-line typescript/no-explicit-any
   return (minimal as any).api.manager;
 }
 
 describe("plugin-rsc inline use-cache references", () => {
+  it("restores user-land reference metadata after rsc:use-server clears it", async () => {
+    const plugins = await getPlugins();
+    const manager = await configurePluginRsc(plugins);
+    const useCacheIndex = plugins.findIndex(
+      (candidate) => candidate.name === "vinext:use-cache-server-functions",
+    );
+    const useServerIndex = plugins.findIndex((candidate) => candidate.name === "rsc:use-server");
+    const metadataIndex = plugins.findIndex(
+      (candidate) => candidate.name === "vinext:use-cache-server-function-metadata",
+    );
+    const manifestIndex = plugins.findIndex(
+      (candidate) => candidate.name === "rsc:virtual-vite-rsc/server-references",
+    );
+    expect(useCacheIndex).toBeLessThan(useServerIndex);
+    expect(metadataIndex).toBeGreaterThan(useServerIndex);
+    expect(metadataIndex).toBeLessThan(manifestIndex);
+
+    const context = { environment: { name: "rsc", mode: "build" } };
+    const transformed = await unwrapHook(plugins[useCacheIndex]!.transform)!.call(
+      context,
+      inlineCacheCode,
+      moduleId,
+    );
+    expect(manager.serverReferenceMetaMap[moduleId]).toBeDefined();
+
+    await unwrapHook(plugins[useServerIndex]!.transform)!.call(
+      context,
+      transformed!.code,
+      moduleId,
+    );
+    expect(manager.serverReferenceMetaMap[moduleId]).toBeUndefined();
+
+    unwrapHook(plugins[metadataIndex]!.transform)!.call(context, transformed!.code, moduleId);
+    expect(manager.serverReferenceMetaMap[moduleId]).toBeDefined();
+
+    const ssrContext = { environment: { name: "ssr", mode: "build" } };
+    const proxied = await unwrapHook(plugins[useCacheIndex]!.transform)!.call(
+      ssrContext,
+      fileCacheCode,
+      moduleId,
+    );
+    await unwrapHook(plugins[useServerIndex]!.transform)!.call(ssrContext, proxied!.code, moduleId);
+    expect(manager.serverReferenceMetaMap[moduleId]).toBeUndefined();
+
+    unwrapHook(plugins[metadataIndex]!.transform)!.call(ssrContext, proxied!.code, moduleId);
+    expect(manager.serverReferenceMetaMap[moduleId]).toMatchObject({
+      importId: moduleId,
+      exportNames: ["getData"],
+    });
+  });
+
+  it("matches Vite's dev reference key for files outside the project root", async () => {
+    const plugins = await getPlugins();
+    const manager = await configurePluginRsc(plugins);
+    manager.config.command = "serve";
+    manager.server = {
+      environments: {
+        rsc: {
+          config: { root: APP_FIXTURE_DIR },
+          moduleGraph: { getModuleById: () => undefined },
+        },
+      },
+    };
+    const plugin = plugins.find(
+      (candidate) => candidate.name === "vinext:use-cache-server-functions",
+    )!;
+    const externalId = import.meta.filename;
+    const result = await unwrapHook(plugin.transform)!.call(
+      { environment: { name: "rsc", mode: "dev" } },
+      inlineCacheCode,
+      externalId,
+    );
+    const expectedKey = path.posix.join("/@fs/", externalId);
+    expect(result!.code).toContain(JSON.stringify(expectedKey));
+    expect(manager.serverReferenceMetaMap[externalId].referenceKey).toBe(expectedKey);
+  });
+
   it("wraps and registers inline cache functions with plugin-rsc's build reference key", async () => {
     const plugins = await getPlugins();
     const manager = await configurePluginRsc(plugins);
     const plugin = plugins.find(
-      (candidate) => candidate.name === "rsc:server-function-directives",
+      (candidate) => candidate.name === "vinext:use-cache-server-functions",
     )!;
     const transform = unwrapHook(plugin.transform)!;
     const result = await transform.call(
@@ -84,7 +165,7 @@ describe("plugin-rsc inline use-cache references", () => {
     const plugins = await getPlugins();
     await configurePluginRsc(plugins);
     const plugin = plugins.find(
-      (candidate) => candidate.name === "rsc:server-function-directives",
+      (candidate) => candidate.name === "vinext:use-cache-server-functions",
     )!;
     const transform = unwrapHook(plugin.transform)!;
     const original = await transform.call(
@@ -109,7 +190,7 @@ describe("plugin-rsc inline use-cache references", () => {
     const plugins = await getPlugins();
     const manager = await configurePluginRsc(plugins);
     const plugin = plugins.find(
-      (candidate) => candidate.name === "rsc:server-function-directives",
+      (candidate) => candidate.name === "vinext:use-cache-server-functions",
     )!;
     const transform = unwrapHook(plugin.transform)!;
     await transform.call(
@@ -130,7 +211,7 @@ describe("plugin-rsc inline use-cache references", () => {
     const plugins = await getPlugins();
     await configurePluginRsc(plugins);
     const plugin = plugins.find(
-      (candidate) => candidate.name === "rsc:server-function-directives",
+      (candidate) => candidate.name === "vinext:use-cache-server-functions",
     )!;
     const transform = unwrapHook(plugin.transform)!;
     const closureCode = [
@@ -164,7 +245,7 @@ describe("plugin-rsc inline use-cache references", () => {
       const plugins = await getPlugins();
       await configurePluginRsc(plugins);
       const plugin = plugins.find(
-        (candidate) => candidate.name === "rsc:server-function-directives",
+        (candidate) => candidate.name === "vinext:use-cache-server-functions",
       )!;
       const transform = unwrapHook(plugin.transform)!;
 
@@ -182,7 +263,7 @@ describe("plugin-rsc inline use-cache references", () => {
     const plugins = await getPlugins();
     await configurePluginRsc(plugins);
     const plugin = plugins.find(
-      (candidate) => candidate.name === "rsc:server-function-directives",
+      (candidate) => candidate.name === "vinext:use-cache-server-functions",
     )!;
     const transform = unwrapHook(plugin.transform)!;
     const result = await transform.call(
@@ -197,7 +278,7 @@ describe("plugin-rsc inline use-cache references", () => {
     const plugins = await getPlugins();
     await configurePluginRsc(plugins);
     const plugin = plugins.find(
-      (candidate) => candidate.name === "rsc:server-function-directives",
+      (candidate) => candidate.name === "vinext:use-cache-server-functions",
     )!;
     const transform = unwrapHook(plugin.transform)!;
     const result = await transform.call(
@@ -212,7 +293,7 @@ describe("plugin-rsc inline use-cache references", () => {
     const plugins = await getPlugins();
     await configurePluginRsc(plugins);
     const plugin = plugins.find(
-      (candidate) => candidate.name === "rsc:server-function-directives",
+      (candidate) => candidate.name === "vinext:use-cache-server-functions",
     )!;
     const transform = unwrapHook(plugin.transform)!;
     const result = await transform.call(
@@ -227,7 +308,7 @@ describe("plugin-rsc inline use-cache references", () => {
     const plugins = await getPlugins();
     const manager = await configurePluginRsc(plugins);
     const plugin = plugins.find(
-      (candidate) => candidate.name === "rsc:server-function-directives",
+      (candidate) => candidate.name === "vinext:use-cache-server-functions",
     )!;
     const transform = unwrapHook(plugin.transform)!;
     const result = await transform.call(
@@ -256,7 +337,7 @@ describe("plugin-rsc inline use-cache references", () => {
     const plugins = await getPlugins();
     await configurePluginRsc(plugins);
     const plugin = plugins.find(
-      (candidate) => candidate.name === "rsc:server-function-directives",
+      (candidate) => candidate.name === "vinext:use-cache-server-functions",
     )!;
     const transform = unwrapHook(plugin.transform)!;
     await expect(
@@ -274,7 +355,7 @@ describe("plugin-rsc inline use-cache references", () => {
       const plugins = await getPlugins();
       await configurePluginRsc(plugins);
       const plugin = plugins.find(
-        (candidate) => candidate.name === "rsc:server-function-directives",
+        (candidate) => candidate.name === "vinext:use-cache-server-functions",
       )!;
       const transform = unwrapHook(plugin.transform)!;
       await expect(
@@ -315,7 +396,7 @@ describe("plugin-rsc inline use-cache references", () => {
     const plugins = await getPlugins();
     await configurePluginRsc(plugins);
     const plugin = plugins.find(
-      (candidate) => candidate.name === "rsc:server-function-directives",
+      (candidate) => candidate.name === "vinext:use-cache-server-functions",
     )!;
     const transform = unwrapHook(plugin.transform)!;
     const result = await transform.call(
@@ -331,7 +412,7 @@ describe("plugin-rsc inline use-cache references", () => {
     const plugins = await getPlugins();
     await configurePluginRsc(plugins);
     const plugin = plugins.find(
-      (candidate) => candidate.name === "rsc:server-function-directives",
+      (candidate) => candidate.name === "vinext:use-cache-server-functions",
     )!;
     const transform = unwrapHook(plugin.transform)!;
     await expect(
@@ -349,7 +430,7 @@ describe("plugin-rsc inline use-cache references", () => {
     const plugins = await getPlugins();
     await configurePluginRsc(plugins);
     const plugin = plugins.find(
-      (candidate) => candidate.name === "rsc:server-function-directives",
+      (candidate) => candidate.name === "vinext:use-cache-server-functions",
     )!;
     const context = { environment: { name: "rsc", mode: "build" } };
     const source = [
@@ -368,7 +449,7 @@ describe("plugin-rsc inline use-cache references", () => {
     const plugins = await getPlugins();
     await configurePluginRsc(plugins);
     const plugin = plugins.find(
-      (candidate) => candidate.name === "rsc:server-function-directives",
+      (candidate) => candidate.name === "vinext:use-cache-server-functions",
     )!;
     const transform = unwrapHook(plugin.transform)!;
     await expect(
@@ -384,7 +465,7 @@ describe("plugin-rsc inline use-cache references", () => {
     const plugins = await getPlugins();
     await configurePluginRsc(plugins);
     const plugin = plugins.find(
-      (candidate) => candidate.name === "rsc:server-function-directives",
+      (candidate) => candidate.name === "vinext:use-cache-server-functions",
     )!;
     const result = await unwrapHook(plugin.transform)!.call(
       { environment: { name: "rsc", mode: "build" } },
@@ -398,7 +479,7 @@ describe("plugin-rsc inline use-cache references", () => {
     const plugins = await getPlugins();
     const manager = await configurePluginRsc(plugins);
     const plugin = plugins.find(
-      (candidate) => candidate.name === "rsc:server-function-directives",
+      (candidate) => candidate.name === "vinext:use-cache-server-functions",
     )!;
     const transform = unwrapHook(plugin.transform)!;
     const result = await transform.call(
@@ -419,7 +500,7 @@ describe("plugin-rsc inline use-cache references", () => {
       const plugins = await getPlugins();
       await configurePluginRsc(plugins);
       const plugin = plugins.find(
-        (candidate) => candidate.name === "rsc:server-function-directives",
+        (candidate) => candidate.name === "vinext:use-cache-server-functions",
       )!;
       const transform = unwrapHook(plugin.transform)!;
       const result = await transform.call(
