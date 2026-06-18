@@ -8,6 +8,7 @@
  * Previously housed in server/app-dev-server.ts.
  */
 import { randomUUID } from "node:crypto";
+import { appRoutesNeedResponseCache } from "../build/app-response-cache-capabilities.js";
 import { buildAppRscManifestCode } from "./app-rsc-manifest.js";
 import { resolveEntryPath } from "./runtime-entry-module.js";
 import { normalizePathSeparators } from "../utils/path.js";
@@ -228,6 +229,7 @@ export function generateRscEntry(
   const cacheComponents = config?.cacheComponents === true;
   const isDev = config?.isDev ?? true;
   const hasServerActions = config?.hasServerActions !== false;
+  const hasIsrRuntime = cacheComponents || appRoutesNeedResponseCache(routes);
   const i18nConfig = config?.i18n ?? null;
   const hasPagesDir = config?.hasPagesDir ?? false;
   const publicFiles = config?.publicFiles ?? [];
@@ -376,7 +378,9 @@ import {
   createAppRscRouteMatcher as __createAppRscRouteMatcher,
   SIBLING_PAGE_INTERCEPT_SLOT_KEY as __SIBLING_PAGE_INTERCEPT_SLOT_KEY,
 } from ${JSON.stringify(appRscRouteMatchingPath)};
-import {
+${
+  hasIsrRuntime
+    ? `import {
   appIsrHtmlKey as __isrHtmlKey,
   appIsrRscKey as __isrRscKey,
   appIsrRouteKey as __isrRouteKey,
@@ -384,7 +388,16 @@ import {
   isrSet as __isrSet,
   isrSetPrerenderedAppPage as __isrSetPrerenderedAppPage,
   triggerBackgroundRegeneration as __triggerBackgroundRegeneration,
-} from ${JSON.stringify(isrCachePath)};
+} from ${JSON.stringify(isrCachePath)};`
+    : `
+const __isrGet = async () => null;
+const __isrSet = async () => {};
+const __isrHtmlKey = (pathname) => pathname;
+const __isrRscKey = (pathname) => pathname;
+const __isrRouteKey = (pathname) => pathname;
+const __triggerBackgroundRegeneration = () => {};
+`
+}
 // Import server-only state module to register ALS-backed accessors.
 import "vinext/navigation-state";
 import { reportRequestError as _reportRequestError } from "vinext/instrumentation";
@@ -625,7 +638,9 @@ export const __inlineCss = ${JSON.stringify(inlineCss)};
 export const __hasPagesDir = ${JSON.stringify(hasPagesDir)};
 export const getRenderedConcreteUrlPathsForRoute = __getRenderedConcreteUrlPathsForRoute;
 
-export async function seedMemoryCacheFromPrerender(serverDir) {
+${
+  hasIsrRuntime
+    ? `export async function seedMemoryCacheFromPrerender(serverDir) {
   const { seedMemoryCacheFromPrerender: __seedMemoryCacheFromPrerender } =
     await import(${JSON.stringify(seedCachePath)});
   return __seedMemoryCacheFromPrerender(serverDir, {
@@ -639,6 +654,8 @@ export async function seedMemoryCacheFromPrerender(serverDir) {
       return __isrSetPrerenderedAppPage(key, data, metadata);
     },
   });
+}`
+    : `export async function seedMemoryCacheFromPrerender() { return 0; }`
 }
 
 ${isDev ? generateDevOriginCheckCode(config?.allowedDevOrigins) : ""}

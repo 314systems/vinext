@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { generateRscEntry } from "../packages/vinext/src/entries/app-rsc-entry.js";
 import type { AppRoute } from "../packages/vinext/src/routing/app-router.js";
 
@@ -203,6 +206,32 @@ describe("generateRscEntry ISR code generation", () => {
     expect(code).toContain("return __isrRscKey(pathname)");
     expect(code).toContain("writeAppPageEntry(key, data, metadata)");
     expect(code).toContain("return __isrSetPrerenderedAppPage(key, data, metadata)");
+  });
+
+  it("omits response ISR imports when every page is forced dynamic", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-isr-codegen-"));
+    try {
+      const layoutPath = path.join(root, "app/layout.tsx");
+      const pagePath = path.join(root, "app/page.tsx");
+      fs.mkdirSync(path.dirname(layoutPath), { recursive: true });
+      fs.writeFileSync(layoutPath, 'export const dynamic = "force-dynamic";');
+      fs.writeFileSync(pagePath, "export default function Page() {}");
+
+      const code = generateRscEntry(root, [
+        {
+          ...minimalRoutes[0],
+          layouts: [layoutPath],
+          pagePath,
+        },
+      ]);
+
+      expect(code).not.toContain("server/isr-cache.js");
+      expect(code).not.toContain("server/seed-cache.js");
+      expect(code).toContain("const __isrGet = async () => null");
+      expect(code).toContain("export async function seedMemoryCacheFromPrerender() { return 0; }");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("generated code delegates server-action header handling to the typed handler", () => {
