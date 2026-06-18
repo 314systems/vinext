@@ -15,10 +15,8 @@ import {
   createFromReadableStream,
   setServerCallback,
 } from "@vitejs/plugin-rsc/browser";
-import { flushSync } from "react-dom";
 import { createRoot, hydrateRoot } from "react-dom/client";
 import "../client/instrumentation-client.js";
-import { notifyAppRouterTransitionStart } from "../client/instrumentation-client-state.js";
 import {
   __basePath,
   appRouterInstance,
@@ -53,7 +51,6 @@ import {
   isClientNavigationPlannerModuleLoaded,
   loadClientNavigationPlannerModule,
 } from "../client/navigation-planner-runtime.js";
-import { retryScrollTo, scrollToHashTargetOnNextFrame } from "vinext/shims/hash-scroll";
 import { AppRouterScrollCommitProvider } from "vinext/shims/app-router-scroll";
 import {
   beginAppRouterScrollIntent,
@@ -68,8 +65,6 @@ import {
 import {
   clearHardNavigationLoopGuard,
   createAppBrowserNavigationController,
-  createBasePathStrippedPathAndSearch,
-  createSnapshotPathAndSearch,
   type HistoryUpdateMode,
   type NavigationPayloadOutcome,
   type PendingBrowserRouterState,
@@ -103,10 +98,6 @@ import {
   type OperationLane,
 } from "./app-browser-state.js";
 import { AppBrowserHistoryController } from "./app-browser-history-controller.js";
-import {
-  createPopstateRestoreHandler,
-  restoreSynchronousPopstateScrollPosition,
-} from "./app-browser-popstate.js";
 import {
   DevRecoveryBoundary,
   GlobalErrorBoundary,
@@ -281,12 +272,6 @@ const DEFAULT_GLOBAL_ERROR_COMPONENT = DefaultGlobalError as React.ComponentType
   reset: () => void;
 }>;
 let latestRscHmrUpdateId = 0;
-// Single-slot latch tracking the navId of the most recent synchronous
-// popstate snapshot restore. activeNavigationId is strictly monotonic, so
-// shouldSkipScrollRestore can only match the most-recently restored
-// navigation. This is intentionally not a per-navigation set — a future
-// asynchronous scroll restore for an older navId is already stale.
-let synchronousPopstateScrollRestoreNavigationId: number | null = null;
 
 // Vite can notify the browser about an RSC HMR update before the dev server's
 // request runner has swapped to the invalidated module graph. Give the
@@ -296,28 +281,6 @@ function waitForRscHmrSettle(delayMs = RSC_HMR_SETTLE_DELAY_MS): Promise<void> {
   return new Promise((resolve) => {
     window.setTimeout(resolve, delayMs);
   });
-}
-
-function restoreHistoryStateSnapshot(historyState: unknown): boolean {
-  const navId = browserNavigationController.getActiveNavigationId();
-  let restored = false;
-  flushSync(() => {
-    restored = historyController.restoreHistorySnapshot({
-      historyState,
-      stageClientParams,
-      approveVisibleRestore: ({ state, beforeCommit }) =>
-        browserNavigationController.restoreHistorySnapshotVisibleState({
-          beforeCommit,
-          navId,
-          state,
-          targetHref: window.location.href,
-        }),
-    });
-  });
-  if (!restored) return false;
-
-  commitClientNavigationState();
-  return true;
 }
 
 function getBrowserRouterState(): AppRouterState {
@@ -761,40 +724,6 @@ function restoreHydrationNavigationContext(
   });
 }
 
-function restorePopstateScrollPosition(
-  state: unknown,
-  options?: {
-    shouldContinue?: () => boolean;
-  },
-): void {
-  const shouldContinue = options?.shouldContinue ?? (() => true);
-  if (!shouldContinue()) return;
-
-  if (!(state && typeof state === "object" && "__vinext_scrollY" in state)) {
-    if (window.location.hash) {
-      scrollToHashTargetOnNextFrame(window.location.hash);
-    }
-    return;
-  }
-
-  const y = Number(state.__vinext_scrollY);
-  const x = "__vinext_scrollX" in state ? Number(state.__vinext_scrollX) : 0;
-
-  retryScrollTo(x, y, { minFrames: 1, shouldContinue });
-}
-
-function isSameAppRoutePopstateTarget(href: string): boolean {
-  if (!hasBrowserRouterState()) return false;
-
-  const target = new URL(href, window.location.origin);
-  const routerState = getBrowserRouterState();
-
-  return (
-    createBasePathStrippedPathAndSearch(target, __basePath) ===
-    createSnapshotPathAndSearch(routerState.navigationSnapshot)
-  );
-}
-
 // Set on pagehide so the RSC navigation catch block can distinguish expected
 // fetch aborts (triggered by the unload itself) from real errors worth logging.
 let isPageUnloading = false;
@@ -1127,86 +1056,24 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
     navigate: navigateRsc,
   });
 
-  // Note: This popstate handler runs for App Router (RSC navigation available).
-  // It coordinates scroll restoration with the pending RSC navigation.
-  // Pages Router scroll restoration is handled in shims/navigation.ts:1289 with
-  // microtask-based deferral for compatibility with non-RSC navigation.
-  // See: https://github.com/vercel/next.js/discussions/41934#discussioncomment-4602607
-  const handlePopstate = createPopstateRestoreHandler({
-    getActiveNavigationId: browserNavigationController.getActiveNavigationId.bind(
-      browserNavigationController,
-    ),
-    getPendingNavigation: () => window.__VINEXT_RSC_PENDING__,
-    getNavigate: () => getNavigationRuntime()?.functions.navigate,
-    isCurrentNavigation: browserNavigationController.isCurrentNavigation.bind(
-      browserNavigationController,
-    ),
-    notifyAppRouterTransitionStart: (href) => {
-      notifyAppRouterTransitionStart(href, "traverse");
-    },
-    restorePopstateScrollPosition,
-    setPendingNavigation: (pendingNavigation) => {
-      window.__VINEXT_RSC_PENDING__ = pendingNavigation;
-    },
-    shouldSkipScrollRestore: (navId) => synchronousPopstateScrollRestoreNavigationId === navId,
-  });
-
-  const handleBrowserPopstate = async (event: PopStateEvent): Promise<void> => {
-    const navigationDependenciesLoad = loadBrowserNavigationDependenciesIfNeeded();
-    if (navigationDependenciesLoad !== null) await navigationDependenciesLoad;
-    // The browser has already applied the history entry by the time popstate
-    // fires. App Router state does not include hashes, so matching the
-    // committed pathname/search proves this traversal does not need a new RSC
-    // payload. This covers both /page#target -> /page and /page -> /page#target.
-    // Notify the transition start so observers still see the URL change, then
-    // restore scroll directly and skip the RSC dispatch.
-    const href = window.location.href;
-    if (isSameAppRoutePopstateTarget(href)) {
-      notifyAppRouterTransitionStart(href, "traverse");
-      historyController.commitTraversalIndexFromHistoryState(event.state);
-      restorePopstateScrollPosition(event.state);
-      return;
-    }
-    handlePopstate(event);
-    // Synchronous snapshot restore supersedes the in-flight async RSC traverse.
-    //
-    // handlePopstate calls navigate() which starts an async RSC traversal:
-    // renderNavigationPayload captures startedState (visibleCommitVersion N)
-    // and awaits nextElements, yielding at least one microtask.
-    //
-    // restoreHistoryStateSnapshot runs synchronously (flushSync, no await) in
-    // the same task, commits the cached history snapshot, and bumps
-    // visibleCommitVersion to N+1.
-    //
-    // When the async traverse resolves,
-    // resolvePendingNavigationCommitDispositionDecision sees
-    // startedVisibleCommitVersion (N) !== currentState.visibleCommitVersion
-    // (N+1) and returns staleOperation → no-commit, discarding the fresh
-    // RSC payload in favor of the cached client snapshot.
-    //
-    // This matches Next's in-memory bfcache behaviour (no refetch on back).
-    // The ordering is deterministic only because restoreHistoryStateSnapshot
-    // is synchronous while the async traverse always yields.
-    if (restoreHistoryStateSnapshot(event.state)) {
-      restoreSynchronousPopstateScrollPosition(
-        {
-          getActiveNavigationId: () => browserNavigationController.getActiveNavigationId(),
-          isCurrentNavigation: (navId) => browserNavigationController.isCurrentNavigation(navId),
-          markScrollRestoreConsumed: (navId) => {
-            synchronousPopstateScrollRestoreNavigationId = navId;
-          },
-          restorePopstateScrollPosition,
-        },
-        event.state,
-      );
-    }
-  };
-
   window.addEventListener("popstate", (event) => {
-    void handleBrowserPopstate(event).catch((error: unknown) => {
-      console.error("[vinext] Failed to load App Router navigation metadata:", error);
-      window.location.reload();
-    });
+    // History mutation can run in the same task as popstate observers. Keep the
+    // traversal index synchronous even though restoration is loaded lazily.
+    historyController.commitTraversalIndexFromHistoryState(event.state);
+    void import("./app-browser-popstate-client.js")
+      .then(({ handleAppBrowserPopstate }) =>
+        handleAppBrowserPopstate(event, {
+          basePath: __basePath,
+          browserNavigationController,
+          historyController,
+          loadNavigationDependencies: loadBrowserNavigationDependenciesIfNeeded,
+          stageClientParams,
+        }),
+      )
+      .catch((error: unknown) => {
+        console.error("[vinext] Failed to load App Router navigation metadata:", error);
+        window.location.reload();
+      });
   });
 
   if (import.meta.hot) {
