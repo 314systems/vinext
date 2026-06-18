@@ -166,6 +166,8 @@ type AppRouterConfig = {
   /** Internationalization routing config for middleware matcher locale handling. */
   i18n?: NextI18nConfig | null;
   imageConfig?: ImageConfig;
+  /** Whether to emit development-only request validation. Defaults to true. */
+  isDev?: boolean;
   /**
    * Absolute path to `app/global-not-found.{tsx,ts,js,jsx}` when present.
    * When provided, route-miss 404s render this module standalone (it owns its
@@ -224,6 +226,7 @@ export function generateRscEntry(
   const cacheMaxMemorySize = config?.cacheMaxMemorySize;
   const inlineCss = config?.inlineCss === true;
   const cacheComponents = config?.cacheComponents === true;
+  const isDev = config?.isDev ?? true;
   const hasServerActions = config?.hasServerActions !== false;
   const i18nConfig = config?.i18n ?? null;
   const hasPagesDir = config?.hasPagesDir ?? false;
@@ -638,7 +641,7 @@ export async function seedMemoryCacheFromPrerender(serverDir) {
   });
 }
 
-${generateDevOriginCheckCode(config?.allowedDevOrigins)}
+${isDev ? generateDevOriginCheckCode(config?.allowedDevOrigins) : ""}
 
 /**
  * Maximum server-action request body size.
@@ -1161,7 +1164,7 @@ export default createAppRscHandler({
   setNavigationContext,
   staticParamsMap: generateStaticParamsMap,
   trailingSlash: __trailingSlash,
-  validateDevRequestOrigin: __validateDevRequestOrigin,
+  ${isDev ? "validateDevRequestOrigin: __validateDevRequestOrigin," : ""}
 });
 
 if (import.meta.hot) {

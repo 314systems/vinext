@@ -809,6 +809,15 @@ describe("App Router entry templates", () => {
     expect(code).not.toContain("computeRscCacheBustingSearchParam(");
   });
 
+  it("generateRscEntry omits dev-origin validation for production builds", () => {
+    const code = generateRscEntry("/tmp/test/app", minimalAppRoutes, null, [], null, "", false, {
+      isDev: false,
+    });
+
+    expect(code).not.toContain("function __validateDevRequestOrigin");
+    expect(code).not.toContain("validateDevRequestOrigin: __validateDevRequestOrigin");
+  });
+
   it("generateRscEntry only includes the App middleware runtime when middleware exists", () => {
     const withoutMiddleware = generateRscEntry(
       "/tmp/test/app",

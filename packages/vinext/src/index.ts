@@ -849,6 +849,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   let appDir: string;
   let hasAppDir = false;
   let hasPagesDir = false;
+  let isDevCommand = true;
   let nextConfig: ResolvedNextConfig;
   let fileMatcher: ReturnType<typeof createValidFileMatcher>;
   let middlewarePath: string | null = null;
@@ -1282,6 +1283,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         if (process.env.NODE_ENV !== resolvedNodeEnv) {
           process.env.NODE_ENV = resolvedNodeEnv;
         }
+        isDevCommand = env?.command === "serve" && env?.isPreview !== true;
 
         // Resolve the base directory for app/pages detection.
         // If appDir is provided, resolve it (supports both relative and absolute paths).
@@ -2887,6 +2889,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 imageSizes: nextConfig?.images?.imageSizes,
                 qualities: nextConfig?.images?.qualities,
               },
+              isDev: isDevCommand,
               hasPagesDir,
               publicFiles: scanPublicFileRoutes(root),
               globalNotFoundPath,
