@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { fnv1a64 } from "../utils/hash.js";
 import { _consumeRequestScopedCacheLife } from "vinext/shims/cache-request-state";
-import { consumeDynamicFetchObservations } from "vinext/shims/fetch-cache";
+import { consumeDynamicFetchObservations } from "vinext/shims/fetch-cache-hooks";
 import {
   consumeDynamicUsage,
   consumeInvalidDynamicUsageError,

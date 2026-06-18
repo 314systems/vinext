@@ -1053,6 +1053,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   let clientRouterRuntimeRequired: boolean | null = null;
   let googleFontRuntimeRequired = false;
   let localFontRuntimeRequired = false;
+  let fetchCacheRuntimeRequired = false;
 
   async function resolveHasClientRouterRuntime(
     config: Pick<ResolvedConfig, "command" | "plugins">,
@@ -2880,6 +2881,12 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             resolveDetectedBuildCapability(this.environment.config, googleFontRuntimeRequired),
             resolveDetectedBuildCapability(this.environment.config, localFontRuntimeRequired),
           ]);
+          const hasFetchCacheRuntime =
+            nextConfig.cacheComponents ||
+            (await resolveDetectedBuildCapability(
+              this.environment.config,
+              fetchCacheRuntimeRequired,
+            ));
           // Check for global-error.tsx at app root
           const globalErrorPath = findFileWithExts(appDir, "global-error", fileMatcher);
           // Check for global-not-found.tsx at app root (Next.js 16+ feature)
@@ -2924,6 +2931,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               hasClientRouterRuntime,
               hasGoogleFonts,
               hasLocalFonts,
+              hasFetchCacheRuntime,
               i18n: nextConfig?.i18n,
               imageConfig: {
                 deviceSizes: nextConfig?.images?.deviceSizes,
@@ -4781,6 +4789,68 @@ export const loadServerActionClient = ${
         },
       },
     } as Plugin & { _dimCache: Map<string, { width: number; height: number }> },
+    {
+      name: "vinext:detect-fetch-cache-runtime",
+      transform: {
+        filter: {
+          id: {
+            include: /\.(?:[cm]?[jt]sx?)(?:\?.*)?$/,
+            exclude: VIRTUAL_MODULE_ID_RE,
+          },
+        },
+        handler(code, id) {
+          if (fetchCacheRuntimeRequired || this.environment?.name !== "rsc") return null;
+
+          const cleanId = stripViteModuleQuery(id);
+          if (
+            cleanId.includes(`${path.sep}node_modules${path.sep}`) ||
+            isInsideDirectory(__dirname, cleanId)
+          ) {
+            return null;
+          }
+          // A relative import can escape Vite's root in a monorepo. Treat
+          // those modules as uncertain rather than silently omitting fetch
+          // patching for code the project scan cannot classify locally.
+          if (!isInsideDirectory(root, cleanId)) {
+            fetchCacheRuntimeRequired = true;
+            return null;
+          }
+
+          if (
+            /\bfetch\b|["']use cache(?::[^"']*)?["']|\bunstable_cache\b|["']next\/cache["']|["']vinext\/cache-runtime["']/.test(
+              code,
+            )
+          ) {
+            fetchCacheRuntimeRequired = true;
+            return null;
+          }
+
+          const importPattern =
+            /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)["']([^"'./][^"']*)["']/g;
+          for (const match of code.matchAll(importPattern)) {
+            const specifier = match[1];
+            if (
+              specifier === "react" ||
+              specifier.startsWith("react/") ||
+              specifier === "react-dom" ||
+              specifier.startsWith("react-dom/") ||
+              specifier === "next" ||
+              specifier.startsWith("next/") ||
+              specifier === "vinext" ||
+              specifier.startsWith("vinext/") ||
+              specifier === "server-only" ||
+              specifier === "client-only"
+            ) {
+              continue;
+            }
+            fetchCacheRuntimeRequired = true;
+            break;
+          }
+
+          return null;
+        },
+      },
+    },
     // Google Fonts import rewrite + self-hosting — see src/plugins/fonts.ts
     createGoogleFontsPlugin(_fontGoogleShimPath, _shimsDir, () => {
       googleFontRuntimeRequired = true;

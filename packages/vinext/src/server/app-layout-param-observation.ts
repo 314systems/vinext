@@ -8,7 +8,7 @@ import {
   getCollectedFetchTags,
   peekCacheableFetchObservations,
   peekDynamicFetchObservations,
-} from "vinext/shims/fetch-cache";
+} from "vinext/shims/fetch-cache-hooks";
 import { peekDynamicUsage, peekRenderRequestApiUsage } from "vinext/shims/headers";
 import {
   isInsideUnifiedScope,

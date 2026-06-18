@@ -8,7 +8,7 @@ import {
   type MetadataMergeEntry,
   type Viewport,
 } from "vinext/shims/metadata";
-import { runWithFetchDedupe } from "vinext/shims/fetch-cache";
+import { runWithFetchDedupe } from "vinext/shims/fetch-cache-hooks";
 import type { AppPageParams } from "./app-page-boundary.js";
 import { tagAppPageMetadataError } from "./app-page-execution.js";
 import { resolveAppPageSegmentParams } from "./app-page-params.js";

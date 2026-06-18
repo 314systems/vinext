@@ -8,11 +8,11 @@ import {
   type HeadersAccessPhase,
 } from "vinext/shims/headers";
 import {
-  type FetchCacheMode,
   setCurrentFetchCacheMode,
   setCurrentFetchSoftTags,
   setCurrentForceDynamicFetchDefault,
-} from "vinext/shims/fetch-cache";
+} from "vinext/shims/fetch-cache-hooks";
+import type { FetchCacheMode } from "vinext/shims/fetch-cache";
 import type { ReactFormState } from "react-dom/client";
 import { isExternalUrl } from "../config/config-matchers.js";
 import { splitPathSegments } from "../routing/utils.js";

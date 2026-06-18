@@ -25,7 +25,7 @@ import {
   VINEXT_PRERENDER_ROUTE_PARAMS_HEADER,
   VINEXT_PRERENDER_STATIC_PARAMS_PATH,
 } from "./headers.js";
-import { ensureFetchPatch, setCurrentFetchSoftTags } from "vinext/shims/fetch-cache";
+import { ensureFetchPatch, setCurrentFetchSoftTags } from "vinext/shims/fetch-cache-hooks";
 import type { ReactFormState } from "react-dom/client";
 import {
   getRequestExecutionContext,

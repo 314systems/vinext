@@ -1,4 +1,4 @@
-import { runWithFetchDedupe } from "vinext/shims/fetch-cache";
+import { runWithFetchDedupe } from "vinext/shims/fetch-cache-hooks";
 import { applyEdgeRuntimeHeader } from "./app-page-response.js";
 import { mergeMiddlewareResponseHeaders } from "./middleware-response-headers.js";
 import {

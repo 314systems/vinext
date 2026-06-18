@@ -40,7 +40,7 @@ import {
   type CacheLifeConfig,
 } from "./cache-request-state.js";
 import { VINEXT_RSC_MARKER_HEADER } from "../server/headers.js";
-import { addCollectedRequestTags, getCurrentFetchSoftTags } from "./fetch-cache.js";
+import { addCollectedRequestTags, getCurrentFetchSoftTags } from "./fetch-cache-hooks.js";
 import { getOrCreateAls } from "./internal/als-registry.js";
 import {
   isInsideUnifiedScope,

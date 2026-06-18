@@ -322,7 +322,7 @@ describe("app route handler dispatch", () => {
   // for fetches without explicit cache config — for route handlers as well as
   // pages.
   it("applies the force-dynamic fetch default before invoking the route handler", async () => {
-    const fetchCacheShims = await import("../packages/vinext/src/shims/fetch-cache.js");
+    const fetchCacheShims = await import("../packages/vinext/src/shims/fetch-cache-hooks.js");
     const modeSpy = vi.spyOn(fetchCacheShims, "setCurrentFetchCacheMode");
     const forceDynamicSpy = vi.spyOn(fetchCacheShims, "setCurrentForceDynamicFetchDefault");
 
@@ -376,7 +376,7 @@ describe("app route handler dispatch", () => {
   });
 
   it("applies the handler's explicit fetchCache export without the force-dynamic default", async () => {
-    const fetchCacheShims = await import("../packages/vinext/src/shims/fetch-cache.js");
+    const fetchCacheShims = await import("../packages/vinext/src/shims/fetch-cache-hooks.js");
     const modeSpy = vi.spyOn(fetchCacheShims, "setCurrentFetchCacheMode");
     const forceDynamicSpy = vi.spyOn(fetchCacheShims, "setCurrentForceDynamicFetchDefault");
 
@@ -428,7 +428,7 @@ describe("app route handler dispatch", () => {
   });
 
   it("re-applies the handler's fetch cache mode inside the background regeneration context", async () => {
-    const fetchCacheShims = await import("../packages/vinext/src/shims/fetch-cache.js");
+    const fetchCacheShims = await import("../packages/vinext/src/shims/fetch-cache-hooks.js");
     const modeSpy = vi.spyOn(fetchCacheShims, "setCurrentFetchCacheMode");
     const forceDynamicSpy = vi.spyOn(fetchCacheShims, "setCurrentForceDynamicFetchDefault");
 

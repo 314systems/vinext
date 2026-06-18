@@ -7,6 +7,7 @@ import {
   _peekRequestScopedCacheLife,
 } from "vinext/shims/cache-request-state";
 import type { CachedAppPageValue } from "vinext/shims/cache-handler";
+import type { FetchCacheMode } from "vinext/shims/fetch-cache";
 import type { RootParams } from "vinext/shims/root-params";
 import type { PprFallbackShellState } from "vinext/shims/ppr-fallback-shell";
 import {
@@ -23,14 +24,13 @@ import { getRequestExecutionContext } from "vinext/shims/request-context";
 import { createRequestContext, runWithRequestContext } from "vinext/shims/unified-request-context";
 import {
   ensureFetchPatch,
-  type FetchCacheMode,
   getCollectedFetchTags,
   peekDynamicFetchObservations,
   runWithFetchDedupe,
   setCurrentFetchCacheMode,
   setCurrentForceDynamicFetchDefault,
   setCurrentFetchSoftTags,
-} from "vinext/shims/fetch-cache";
+} from "vinext/shims/fetch-cache-hooks";
 import { createAppPayloadLayoutId, type AppOutgoingElements } from "./app-elements.js";
 import type { AppPagePprFallbackCacheShell } from "./app-ppr-fallback-shell.js";
 import type { WarmPprFallbackShellCachesOptions } from "./app-ppr-fallback-shell-render.js";

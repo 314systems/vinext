@@ -4,7 +4,7 @@ import type { RootParams } from "vinext/shims/root-params";
 import { _consumeRequestScopedCacheLife } from "vinext/shims/cache-request-state";
 import type { CacheControlMetadata } from "vinext/shims/cache-handler";
 import { consumeDynamicUsage, consumeInvalidDynamicUsageError } from "vinext/shims/headers";
-import { getCollectedFetchTags } from "vinext/shims/fetch-cache";
+import { getCollectedFetchTags } from "vinext/shims/fetch-cache-hooks";
 import {
   consumeAppPageRenderObservationState,
   createAppPageHtmlOutputScope,

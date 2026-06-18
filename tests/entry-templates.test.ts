@@ -891,6 +891,32 @@ describe("App Router entry templates", () => {
     expect(withCacheComponents).toContain("pprRuntime: __appPagePprRuntime");
   });
 
+  it("generateRscEntry only registers the fetch cache runtime when the build requires it", () => {
+    const withoutFetchCache = generateRscEntry(
+      "/tmp/test/app",
+      minimalAppRoutes,
+      null,
+      [],
+      null,
+      "",
+      false,
+      { hasFetchCacheRuntime: false },
+    );
+    const withFetchCache = generateRscEntry(
+      "/tmp/test/app",
+      minimalAppRoutes,
+      null,
+      [],
+      null,
+      "",
+      false,
+      { hasFetchCacheRuntime: true },
+    );
+
+    expect(withoutFetchCache).not.toContain('import "vinext/shims/fetch-cache";');
+    expect(withFetchCache).toContain('import "vinext/shims/fetch-cache";');
+  });
+
   it("generateRscEntry only includes metadata route response handling when routes exist", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-entry-metadata-runtime-"));
     const filePath = path.join(tmpDir, "sitemap.ts");

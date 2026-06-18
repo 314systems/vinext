@@ -176,6 +176,8 @@ type AppRouterConfig = {
   hasGoogleFonts?: boolean;
   /** Whether the module graph imports next/font/local. Defaults to true. */
   hasLocalFonts?: boolean;
+  /** Whether the server module graph uses fetch or cache APIs. Defaults to true. */
+  hasFetchCacheRuntime?: boolean;
   /** Internationalization routing config for middleware matcher locale handling. */
   i18n?: NextI18nConfig | null;
   imageConfig?: ImageConfig;
@@ -244,6 +246,7 @@ export function generateRscEntry(
   const hasClientRouterRuntime = config?.hasClientRouterRuntime !== false;
   const hasGoogleFonts = config?.hasGoogleFonts !== false;
   const hasLocalFonts = config?.hasLocalFonts !== false;
+  const hasFetchCacheRuntime = config?.hasFetchCacheRuntime !== false;
   const hasIsrRuntime = cacheComponents || appRoutesNeedResponseCache(routes);
   const i18nConfig = config?.i18n ?? null;
   const hasPagesDir = config?.hasPagesDir ?? false;
@@ -296,6 +299,7 @@ import {
 import { createClientManifest as _createClientManifest } from "@vitejs/plugin-rsc/core/rsc";
 import { prerender as _prerender } from "@vitejs/plugin-rsc/vendor/react-server-dom/static.edge";
 import { createRscPrerenderer, createRscRenderer } from ${JSON.stringify(rscStreamHintsPath)};
+${hasFetchCacheRuntime ? 'import "vinext/shims/fetch-cache";' : ""}
 
 const renderToReadableStream = createRscRenderer(_renderToReadableStream);
 const prerenderToReadableStream = createRscPrerenderer(async (model, options) =>

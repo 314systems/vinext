@@ -1,12 +1,12 @@
 import type { NextI18nConfig } from "../config/next-config.js";
+import type { FetchCacheMode } from "vinext/shims/fetch-cache";
 import {
   getCollectedFetchTags,
   ensureFetchPatch,
   setCurrentFetchCacheMode,
   setCurrentFetchSoftTags,
   setCurrentForceDynamicFetchDefault,
-  type FetchCacheMode,
-} from "vinext/shims/fetch-cache";
+} from "vinext/shims/fetch-cache-hooks";
 import {
   consumeDynamicUsage,
   getAndClearPendingCookies,

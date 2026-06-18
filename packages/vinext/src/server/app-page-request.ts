@@ -1,5 +1,5 @@
 import type { AppPageSpecialError } from "./app-page-execution.js";
-import { runWithFetchDedupe } from "vinext/shims/fetch-cache";
+import { runWithFetchDedupe } from "vinext/shims/fetch-cache-hooks";
 import { getAppPageSegmentParamName } from "./app-page-params.js";
 import { notFoundResponse } from "./http-error-responses.js";
 import type { AppLayoutParamAccessTracker } from "./app-layout-param-observation.js";

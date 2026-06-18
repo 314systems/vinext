@@ -29,6 +29,7 @@ import {
   getRequestContext,
   runWithUnifiedStateMutation,
 } from "./unified-request-context.js";
+import { registerFetchCacheHooks } from "./fetch-cache-hooks.js";
 
 // ---------------------------------------------------------------------------
 // Cache key generation
@@ -1354,3 +1355,17 @@ export function ensureFetchPatch(): void {
 export function getOriginalFetch(): typeof globalThis.fetch {
   return originalFetch;
 }
+
+registerFetchCacheHooks({
+  addCollectedRequestTags,
+  consumeDynamicFetchObservations,
+  ensureFetchPatch,
+  getCollectedFetchTags,
+  getCurrentFetchSoftTags,
+  peekCacheableFetchObservations,
+  peekDynamicFetchObservations,
+  runWithFetchDedupe,
+  setCurrentFetchCacheMode,
+  setCurrentFetchSoftTags,
+  setCurrentForceDynamicFetchDefault,
+});
