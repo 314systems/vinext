@@ -296,15 +296,19 @@ import {
 } from ${JSON.stringify(
     hasServerActions ? "@vitejs/plugin-rsc/rsc" : "@vitejs/plugin-rsc/react/rsc",
   )};
-import { createClientManifest as _createClientManifest } from "@vitejs/plugin-rsc/core/rsc";
-import { prerender as _prerender } from "@vitejs/plugin-rsc/vendor/react-server-dom/static.edge";
+${cacheComponents ? 'import { createClientManifest as _createClientManifest } from "@vitejs/plugin-rsc/core/rsc";' : ""}
+${cacheComponents ? 'import { prerender as _prerender } from "@vitejs/plugin-rsc/vendor/react-server-dom/static.edge";' : ""}
 import { createRscPrerenderer, createRscRenderer } from ${JSON.stringify(rscStreamHintsPath)};
 ${hasFetchCacheRuntime ? 'import "vinext/shims/fetch-cache";' : ""}
 
 const renderToReadableStream = createRscRenderer(_renderToReadableStream);
-const prerenderToReadableStream = createRscPrerenderer(async (model, options) =>
+${
+  cacheComponents
+    ? `const prerenderToReadableStream = createRscPrerenderer(async (model, options) =>
   _prerender(model, _createClientManifest(), options),
-);
+);`
+    : ""
+}
 import { createElement } from "react";
 import { getNavigationContext as _getNavigationContext } from "next/navigation";
 import { configureMemoryCacheHandler as __configureMemoryCacheHandler } from "vinext/shims/cache-handler";
@@ -989,7 +993,7 @@ export default createAppRscHandler({
         });
       },
       renderToReadableStream,
-      prerenderToReadableStream,
+      ${cacheComponents ? "prerenderToReadableStream," : ""}
       request,
       revalidateSeconds: __segmentConfig.revalidateSeconds,
       resolveRouteFetchCacheMode(targetRoute) {

@@ -884,9 +884,13 @@ describe("App Router entry templates", () => {
     );
 
     expect(withoutCacheComponents).not.toContain("app-page-ppr-runtime.js");
+    expect(withoutCacheComponents).not.toContain("react-server-dom/static.edge");
+    expect(withoutCacheComponents).not.toContain("prerenderToReadableStream,");
     expect(withoutCacheComponents).not.toContain("createPprFallbackShells(route, params)");
     expect(withoutCacheComponents).toContain("pprRuntime: undefined");
     expect(withCacheComponents).toContain("app-page-ppr-runtime.js");
+    expect(withCacheComponents).toContain("react-server-dom/static.edge");
+    expect(withCacheComponents).toContain("prerenderToReadableStream,");
     expect(withCacheComponents).toContain("createPprFallbackShells(route, params)");
     expect(withCacheComponents).toContain("pprRuntime: __appPagePprRuntime");
   });
