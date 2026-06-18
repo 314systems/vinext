@@ -17,6 +17,10 @@ import {
   loadNavigationRuntimeRouteManifest,
   type NavigationRuntimeVisibleCommitMode,
 } from "../client/navigation-runtime.js";
+import {
+  getClientNavigationPlannerModule,
+  loadClientNavigationPlannerModule,
+} from "../client/navigation-planner-runtime.js";
 import { notifyAppRouterTransitionStart } from "../client/instrumentation-client-state.js";
 import {
   clearAppNavigationFailureTarget,
@@ -48,7 +52,6 @@ import {
   toSameOriginAppPath,
   withBasePath,
 } from "./url-utils.js";
-import { navigationPlanner } from "../server/navigation-planner.js";
 import { stripBasePath } from "../utils/base-path.js";
 import { ReadonlyURLSearchParams } from "./readonly-url-search-params.js";
 import { assertSafeNavigationUrl } from "./url-safety.js";
@@ -1659,6 +1662,8 @@ export async function navigateClientSide(
   // The planner classifies the early navigation intent from the URL delta. A
   // same-document scroll updates the URL and scrolls to the hash target without
   // an RSC fetch; everything else proceeds to the RSC navigation below.
+  await loadClientNavigationPlannerModule();
+  const navigationPlanner = getClientNavigationPlannerModule().navigationPlanner;
   const earlyIntent = navigationPlanner.classifyEarlyNavigationIntent({
     basePath: __basePath,
     currentHref: window.location.href,

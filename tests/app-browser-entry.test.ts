@@ -1,5 +1,5 @@
 import React from "react";
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 import {
   createDevOnCaughtError,
   createOnUncaughtError,
@@ -122,6 +122,7 @@ import {
   createNavigationTrace,
 } from "../packages/vinext/src/server/navigation-trace.js";
 import { navigationPlanner } from "../packages/vinext/src/server/navigation-planner.js";
+import { loadClientNavigationPlannerModule } from "../packages/vinext/src/client/navigation-planner-runtime.js";
 import { createCacheEntryReuseProof } from "../packages/vinext/src/server/cache-proof.js";
 import {
   ACTION_REVALIDATED_HEADER,
@@ -140,6 +141,10 @@ import type {
   RouteManifestSlotBinding,
   StaticSegmentGraph,
 } from "../packages/vinext/src/routing/app-route-graph.js";
+
+beforeAll(async () => {
+  await loadClientNavigationPlannerModule();
+});
 
 type TestRouteManifestRoute = {
   id?: string;

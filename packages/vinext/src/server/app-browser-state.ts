@@ -24,15 +24,14 @@ import {
   type NavigationTraceFields,
 } from "./navigation-trace.js";
 import { createCacheEntryReuseProof, type CacheEntryReuseProof } from "./cache-proof.js";
-import {
-  navigationPlanner,
-  resolveDefaultOrUnmatchedSlotPersistenceForLayouts,
-  type MountedParallelSlotSnapshot,
-  type NavigationDecision,
-  type OperationLane,
-  type OperationToken,
-  type RouteSnapshot,
+import type {
+  MountedParallelSlotSnapshot,
+  NavigationDecision,
+  OperationLane,
+  OperationToken,
+  RouteSnapshot,
 } from "./navigation-planner.js";
+import { getClientNavigationPlannerModule } from "../client/navigation-planner-runtime.js";
 import { verifyOperationTokenForCommit, type VerifiedOperationToken } from "./operation-token.js";
 import {
   createSnapshotPathAndSearch,
@@ -453,7 +452,7 @@ function planPendingRootBoundaryFlightResponse(options: {
   // only translates committed AppElements metadata into planner snapshots.
   // RouteManifest now supplies graph-owned route topology while snapshots
   // continue to carry runtime state such as visible slot content.
-  return navigationPlanner.plan({
+  return getClientNavigationPlannerModule().navigationPlanner.plan({
     routeManifest: options.routeManifest,
     state: {
       nextOperationToken: options.token,
@@ -571,11 +570,12 @@ function mergeSkippedLayoutSlotPreservation(options: {
   skippedLayoutIds: readonly string[];
   targetSlotBindings: readonly AppElementsSlotBinding[];
 }): readonly string[] {
-  const ownedSlotIds = resolveDefaultOrUnmatchedSlotPersistenceForLayouts({
-    currentSlotBindings: options.currentSlotBindings,
-    preservedLayoutIds: options.skippedLayoutIds,
-    targetSlotBindings: options.targetSlotBindings,
-  });
+  const ownedSlotIds =
+    getClientNavigationPlannerModule().resolveDefaultOrUnmatchedSlotPersistenceForLayouts({
+      currentSlotBindings: options.currentSlotBindings,
+      preservedLayoutIds: options.skippedLayoutIds,
+      targetSlotBindings: options.targetSlotBindings,
+    });
   if (ownedSlotIds.length === 0) return options.preservePreviousSlotIds;
 
   const preservePreviousSlotIds = [...options.preservePreviousSlotIds];

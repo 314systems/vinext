@@ -59,6 +59,11 @@ import {
   type NavigationRuntimeVisibleCommitMode,
   type NavigationRuntimeRscBootstrap,
 } from "../client/navigation-runtime.js";
+import {
+  getClientNavigationPlannerModule,
+  isClientNavigationPlannerModuleLoaded,
+  loadClientNavigationPlannerModule,
+} from "../client/navigation-planner-runtime.js";
 import { retryScrollTo, scrollToHashTargetOnNextFrame } from "vinext/shims/hash-scroll";
 import { AppRouterScrollCommitProvider } from "vinext/shims/app-router-scroll";
 import {
@@ -190,13 +195,13 @@ import {
   VINEXT_RSC_REDIRECT_HEADER,
 } from "./headers.js";
 import { removeStylesheetLinksCoveredByInlineCss } from "./app-inline-css-client.js";
-import {
-  navigationPlanner,
-  type NavigationReuseFacts,
-  type VisitedResponseCacheCandidateFacts,
+import type {
+  NavigationReuseFacts,
+  VisitedResponseCacheCandidateFacts,
 } from "./navigation-planner.js";
 
 type SearchParamInput = ConstructorParameters<typeof URLSearchParams>[0];
+type NavigationPlanner = typeof import("./navigation-planner.js").navigationPlanner;
 
 type ServerActionResult = AppBrowserServerActionResult<AppWireElements>;
 
@@ -251,8 +256,15 @@ function getBrowserRouteManifest(): RouteManifest | null {
   return getNavigationRuntime()?.bootstrap.routeManifest ?? null;
 }
 
-function loadBrowserRouteManifestIfNeeded(): Promise<RouteManifest | null> | null {
-  return getBrowserRouteManifest() === null ? loadNavigationRuntimeRouteManifest() : null;
+function loadBrowserNavigationDependenciesIfNeeded(): Promise<unknown> | null {
+  const loads: Promise<unknown>[] = [];
+  if (getBrowserRouteManifest() === null) {
+    loads.push(loadNavigationRuntimeRouteManifest());
+  }
+  if (!isClientNavigationPlannerModuleLoaded()) {
+    loads.push(loadClientNavigationPlannerModule());
+  }
+  return loads.length === 0 ? null : Promise.all(loads);
 }
 
 const MAX_HISTORY_STATE_SNAPSHOTS = 50;
@@ -767,7 +779,7 @@ function readVisitedResponseCacheCandidate(
 
 function applyVisitedResponseCacheCandidateDecision(
   candidate: VisitedResponseCacheCandidate,
-  decision: ReturnType<typeof navigationPlanner.classifyVisitedResponseCacheCandidate>,
+  decision: ReturnType<NavigationPlanner["classifyVisitedResponseCacheCandidate"]>,
 ): VisitedResponseCacheEntry | null {
   if (candidate.entry === null) {
     return null;
@@ -1421,8 +1433,9 @@ function applyRuntimeRscBootstrap(rsc: NavigationRuntimeRscBootstrap): void {
 
 function registerServerActionCallback(): void {
   const serverActionCallback: Parameters<typeof setServerCallback>[0] = async (id, args) => {
-    const routeManifestLoad = loadBrowserRouteManifestIfNeeded();
-    if (routeManifestLoad !== null) await routeManifestLoad;
+    const navigationDependenciesLoad = loadBrowserNavigationDependenciesIfNeeded();
+    if (navigationDependenciesLoad !== null) await navigationDependenciesLoad;
+    const navigationPlanner = getClientNavigationPlannerModule().navigationPlanner;
     syncServerActionHttpFallbackHead(null);
     const temporaryReferences = createTemporaryReferenceSet();
     // Carry the interception context + mounted slots from the current router
@@ -1707,8 +1720,9 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
     scrollIntent?: AppRouterScrollIntent | null,
     visibleCommitMode: NavigationRuntimeVisibleCommitMode = "transition",
   ): Promise<void> {
-    const routeManifestLoad = loadBrowserRouteManifestIfNeeded();
-    if (routeManifestLoad !== null) await routeManifestLoad;
+    const navigationDependenciesLoad = loadBrowserNavigationDependenciesIfNeeded();
+    if (navigationDependenciesLoad !== null) await navigationDependenciesLoad;
+    const navigationPlanner = getClientNavigationPlannerModule().navigationPlanner;
     activeNavigationAbortController?.abort();
     const navigationAbortController = new AbortController();
     activeNavigationAbortController = navigationAbortController;
@@ -2291,8 +2305,8 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
   });
 
   const handleBrowserPopstate = async (event: PopStateEvent): Promise<void> => {
-    const routeManifestLoad = loadBrowserRouteManifestIfNeeded();
-    if (routeManifestLoad !== null) await routeManifestLoad;
+    const navigationDependenciesLoad = loadBrowserNavigationDependenciesIfNeeded();
+    if (navigationDependenciesLoad !== null) await navigationDependenciesLoad;
     // The browser has already applied the history entry by the time popstate
     // fires. App Router state does not include hashes, so matching the
     // committed pathname/search proves this traversal does not need a new RSC
@@ -2390,6 +2404,8 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
       if (!browserNavigationController.hasBrowserRouterState()) {
         return;
       }
+      const navigationDependenciesLoad = loadBrowserNavigationDependenciesIfNeeded();
+      if (navigationDependenciesLoad !== null) await navigationDependenciesLoad;
       clearClientNavigationCaches();
       const navigationSnapshot = createClientNavigationRenderSnapshot(
         window.location.href,
