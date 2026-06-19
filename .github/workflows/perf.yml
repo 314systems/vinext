@@ -235,7 +235,7 @@ jobs:
             for relative_path in "${project_roots[@]}"; do
               local path="$root/$relative_path"
               sudo chmod +t "$path"
-              sudo setfacl -m u:"$user":wx "$path"
+              sudo setfacl -m u:"$user":rwx "$path"
             done
             local paths=(
               packages/vinext/dist

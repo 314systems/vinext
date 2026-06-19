@@ -70,7 +70,7 @@ describe("paired performance benchmarks", () => {
     expect(workflow).toContain("node_modules/.vite/task-cache");
     expect(workflow).toContain("benchmarks/nextjs/node_modules");
     expect(workflow).toContain('sudo chmod +t "$path"');
-    expect(workflow).toContain('sudo setfacl -m u:"$user":wx "$path"');
+    expect(workflow).toContain('sudo setfacl -m u:"$user":rwx "$path"');
     expect(workflow).toContain('sudo chown -R "$user":"$user" "$path"');
     expect(workflow).toContain('if [ -L "$path" ]; then');
     expect(workflow).toContain('case "$(realpath "$path")" in');
