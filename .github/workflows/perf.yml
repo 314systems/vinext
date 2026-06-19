@@ -240,6 +240,7 @@ jobs:
             local paths=(
               packages/vinext/dist
               packages/cloudflare/dist
+              node_modules/.vite/task-cache
               benchmarks/vinext/dist
               benchmarks/vinext/.vite
               benchmarks/vinext/node_modules/.vite
@@ -359,6 +360,7 @@ jobs:
             for path in \
               "$root/packages/vinext/dist" \
               "$root/packages/cloudflare/dist" \
+              "$root/node_modules/.vite/task-cache" \
               "$root/benchmarks/nextjs/node_modules"; do
               sudo chown -R "$USER":"$USER" "$path"
               sudo setfacl -R -x u:"$user" "$path"
