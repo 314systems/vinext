@@ -236,6 +236,7 @@ jobs:
               local path="$root/$relative_path"
               sudo chmod +t "$path"
               sudo setfacl -m u:"$user":rwx "$path"
+              sudo setfacl -m d:u:"$user":rwx,d:u:"$USER":rwx "$path"
             done
             local paths=(
               packages/vinext/dist
