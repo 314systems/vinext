@@ -415,7 +415,13 @@ type PagesRouterRuntimeState = {
   beforePopStateCb?: BeforePopStateCallback;
   lastPathnameAndSearch: string;
   isFirstPopStateEvent: boolean;
+  // Any router-owned history update, including a hash-only change. This keeps
+  // Safari replay filtering and back/forward handling aligned with Next.js.
   routerDidNavigate: boolean;
+  // A navigation that changes the rendered page/query owner. Hash-only
+  // changes leave this false so the server-resolved initial query remains
+  // authoritative for the current document.
+  pageDidNavigate: boolean;
   deprecatedEventBridgeInstalled: boolean;
   pagesRouterReady: boolean;
   publicRouter?: Record<string, unknown>;
@@ -443,6 +449,7 @@ function createPagesRouterRuntimeState(): PagesRouterRuntimeState {
       typeof window !== "undefined" ? window.location.pathname + window.location.search : "",
     isFirstPopStateEvent: true,
     routerDidNavigate: false,
+    pageDidNavigate: false,
     deprecatedEventBridgeInstalled: false,
     pagesRouterReady: typeof window === "undefined" || !shouldDeferInitialPagesRouterReady(),
   };
@@ -1268,7 +1275,7 @@ function getPathnameAndQuery(): {
   const routeQuery: Record<string, string | string[]> = {};
   if (isReady) {
     const initialResolvedQuery = nextData?.__vinext?.initialResolvedQuery;
-    if (!routerRuntimeState.routerDidNavigate && initialResolvedQuery) {
+    if (!routerRuntimeState.pageDidNavigate && initialResolvedQuery) {
       for (const [key, value] of Object.entries(initialResolvedQuery)) {
         routeQuery[key] = Array.isArray(value) ? [...value] : value;
       }
@@ -1290,7 +1297,7 @@ function getPathnameAndQuery(): {
   const searchQuery: Record<string, string | string[]> = {};
   if (
     isReady &&
-    (routerRuntimeState.routerDidNavigate || !nextData?.__vinext?.initialResolvedQuery)
+    (routerRuntimeState.pageDidNavigate || !nextData?.__vinext?.initialResolvedQuery)
   ) {
     const params = new URLSearchParams(window.location.search);
     for (const [key, value] of params) {
@@ -2319,6 +2326,7 @@ function updateHistory(
   mode: "push" | "replace",
   fullUrl: string,
   navState: { url: string; as: string; options: { locale?: string; shallow?: boolean } },
+  marksPageNavigation = true,
 ): void {
   const previousKey = getRouterStateKey(window.history.state);
   const key =
@@ -2337,6 +2345,7 @@ function updateHistory(
   routerRuntimeState.currentHistoryKey = key;
   routerRuntimeState.lastPathnameAndSearch = window.location.pathname + window.location.search;
   routerRuntimeState.routerDidNavigate = true;
+  if (marksPageNavigation) routerRuntimeState.pageDidNavigate = true;
 }
 
 /**
@@ -2617,7 +2626,7 @@ async function performNavigation(
     if (mode === "push") saveScrollPosition();
     const eventUrl = resolveHashUrl(full);
     routerEvents.emit("hashChangeStart", eventUrl, { shallow });
-    updateHistory(mode, resolved.startsWith("#") ? resolved : full, navState);
+    updateHistory(mode, resolved.startsWith("#") ? resolved : full, navState, false);
     if (doScroll) scrollToHashTarget(extractHash(resolved));
     onStateUpdate?.();
     routerEvents.emit("hashChangeComplete", eventUrl, { shallow });
@@ -3020,6 +3029,8 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
     dispatchNavigateEvent();
     return;
   }
+
+  routerRuntimeState.pageDidNavigate = true;
 
   // If the restored history entry carries an explicit locale, honour it
   // when computing the fetch URL so default-locale roots still go through

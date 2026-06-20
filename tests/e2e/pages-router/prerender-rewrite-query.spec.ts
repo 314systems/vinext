@@ -27,6 +27,27 @@ async function expectHydratedQuery(
   expect(hydrationErrors).toEqual([]);
 }
 
+async function expectHashNavigationPreservesQuery(
+  page: Page,
+  url: string,
+  expectedQuery: unknown,
+  mode: "push" | "replace",
+) {
+  await page.goto(url);
+  await expect
+    .poll(async () => JSON.parse(await page.locator("#query").innerText()))
+    .toEqual(expectedQuery);
+
+  await page.evaluate(async (navigationMode) => {
+    await (window as any).next.router[navigationMode]("#after-hydration");
+  }, mode);
+
+  await expect(page).toHaveURL(/#after-hydration$/);
+  await expect
+    .poll(async () => JSON.parse(await page.locator("#query").innerText()))
+    .toEqual(expectedQuery);
+}
+
 test.describe("Pages prerender rewrite query", () => {
   test("preserves destination query for static GSP hydration", async ({ page }) => {
     await expectHydratedQuery(
@@ -86,5 +107,39 @@ test.describe("Pages prerender rewrite query", () => {
       {},
       { allowed: "kept" },
     );
+  });
+
+  for (const mode of ["push", "replace"] as const) {
+    test(`preserves same-path rewrite query after hash-only ${mode}`, async ({ page }) => {
+      await expectHashNavigationPreservesQuery(
+        page,
+        "/prerender-query-same?visible=browser&same=visible",
+        { visible: "browser", same: "destination", from: "config" },
+        mode,
+      );
+    });
+
+    test(`does not resurrect middleware-removed query after hash-only ${mode}`, async ({
+      page,
+    }) => {
+      await expectHashNavigationPreservesQuery(
+        page,
+        "/prerender-middleware-clear?allowed=kept&removed=visible",
+        { allowed: "kept" },
+        mode,
+      );
+    });
+  }
+
+  test("switches to browser query authority after a real page navigation", async ({ page }) => {
+    await page.goto("/prerender-query-same?visible=initial&same=visible");
+    await page.evaluate(async () => {
+      await (window as any).next.router.push("/prerender-rewrite?visible=client&same=visible");
+    });
+
+    await expect(page).toHaveURL(/\/prerender-rewrite\?visible=client&same=visible$/);
+    await expect
+      .poll(async () => JSON.parse(await page.locator("#query").innerText()))
+      .toEqual({ visible: "client", same: "destination", from: "config" });
   });
 });
