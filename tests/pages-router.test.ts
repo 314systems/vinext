@@ -500,6 +500,16 @@ describe("Pages Router integration", () => {
     expect(html).toContain("This is the about page.");
   });
 
+  it("preserves configured rewrite query during GSP prerender SSR in dev", async () => {
+    const res = await fetch(`${baseUrl}/prerender-rewrite?visible=browser&same=visible`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('<pre id="params">{}</pre>');
+    expect(html).toContain(
+      '<pre id="query">{&quot;from&quot;:&quot;config&quot;,&quot;same&quot;:&quot;destination&quot;}</pre>',
+    );
+  });
+
   // Refs #1463: Pages Router should reject non-GET/HEAD methods to static
   // (no `getServerSideProps`) pages with a 405 + `Allow: GET, HEAD`.
   // Ported from Next.js: test/e2e/prerender.test.ts

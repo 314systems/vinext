@@ -4287,6 +4287,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                   req.__vinextMiddlewareStatus,
                   pipelineResult.isDataReq,
                   originalRequestUrl,
+                  pipelineResult.renderOptions?.rewriteQueryKeys,
                 );
               }
             } catch (e) {

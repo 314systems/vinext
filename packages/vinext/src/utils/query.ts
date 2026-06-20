@@ -53,6 +53,21 @@ export function mergeRouteParamsIntoQuery(
   return merged;
 }
 
+export function buildInitialPagesRouterQuery(
+  resolvedQuery: Record<string, string | string[]>,
+  params: Record<string, string | string[]>,
+  rewriteQueryKeys: readonly string[] = [],
+): Record<string, string | string[]> {
+  const initialQuery: Record<string, string | string[]> = {};
+  for (const key of rewriteQueryKeys) {
+    const value = resolvedQuery[key];
+    if (typeof value === "string" || Array.isArray(value)) {
+      setOwnQueryValue(initialQuery, key, Array.isArray(value) ? [...value] : value);
+    }
+  }
+  return mergeRouteParamsIntoQuery(initialQuery, params);
+}
+
 /**
  * Parse a URL's query string into a Record, with multi-value keys promoted to arrays.
  *

@@ -39,7 +39,11 @@ import { withScriptNonce } from "vinext/shims/script-nonce-context";
 import { createInlineScriptTag, createNonceAttribute, safeJsonStringify } from "./html.js";
 import { getClientTraceMetadataHTML } from "./client-trace-metadata.js";
 import { getScriptNonceFromNodeHeaderSources } from "./csp.js";
-import { mergeRouteParamsIntoQuery, parseQueryString as parseQuery } from "../utils/query.js";
+import {
+  buildInitialPagesRouterQuery,
+  mergeRouteParamsIntoQuery,
+  parseQueryString as parseQuery,
+} from "../utils/query.js";
 import path from "node:path";
 import React from "react";
 import { renderToReadableStream } from "react-dom/server.edge";
@@ -474,6 +478,7 @@ export function createSSRHandler(
      */
     isDataReq: boolean = false,
     originalUrl: string = url,
+    rewriteQueryKeys: string[] = [],
   ): Promise<void> => {
     const _reqStart = now();
     let _compileEnd: number | undefined;
@@ -577,6 +582,7 @@ export function createSSRHandler(
       ? params
       : null;
     const query = mergeRouteParamsIntoQuery(parseQuery(url), params);
+    const initialQuery = buildInitialPagesRouterQuery(query, params, rewriteQueryKeys);
 
     // Wrap the entire request in a single unified AsyncLocalStorage scope.
     const requestContext = createRequestContext();
@@ -648,7 +654,7 @@ export function createSSRHandler(
           routerShim.setSSRContext({
             pathname: patternToNextFormat(route.pattern),
             query,
-            initialQuery: params,
+            initialQuery,
             asPath: requestAsPath,
             navigationIsReady,
             nextData: pagesNextData,
@@ -790,7 +796,7 @@ export function createSSRHandler(
               routerShim.setSSRContext({
                 pathname: patternToNextFormat(route.pattern),
                 query,
-                initialQuery: params,
+                initialQuery,
                 asPath: requestAsPath,
                 navigationIsReady: false,
                 locale: locale ?? currentDefaultLocale,
@@ -1172,7 +1178,7 @@ export function createSSRHandler(
                         routerShim.setSSRContext({
                           pathname: patternToNextFormat(route.pattern),
                           query,
-                          initialQuery: params,
+                          initialQuery,
                           asPath: requestAsPath,
                           navigationIsReady,
                           locale: locale ?? currentDefaultLocale,
@@ -1237,7 +1243,7 @@ export function createSSRHandler(
                         {
                           props: freshRenderProps,
                           page: patternToNextFormat(route.pattern),
-                          query: params,
+                          query: initialQuery,
                           buildId: process.env.__VINEXT_BUILD_ID,
                           isFallback: false,
                           locale: locale ?? currentDefaultLocale,
@@ -1660,7 +1666,7 @@ hydrate();
           {
             props: renderProps,
             page: patternToNextFormat(route.pattern),
-            query: params,
+            query: initialQuery,
             buildId: process.env.__VINEXT_BUILD_ID,
             isFallback: isFallbackRender,
             locale: locale ?? currentDefaultLocale,
