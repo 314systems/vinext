@@ -155,11 +155,6 @@ export function createTransitiveExternalsPlugin(options: {
       if (importer.startsWith("\0") || importer.includes("?")) return null;
       if (!path.isAbsolute(importer)) return null;
 
-      // Skip importers that don't live inside a node_modules tree —
-      // imports from the user's own source code are always resolved against
-      // the project root anyway, so there's nothing to disambiguate.
-      if (!importer.includes(`${path.sep}node_modules${path.sep}`)) return null;
-
       const resolved = resolveTransitiveExternal(source, importer, resolver);
       if (!resolved) return null;
       return resolved;

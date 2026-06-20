@@ -216,6 +216,33 @@ describe("vinext:transitive-externals plugin", () => {
     expect(result).toBeNull();
   });
 
+  it("bundles nested-only externals imported from a linked package realpath", () => {
+    writeFile(tmpDir, "package.json", JSON.stringify({ name: "app" }, null, 2));
+    const linkedPackage = path.join(tmpDir, "packages", "dep-b");
+    writePackage(
+      tmpDir,
+      "dep-b",
+      "1.0.0",
+      { lodash: "4.17.21" },
+      { parent: path.join(tmpDir, "packages") },
+    );
+    writePackage(
+      tmpDir,
+      "lodash",
+      "4.17.21",
+      {},
+      { parent: path.join(linkedPackage, "node_modules") },
+    );
+
+    const { resolveId } = setupPlugin({
+      root: tmpDir,
+      externalPackages: ["lodash"],
+    });
+    const result = resolveId("lodash", path.join(linkedPackage, "index.js"));
+
+    expect(result).toBe(fs.realpathSync(path.join(linkedPackage, "node_modules/lodash/index.js")));
+  });
+
   it("ignores virtual / non-absolute importers", () => {
     buildFixture(tmpDir);
     const { resolveId } = setupPlugin({
