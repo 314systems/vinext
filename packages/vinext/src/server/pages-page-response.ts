@@ -11,7 +11,7 @@ import {
 } from "./isr-decision.js";
 import { encodeCacheTag } from "../utils/encode-cache-tag.js";
 import { setCacheStateHeaders } from "./cache-headers.js";
-import { createNonceAttribute, escapeHtmlAttr } from "./html.js";
+import { createNonceAttribute, escapeHtmlAttr, prependToHtmlHead } from "./html.js";
 import { getClientTraceMetadataHTML } from "./client-trace-metadata.js";
 import { reportRequestError } from "./instrumentation.js";
 import {
@@ -321,11 +321,11 @@ async function buildPagesShellHtml(
       : React.createElement(options.DocumentComponent);
     let html = await options.renderDocumentToString(docElement);
     html = html.replace("__NEXT_MAIN__", bodyMarker);
-    if (options.ssrHeadHTML || options.assetTags || fontHeadHTML) {
-      html = html.replace(
-        "</head>",
-        `  ${fontHeadHTML}${options.ssrHeadHTML}\n  ${options.assetTags}\n</head>`,
-      );
+    if (options.ssrHeadHTML) {
+      html = prependToHtmlHead(html, `\n  ${options.ssrHeadHTML}\n`);
+    }
+    if (options.assetTags || fontHeadHTML) {
+      html = html.replace("</head>", `  ${fontHeadHTML}${options.assetTags}\n</head>`);
     }
     html = html.replace("<!-- __NEXT_SCRIPTS__ -->", nextDataScript);
     if (!html.includes("__NEXT_DATA__")) {

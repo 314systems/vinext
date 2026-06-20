@@ -29,8 +29,17 @@ export function Html({
  * ordering (`<meta charset>` first, then `<meta viewport>`, then user tags,
  * all with `data-next-head=""`). See `test/e2e/next-head/index.test.ts`.
  */
-export function Head({ children }: { children?: React.ReactNode }) {
-  return <head>{children}</head>;
+export function Head({
+  children,
+  nonce: _nonce,
+  crossOrigin: _crossOrigin,
+  ...props
+}: React.HTMLAttributes<HTMLHeadElement> & {
+  children?: React.ReactNode;
+  nonce?: string;
+  crossOrigin?: "anonymous" | "use-credentials" | "";
+}) {
+  return <head {...props}>{children}</head>;
 }
 
 /**

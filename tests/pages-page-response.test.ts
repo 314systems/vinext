@@ -7,6 +7,10 @@ import {
   etagMatches,
 } from "../packages/vinext/src/server/pages-page-response.js";
 import { resolvePagesPageData } from "../packages/vinext/src/server/pages-page-data.js";
+import {
+  movePagesDefaultHeadTagsFirst,
+  prependToHtmlHead,
+} from "../packages/vinext/src/server/html.js";
 
 function createStream(chunks: string[]): ReadableStream<Uint8Array> {
   return new ReadableStream({
@@ -55,7 +59,7 @@ function createCommonOptions() {
   const isrSet = vi.fn(async () => {});
   const renderDocumentToString = vi.fn(
     async () =>
-      '<!DOCTYPE html><html><head></head><body><div id="__next">__NEXT_MAIN__</div><!-- __NEXT_SCRIPTS__ --></body></html>',
+      '<!DOCTYPE html><html><head><meta name="document-head" content="1" /></head><body><div id="__next">__NEXT_MAIN__</div><!-- __NEXT_SCRIPTS__ --></body></html>',
   );
   const renderIsrPassToStringAsync = vi.fn(async () => "<div>cached-body</div>");
   const renderToReadableStream = vi.fn(async () => createStream(["<div>live-body</div>"]));
@@ -106,6 +110,49 @@ function createCommonOptions() {
     },
   };
 }
+
+describe("prependToHtmlHead", () => {
+  it("inserts managed tags before custom document children", () => {
+    expect(
+      prependToHtmlHead(
+        '<html><head data-theme="dark"><meta name="document" /></head></html>',
+        '<meta charset="utf-8" />',
+      ),
+    ).toBe(
+      '<html><head data-theme="dark"><meta charset="utf-8" /><meta name="document" /></head></html>',
+    );
+  });
+
+  it("moves transformed default head tags before injected development scripts", () => {
+    expect(
+      movePagesDefaultHeadTagsFirst(
+        '<html><head><script src="/@vite/client"></script><meta name="document" /><meta name="viewport" content="width=device-width" data-next-head="" /><meta charset="utf-8" data-next-head="" /></head></html>',
+      ),
+    ).toBe(
+      '<html><head><meta charset="utf-8" data-next-head="" /><meta name="viewport" content="width=device-width" data-next-head="" /><script src="/@vite/client"></script><meta name="document" /></head></html>',
+    );
+  });
+
+  it("leaves matching body markup outside the head untouched", () => {
+    expect(
+      movePagesDefaultHeadTagsFirst(
+        '<html><head><script src="/@vite/client"></script><meta charset="utf-8" data-next-head="" /></head><body><meta name="viewport" content="body" data-next-head="" /></body></html>',
+      ),
+    ).toBe(
+      '<html><head><meta charset="utf-8" data-next-head="" /><script src="/@vite/client"></script></head><body><meta name="viewport" content="body" data-next-head="" /></body></html>',
+    );
+  });
+
+  it("moves a user-overridden charset before transformed development scripts", () => {
+    expect(
+      movePagesDefaultHeadTagsFirst(
+        '<html><head><script src="/@vite/client"></script><meta charset="utf-16" data-next-head="" /><meta name="viewport" content="width=device-width" data-next-head="" /></head></html>',
+      ),
+    ).toBe(
+      '<html><head><meta charset="utf-16" data-next-head="" /><meta name="viewport" content="width=device-width" data-next-head="" /><script src="/@vite/client"></script></head></html>',
+    );
+  });
+});
 
 describe("isPagesStreamingBot", () => {
   it("detects Googlebot as a streaming bot", () => {
@@ -177,6 +224,12 @@ describe("pages page response", () => {
     const html = await response.text();
     expect(html).toContain("<div>live-body</div>");
     expect(html).toContain('<meta name="test-head" content="1" />');
+    expect(html.indexOf('<meta name="test-head"')).toBeLessThan(
+      html.indexOf('<meta name="document-head"'),
+    );
+    expect(html.indexOf('<meta name="document-head"')).toBeLessThan(
+      html.indexOf('<link rel="stylesheet" href="/font.css"'),
+    );
     expect(html).toContain('<link rel="stylesheet" href="/font.css" />');
     expect(html).toContain('<script id="__NEXT_DATA__" type="application/json">');
     const nextDataMatch = html.match(

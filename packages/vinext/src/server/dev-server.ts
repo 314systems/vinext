@@ -36,7 +36,13 @@ import "vinext/shims/router-state";
 import { runWithHeadState } from "vinext/shims/head-state";
 import { runWithServerInsertedHTMLState } from "vinext/shims/navigation-state";
 import { withScriptNonce } from "vinext/shims/script-nonce-context";
-import { createInlineScriptTag, createNonceAttribute, safeJsonStringify } from "./html.js";
+import {
+  createInlineScriptTag,
+  createNonceAttribute,
+  movePagesDefaultHeadTagsFirst,
+  prependToHtmlHead,
+  safeJsonStringify,
+} from "./html.js";
 import { getClientTraceMetadataHTML } from "./client-trace-metadata.js";
 import { getScriptNonceFromNodeHeaderSources } from "./csp.js";
 import { mergeRouteParamsIntoQuery, parseQueryString as parseQuery } from "../utils/query.js";
@@ -300,9 +306,11 @@ async function streamPageToResponse(
     let docHtml = await renderToStringAsync(docElement);
     // Replace __NEXT_MAIN__ with our stream marker
     docHtml = docHtml.replace("__NEXT_MAIN__", STREAM_BODY_MARKER);
-    // Inject head tags
-    if (headHTML || fontHeadHTML) {
-      docHtml = docHtml.replace("</head>", `  ${fontHeadHTML}${headHTML}\n</head>`);
+    if (headHTML) {
+      docHtml = prependToHtmlHead(docHtml, `\n  ${headHTML}\n`);
+    }
+    if (fontHeadHTML) {
+      docHtml = docHtml.replace("</head>", `  ${fontHeadHTML}</head>`);
     }
     // Inject scripts: replace placeholder or append before </body>
     docHtml = docHtml.replace("<!-- __NEXT_SCRIPTS__ -->", scripts);
@@ -328,7 +336,10 @@ async function streamPageToResponse(
 
   // Apply Vite's HTML transforms (injects HMR client, etc.) on the full
   // shell template, then split at the body marker.
-  const transformedShell = await server.transformIndexHtml(url, shellTemplate);
+  let transformedShell = await server.transformIndexHtml(url, shellTemplate);
+  if (DocumentComponent && headHTML) {
+    transformedShell = movePagesDefaultHeadTagsFirst(transformedShell);
+  }
   const markerIdx = transformedShell.indexOf(STREAM_BODY_MARKER);
   const prefix = transformedShell.slice(0, markerIdx);
   const suffix = transformedShell.slice(markerIdx + STREAM_BODY_MARKER.length);
