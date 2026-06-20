@@ -87,7 +87,7 @@ async function createFixture(): Promise<string> {
   writeFixtureFile(
     root,
     "next.config.mjs",
-    `export default { serverExternalPackages: ["shared-version", "nested-only"] };\n`,
+    `export default { serverExternalPackages: ["shared-version", "nested-only", "require-only"] };\n`,
   );
   writeFixtureFile(
     root,
@@ -147,9 +147,24 @@ export default "dep-b:" + version + ":" + feature + ":" + packageJson.version;\n
     "packages/dep-c/index.cjs",
     `const version = require("shared-version");
 const feature = require("shared-version/feature");
-module.exports = "dep-c:" + version + ":" + feature;\n`,
+const requireOnly = require("require-only");
+module.exports = "dep-c:" + version + ":" + feature + ":" + requireOnly;\n`,
   );
   writeConditionalPackage(root, "packages/dep-c/node_modules/shared-version", "4.0.0", "nested-c");
+  writeFixtureFile(
+    root,
+    "packages/dep-c/node_modules/require-only/package.json",
+    JSON.stringify({
+      name: "require-only",
+      version: "1.0.0",
+      exports: { require: "./index.cjs" },
+    }),
+  );
+  writeFixtureFile(
+    root,
+    "packages/dep-c/node_modules/require-only/index.cjs",
+    `module.exports = "nested-require-only";\n`,
+  );
   linkPackage(root, "dep-a");
   linkPackage(root, "dep-b");
   linkPackage(root, "dep-c");
@@ -205,8 +220,75 @@ describe("transitive server externals", () => {
     expect(normalizedHtml).toContain(
       "dep-a:nested-a-import:nested-a-feature-import:nested-only, " +
         "dep-b:nested-b-import:nested-b-feature-import:3.0.0, " +
-        "dep-c:nested-c-require:nested-c-feature-require, " +
+        "dep-c:nested-c-require:nested-c-feature-require:nested-require-only, " +
         "root:root-import:root-feature-import",
     );
+  }, 30_000);
+
+  it("does not fall back to require-only exports for ESM imports from linked packages", async () => {
+    const root = await mkdtemp(path.join(import.meta.dirname, ".tmp-externals-require-only-"));
+    tempDirs.push(root);
+
+    writeFixtureFile(
+      root,
+      "package.json",
+      JSON.stringify({ name: "vinext-externals-require-only", private: true, type: "module" }),
+    );
+    writeFixtureFile(
+      root,
+      "next.config.mjs",
+      `export default { serverExternalPackages: ["require-only"] };\n`,
+    );
+    writeFixtureFile(
+      root,
+      "app/layout.tsx",
+      `export default function Layout({ children }: { children: React.ReactNode }) {
+  return <html><body>{children}</body></html>;
+}\n`,
+    );
+    writeFixtureFile(
+      root,
+      "app/page.tsx",
+      `import dependency from "linked-dependency";
+export default function Page() { return <p>{dependency}</p>; }\n`,
+    );
+    writePackage(
+      root,
+      "packages/linked-dependency",
+      "1.0.0",
+      `import value from "require-only";\nexport default value;\n`,
+    );
+    writeFixtureFile(
+      root,
+      "packages/linked-dependency/node_modules/require-only/package.json",
+      JSON.stringify({
+        name: "require-only",
+        version: "1.0.0",
+        exports: { require: "./index.cjs" },
+      }),
+    );
+    writeFixtureFile(
+      root,
+      "packages/linked-dependency/node_modules/require-only/index.cjs",
+      `module.exports = "must-not-load-for-import";\n`,
+    );
+    fs.mkdirSync(path.join(root, "node_modules"), { recursive: true });
+    linkPackage(root, "linked-dependency");
+
+    const builder = await createBuilder({
+      root,
+      configFile: false,
+      logLevel: "silent",
+      plugins: [
+        vinext({
+          appDir: root,
+          rscOutDir: path.join(root, "dist/server"),
+          ssrOutDir: path.join(root, "dist/server/ssr"),
+          clientOutDir: path.join(root, "dist/client"),
+        }),
+      ],
+    });
+
+    await expect(builder.buildApp()).rejects.toThrow(/require-only/);
   }, 30_000);
 });

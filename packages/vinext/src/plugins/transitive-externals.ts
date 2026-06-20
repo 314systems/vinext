@@ -197,7 +197,7 @@ export function createTransitiveExternalsPlugin(options: {
       return (async () => {
         const importerResolution = await environmentResolver(this.environment, source, importer);
         if (!importerResolution || !path.isAbsolute(importerResolution)) {
-          return resolveTransitiveExternal(source, importer, resolver);
+          return mode === "require" ? resolveTransitiveExternal(source, importer, resolver) : null;
         }
 
         const rootResolution = await environmentResolver(this.environment, source, rootAnchor);
