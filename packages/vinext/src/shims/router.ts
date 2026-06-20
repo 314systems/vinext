@@ -418,10 +418,6 @@ type PagesRouterRuntimeState = {
   // Any router-owned history update, including a hash-only change. This keeps
   // Safari replay filtering and back/forward handling aligned with Next.js.
   routerDidNavigate: boolean;
-  // A navigation that changes the rendered page/query owner. Hash-only
-  // changes leave this false so the server-resolved initial query remains
-  // authoritative for the current document.
-  pageDidNavigate: boolean;
   deprecatedEventBridgeInstalled: boolean;
   pagesRouterReady: boolean;
   publicRouter?: Record<string, unknown>;
@@ -449,7 +445,6 @@ function createPagesRouterRuntimeState(): PagesRouterRuntimeState {
       typeof window !== "undefined" ? window.location.pathname + window.location.search : "",
     isFirstPopStateEvent: true,
     routerDidNavigate: false,
-    pageDidNavigate: false,
     deprecatedEventBridgeInstalled: false,
     pagesRouterReady: typeof window === "undefined" || !shouldDeferInitialPagesRouterReady(),
   };
@@ -805,6 +800,7 @@ function buildInitialRouterState(): VinextHistoryState {
     options,
     __N: true,
     key: createHistoryKey(),
+    __vinext_queryOwner: "server",
   };
 }
 
@@ -1272,10 +1268,11 @@ function getPathnameAndQuery(): {
   const pathname = window.__NEXT_DATA__?.page ?? resolvedPath;
   const nextData = window.__NEXT_DATA__ as VinextNextData | undefined;
   const isReady = isPagesRouterReady();
+  const usesServerResolvedQuery = getCurrentQueryOwner() === "server";
   const routeQuery: Record<string, string | string[]> = {};
   if (isReady) {
     const initialResolvedQuery = nextData?.__vinext?.initialResolvedQuery;
-    if (!routerRuntimeState.pageDidNavigate && initialResolvedQuery) {
+    if (usesServerResolvedQuery && initialResolvedQuery) {
       for (const [key, value] of Object.entries(initialResolvedQuery)) {
         routeQuery[key] = Array.isArray(value) ? [...value] : value;
       }
@@ -1295,10 +1292,7 @@ function getPathnameAndQuery(): {
   // route params. URL search values are published after hydration so the
   // browser snapshot stays aligned with the prerendered server HTML.
   const searchQuery: Record<string, string | string[]> = {};
-  if (
-    isReady &&
-    (routerRuntimeState.pageDidNavigate || !nextData?.__vinext?.initialResolvedQuery)
-  ) {
+  if (isReady && (!usesServerResolvedQuery || !nextData?.__vinext?.initialResolvedQuery)) {
     const params = new URLSearchParams(window.location.search);
     for (const [key, value] of params) {
       addQueryParam(searchQuery, key, value);
@@ -1330,6 +1324,12 @@ function getCurrentHistoryAsPath(): string | null {
   } catch {
     return null;
   }
+}
+
+function getCurrentQueryOwner(): VinextHistoryState["__vinext_queryOwner"] {
+  const state = window.history?.state;
+  if (!isNextRouterState(state)) return "browser";
+  return state.__vinext_queryOwner ?? "server";
 }
 
 export function getPagesNavigationIsReadyFromSerializedState(
@@ -2339,13 +2339,13 @@ function updateHistory(
     options: navState.options,
     __N: true,
     key,
+    __vinext_queryOwner: marksPageNavigation ? "browser" : getCurrentQueryOwner(),
   };
   if (mode === "push") window.history.pushState(state, "", fullUrl);
   else window.history.replaceState(state, "", fullUrl);
   routerRuntimeState.currentHistoryKey = key;
   routerRuntimeState.lastPathnameAndSearch = window.location.pathname + window.location.search;
   routerRuntimeState.routerDidNavigate = true;
-  if (marksPageNavigation) routerRuntimeState.pageDidNavigate = true;
 }
 
 /**
@@ -2358,6 +2358,7 @@ type VinextHistoryState = {
   options: { locale?: string; shallow?: boolean };
   __N: true;
   key: string;
+  __vinext_queryOwner?: "server" | "browser";
 };
 
 function createHistoryKey(): string {
@@ -2880,6 +2881,7 @@ function isNextRouterState(state: unknown): state is {
   options: TransitionOptions;
   __N: true;
   key?: string;
+  __vinext_queryOwner?: "server" | "browser";
 } {
   return (
     typeof state === "object" &&
@@ -3029,8 +3031,6 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
     dispatchNavigateEvent();
     return;
   }
-
-  routerRuntimeState.pageDidNavigate = true;
 
   // If the restored history entry carries an explicit locale, honour it
   // when computing the fetch URL so default-locale roots still go through

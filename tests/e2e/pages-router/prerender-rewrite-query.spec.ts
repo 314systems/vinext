@@ -48,6 +48,31 @@ async function expectHashNavigationPreservesQuery(
     .toEqual(expectedQuery);
 }
 
+async function expectBackForwardRestoresQuery(page: Page, url: string, expectedQuery: unknown) {
+  await page.goto(url);
+  await expect
+    .poll(async () => JSON.parse(await page.locator("#query").innerText()))
+    .toEqual(expectedQuery);
+
+  await page.evaluate(async () => {
+    await (window as any).next.router.push("/about");
+  });
+  await expect(page).toHaveURL(/\/about$/);
+
+  await page.goBack();
+  await expect(page).toHaveURL(new RegExp(`${new URL(url, "http://localhost").pathname}.*$`));
+  await expect
+    .poll(async () => JSON.parse(await page.locator("#query").innerText()))
+    .toEqual(expectedQuery);
+
+  await page.goForward();
+  await expect(page).toHaveURL(/\/about$/);
+  await page.goBack();
+  await expect
+    .poll(async () => JSON.parse(await page.locator("#query").innerText()))
+    .toEqual(expectedQuery);
+}
+
 test.describe("Pages prerender rewrite query", () => {
   test("preserves destination query for static GSP hydration", async ({ page }) => {
     await expectHydratedQuery(
@@ -130,6 +155,22 @@ test.describe("Pages prerender rewrite query", () => {
       );
     });
   }
+
+  test("restores same-path rewrite query across back and forward", async ({ page }) => {
+    await expectBackForwardRestoresQuery(
+      page,
+      "/prerender-query-same?visible=browser&same=visible",
+      { visible: "browser", same: "destination", from: "config" },
+    );
+  });
+
+  test("keeps middleware-removed query cleared across back and forward", async ({ page }) => {
+    await expectBackForwardRestoresQuery(
+      page,
+      "/prerender-middleware-clear?allowed=kept&removed=visible",
+      { allowed: "kept" },
+    );
+  });
 
   test("switches to browser query authority after a real page navigation", async ({ page }) => {
     await page.goto("/prerender-query-same?visible=initial&same=visible");
