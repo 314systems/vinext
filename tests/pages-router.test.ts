@@ -4905,6 +4905,16 @@ describe("Production server middleware (Pages Router)", () => {
     expect(deferInHead.length).toBeGreaterThan(0);
   });
 
+  // Ported from Next.js: test/e2e/prerender.test.ts
+  // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/prerender.test.ts
+  it("does not expose URL search params during non-dynamic GSP prerender SSR", async () => {
+    const res = await fetch(`${prodUrl}/prerender-query?hello=world`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('<pre id="params">{}</pre>');
+    expect(html).toContain('<pre id="query">{}</pre>');
+  });
+
   it("does not serve cached production Pages ISR HTML to CSP nonce requests", async () => {
     const first = await fetch(`${prodUrl}/isr-test`);
     expect(first.status).toBe(200);

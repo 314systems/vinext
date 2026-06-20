@@ -648,6 +648,7 @@ export function createSSRHandler(
           routerShim.setSSRContext({
             pathname: patternToNextFormat(route.pattern),
             query,
+            initialQuery: params,
             asPath: requestAsPath,
             navigationIsReady,
             nextData: pagesNextData,
@@ -789,6 +790,7 @@ export function createSSRHandler(
               routerShim.setSSRContext({
                 pathname: patternToNextFormat(route.pattern),
                 query,
+                initialQuery: params,
                 asPath: requestAsPath,
                 navigationIsReady: false,
                 locale: locale ?? currentDefaultLocale,
@@ -1170,6 +1172,7 @@ export function createSSRHandler(
                         routerShim.setSSRContext({
                           pathname: patternToNextFormat(route.pattern),
                           query,
+                          initialQuery: params,
                           asPath: requestAsPath,
                           navigationIsReady,
                           locale: locale ?? currentDefaultLocale,

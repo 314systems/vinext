@@ -444,6 +444,7 @@ export function createPagesPageHandler(
             setSSRContext({
               pathname: routePattern,
               query,
+              initialQuery: params,
               asPath: renderAsPath ?? routeUrl,
               navigationIsReady,
               locale,
@@ -643,6 +644,7 @@ export function createPagesPageHandler(
           setSSRContext({
             pathname: routePattern,
             query,
+            initialQuery: params,
             asPath: renderAsPath ?? routeUrl,
             navigationIsReady: false,
             locale,

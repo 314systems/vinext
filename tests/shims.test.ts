@@ -13789,6 +13789,77 @@ describe("next/compat/router shim", () => {
     }
   });
 
+  // Ported from Next.js: test/e2e/prerender.test.ts
+  // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/prerender.test.ts
+  it("suppresses search params from useRouter().query before prerender hydration", async () => {
+    const React = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { useRouter, wrapWithRouterContext, setSSRContext } =
+      await import("../packages/vinext/src/shims/router.js");
+
+    let capturedQuery: unknown;
+    function Probe() {
+      capturedQuery = useRouter().query;
+      return React.createElement("div");
+    }
+
+    setSSRContext({
+      pathname: "/something",
+      query: { hello: "world" },
+      initialQuery: {},
+      asPath: "/something?hello=world",
+      navigationIsReady: false,
+    });
+    try {
+      renderToStaticMarkup(wrapWithRouterContext(React.createElement(Probe)));
+      expect(capturedQuery).toEqual({});
+    } finally {
+      setSSRContext(null);
+    }
+
+    setSSRContext({
+      pathname: "/blog/[post]",
+      query: { post: "post-1", hello: "world" },
+      initialQuery: { post: "post-1" },
+      asPath: "/blog/post-1?hello=world",
+      navigationIsReady: false,
+    });
+    try {
+      renderToStaticMarkup(wrapWithRouterContext(React.createElement(Probe)));
+      expect(capturedQuery).toEqual({ post: "post-1" });
+    } finally {
+      setSSRContext(null);
+    }
+
+    setSSRContext({
+      pathname: "/docs/[[...slug]]",
+      query: { slug: "query" },
+      initialQuery: {},
+      asPath: "/docs?slug=query",
+      navigationIsReady: false,
+    });
+    try {
+      renderToStaticMarkup(wrapWithRouterContext(React.createElement(Probe)));
+      expect(capturedQuery).toEqual({});
+    } finally {
+      setSSRContext(null);
+    }
+
+    setSSRContext({
+      pathname: "/blog/[post]",
+      query: { post: "hello world", q: "1" },
+      initialQuery: { post: "hello world" },
+      asPath: "/blog/hello%20world?q=1",
+      navigationIsReady: false,
+    });
+    try {
+      renderToStaticMarkup(wrapWithRouterContext(React.createElement(Probe)));
+      expect(capturedQuery).toEqual({ post: "hello world" });
+    } finally {
+      setSSRContext(null);
+    }
+  });
+
   it("does not defer Pages Router readiness for dynamic getStaticProps routes without search", async () => {
     const { getPagesNavigationIsReadyFromSerializedState } =
       await import("../packages/vinext/src/shims/router.js");
@@ -22436,6 +22507,91 @@ describe("default-locale path normalisation (issue #1336, item 4)", () => {
 // runtime object rather than in module-local variables.
 // ---------------------------------------------------------------------------
 describe("Pages Router runtime state sharing", () => {
+  it("keeps search params hidden until the initial Pages Router ready transition", async () => {
+    const previousWindow = (globalThis as any).window;
+    const win: any = {
+      location: {
+        pathname: "/something",
+        search: "?hello=world",
+        hash: "",
+        href: "http://localhost/something?hello=world",
+        hostname: "localhost",
+      },
+      history: { state: null, pushState() {}, replaceState() {} },
+      addEventListener() {},
+      dispatchEvent() {},
+      scrollTo() {},
+      __NEXT_DATA__: {
+        page: "/something",
+        query: {},
+        gsp: true,
+        isFallback: false,
+        props: { pageProps: {} },
+      },
+      __VINEXT_PAGE_LOADERS__: {},
+    };
+    (globalThis as any).window = win;
+
+    try {
+      vi.resetModules();
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      const Router = routerModule.default;
+
+      expect(Router.isReady).toBe(false);
+      expect(Router.query).toEqual({});
+
+      expect(routerModule._markPagesRouterReady()).toBe(true);
+      expect(Router.query).toEqual({ hello: "world" });
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+    }
+  });
+
+  it("filters rewritten search values from the pre-ready Pages Router query", async () => {
+    const previousWindow = (globalThis as any).window;
+    const win: any = {
+      location: {
+        pathname: "/source",
+        search: "?hello=world",
+        hash: "",
+        href: "http://localhost/source?hello=world",
+        hostname: "localhost",
+      },
+      history: { state: null, pushState() {}, replaceState() {} },
+      addEventListener() {},
+      dispatchEvent() {},
+      scrollTo() {},
+      __NEXT_DATA__: {
+        page: "/destination/[slug]",
+        query: { slug: "article" },
+        gsp: true,
+        isFallback: false,
+        props: { pageProps: {} },
+        __vinext: { hasRewrites: true },
+      },
+      __VINEXT_PAGE_LOADERS__: {},
+    };
+    (globalThis as any).window = win;
+
+    try {
+      vi.resetModules();
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      expect(routerModule.default.query).toEqual({ slug: "article" });
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+    }
+  });
+
   it("shares RouterContext across duplicated next/router module instances", async () => {
     vi.resetModules();
     const contextA = await import("../packages/vinext/src/shims/internal/router-context.js");
