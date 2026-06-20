@@ -1236,6 +1236,7 @@ export function createSSRHandler(
                           pageModuleUrl: regenPageUrl,
                           appModuleUrl: regenAppUrl,
                           hasMiddleware,
+                          initialResolvedQuery: query,
                         },
                       };
 
@@ -1584,6 +1585,7 @@ export function createSSRHandler(
             pageModuleUrl,
             appModuleUrl,
             hasMiddleware,
+            initialResolvedQuery: query,
           },
         };
 

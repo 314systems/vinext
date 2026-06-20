@@ -1263,11 +1263,18 @@ function getPathnameAndQuery(): {
   // not the resolved path ("/posts/42"). __NEXT_DATA__.page holds the route
   // pattern and is updated by navigateClient() on every client-side navigation.
   const pathname = window.__NEXT_DATA__?.page ?? resolvedPath;
-  const nextData = window.__NEXT_DATA__;
+  const nextData = window.__NEXT_DATA__ as VinextNextData | undefined;
   const isReady = isPagesRouterReady();
   const routeQuery: Record<string, string | string[]> = {};
   if (isReady) {
-    Object.assign(routeQuery, getRouteQueryFromNextData(nextData, resolvedPath));
+    const initialResolvedQuery = nextData?.__vinext?.initialResolvedQuery;
+    if (!routerRuntimeState.routerDidNavigate && initialResolvedQuery) {
+      for (const [key, value] of Object.entries(initialResolvedQuery)) {
+        routeQuery[key] = Array.isArray(value) ? [...value] : value;
+      }
+    } else {
+      Object.assign(routeQuery, getRouteQueryFromNextData(nextData, resolvedPath));
+    }
   } else {
     for (const [key, value] of Object.entries(nextData?.query ?? {})) {
       if (typeof value === "string") {
@@ -1281,7 +1288,10 @@ function getPathnameAndQuery(): {
   // route params. URL search values are published after hydration so the
   // browser snapshot stays aligned with the prerendered server HTML.
   const searchQuery: Record<string, string | string[]> = {};
-  if (isReady) {
+  if (
+    isReady &&
+    (routerRuntimeState.routerDidNavigate || !nextData?.__vinext?.initialResolvedQuery)
+  ) {
     const params = new URLSearchParams(window.location.search);
     for (const [key, value] of params) {
       addQueryParam(searchQuery, key, value);

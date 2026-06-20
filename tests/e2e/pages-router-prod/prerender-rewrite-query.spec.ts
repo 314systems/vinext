@@ -57,4 +57,34 @@ test.describe("Pages prerender rewrite query", () => {
       { visible: "browser", same: "destination", from: "config" },
     );
   });
+
+  test("preserves destination query for a same-path config rewrite", async ({ page }) => {
+    await expectHydratedQuery(
+      page,
+      "http://localhost:4175/prerender-query-same?visible=browser&same=visible",
+      {},
+      { same: "destination", from: "config" },
+      { visible: "browser", same: "destination", from: "config" },
+    );
+  });
+
+  test("preserves destination query for a dynamic same-path config rewrite", async ({ page }) => {
+    await expectHydratedQuery(
+      page,
+      "http://localhost:4175/prerender-query-same-dynamic/a%2Fb?visible=browser&same=visible",
+      { slug: "a/b" },
+      { same: "destination", from: "config", slug: "a/b" },
+      { visible: "browser", same: "destination", from: "config", slug: "a/b" },
+    );
+  });
+
+  test("does not resurrect visible query removed by middleware", async ({ page }) => {
+    await expectHydratedQuery(
+      page,
+      "http://localhost:4175/prerender-middleware-clear?allowed=kept&removed=visible",
+      {},
+      {},
+      { allowed: "kept" },
+    );
+  });
 });
