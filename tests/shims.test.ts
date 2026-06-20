@@ -14430,6 +14430,43 @@ describe("Pages Router concurrent navigation", () => {
     }
   });
 
+  it("stamps initial router state without dropping third-party history fields", async () => {
+    const previousWindow = (globalThis as any).window;
+    const { win, replaceState } = createNavWindow();
+    win.history.state = {
+      analyticsEntry: "landing",
+      nested: { retained: true },
+    } as any;
+    replaceState.mockImplementation((state: unknown) => {
+      win.history.state = state as any;
+    });
+    (globalThis as any).window = win;
+
+    try {
+      vi.resetModules();
+      await import("../packages/vinext/src/shims/router.js");
+
+      expect(win.history.state).toEqual(
+        expect.objectContaining({
+          analyticsEntry: "landing",
+          nested: { retained: true },
+          __N: true,
+          __vinext_queryOwner: "server",
+          url: "/",
+          as: "/",
+        }),
+      );
+      expect(replaceState).toHaveBeenCalledWith(expect.any(Object), "");
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+    }
+  });
+
   /**
    * Helper: create a mock window suitable for non-shallow Router.push().
    * Returns an object with the window mock plus helpers for controlling

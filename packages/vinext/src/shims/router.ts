@@ -805,9 +805,9 @@ function buildInitialRouterState(): VinextHistoryState {
 }
 
 /**
- * Stamp the initial document entry with router-shaped state (only if no
- * state is present). Called once at runtime install so the entry has a
- * locale stamped before any push could overwrite the active locale global.
+ * Stamp the initial document entry with router-shaped state. Preserve fields
+ * owned by userland or third-party history integrations while ensuring the
+ * router metadata needed for back/forward and query ownership is present.
  */
 function stampInitialHistoryState(): void {
   installManualScrollRestoration();
@@ -815,15 +815,12 @@ function stampInitialHistoryState(): void {
   if (!window.history) return;
 
   const existingState = window.history.state;
-  if (existingState !== null && existingState !== undefined) {
-    routerRuntimeState.currentHistoryKey =
-      getRouterStateKey(existingState) ?? routerRuntimeState.currentHistoryKey;
-    return;
-  }
-
   const initialState = buildInitialRouterState();
   routerRuntimeState.currentHistoryKey = initialState.key;
-  window.history.replaceState(initialState, "");
+  window.history.replaceState(
+    isUnknownRecord(existingState) ? { ...existingState, ...initialState } : initialState,
+    "",
+  );
 }
 
 setStampInitialHistoryState(stampInitialHistoryState);
@@ -1238,6 +1235,52 @@ function getRouteQueryFromNextData(
   return routeQuery;
 }
 
+function navigationRequiresServerQueryOwnership(nextData: VinextNextData): boolean {
+  const serverQuery = nextData.__vinext?.initialResolvedQuery;
+  if (!serverQuery || !nextData.page) return false;
+
+  const resolvedPath = stripBasePath(window.location.pathname, __basePath);
+  if (extractRouteParamsFromPath(nextData.page, resolvedPath) === null) return false;
+
+  const browserQuery: Record<string, string | string[]> = {};
+  for (const [key, value] of new URLSearchParams(window.location.search)) {
+    addQueryParam(browserQuery, key, value);
+  }
+  const routeParams = extractRouteParamsFromPath(nextData.page, resolvedPath);
+  if (routeParams) Object.assign(browserQuery, routeParams);
+
+  return !queryValuesEqual(browserQuery, serverQuery);
+}
+
+function queryValuesEqual(
+  left: Record<string, string | string[]>,
+  right: Record<string, string | string[]>,
+): boolean {
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length) return false;
+
+  for (const key of leftKeys) {
+    const leftValue = left[key];
+    const rightValue = right[key];
+    if (Array.isArray(leftValue) || Array.isArray(rightValue)) {
+      if (!Array.isArray(leftValue) || !Array.isArray(rightValue)) return false;
+      if (leftValue.length !== rightValue.length) return false;
+      if (leftValue.some((value, index) => value !== rightValue[index])) return false;
+    } else if (leftValue !== rightValue) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function updateCurrentQueryOwnership(nextData: VinextNextData): void {
+  if (!navigationRequiresServerQueryOwnership(nextData)) return;
+  const state = window.history.state;
+  if (!isNextRouterState(state) || state.__vinext_queryOwner === "server") return;
+  window.history.replaceState({ ...state, __vinext_queryOwner: "server" }, "");
+}
+
 function getPathnameAndQuery(): {
   pathname: string;
   query: Record<string, string | string[]>;
@@ -1498,6 +1541,8 @@ type PagesDataResponse = {
   // that outer envelope through App during hydration/navigation.
   [key: string]: unknown;
 };
+
+const VINEXT_RESOLVED_QUERY_HEADER = "x-vinext-resolved-query";
 
 function isPageComponent(value: unknown): value is ComponentType<Record<string, unknown>> {
   if (typeof value === "function") return true;
@@ -1855,6 +1900,24 @@ async function navigateClientData(
   // `/posts/123?id=456` still exposes `id: "123"`). Without this, code reading
   // `window.__NEXT_DATA__.query` directly would see only the dynamic params.
   const mergedQuery = mergeRouteParamsIntoQuery(parseQueryString(target.search), target.params);
+  const resolvedQueryHeader = res.headers.get(VINEXT_RESOLVED_QUERY_HEADER);
+  let resolvedQuery = mergedQuery;
+  if (resolvedQueryHeader) {
+    try {
+      const parsed = JSON.parse(resolvedQueryHeader);
+      if (isUnknownRecord(parsed)) {
+        resolvedQuery = {};
+        for (const [key, value] of Object.entries(parsed)) {
+          if (typeof value === "string") resolvedQuery[key] = value;
+          else if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+            resolvedQuery[key] = [...value];
+          }
+        }
+      }
+    } catch {
+      // Ignore malformed optional metadata and retain browser-derived query ownership.
+    }
+  }
 
   const prev = window.__NEXT_DATA__ as NonNullable<Window["__NEXT_DATA__"]> | undefined;
   // Locale-prefixed URLs change the active locale; the JSON envelope itself
@@ -1876,6 +1939,10 @@ async function navigateClientData(
     query: mergedQuery,
     buildId: target.buildId,
     isFallback: false,
+    __vinext: {
+      ...(prev as VinextNextData | undefined)?.__vinext,
+      initialResolvedQuery: resolvedQuery,
+    },
     ...(nextLocale !== undefined ? { locale: nextLocale } : {}),
   } as unknown as NonNullable<Window["__NEXT_DATA__"]> & VinextNextData;
 
@@ -1884,6 +1951,7 @@ async function navigateClientData(
   // stable Pages Router commit boundary before routeChangeComplete, matching
   // Next.js's client Root callback without remounting the page tree.
   window.__NEXT_DATA__ = nextData;
+  updateCurrentQueryOwnership(nextData);
   applyVinextLocaleGlobals(window, nextData);
   await renderPagesRouterElement(element, options.scroll);
   assertStillCurrent();
@@ -2062,6 +2130,7 @@ async function navigateClientHtml(
     routerRuntimeState.lastPathnameAndSearch = window.location.pathname + window.location.search;
   }
   window.__NEXT_DATA__ = nextData;
+  updateCurrentQueryOwnership(nextData);
   applyVinextLocaleGlobals(window, nextData);
   await renderPagesRouterElement(element, options.scroll);
   assertStillCurrent();

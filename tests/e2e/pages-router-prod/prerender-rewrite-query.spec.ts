@@ -73,6 +73,26 @@ async function expectBackForwardRestoresQuery(page: Page, url: string, expectedQ
     .toEqual(expectedQuery);
 }
 
+async function expectClientNavigationPreservesServerQuery(
+  page: Page,
+  url: string,
+  expectedQuery: unknown,
+  mode: "push" | "replace",
+) {
+  await page.goto("http://localhost:4175/about");
+  await page.evaluate(
+    async ({ navigationMode, target }) => {
+      await (window as any).next.router[navigationMode](target);
+    },
+    { navigationMode: mode, target: url },
+  );
+
+  await expect(page).toHaveURL(new RegExp(`${new URL(url).pathname}.*$`));
+  await expect
+    .poll(async () => JSON.parse(await page.locator("#query").innerText()))
+    .toEqual(expectedQuery);
+}
+
 test.describe("Pages prerender rewrite query", () => {
   test("preserves destination query for static GSP hydration", async ({ page }) => {
     await expectHydratedQuery(
@@ -135,6 +155,33 @@ test.describe("Pages prerender rewrite query", () => {
   });
 
   for (const mode of ["push", "replace"] as const) {
+    test(`preserves static same-path rewrite query after client ${mode}`, async ({ page }) => {
+      await expectClientNavigationPreservesServerQuery(
+        page,
+        "http://localhost:4175/prerender-query-same?visible=client&same=visible",
+        { visible: "client", same: "destination", from: "config" },
+        mode,
+      );
+    });
+
+    test(`preserves dynamic same-path rewrite query after client ${mode}`, async ({ page }) => {
+      await expectClientNavigationPreservesServerQuery(
+        page,
+        "http://localhost:4175/prerender-query-same-dynamic/a%2Fb?visible=client&same=visible",
+        { visible: "client", same: "destination", from: "config", slug: "a/b" },
+        mode,
+      );
+    });
+
+    test(`keeps middleware-cleared query removed after client ${mode}`, async ({ page }) => {
+      await expectClientNavigationPreservesServerQuery(
+        page,
+        "http://localhost:4175/prerender-middleware-clear?allowed=kept&removed=visible",
+        { allowed: "kept" },
+        mode,
+      );
+    });
+
     test(`preserves same-path rewrite query after hash-only ${mode}`, async ({ page }) => {
       await expectHashNavigationPreservesQuery(
         page,

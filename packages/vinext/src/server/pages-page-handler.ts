@@ -668,6 +668,7 @@ export function createPagesPageHandler(
         // props like __N_SSP, __N_SSG) as JSON instead of the full HTML page.
         if (isDataReq) {
           const init: ResponseInit & { headers: Record<string, string> } = { headers: {} };
+          init.headers["x-vinext-resolved-query"] = safeJsonStringify(query);
           if (gsspRes && typeof gsspRes.getHeaders === "function") {
             const gsspHeaders = gsspRes.getHeaders();
             for (const k of Object.keys(gsspHeaders)) {

@@ -1451,6 +1451,7 @@ export function createSSRHandler(
           }
           const dataHeaders: Record<string, string | string[] | number> = {
             "Content-Type": "application/json",
+            "x-vinext-resolved-query": JSON.stringify(query),
           };
           if (gsspExtraHeaders) {
             for (const [k, v] of Object.entries(gsspExtraHeaders)) {
