@@ -16,13 +16,55 @@ function writeFixtureFile(root: string, filePath: string, content: string): void
   fs.writeFileSync(absolutePath, content);
 }
 
-function writePackage(root: string, packagePath: string, version: string, source: string): void {
+function writePackage(
+  root: string,
+  packagePath: string,
+  version: string,
+  source: string,
+  packageJson: Record<string, unknown> = {},
+): void {
   writeFixtureFile(
     root,
     `${packagePath}/package.json`,
-    JSON.stringify({ name: path.basename(packagePath), version, type: "module", main: "index.js" }),
+    JSON.stringify({ name: path.basename(packagePath), version, type: "module", ...packageJson }),
   );
   writeFixtureFile(root, `${packagePath}/index.js`, source);
+}
+
+function writeConditionalPackage(
+  root: string,
+  packagePath: string,
+  version: string,
+  label: string,
+): void {
+  writePackage(
+    root,
+    packagePath,
+    version,
+    `export default ${JSON.stringify(`${label}-import`)};\n`,
+    {
+      exports: {
+        ".": { import: "./index.js", require: "./index.cjs" },
+        "./feature": { import: "./feature.js", require: "./feature.cjs" },
+        "./package.json": "./package.json",
+      },
+    },
+  );
+  writeFixtureFile(
+    root,
+    `${packagePath}/index.cjs`,
+    `module.exports = ${JSON.stringify(`${label}-require`)};\n`,
+  );
+  writeFixtureFile(
+    root,
+    `${packagePath}/feature.js`,
+    `export default ${JSON.stringify(`${label}-feature-import`)};\n`,
+  );
+  writeFixtureFile(
+    root,
+    `${packagePath}/feature.cjs`,
+    `module.exports = ${JSON.stringify(`${label}-feature-require`)};\n`,
+  );
 }
 
 function linkPackage(root: string, packageName: string): void {
@@ -59,28 +101,26 @@ async function createFixture(): Promise<string> {
     "app/page.tsx",
     `import depA from "dep-a";
 import depB from "dep-b";
+import depC from "dep-c";
 import rootVersion from "shared-version";
+import rootFeature from "shared-version/feature";
 
 export default function Page() {
-  return <p id="versions">{depA}, {depB}, root:{rootVersion}</p>;
+  return <p id="versions">{depA}, {depB}, {depC}, root:{rootVersion}:{rootFeature}</p>;
 }\n`,
   );
 
-  writePackage(root, "node_modules/shared-version", "1.0.0", `export default "root";\n`);
+  writeConditionalPackage(root, "node_modules/shared-version", "1.0.0", "root");
   writePackage(
     root,
     "packages/dep-a",
     "1.0.0",
     `import version from "shared-version";
+import feature from "shared-version/feature";
 import nestedOnly from "nested-only";
-export default "dep-a:" + version + ":" + nestedOnly;\n`,
+export default "dep-a:" + version + ":" + feature + ":" + nestedOnly;\n`,
   );
-  writePackage(
-    root,
-    "packages/dep-a/node_modules/shared-version",
-    "2.0.0",
-    `export default "nested-a";\n`,
-  );
+  writeConditionalPackage(root, "packages/dep-a/node_modules/shared-version", "2.0.0", "nested-a");
   writePackage(
     root,
     "packages/dep-a/node_modules/nested-only",
@@ -92,17 +132,27 @@ export default "dep-a:" + version + ":" + nestedOnly;\n`,
     "packages/dep-b",
     "1.0.0",
     `import version from "shared-version";
+import feature from "shared-version/feature";
 import packageJson from "shared-version/package.json" with { type: "json" };
-export default "dep-b:" + version + ":" + packageJson.version;\n`,
+export default "dep-b:" + version + ":" + feature + ":" + packageJson.version;\n`,
   );
-  writePackage(
+  writeConditionalPackage(root, "packages/dep-b/node_modules/shared-version", "3.0.0", "nested-b");
+  writeFixtureFile(
     root,
-    "packages/dep-b/node_modules/shared-version",
-    "3.0.0",
-    `export default "nested-b";\n`,
+    "packages/dep-c/package.json",
+    JSON.stringify({ name: "dep-c", version: "1.0.0", main: "index.cjs" }),
   );
+  writeFixtureFile(
+    root,
+    "packages/dep-c/index.cjs",
+    `const version = require("shared-version");
+const feature = require("shared-version/feature");
+module.exports = "dep-c:" + version + ":" + feature;\n`,
+  );
+  writeConditionalPackage(root, "packages/dep-c/node_modules/shared-version", "4.0.0", "nested-c");
   linkPackage(root, "dep-a");
   linkPackage(root, "dep-b");
+  linkPackage(root, "dep-c");
 
   return root;
 }
@@ -152,6 +202,11 @@ describe("transitive server externals", () => {
     const html = await response.text();
     const normalizedHtml = html.replaceAll("<!-- -->", "");
     expect(response.status, html).toBe(200);
-    expect(normalizedHtml).toContain("dep-a:nested-a:nested-only, dep-b:nested-b:3.0.0, root:root");
+    expect(normalizedHtml).toContain(
+      "dep-a:nested-a-import:nested-a-feature-import:nested-only, " +
+        "dep-b:nested-b-import:nested-b-feature-import:3.0.0, " +
+        "dep-c:nested-c-require:nested-c-feature-require, " +
+        "root:root-import:root-feature-import",
+    );
   }, 30_000);
 });

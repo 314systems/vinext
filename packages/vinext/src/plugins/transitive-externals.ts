@@ -1,7 +1,38 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
-import type { Plugin } from "vite";
+import { createIdResolver, type Plugin, type Rollup } from "vite";
+
+type ExternalModuleMode = "import" | "require";
+
+type ResolvedExternal = {
+  path: string;
+  mode: ExternalModuleMode;
+};
+
+function realpath(resolvedPath: string): string {
+  try {
+    return fs.realpathSync(resolvedPath);
+  } catch {
+    return resolvedPath;
+  }
+}
+
+function getExternalModuleMode(kind: Rollup.ImportKind | undefined): ExternalModuleMode {
+  return kind === "require-call" ? "require" : "import";
+}
+
+export function compareTransitiveExternalResolutions(
+  importerResolved: ResolvedExternal,
+  rootResolved: ResolvedExternal | null,
+): string | null {
+  const importerReal = realpath(importerResolved.path);
+  if (!rootResolved) return importerReal;
+
+  const rootReal = realpath(rootResolved.path);
+  if (importerReal === rootReal && importerResolved.mode === rootResolved.mode) return null;
+  return importerReal;
+}
 
 /**
  * Transitive-externals resolution for `serverExternalPackages`.
@@ -53,30 +84,13 @@ export function resolveTransitiveExternal(
     // Request can't be resolved from the root at all — that's a stronger
     // signal that the importer's nested copy is the only valid one.
     // Returning the importer-resolved path forces Vite to bundle it.
-    try {
-      return fs.realpathSync(importerResolved);
-    } catch {
-      return importerResolved;
-    }
+    return realpath(importerResolved);
   }
 
-  let importerReal: string;
-  let rootReal: string;
-  try {
-    importerReal = fs.realpathSync(importerResolved);
-  } catch {
-    importerReal = importerResolved;
-  }
-  try {
-    rootReal = fs.realpathSync(rootResolved);
-  } catch {
-    rootReal = rootResolved;
-  }
-
-  if (importerReal === rootReal) {
-    return null;
-  }
-  return importerReal;
+  return compareTransitiveExternalResolutions(
+    { path: importerResolved, mode: "require" },
+    { path: rootResolved, mode: "require" },
+  );
 }
 
 /**
@@ -117,26 +131,44 @@ export function createTransitiveExternalsPlugin(options: {
 }): Plugin {
   let externalSet: Set<string> | null = null;
   let rootResolver: NodeRequire | null = null;
+  let rootImporter: string | null = null;
+  let importResolver: ReturnType<typeof createIdResolver> | null = null;
+  let requireResolver: ReturnType<typeof createIdResolver> | null = null;
 
   return {
     name: "vinext:transitive-externals",
     enforce: "pre",
 
-    configResolved() {
+    configResolved(config) {
       const root = options.getRoot();
       if (!root) return;
       externalSet = new Set(options.getExternalPackages());
-      rootResolver = createRequire(path.join(root, "package.json"));
+      rootImporter = path.join(root, "package.json");
+      rootResolver = createRequire(rootImporter);
+      importResolver = createIdResolver(config, {
+        external: [],
+        isRequire: false,
+        noExternal: true,
+      });
+      requireResolver = createIdResolver(config, {
+        external: [],
+        isRequire: true,
+        noExternal: true,
+      });
     },
 
-    resolveId(source, importer) {
+    resolveId(source, importer, resolveOptions) {
       // `resolve.external` is only configured on server environments (rsc,
       // ssr), so the client environment has nothing to disambiguate.
       // Bail out immediately to avoid per-import work on client builds.
       if (this.environment?.name === "client") return null;
       const set = externalSet;
       const resolver = rootResolver;
-      if (!set || !resolver) return null;
+      const rootAnchor = rootImporter;
+      const viteImportResolver = importResolver;
+      const viteRequireResolver = requireResolver;
+      if (!set || !resolver || !rootAnchor || !viteImportResolver || !viteRequireResolver)
+        return null;
       if (!importer || set.size === 0) return null;
       // Only act on bare specifiers that match an externalised package.
       // Match either an exact package name or a subpath import (e.g.
@@ -155,9 +187,25 @@ export function createTransitiveExternalsPlugin(options: {
       if (importer.startsWith("\0") || importer.includes("?")) return null;
       if (!path.isAbsolute(importer)) return null;
 
-      const resolved = resolveTransitiveExternal(source, importer, resolver);
-      if (!resolved) return null;
-      return resolved;
+      if (typeof this.resolve !== "function") {
+        return resolveTransitiveExternal(source, importer, resolver);
+      }
+
+      const kind = resolveOptions.kind;
+      const mode = getExternalModuleMode(kind);
+      const environmentResolver = mode === "require" ? viteRequireResolver : viteImportResolver;
+      return (async () => {
+        const importerResolution = await environmentResolver(this.environment, source, importer);
+        if (!importerResolution || !path.isAbsolute(importerResolution)) {
+          return resolveTransitiveExternal(source, importer, resolver);
+        }
+
+        const rootResolution = await environmentResolver(this.environment, source, rootAnchor);
+        return compareTransitiveExternalResolutions(
+          { path: importerResolution, mode },
+          rootResolution && path.isAbsolute(rootResolution) ? { path: rootResolution, mode } : null,
+        );
+      })();
     },
   };
 }

@@ -5,6 +5,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import {
   _createPluginForTest,
+  compareTransitiveExternalResolutions,
   resolveTransitiveExternal,
 } from "../packages/vinext/src/plugins/transitive-externals.js";
 
@@ -85,6 +86,18 @@ afterEach(() => {
 });
 
 describe("resolveTransitiveExternal", () => {
+  it("bundles when the resolved path matches but the module mode differs", () => {
+    writeFile(tmpDir, "shared.js", "export default 'shared';\n");
+    const sharedPath = path.join(tmpDir, "shared.js");
+
+    expect(
+      compareTransitiveExternalResolutions(
+        { path: sharedPath, mode: "import" },
+        { path: sharedPath, mode: "require" },
+      ),
+    ).toBe(fs.realpathSync(sharedPath));
+  });
+
   it("returns the nested copy when the importer resolves to a different version than root", () => {
     buildFixture(tmpDir);
 
