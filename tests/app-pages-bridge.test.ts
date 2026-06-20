@@ -404,6 +404,42 @@ describe("renderPagesFallback", () => {
     expect(await res!.text()).toBe("page-response");
   });
 
+  it("applies middleware response headers to Pages fallback page responses", async () => {
+    const renderPage = vi.fn(
+      () =>
+        new Response("page-response", {
+          headers: { "x-page-header": "page" },
+        }),
+    );
+    const middlewareHeaders = new Headers({
+      "set-cookie": "middleware=1; Path=/",
+      "x-from-middleware": "present",
+    });
+
+    const res = await renderPagesFallback(
+      {
+        isRscRequest: false,
+        middlewareContext: {
+          headers: middlewareHeaders,
+          requestHeaders: null,
+          status: 202,
+        },
+        request: new Request("http://localhost/pages/middleware-headers-node"),
+        url: new URL("http://localhost/pages/middleware-headers-node"),
+      },
+      {
+        ...defaultDeps,
+        loadPagesEntry: () => ({ renderPage }),
+      },
+    );
+
+    expect(res).not.toBeNull();
+    expect(res!.status).toBe(202);
+    expect(res!.headers.get("x-page-header")).toBe("page");
+    expect(res!.headers.get("x-from-middleware")).toBe("present");
+    expect(res!.headers.getSetCookie()).toContain("middleware=1; Path=/");
+  });
+
   it("filters static and dynamic Pages matches by ownership phase", async () => {
     const renderPage = vi.fn(() => new Response("page"));
     const request = new Request("http://localhost/blog/hello");

@@ -175,7 +175,10 @@ export async function renderPagesFallback(
         middlewareContext.requestHeaders,
       );
   if (pagesRes.status === 404 && pageMatch === null) return null;
-  return applyDraftModeCookie(pagesRes, getDraftModeCookieHeader());
+  return applyDraftModeCookie(
+    applyRouteHandlerMiddlewareContext(pagesRes, middlewareContext),
+    getDraftModeCookieHeader(),
+  );
 }
 
 /**
