@@ -332,18 +332,21 @@ async function buildPagesShellHtml(
     let html = renderedDocument.html;
     const generatedFontHeadHTML = applyDocumentAssetProps(
       fontHeadHTML,
-      { headNonce: renderedDocument.props.headNonce },
+      renderedDocument.props,
       renderedDocument.props.headCrossOrigin ?? options.crossOrigin,
+      "head",
     );
     const generatedAssetTags = applyDocumentAssetProps(
       options.assetTags,
       renderedDocument.props,
       options.crossOrigin,
+      "head",
     );
     const generatedNextDataScript = applyDocumentAssetProps(
       nextDataScript,
       renderedDocument.props,
       options.crossOrigin,
+      "script",
     );
     html = html.replace("__NEXT_MAIN__", bodyMarker);
     if (options.ssrHeadHTML) {

@@ -312,10 +312,16 @@ async function streamPageToResponse(
     let docHtml = renderedDocument.html;
     const generatedFontHeadHTML = applyDocumentAssetProps(
       fontHeadHTML,
-      { headNonce: renderedDocument.props.headNonce },
+      renderedDocument.props,
       renderedDocument.props.headCrossOrigin ?? crossOrigin,
+      "head",
     );
-    const generatedScripts = applyDocumentAssetProps(scripts, renderedDocument.props, crossOrigin);
+    const generatedScripts = applyDocumentAssetProps(
+      scripts,
+      renderedDocument.props,
+      crossOrigin,
+      "script",
+    );
     // Replace __NEXT_MAIN__ with our stream marker
     docHtml = docHtml.replace("__NEXT_MAIN__", STREAM_BODY_MARKER);
     if (headHTML) {

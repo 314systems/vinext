@@ -7,22 +7,33 @@ import path from "node:path";
 import vinext from "../packages/vinext/src/index.js";
 import { startProdServer } from "../packages/vinext/src/server/prod-server.js";
 
-function assertDocumentAssetProps(html: string, requirePreloads: boolean): void {
+function assertDocumentAssetProps(html: string, requireHeadAssets: boolean): void {
   expect(html).not.toContain("data-vinext-head-nonce");
   expect(html).not.toContain("data-vinext-script-nonce");
 
-  const scripts = (html.match(/<script\b[^>]*>/g) ?? []).filter((tag) =>
-    tag.includes('nonce="test-nonce"'),
+  const documentScripts = (html.match(/<script\b[^>]*>/g) ?? []).filter((tag) =>
+    tag.includes('nonce="script-nonce"'),
   );
-  const preloads = (html.match(/<link\b[^>]*rel="(?:preload|modulepreload)"[^>]*>/g) ?? []).filter(
-    (tag) => !tag.includes('id="user-preload"'),
-  );
-  expect(scripts.length).toBeGreaterThan(0);
-  if (requirePreloads) expect(preloads.length).toBeGreaterThan(0);
-
-  for (const tag of [...scripts, ...preloads]) {
-    expect(tag).toContain('nonce="test-nonce"');
+  expect(documentScripts.length).toBeGreaterThan(0);
+  for (const tag of documentScripts) {
     expect(tag).toContain('crossorigin="anonymous"');
+  }
+
+  const generatedHeadAssets = (html.match(/<(?:script|link)\b[^>]*>/g) ?? []).filter(
+    (tag) =>
+      !tag.includes('id="user-') &&
+      !tag.includes("/@vite/") &&
+      (tag.includes('rel="stylesheet"') ||
+        tag.includes('rel="preload"') ||
+        tag.includes('rel="modulepreload"') ||
+        (tag.includes("<script") && tag.includes("src="))),
+  );
+  if (requireHeadAssets) {
+    expect(generatedHeadAssets.length).toBeGreaterThan(0);
+    for (const tag of generatedHeadAssets) {
+      expect(tag).toContain('nonce="head-nonce"');
+      expect(tag).toContain('crossorigin="use-credentials"');
+    }
   }
 
   expect(html).toMatch(
@@ -59,17 +70,26 @@ describe("Pages _document script and preload props", () => {
     );
     await fsp.writeFile(
       path.join(root, "pages", "index.tsx"),
-      "export default function Page() { return <main>ok</main>; }\n",
+      'import "../style.css";\nexport default function Page() { return <main className="cascade">ok</main>; }\n',
     );
+    await fsp.writeFile(path.join(root, "style.css"), ".cascade { color: green }\n");
     await fsp.writeFile(
       path.join(root, "pages", "_document.tsx"),
       `import { Html, Head, Main, NextScript } from "next/document";
 export default function Document() {
-  return <Html><Head nonce="test-nonce">
+  return <Html><Head nonce="head-nonce" crossOrigin="use-credentials">
+    <style id="custom-document-style">{".cascade { color: red }"}</style>
     <script id="user-script" src="/user.js" nonce="user-nonce" crossOrigin="use-credentials" />
     <link id="user-preload" rel="preload" href="/user.js" as="script" nonce="user-preload-nonce" crossOrigin="use-credentials" />
-  </Head><body><Main /><NextScript nonce="test-nonce" /></body></Html>;
+  </Head><body><Main /><NextScript nonce="script-nonce" /></body></Html>;
 }
+Document.getInitialProps = async (ctx) => {
+  const initialProps = await ctx.defaultGetInitialProps(ctx);
+  return {
+    ...initialProps,
+    styles: <style id="collected-document-style">{".cascade { color: blue }"}</style>,
+  };
+};
 `,
     );
 
@@ -123,8 +143,11 @@ export default function Document() {
     expect(response.status).toBe(200);
     const html = await response.text();
     assertDocumentAssetProps(html, false);
+    expect(html.indexOf('id="custom-document-style"')).toBeLessThan(
+      html.indexOf('id="collected-document-style"'),
+    );
     const viteScripts = (html.match(/<script\b[^>]*>/g) ?? []).filter(
-      (tag) => !tag.includes('id="user-script"') && !tag.includes('nonce="test-nonce"'),
+      (tag) => !tag.includes('id="user-script"') && !tag.includes('nonce="script-nonce"'),
     );
     expect(viteScripts.length).toBeGreaterThan(0);
     for (const tag of viteScripts) {
@@ -136,6 +159,10 @@ export default function Document() {
   it("propagates props in production", async () => {
     const response = await fetch(prodUrl);
     expect(response.status).toBe(200);
-    assertDocumentAssetProps(await response.text(), true);
+    const html = await response.text();
+    assertDocumentAssetProps(html, true);
+    expect(html.indexOf('id="custom-document-style"')).toBeLessThan(
+      html.indexOf('id="collected-document-style"'),
+    );
   });
 });

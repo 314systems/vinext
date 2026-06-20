@@ -7,6 +7,8 @@ export type DocumentAssetProps = {
   scriptCrossOrigin?: string;
 };
 
+type DocumentAssetOwner = "head" | "script";
+
 const HEAD_NONCE_ATTR = "data-vinext-head-nonce";
 const HEAD_CROSS_ORIGIN_ATTR = "data-vinext-head-cross-origin";
 const SCRIPT_NONCE_ATTR = "data-vinext-script-nonce";
@@ -60,28 +62,19 @@ export function applyDocumentAssetProps(
   html: string,
   props: DocumentAssetProps,
   configuredCrossOrigin?: string,
+  owner: DocumentAssetOwner = "script",
 ): string {
-  const scriptNonce = props.scriptNonce;
-  const preloadNonce = props.headNonce;
-  const scriptCrossOrigin = props.scriptCrossOrigin ?? configuredCrossOrigin;
-  const preloadCrossOrigin =
-    props.headCrossOrigin ?? props.scriptCrossOrigin ?? configuredCrossOrigin;
+  const nonce = owner === "head" ? props.headNonce : props.scriptNonce;
+  const crossOrigin =
+    owner === "head"
+      ? (props.headCrossOrigin ?? configuredCrossOrigin)
+      : (props.scriptCrossOrigin ?? configuredCrossOrigin);
 
   return html
     .replace(/<script\b[^>]*>/gi, (tag) =>
-      addAttribute(
-        addAttribute(tag, "nonce", scriptNonce, true),
-        "crossorigin",
-        scriptCrossOrigin,
-        true,
-      ),
+      addAttribute(addAttribute(tag, "nonce", nonce, true), "crossorigin", crossOrigin, true),
     )
-    .replace(/<link\b[^>]*\brel="(?:preload|modulepreload)"[^>]*>/gi, (tag) =>
-      addAttribute(
-        addAttribute(tag, "nonce", preloadNonce, true),
-        "crossorigin",
-        preloadCrossOrigin,
-        true,
-      ),
+    .replace(/<link\b[^>]*\brel="(?:preload|modulepreload|stylesheet)"[^>]*>/gi, (tag) =>
+      addAttribute(addAttribute(tag, "nonce", nonce, true), "crossorigin", crossOrigin, true),
     );
 }
