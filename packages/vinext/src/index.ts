@@ -1223,7 +1223,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
       serverOnlyShimPath: resolveShimModulePath(shimsDir, "server-only"),
     }),
     createPagesNodeExternalsPlugin({
+      getRoot: () => root,
       getPagesDir: () => (hasPagesDir ? pagesDir : null),
+      getEsmExternals: () => nextConfig?.esmExternals ?? true,
+      getBundlePagesRouterDependencies: () => nextConfig?.bundlePagesRouterDependencies ?? false,
       getTranspilePackages: () => nextConfig?.transpilePackages ?? [],
       isEnabled: () => !hasCloudflarePlugin && !hasNitroPlugin,
     }),

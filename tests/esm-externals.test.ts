@@ -45,7 +45,14 @@ async function writePackage(
 
 async function createFixture(
   router: "pages" | "app",
-  options: { transpilePackages?: string[] } = {},
+  options: {
+    transpilePackages?: string[];
+    esmExternals?: boolean;
+    bundlePagesRouterDependencies?: boolean;
+    requireEsm?: boolean;
+    requireConditional?: boolean;
+    nestedVersion?: boolean;
+  } = {},
 ): Promise<string> {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), `vinext-esm-externals-${router}-`));
   fixtureRoots.push(root);
@@ -118,22 +125,56 @@ async function createFixture(
   );
 
   if (router === "pages") {
-    await writePackage(
-      root,
-      "transitive-esm-package",
-      {
-        type: "module",
-        exports: { ".": "./index.js" },
-      },
-      {
-        "index.js": `export default "Transitive"; if (Math.random() < 0) import("fail");`,
-      },
-    );
-    await writeFile(
-      root,
-      "node_modules/invalid-esm-package/alternative.js",
-      `module.exports = require("transitive-esm-package").default === "Transitive" ? "Alternative" : "Wrong";`,
-    );
+    if (options.requireEsm) {
+      await writePackage(
+        root,
+        "required-esm-package",
+        { type: "module", exports: { ".": "./index.js" } },
+        { "index.js": `export default "Required ESM";` },
+      );
+    }
+    if (options.requireConditional) {
+      await writePackage(
+        root,
+        "required-conditional-package",
+        {
+          exports: {
+            ".": { import: "./import.mjs", require: "./require.cjs" },
+          },
+        },
+        {
+          "import.mjs": `export default "Import Version";`,
+          "require.cjs": `module.exports = "Require Version";`,
+        },
+      );
+    }
+    if (options.nestedVersion) {
+      await writePackage(
+        root,
+        "nested-version-package",
+        { type: "module", exports: { ".": "./index.js" } },
+        { "index.js": `export default "Root Version";` },
+      );
+      await writeFile(
+        root,
+        "pages/nested/node_modules/nested-version-package/package.json",
+        JSON.stringify({
+          name: "nested-version-package",
+          type: "module",
+          exports: { ".": "./index.js" },
+        }),
+      );
+      await writeFile(
+        root,
+        "pages/nested/node_modules/nested-version-package/index.js",
+        `export default "Nested Version";`,
+      );
+      await writeFile(
+        root,
+        "pages/nested/value.ts",
+        `import value from "nested-version-package"; export default value;`,
+      );
+    }
   }
 
   const imports =
@@ -146,20 +187,32 @@ import World2 from "esm-package2/entry";
 import World3 from "invalid-esm-package/entry";`;
 
   if (router === "pages") {
-    if (options.transpilePackages) {
+    if (
+      options.transpilePackages ||
+      options.esmExternals !== undefined ||
+      options.bundlePagesRouterDependencies
+    ) {
       await writeFile(
         root,
         "next.config.mjs",
-        `export default { transpilePackages: ${JSON.stringify(options.transpilePackages)} };\n`,
+        `export default ${JSON.stringify({
+          transpilePackages: options.transpilePackages,
+          bundlePagesRouterDependencies: options.bundlePagesRouterDependencies,
+          experimental:
+            options.esmExternals === undefined ? undefined : { esmExternals: options.esmExternals },
+        })};\n`,
       );
     }
     await writeFile(
       root,
       "pages/index.tsx",
       `${imports}
+${options.requireEsm ? `const requiredEsm = require("required-esm-package");` : ""}
+${options.requireConditional ? `const requiredConditional = require("required-conditional-package");` : ""}
+${options.nestedVersion ? `import nestedVersion from "./nested/value";` : ""}
 export function getServerSideProps() { return { props: { server: [World1, World2, World3].join("+") } }; }
 export default function Page({ server }: { server: string }) {
-  return <p>{server}</p>;
+  return <p>{server}${options.requireEsm ? `+${"${requiredEsm.default}"}` : ""}${options.requireConditional ? `+${"${requiredConditional}"}` : ""}${options.nestedVersion ? `+${"${nestedVersion}"}` : ""}</p>;
 }
 `,
     );
@@ -273,4 +326,57 @@ describe("ESM external package parity", () => {
     const root = await createFixture("pages", { transpilePackages: ["esm-package1"] });
     await expect(buildFixture(root, "pages")).rejects.toThrow(/failed to resolve import "fail"/i);
   }, 120_000);
+
+  it("bundles a nested package version that differs from root resolution", async () => {
+    const root = await createFixture("pages", { nestedVersion: true });
+    const outDir = await buildFixture(root, "pages");
+    const server = unwrapStartedProdServer(
+      await startProdServer({ host: "127.0.0.1", port: 0, outDir }),
+    );
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Missing server address");
+      expect(await (await fetch(`http://127.0.0.1:${address.port}/`)).text()).toContain(
+        "Nested Version",
+      );
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }, 120_000);
+
+  it("rejects strict require of an ESM-only package", async () => {
+    const root = await createFixture("pages", { requireEsm: true });
+    await expect(buildFixture(root, "pages")).rejects.toThrow(
+      "ESM packages (required-esm-package) need to be imported",
+    );
+  }, 120_000);
+
+  it("uses the require export for a conditional package", async () => {
+    const root = await createFixture("pages", { requireConditional: true });
+    const outDir = await buildFixture(root, "pages");
+    const server = unwrapStartedProdServer(
+      await startProdServer({ host: "127.0.0.1", port: 0, outDir }),
+    );
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Missing server address");
+      const html = await (await fetch(`http://127.0.0.1:${address.port}/`)).text();
+      expect(html).toContain("Require Version");
+      expect(html).not.toContain("Import Version");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }, 120_000);
+
+  it.each([
+    ["experimental.esmExternals false", { esmExternals: false }],
+    ["bundlePagesRouterDependencies true", { bundlePagesRouterDependencies: true }],
+  ])(
+    "bundles native ESM when %s",
+    async (_name, options) => {
+      const root = await createFixture("pages", options);
+      await expect(buildFixture(root, "pages")).rejects.toThrow(/failed to resolve import "fail"/i);
+    },
+    120_000,
+  );
 });

@@ -5,7 +5,10 @@ import type { Plugin } from "vite";
 import { stripViteModuleQuery } from "../utils/path.js";
 
 type PagesNodeExternalsOptions = {
+  getRoot: () => string;
   getPagesDir: () => string | null;
+  getEsmExternals: () => boolean | "loose";
+  getBundlePagesRouterDependencies: () => boolean;
   getTranspilePackages: () => readonly string[];
   isEnabled: () => boolean;
 };
@@ -23,6 +26,7 @@ const FRAMEWORK_PACKAGES = new Set([
 
 const MODULE_SPECIFIER_RE =
   /\b(?:import|export)\s+(?:type\s+)?(?:[^'"]*?\s+from\s*)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)|\brequire\s*\(\s*["']([^"']+)["']\s*\)/g;
+const STATIC_REQUIRE_RE = /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g;
 
 function isBarePackageRequest(id: string): boolean {
   return (
@@ -104,6 +108,7 @@ export function createPagesNodeExternalsPlugin(options: PagesNodeExternalsOption
   let isBuild = false;
   const pagesOwnedModules = new Set<string>();
   const nativeEsmCache = new Map<string, boolean>();
+  const requireRequestsByImporter = new Map<string, Set<string>>();
 
   return {
     name: "vinext:pages-node-externals",
@@ -111,6 +116,26 @@ export function createPagesNodeExternalsPlugin(options: PagesNodeExternalsOption
 
     configResolved(config) {
       isBuild = config.command === "build";
+    },
+
+    transform: {
+      order: "pre",
+      handler(code, id) {
+        if (!isBuild || !options.isEnabled() || this.environment?.name === "client") return null;
+        if (!code.includes("require")) return null;
+
+        const requests = new Set<string>();
+        STATIC_REQUIRE_RE.lastIndex = 0;
+        let match: RegExpExecArray | null;
+        while ((match = STATIC_REQUIRE_RE.exec(code)) !== null) {
+          const request = match[1];
+          if (request && isBarePackageRequest(request)) requests.add(request);
+        }
+        if (requests.size > 0) {
+          requireRequestsByImporter.set(realpathIfExists(stripViteModuleQuery(id)), requests);
+        }
+        return null;
+      },
     },
 
     async resolveId(id, importer) {
@@ -139,6 +164,9 @@ export function createPagesNodeExternalsPlugin(options: PagesNodeExternalsOption
       }
 
       if (!importerIsPagesOwned) return null;
+      if (options.getEsmExternals() === false || options.getBundlePagesRouterDependencies()) {
+        return null;
+      }
       const packageName = getPackageName(id);
       if (!packageName) return null;
       if (
@@ -150,6 +178,24 @@ export function createPagesNodeExternalsPlugin(options: PagesNodeExternalsOption
         options.getTranspilePackages().includes(packageName)
       ) {
         return null;
+      }
+
+      const canonicalImporter = cleanImporter ? realpathIfExists(cleanImporter) : null;
+      const isRequireRequest = Boolean(
+        canonicalImporter && requireRequestsByImporter.get(canonicalImporter)?.has(id),
+      );
+      if (isRequireRequest) {
+        const requireFromImporter = createRequire(
+          canonicalImporter ?? path.join(pagesDir, "index.js"),
+        );
+        const requireResolved = realpathIfExists(requireFromImporter.resolve(id));
+        if (canNodeImport(requireResolved) && options.getEsmExternals() !== "loose") {
+          throw new Error(
+            `ESM packages (${id}) need to be imported. Use 'import' to reference the package instead. https://nextjs.org/docs/messages/import-esm-externals`,
+          );
+        }
+        pagesOwnedModules.add(requireResolved);
+        return canNodeImport(requireResolved) ? { id, external: true } : requireResolved;
       }
 
       const resolved = await this.resolve(id, importer, { skipSelf: true });
@@ -169,7 +215,17 @@ export function createPagesNodeExternalsPlugin(options: PagesNodeExternalsOption
           canNodeImport(cleanResolved) && !hasNodeUnsupportedRelativeImport(cleanResolved);
         nativeEsmCache.set(cleanResolved, shouldExternalize);
       }
-      if (shouldExternalize) return { id, external: true };
+      if (shouldExternalize) {
+        const rootImporter = path.join(options.getRoot(), "__vinext_external_resolve__.js");
+        const rootResolved = await this.resolve(id, rootImporter, { skipSelf: true });
+        const cleanRootResolved = rootResolved?.external
+          ? null
+          : rootResolved
+            ? realpathIfExists(stripViteModuleQuery(rootResolved.id))
+            : null;
+        if (cleanRootResolved !== cleanResolved) return null;
+        return { id, external: true };
+      }
 
       try {
         const requireFromImporter = createRequire(cleanImporter ?? path.join(pagesDir, "index.js"));
