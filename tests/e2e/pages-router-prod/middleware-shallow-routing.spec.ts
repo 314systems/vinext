@@ -28,4 +28,21 @@ test("middleware alias supports deep then shallow navigation", async ({ page }) 
   await expect(page).toHaveURL(`${BASE}/sha?hello=world`);
   await expect(page.locator('[data-testid="router-query"]')).toHaveText('{"hello":"world"}');
   expect(await page.locator('[data-testid="gssp-call-id"]').textContent()).toBe(deepCallId);
+
+  await page.goBack();
+  await expect(page).toHaveURL(`${BASE}/sha?hello=goodbye`);
+  await expect(page.locator('[data-testid="router-query"]')).toHaveText(
+    '{"hello":"goodbye","from":"middleware"}',
+  );
+  await page.goForward();
+  await expect(page).toHaveURL(`${BASE}/sha?hello=world`);
+  await expect(page.locator('[data-testid="router-query"]')).toHaveText(
+    '{"hello":"world","from":"middleware"}',
+  );
+
+  await page.reload();
+  await waitForHydration(page);
+  await expect(page.locator('[data-testid="router-query"]')).toHaveText('{"hello":"world"}');
+  const reloadCallId = await page.locator('[data-testid="gssp-call-id"]').textContent();
+  expect(reloadCallId).not.toBe(deepCallId);
 });

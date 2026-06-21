@@ -416,6 +416,7 @@ type PagesRouterRuntimeState = {
   lastPathnameAndSearch: string;
   isFirstPopStateEvent: boolean;
   routerDidNavigate: boolean;
+  currentShallow: boolean;
   deprecatedEventBridgeInstalled: boolean;
   pagesRouterReady: boolean;
   publicRouter?: Record<string, unknown>;
@@ -443,6 +444,7 @@ function createPagesRouterRuntimeState(): PagesRouterRuntimeState {
       typeof window !== "undefined" ? window.location.pathname + window.location.search : "",
     isFirstPopStateEvent: true,
     routerDidNavigate: false,
+    currentShallow: false,
     deprecatedEventBridgeInstalled: false,
     pagesRouterReady: typeof window === "undefined" || !shouldDeferInitialPagesRouterReady(),
   };
@@ -812,13 +814,10 @@ function stampInitialHistoryState(): void {
   if (!window.history) return;
 
   const existingState = window.history.state;
-  if (existingState !== null && existingState !== undefined) {
-    routerRuntimeState.currentHistoryKey =
-      getRouterStateKey(existingState) ?? routerRuntimeState.currentHistoryKey;
-    return;
-  }
-
   const initialState = buildInitialRouterState();
+  const existingKey = getRouterStateKey(existingState);
+  if (existingKey !== undefined) initialState.key = existingKey;
+  routerRuntimeState.currentShallow = false;
   routerRuntimeState.currentHistoryKey = initialState.key;
   window.history.replaceState(initialState, "");
 }
@@ -1263,7 +1262,7 @@ function getPathnameAndQuery(): {
   for (const [key, value] of params) {
     addQueryParam(searchQuery, key, value);
   }
-  const isShallowNavigation = window.history?.state?.options?.shallow === true;
+  const isShallowNavigation = routerRuntimeState.currentShallow;
   const query = isShallowNavigation ? { ...searchQuery } : { ...searchQuery, ...routeQuery };
   if (isShallowNavigation) {
     for (const routeParamName of extractRouteParamNames(nextData?.page ?? "")) {
@@ -2307,6 +2306,7 @@ function updateHistory(
   };
   if (mode === "push") window.history.pushState(state, "", fullUrl);
   else window.history.replaceState(state, "", fullUrl);
+  routerRuntimeState.currentShallow = navState.options.shallow === true;
   routerRuntimeState.currentHistoryKey = key;
   routerRuntimeState.lastPathnameAndSearch = window.location.pathname + window.location.search;
   routerRuntimeState.routerDidNavigate = true;
@@ -2963,6 +2963,13 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
     });
     if (!shouldContinue) return;
   }
+
+  // Next.js only carries shallow mode across popstate when both the target
+  // entry and the current router transition are shallow. Vinext currently
+  // resolves every non-hash popstate through a fresh server navigation, so
+  // the resulting router state is always deep and must publish all server
+  // query metadata, even when the restored entry was originally shallow.
+  routerRuntimeState.currentShallow = false;
 
   // Update trackers only after beforePopState confirms navigation proceeds.
   // If beforePopState cancels, the app stays on the previous history entry,

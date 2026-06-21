@@ -13852,6 +13852,9 @@ describe("next/compat/router shim", () => {
       __VINEXT_DEFAULT_LOCALE__: undefined,
     };
 
+    const runtimeStateKey = Symbol.for("vinext.pagesRouter.runtimeState");
+    (globalThis as any).window[runtimeStateKey] = { currentShallow: true };
+
     try {
       let captured: unknown = "NOT_SET";
       function Probe() {
@@ -13922,12 +13925,6 @@ describe("next/compat/router shim", () => {
   });
 
   it("prefers the current search query over stale rewrite query state", async () => {
-    const React = await import("react");
-    const { renderToStaticMarkup } = await import("react-dom/server");
-    const { useRouter: useCompatRouter } =
-      await import("../packages/vinext/src/shims/compat-router.js");
-    const { wrapWithRouterContext } = await import("../packages/vinext/src/shims/router.js");
-
     const previousWindow = (globalThis as any).window;
     (globalThis as any).window = {
       location: {
@@ -13935,7 +13932,19 @@ describe("next/compat/router shim", () => {
         search: "?hello=world",
         hash: "",
       },
-      history: { state: { options: { shallow: true } } },
+      history: {
+        state: {
+          __N: true,
+          url: "/shallow-test?hello=world",
+          as: "/sha?hello=world",
+          options: { shallow: true },
+          key: "shallow",
+        },
+        replaceState: vi.fn(function (this: { state: unknown }, state: unknown) {
+          this.state = state;
+        }),
+      },
+      addEventListener: vi.fn(),
       __NEXT_DATA__: {
         page: "/shallow-test",
         query: { hello: "goodbye", from: "middleware" },
@@ -13947,6 +13956,15 @@ describe("next/compat/router shim", () => {
     };
 
     try {
+      vi.resetModules();
+      const React = await import("react");
+      const { renderToStaticMarkup } = await import("react-dom/server");
+      const { useRouter: useCompatRouter } =
+        await import("../packages/vinext/src/shims/compat-router.js");
+      const { wrapWithRouterContext } = await import("../packages/vinext/src/shims/router.js");
+      const runtimeStateKey = Symbol.for("vinext.pagesRouter.runtimeState");
+      (globalThis as any).window[runtimeStateKey].currentShallow = true;
+
       let captured: unknown = "NOT_SET";
       function Probe() {
         captured = useCompatRouter();
@@ -13960,6 +13978,7 @@ describe("next/compat/router shim", () => {
       expect((captured as any).pathname).toBe("/shallow-test");
       expect((captured as any).asPath).toBe("/sha?hello=world");
     } finally {
+      vi.resetModules();
       if (previousWindow === undefined) {
         delete (globalThis as any).window;
       } else {
@@ -13968,13 +13987,7 @@ describe("next/compat/router shim", () => {
     }
   });
 
-  it("preserves rewrite query state after deep navigation", async () => {
-    const React = await import("react");
-    const { renderToStaticMarkup } = await import("react-dom/server");
-    const { useRouter: useCompatRouter } =
-      await import("../packages/vinext/src/shims/compat-router.js");
-    const { wrapWithRouterContext } = await import("../packages/vinext/src/shims/router.js");
-
+  it("does not treat persisted shallow history state as a current shallow navigation", async () => {
     const previousWindow = (globalThis as any).window;
     (globalThis as any).window = {
       location: {
@@ -13982,7 +13995,19 @@ describe("next/compat/router shim", () => {
         search: "?hello=world",
         hash: "",
       },
-      history: { state: { options: { shallow: false } } },
+      history: {
+        state: {
+          __N: true,
+          url: "/shallow-test?hello=world",
+          as: "/sha?hello=world",
+          options: { shallow: true },
+          key: "reloaded-shallow",
+        },
+        replaceState: vi.fn(function (this: { state: unknown }, state: unknown) {
+          this.state = state;
+        }),
+      },
+      addEventListener: vi.fn(),
       __NEXT_DATA__: {
         page: "/shallow-test",
         query: { hello: "goodbye", from: "middleware" },
@@ -13994,6 +14019,13 @@ describe("next/compat/router shim", () => {
     };
 
     try {
+      vi.resetModules();
+      const React = await import("react");
+      const { renderToStaticMarkup } = await import("react-dom/server");
+      const { useRouter: useCompatRouter } =
+        await import("../packages/vinext/src/shims/compat-router.js");
+      const { wrapWithRouterContext } = await import("../packages/vinext/src/shims/router.js");
+
       let captured: unknown = "NOT_SET";
       function Probe() {
         captured = useCompatRouter();
@@ -14007,6 +14039,7 @@ describe("next/compat/router shim", () => {
       expect((captured as any).pathname).toBe("/shallow-test");
       expect((captured as any).asPath).toBe("/sha?hello=world");
     } finally {
+      vi.resetModules();
       if (previousWindow === undefined) {
         delete (globalThis as any).window;
       } else {
