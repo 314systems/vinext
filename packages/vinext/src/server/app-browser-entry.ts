@@ -287,6 +287,18 @@ const discardedServerActionRefreshScheduler = createDiscardedServerActionRefresh
 const NavigationCommitSignal = browserNavigationController.NavigationCommitSignal;
 const ACTION_HTTP_FALLBACK_ROBOTS_META_ATTR = "data-vinext-action-http-fallback";
 
+function syncMetadataIcons(): void {
+  const bodyIcons = document.body.querySelectorAll<HTMLLinkElement>(
+    'link[rel="icon"], link[rel="apple-touch-icon"]',
+  );
+  if (bodyIcons.length === 0) return;
+
+  document.head
+    .querySelectorAll('link[rel="icon"], link[rel="apple-touch-icon"]')
+    .forEach((icon) => icon.remove());
+  bodyIcons.forEach((icon) => document.head.appendChild(icon));
+}
+
 function syncServerActionHttpFallbackHead(status: number | null): void {
   document.head
     .querySelectorAll(`meta[${ACTION_HTTP_FALLBACK_ROBOTS_META_ATTR}="robots"]`)
@@ -573,6 +585,7 @@ function createNavigationCommitEffect(options: {
     // URL has been updated; the recovery hard-nav target is no longer needed.
     clearAppNavigationFailureTarget(href);
     commitClientNavigationState(navId);
+    queueMicrotask(syncMetadataIcons);
   };
 }
 
@@ -1105,6 +1118,7 @@ function BrowserRoot({
   useLayoutEffect(() => {
     setMountedSlotsHeader(getMountedSlotIdsHeader(stateRef.current.elements));
     removeStylesheetLinksCoveredByInlineCss();
+    syncMetadataIcons();
     getNavigationRuntime()?.functions.pingVisibleLinks?.();
   }, [treeState.elements]);
 
