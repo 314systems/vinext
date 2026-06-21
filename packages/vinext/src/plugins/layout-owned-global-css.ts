@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { parseSync, type ESTree, type Plugin } from "vite";
+import { createIdResolver, parseSync, type ESTree, type Plugin, type ResolvedConfig } from "vite";
 import { fnv1a64 } from "../utils/hash.js";
 
 const STYLESHEET_RE = /\.(?:css|less|sass|scss|styl|stylus)$/i;
@@ -28,6 +28,8 @@ type ResolveContext = {
     options?: { skipSelf?: boolean },
   ): Promise<{ id: string } | null>;
 };
+
+type ResolverEnvironment = Parameters<ReturnType<typeof createIdResolver>>[0];
 
 function cleanModuleId(id: string): string {
   const suffixIndex = id.search(/[?#]/);
@@ -224,6 +226,20 @@ export function createLayoutOwnedGlobalCssPlugin(
   let pagesScanIsConservative = false;
   let pagesSsrResolve: ((source: string, importer?: string) => Promise<string | undefined>) | null =
     null;
+  let resolvedConfig: ResolvedConfig | null = null;
+
+  function isPagesServerEnvironment(
+    environment: ResolverEnvironment | undefined,
+  ): environment is ResolverEnvironment {
+    return environment !== undefined && environment.name !== "client" && environment.name !== "rsc";
+  }
+
+  function capturePagesServerEnvironment(environment: ResolverEnvironment | undefined): void {
+    if (!resolvedConfig || !isPagesServerEnvironment(environment)) return;
+    const serverEnvironment = environment;
+    const resolve = createIdResolver(resolvedConfig);
+    pagesSsrResolve = (source, importer) => resolve(serverEnvironment, source, importer);
+  }
 
   function normalizedPageExtensions(): string[] {
     return (options.getPageExtensions?.() ?? ["tsx", "ts", "jsx", "js", "mts", "cts", "mjs", "cjs"])
@@ -510,17 +526,21 @@ export function createLayoutOwnedGlobalCssPlugin(
     apply: "build",
 
     configResolved(config) {
-      const resolver = config.createResolver();
-      pagesSsrResolve = (source, importer) => resolver(source, importer, false, true);
+      resolvedConfig = config;
+      if (!config.environments || config.environments.ssr) {
+        const resolver = config.createResolver();
+        pagesSsrResolve = (source, importer) => resolver(source, importer, false, true);
+      }
     },
 
     async resolveDynamicImport(source, importer) {
       if (typeof source !== "string" || !importer) return null;
+      capturePagesServerEnvironment(this.environment);
       const resolved = await this.resolve(source, importer, { skipSelf: true });
       if (!resolved || resolved.id.startsWith("\0")) return null;
       if (this.environment?.name === "rsc") {
         addImport(importer, resolved.id, false);
-      } else if (this.environment?.name === "ssr") {
+      } else if (isPagesServerEnvironment(this.environment)) {
         const pagesDir = getPagesDir();
         if (!pagesDir) return resolved;
         const normalizedPagesDir = path.resolve(pagesDir);
@@ -535,13 +555,14 @@ export function createLayoutOwnedGlobalCssPlugin(
 
     async resolveId(source, importer) {
       if (!importer || source.startsWith(EMPTY_LAYOUT_CSS_PREFIX)) return null;
+      capturePagesServerEnvironment(this.environment);
 
       const importerPath = path.resolve(cleanModuleId(importer));
       const normalizedAppDir = path.resolve(getAppDir());
       const pagesDir = getPagesDir();
       const normalizedPagesDir = pagesDir ? path.resolve(pagesDir) : null;
 
-      if (this.environment?.name === "ssr" && normalizedPagesDir) {
+      if (isPagesServerEnvironment(this.environment) && normalizedPagesDir) {
         const importerId = graphModuleId(importer);
         const isPagesRoute = isDescendantPath(importerPath, normalizedPagesDir);
         if (!isPagesRoute && !pagesConsumers.has(importerId)) return null;
