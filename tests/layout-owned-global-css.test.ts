@@ -899,6 +899,102 @@ describe("layout-owned global CSS", () => {
     await fs.rm(projectDir, { recursive: true, force: true });
   });
 
+  it("ignores fenced MDX imports while following top-level ESM", async () => {
+    const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-layout-css-mdx-fences-"));
+    const appDir = path.join(projectDir, "app");
+    const pagesDir = path.join(projectDir, "pages");
+    const sourceDir = path.join(projectDir, "src");
+    await fs.mkdir(path.join(appDir, "dashboard"), { recursive: true });
+    await fs.mkdir(pagesDir, { recursive: true });
+    await fs.mkdir(sourceDir, { recursive: true });
+
+    const layout = path.join(appDir, "dashboard", "layout.tsx");
+    const appHelper = path.join(appDir, "dashboard", "shared.tsx");
+    const pagesRoute = path.join(pagesDir, "shared.mdx");
+    const pagesHelper = path.join(sourceDir, "pages-helper.ts");
+    const fencedBacktickHelper = path.join(sourceDir, "fenced-backtick.ts");
+    const fencedTildeHelper = path.join(sourceDir, "fenced-tilde.ts");
+    const sharedClient = path.join(sourceDir, "shared-client.tsx");
+    const stylesheet = path.join(sourceDir, "shared.css");
+    await fs.writeFile(
+      pagesRoute,
+      [
+        'import "../src/pages-helper"',
+        "",
+        "```tsx",
+        'import "../src/fenced-backtick"',
+        "```",
+        "",
+        "~~~~ts",
+        'import "../src/fenced-tilde"',
+        "~~~~",
+        "",
+        "# Shared",
+      ].join("\n"),
+    );
+    await fs.writeFile(pagesHelper, `import "./shared-client";\n`);
+    await fs.writeFile(fencedBacktickHelper, `import "./shared-client";\n`);
+    await fs.writeFile(fencedTildeHelper, `import "./shared-client";\n`);
+    await fs.writeFile(sharedClient, `import "./shared.css";\n`);
+    await fs.writeFile(stylesheet, `.shared { color: teal; }\n`);
+
+    const resolvedSources: string[] = [];
+    const resolutions = new Map([
+      [`${pagesRoute}:../src/pages-helper`, pagesHelper],
+      [`${pagesRoute}:../src/fenced-backtick`, fencedBacktickHelper],
+      [`${pagesRoute}:../src/fenced-tilde`, fencedTildeHelper],
+      [`${pagesHelper}:./shared-client`, sharedClient],
+      [`${fencedBacktickHelper}:./shared-client`, sharedClient],
+      [`${fencedTildeHelper}:./shared-client`, sharedClient],
+      [`${sharedClient}:./shared.css`, stylesheet],
+    ]);
+    const plugin = createLayoutOwnedGlobalCssPlugin(
+      () => appDir,
+      () => pagesDir,
+      { getPageExtensions: () => ["mdx", "tsx"] },
+    );
+    const resolveId =
+      typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
+    const configResolved =
+      typeof plugin.configResolved === "object"
+        ? plugin.configResolved.handler
+        : plugin.configResolved;
+    await configResolved?.call(
+      {} as never,
+      {
+        createResolver: () => async (source: string, importer?: string) => {
+          if (!importer) return undefined;
+          resolvedSources.push(`${importer}:${source}`);
+          return resolutions.get(`${importer}:${source}`);
+        },
+      } as never,
+    );
+
+    for (const [source, importer, resolved] of [
+      ["./shared", layout, appHelper],
+      ["@shared/client", appHelper, sharedClient],
+      ["./shared.css", sharedClient, stylesheet],
+    ] as const) {
+      await resolveId!.call(
+        createContext("rsc", { [source]: resolved }) as never,
+        source,
+        importer,
+        { isEntry: false },
+      );
+    }
+
+    await expect(
+      resolveId!.call(createContext("client", stylesheet) as never, "./shared.css", sharedClient, {
+        isEntry: false,
+      }),
+    ).resolves.toBeNull();
+    expect(resolvedSources).toContain(`${pagesRoute}:../src/pages-helper`);
+    expect(resolvedSources).not.toContain(`${pagesRoute}:../src/fenced-backtick`);
+    expect(resolvedSources).not.toContain(`${pagesRoute}:../src/fenced-tilde`);
+
+    await fs.rm(projectDir, { recursive: true, force: true });
+  });
+
   it("uses Pages SSR conditions when pre-scanning conditional exports", async () => {
     const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-layout-css-conditions-"));
     const appDir = path.join(projectDir, "app");

@@ -111,11 +111,36 @@ function extractModuleSources(
 }
 
 function extractMdxModuleSources(source: string): Array<{ source: string; isDynamic: false }> {
+  const unfencedLines: string[] = [];
+  let fence: { marker: "`" | "~"; length: number } | null = null;
+  for (const line of source.split(/\r?\n/)) {
+    const fenceMatch = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if (fenceMatch) {
+      const marker = fenceMatch[1][0] as "`" | "~";
+      if (!fence) {
+        fence = { marker, length: fenceMatch[1].length };
+        unfencedLines.push("");
+        continue;
+      }
+      if (
+        marker === fence.marker &&
+        fenceMatch[1].length >= fence.length &&
+        fenceMatch[2].trim() === ""
+      ) {
+        fence = null;
+      }
+      unfencedLines.push("");
+      continue;
+    }
+    unfencedLines.push(fence ? "" : line);
+  }
+
+  const unfencedSource = unfencedLines.join("\n");
   const sources = new Set<string>();
   const esmStatement = /^\s*(?:import|export)\s[\s\S]*?\sfrom\s*["']([^"']+)["']\s*;?\s*$/gm;
   const sideEffectImport = /^\s*import\s*["']([^"']+)["']\s*;?\s*$/gm;
   for (const matcher of [esmStatement, sideEffectImport]) {
-    for (const match of source.matchAll(matcher)) sources.add(match[1]);
+    for (const match of unfencedSource.matchAll(matcher)) sources.add(match[1]);
   }
   return [...sources].map((importSource) => ({ source: importSource, isDynamic: false }));
 }
