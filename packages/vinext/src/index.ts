@@ -2062,15 +2062,20 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           resolve: {
             // Materialize simple tsconfig/jsconfig path aliases into resolve.alias
             // so Vite can transform import.meta.glob("@/...") and import(`@/...`).
-            alias: {
-              ...tsconfigPathAliases,
-              ...nextConfig.aliases,
-              ...nextShimMap,
-              "styled-jsx/css": resolveOptionalDependency(earlyBaseDir, "styled-jsx/css")!,
-              "styled-jsx/style": resolveShimModulePath(shimsDir, "styled-jsx-style"),
-              "styled-jsx/style.js": resolveShimModulePath(shimsDir, "styled-jsx-style"),
-              "styled-jsx": resolveOptionalDependency(earlyBaseDir, "styled-jsx")!,
-            },
+            alias: [
+              ...Object.entries({
+                ...tsconfigPathAliases,
+                ...nextConfig.aliases,
+                ...nextShimMap,
+                "styled-jsx/css": resolveOptionalDependency(earlyBaseDir, "styled-jsx/css")!,
+                "styled-jsx/style": resolveShimModulePath(shimsDir, "styled-jsx-style"),
+                "styled-jsx/style.js": resolveShimModulePath(shimsDir, "styled-jsx-style"),
+              }).map(([find, replacement]) => ({ find, replacement })),
+              {
+                find: /^styled-jsx$/,
+                replacement: resolveOptionalDependency(earlyBaseDir, "styled-jsx")!,
+              },
+            ],
             // Dedupe React packages to prevent dual-instance errors.
             // When vinext is linked (npm link / bun link) or any dependency
             // brings its own React copy, multiple React instances can load,
