@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { createIdResolver, parseSync, type ESTree, type Plugin, type ResolvedConfig } from "vite";
+import { parseSync, type ESTree, type Plugin } from "vite";
 import { fnv1a64 } from "../utils/hash.js";
 
 const STYLESHEET_RE = /\.(?:css|less|sass|scss|styl|stylus)$/i;
@@ -28,8 +28,6 @@ type ResolveContext = {
     options?: { skipSelf?: boolean },
   ): Promise<{ id: string } | null>;
 };
-
-type ResolverEnvironment = Parameters<ReturnType<typeof createIdResolver>>[0];
 
 function cleanModuleId(id: string): string {
   const suffixIndex = id.search(/[?#]/);
@@ -226,19 +224,20 @@ export function createLayoutOwnedGlobalCssPlugin(
   let pagesScanIsConservative = false;
   let pagesSsrResolve: ((source: string, importer?: string) => Promise<string | undefined>) | null =
     null;
-  let resolvedConfig: ResolvedConfig | null = null;
 
-  function isPagesServerEnvironment(
-    environment: ResolverEnvironment | undefined,
-  ): environment is ResolverEnvironment {
+  function isPagesServerEnvironment(environment: { name: string } | undefined): boolean {
     return environment !== undefined && environment.name !== "client" && environment.name !== "rsc";
   }
 
-  function capturePagesServerEnvironment(environment: ResolverEnvironment | undefined): void {
-    if (!resolvedConfig || !isPagesServerEnvironment(environment)) return;
-    const serverEnvironment = environment;
-    const resolve = createIdResolver(resolvedConfig);
-    pagesSsrResolve = (source, importer) => resolve(serverEnvironment, source, importer);
+  function capturePagesServerResolver(
+    context: ResolveContext,
+    environment: { name: string } | undefined,
+  ): void {
+    if (!isPagesServerEnvironment(environment)) return;
+    pagesSsrResolve = async (source, importer) => {
+      const resolved = await context.resolve(source, importer, { skipSelf: true });
+      return resolved?.id;
+    };
   }
 
   function normalizedPageExtensions(): string[] {
@@ -451,6 +450,7 @@ export function createLayoutOwnedGlobalCssPlugin(
   async function scanPagesConsumers(context: ResolveContext): Promise<void> {
     const pagesDir = getPagesDir();
     if (!pagesDir) return;
+    if (pagesConsumers.size > 0) return;
     if (pagesConsumerScan) return pagesConsumerScan;
 
     pagesConsumerScan = (async () => {
@@ -470,6 +470,7 @@ export function createLayoutOwnedGlobalCssPlugin(
       for (const entry of directoryEntries) {
         if (!entry.isFile() || configuredPageExtension(entry.name) === undefined) continue;
         const modulePath = path.join(entry.parentPath, entry.name);
+        if (isDescendantPath(modulePath, path.join(pagesDir, "api"))) continue;
         markPagesConsumer(modulePath);
         pending.push(modulePath);
       }
@@ -526,7 +527,6 @@ export function createLayoutOwnedGlobalCssPlugin(
     apply: "build",
 
     configResolved(config) {
-      resolvedConfig = config;
       if (!config.environments || config.environments.ssr) {
         const resolver = config.createResolver();
         pagesSsrResolve = (source, importer) => resolver(source, importer, false, true);
@@ -535,7 +535,7 @@ export function createLayoutOwnedGlobalCssPlugin(
 
     async resolveDynamicImport(source, importer) {
       if (typeof source !== "string" || !importer) return null;
-      capturePagesServerEnvironment(this.environment);
+      capturePagesServerResolver(this, this.environment);
       const resolved = await this.resolve(source, importer, { skipSelf: true });
       if (!resolved || resolved.id.startsWith("\0")) return null;
       if (this.environment?.name === "rsc") {
@@ -555,7 +555,7 @@ export function createLayoutOwnedGlobalCssPlugin(
 
     async resolveId(source, importer) {
       if (!importer || source.startsWith(EMPTY_LAYOUT_CSS_PREFIX)) return null;
-      capturePagesServerEnvironment(this.environment);
+      capturePagesServerResolver(this, this.environment);
 
       const importerPath = path.resolve(cleanModuleId(importer));
       const normalizedAppDir = path.resolve(getAppDir());
