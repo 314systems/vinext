@@ -1,17 +1,23 @@
 declare module "styled-jsx" {
-  import type { ComponentType, ReactNode } from "react";
+  import type { ComponentType, JSX, ReactNode } from "react";
 
-  export type StyleRegistryInstance = {
-    styles(options?: { nonce?: string }): ReactNode[];
+  export type StyledJsxStyleRegistry = {
+    styles(options?: { nonce?: string }): JSX.Element[];
     flush(): void;
+    // oxlint-disable-next-line typescript/no-explicit-any
+    add(props: any): void;
+    // oxlint-disable-next-line typescript/no-explicit-any
+    remove(props: any): void;
   };
 
+  export type StyleRegistryInstance = StyledJsxStyleRegistry;
+
   export const StyleRegistry: ComponentType<{
-    registry: StyleRegistryInstance;
+    registry?: StyledJsxStyleRegistry;
     children?: ReactNode;
   }>;
-  export function createStyleRegistry(): StyleRegistryInstance;
-  export function useStyleRegistry(): StyleRegistryInstance;
+  export function createStyleRegistry(): StyledJsxStyleRegistry;
+  export function useStyleRegistry(): StyledJsxStyleRegistry;
   export const style: ComponentType<{
     id: string;
     dynamic?: string;
