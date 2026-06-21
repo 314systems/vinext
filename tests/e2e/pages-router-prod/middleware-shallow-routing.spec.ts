@@ -46,3 +46,59 @@ test("middleware alias supports deep then shallow navigation", async ({ page }) 
   const reloadCallId = await page.locator('[data-testid="gssp-call-id"]').textContent();
   expect(reloadCallId).not.toBe(deepCallId);
 });
+
+test("Back and Forward stay shallow only between consecutive shallow entries", async ({ page }) => {
+  await page.goto(`${BASE}/sha?hello=initial`);
+  await expect(page.locator("h1")).toHaveText("Shallow Routing Test");
+  await waitForHydration(page);
+
+  const requests: string[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === "/sha" || url.pathname.startsWith("/_next/data/")) {
+      requests.push(url.pathname + url.search);
+    }
+  });
+
+  await page.evaluate(() =>
+    (window as any).next.router.push("/sha?hello=one", undefined, { shallow: true }),
+  );
+  await expect(page.locator('[data-testid="router-query"]')).toHaveText('{"hello":"one"}');
+
+  await page.evaluate(() =>
+    (window as any).next.router.push("/sha?hello=two", undefined, { shallow: true }),
+  );
+  await expect(page.locator('[data-testid="router-query"]')).toHaveText('{"hello":"two"}');
+  const shallowCallId = await page.locator('[data-testid="gssp-call-id"]').textContent();
+  requests.length = 0;
+
+  await page.goBack();
+  await expect(page).toHaveURL(`${BASE}/sha?hello=one`);
+  await expect(page.locator('[data-testid="router-query"]')).toHaveText('{"hello":"one"}');
+  expect(await page.locator('[data-testid="gssp-call-id"]').textContent()).toBe(shallowCallId);
+  expect(requests).toEqual([]);
+
+  await page.goForward();
+  await expect(page).toHaveURL(`${BASE}/sha?hello=two`);
+  await expect(page.locator('[data-testid="router-query"]')).toHaveText('{"hello":"two"}');
+  expect(await page.locator('[data-testid="gssp-call-id"]').textContent()).toBe(shallowCallId);
+  expect(requests).toEqual([]);
+
+  await page.goBack();
+  await page.goBack();
+  await expect(page).toHaveURL(`${BASE}/sha?hello=initial`);
+  await expect(page.locator('[data-testid="router-query"]')).toHaveText(
+    '{"hello":"initial","from":"middleware"}',
+  );
+  const deepCallId = await page.locator('[data-testid="gssp-call-id"]').textContent();
+  expect(deepCallId).not.toBe(shallowCallId);
+
+  requests.length = 0;
+  await page.goForward();
+  await expect(page).toHaveURL(`${BASE}/sha?hello=one`);
+  await expect(page.locator('[data-testid="router-query"]')).toHaveText(
+    '{"hello":"one","from":"middleware"}',
+  );
+  expect(await page.locator('[data-testid="gssp-call-id"]').textContent()).not.toBe(deepCallId);
+  expect(requests.length).toBeGreaterThan(0);
+});

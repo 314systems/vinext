@@ -2965,11 +2965,13 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
   }
 
   // Next.js only carries shallow mode across popstate when both the target
-  // entry and the current router transition are shallow. Vinext currently
-  // resolves every non-hash popstate through a fresh server navigation, so
-  // the resulting router state is always deep and must publish all server
-  // query metadata, even when the restored entry was originally shallow.
-  routerRuntimeState.currentShallow = false;
+  // entry and the current router transition are shallow. A persisted shallow
+  // target must not promote a deep traversal back to shallow mode.
+  const shallow =
+    isNextRouterState(state) &&
+    state.options?.shallow === true &&
+    routerRuntimeState.currentShallow;
+  routerRuntimeState.currentShallow = shallow;
 
   // Update trackers only after beforePopState confirms navigation proceeds.
   // If beforePopState cancels, the app stays on the previous history entry,
@@ -3008,13 +3010,18 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
   const effectiveLocale = typeof stateLocale === "string" ? stateLocale : window.__VINEXT_LOCALE__;
 
   const fullAppUrl = appUrl + window.location.hash;
-  routerEvents.emit("routeChangeStart", fullAppUrl, { shallow: false });
+  routerEvents.emit("routeChangeStart", fullAppUrl, { shallow });
   // Note: The browser has already updated window.location by the time popstate
   // fires, so this is not truly "before" the URL change. In Next.js the popstate
   // handler calls replaceState to store history metadata — beforeHistoryChange
   // precedes that call, not the URL change itself. We emit it here for API
   // compatibility.
-  routerEvents.emit("beforeHistoryChange", fullAppUrl, { shallow: false });
+  routerEvents.emit("beforeHistoryChange", fullAppUrl, { shallow });
+  if (shallow) {
+    routerEvents.emit("routeChangeComplete", fullAppUrl, { shallow: true });
+    dispatchNavigateEvent();
+    return;
+  }
   void (async () => {
     // When manual scroll restoration is enabled we drive the position from the
     // sessionStorage snapshot keyed by history key. When it is disabled we
