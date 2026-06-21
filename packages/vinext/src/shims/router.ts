@@ -412,6 +412,7 @@ type PagesRouterRuntimeState = {
   navigationId: number;
   activeAbortController: AbortController | null;
   activeNavigationEventUrl: string | null;
+  activeNavigationEventOptions: { shallow: boolean } | null;
   cancellationEventEmittedControllers: WeakSet<AbortController>;
   cancelPendingRenderCommit: (() => void) | null;
   beforePopStateCb?: BeforePopStateCallback;
@@ -441,6 +442,7 @@ function createPagesRouterRuntimeState(): PagesRouterRuntimeState {
     navigationId: 0,
     activeAbortController: null,
     activeNavigationEventUrl: null,
+    activeNavigationEventOptions: null,
     cancellationEventEmittedControllers: new WeakSet(),
     cancelPendingRenderCommit: null,
     lastPathnameAndSearch:
@@ -1434,19 +1436,24 @@ function cancelPreviousRenderCommit(): void {
 
 function cancelActiveNavigation(): void {
   const cancelledEventUrl = routerRuntimeState.activeNavigationEventUrl;
+  const cancelledEventOptions = routerRuntimeState.activeNavigationEventOptions;
   const controller = routerRuntimeState.activeAbortController;
-  if (!controller || !cancelledEventUrl) return;
+  if (!controller || !cancelledEventUrl || !cancelledEventOptions) return;
 
   controller.abort();
   cancelPreviousRenderCommit();
   routerRuntimeState.navigationId += 1;
   routerRuntimeState.activeAbortController = null;
   routerRuntimeState.activeNavigationEventUrl = null;
+  routerRuntimeState.activeNavigationEventOptions = null;
 
   routerRuntimeState.cancellationEventEmittedControllers.add(controller);
-  routerEvents.emit("routeChangeError", new NavigationCancelledError(), cancelledEventUrl, {
-    shallow: false,
-  });
+  routerEvents.emit(
+    "routeChangeError",
+    new NavigationCancelledError(),
+    cancelledEventUrl,
+    cancelledEventOptions,
+  );
 }
 
 function scheduleHardNavigationAndThrow(url: string, message: string): never {
@@ -1460,6 +1467,7 @@ function scheduleHardNavigationAndThrow(url: string, message: string): never {
 type NavigateClientOptions = {
   allowNotFoundResponse?: boolean;
   commitNavigation?: (browserUrl: string) => void;
+  eventOptions?: { shallow: boolean };
   /**
    * The history mode of the originating navigation. Used when a gSSP/gSP data
    * response carries a `__N_REDIRECT` marker so the re-entrant navigation to
@@ -2085,6 +2093,7 @@ async function navigateClient(
   const controller = new AbortController();
   routerRuntimeState.activeAbortController = controller;
   routerRuntimeState.activeNavigationEventUrl = url;
+  routerRuntimeState.activeNavigationEventOptions = options.eventOptions ?? { shallow: false };
 
   const navId = ++routerRuntimeState.navigationId;
 
@@ -2172,6 +2181,7 @@ async function navigateClient(
     if (navId === routerRuntimeState.navigationId) {
       routerRuntimeState.activeAbortController = null;
       routerRuntimeState.activeNavigationEventUrl = null;
+      routerRuntimeState.activeNavigationEventOptions = null;
     }
   }
 }
@@ -2549,8 +2559,8 @@ async function performNavigation(
   // scroll after completion.
   const scrollTarget = doScroll ? { x: 0, y: 0 } : null;
   const navigateOptions: NavigateClientOptions = errorRouteHtmlFetchUrl
-    ? { allowNotFoundResponse: true, mode, scroll: scrollTarget }
-    : { mode, scroll: scrollTarget };
+    ? { allowNotFoundResponse: true, eventOptions: { shallow }, mode, scroll: scrollTarget }
+    : { eventOptions: { shallow }, mode, scroll: scrollTarget };
 
   // Next.js push→replace coercion (narrowed): when the display URL (asPath)
   // doesn't change AND the route URL DOES change AND the locale doesn't
@@ -2656,6 +2666,7 @@ async function performNavigation(
   if (!isQueryUpdating) {
     routerEvents.emit("routeChangeStart", full, { shallow });
   }
+  let completedBrowserUrl = full;
   if (!shallow) {
     const result = await runNavigateClient(
       full,
@@ -2664,6 +2675,7 @@ async function performNavigation(
       {
         ...navigateOptions,
         commitNavigation(browserUrl) {
+          completedBrowserUrl = browserUrl;
           routerEvents.emit("beforeHistoryChange", browserUrl, { shallow });
           updateHistory(mode, browserUrl, navState);
         },
@@ -2691,13 +2703,14 @@ async function performNavigation(
   }
   onStateUpdate?.();
   if (!isQueryUpdating) {
-    routerEvents.emit("routeChangeComplete", full, { shallow });
+    routerEvents.emit("routeChangeComplete", completedBrowserUrl, { shallow });
   }
   // Hash scrolling after routeChangeComplete, matching Next.js ordering:
   // x/y restoration happens during the render commit, then hash scrolling
   // happens after the completion event.
-  if (doScroll && hash && !shallow) {
-    scrollToHashTarget(hash);
+  if (doScroll && !shallow) {
+    const completedHash = extractHash(completedBrowserUrl);
+    if (completedHash) scrollToHashTarget(completedHash);
   }
   dispatchNavigateEvent();
   return true;

@@ -14824,16 +14824,16 @@ describe("Pages Router concurrent navigation", () => {
 
       const slowNavigation = Router.push("/slow-route");
       await Promise.resolve();
-      const completedNavigation = Router.push("/other-page");
+      const completedNavigation = Router.push("/other-page", undefined, { shallow: true });
       slowResponse.resolve(new Response(buildNavHtml("/slow-route", pageModuleUrl)));
       await Promise.all([slowNavigation, completedNavigation]);
 
       expect(events).toEqual([
         ["routeChangeStart", "/docs/slow-route", { shallow: false }],
         ["routeChangeError", "Route Cancelled", true, "/docs/slow-route", { shallow: false }],
-        ["routeChangeStart", "/docs/other-page", { shallow: false }],
-        ["beforeHistoryChange", "/docs/other-page", { shallow: false }],
-        ["routeChangeComplete", "/docs/other-page", { shallow: false }],
+        ["routeChangeStart", "/docs/other-page", { shallow: true }],
+        ["beforeHistoryChange", "/docs/other-page", { shallow: true }],
+        ["routeChangeComplete", "/docs/other-page", { shallow: true }],
       ]);
     } finally {
       if (previousBasePath === undefined) delete process.env.__NEXT_ROUTER_BASEPATH;
@@ -16774,11 +16774,15 @@ describe("Pages Router concurrent navigation", () => {
       throw new Error(`Unexpected fetch: ${href}`);
     });
     globalThis.fetch = fetch;
+    const events: unknown[][] = [];
 
     try {
       vi.resetModules();
       const routerModule = await import("../packages/vinext/src/shims/router.js");
       const Router = routerModule.default;
+      for (const event of ["routeChangeStart", "beforeHistoryChange", "routeChangeComplete"]) {
+        Router.events.on(event, (...args: unknown[]) => events.push([event, ...args]));
+      }
 
       const result = await Router.push("/old-home");
 
@@ -16799,6 +16803,11 @@ describe("Pages Router concurrent navigation", () => {
       );
       expect(win.location.href).toBe("http://localhost/docs/new-home");
       expect(render).toHaveBeenCalled();
+      expect(events).toEqual([
+        ["routeChangeStart", "/docs/old-home", { shallow: false }],
+        ["beforeHistoryChange", "/docs/new-home", { shallow: false }],
+        ["routeChangeComplete", "/docs/new-home", { shallow: false }],
+      ]);
     } finally {
       vi.resetModules();
       if (previousBasePath === undefined) {
