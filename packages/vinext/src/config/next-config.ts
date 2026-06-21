@@ -1147,8 +1147,8 @@ function readOptionalString(value: unknown): string | undefined {
 }
 
 function resolveTsconfigPath(value: unknown): string | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== "string" || value.length === 0) {
+  if (value === undefined || value === "") return undefined;
+  if (typeof value !== "string") {
     throw new Error(
       'Invalid next.config option "typescript.tsconfigPath": expected a non-empty string',
     );

@@ -373,10 +373,49 @@ function normalizeTsconfigExtends(extendsField: unknown): string[] {
 
 const TSCONFIG_EXPORT_CONDITIONS = new Set(["types", "require", "node"]);
 
+type TypeScriptVersionRange = {
+  test(version: string): boolean;
+};
+
+type TypeScriptModule = {
+  version: string;
+  VersionRange: {
+    tryParse(range: string): TypeScriptVersionRange | undefined;
+  };
+};
+
+function loadTypeScriptModule(configPath: string): TypeScriptModule | null {
+  for (const requireTypeScript of [createRequire(configPath), createRequire(import.meta.url)]) {
+    try {
+      const typescript = requireTypeScript("typescript") as Partial<TypeScriptModule>;
+      if (
+        typeof typescript.version === "string" &&
+        typeof typescript.VersionRange?.tryParse === "function"
+      ) {
+        return typescript as TypeScriptModule;
+      }
+    } catch {
+      // TypeScript is optional for JavaScript projects. In that case only the
+      // ordinary package export conditions are considered.
+    }
+  }
+  return null;
+}
+
+function isApplicableVersionedTypesCondition(
+  condition: string,
+  typescript: TypeScriptModule | null,
+): boolean {
+  if (!typescript || !condition.startsWith("types@")) return false;
+  const range = typescript.VersionRange.tryParse(condition.slice("types@".length));
+  return range?.test(typescript.version) ?? false;
+}
+
 function resolveTsconfigExportTarget(
   packageRoot: string,
   target: unknown,
   replacement = "",
+  typescript: TypeScriptModule | null = null,
 ): string | null {
   if (typeof target === "string") {
     if (!target.startsWith("./")) return null;
@@ -399,7 +438,7 @@ function resolveTsconfigExportTarget(
 
   if (Array.isArray(target)) {
     for (const candidate of target) {
-      const resolved = resolveTsconfigExportTarget(packageRoot, candidate, replacement);
+      const resolved = resolveTsconfigExportTarget(packageRoot, candidate, replacement, typescript);
       if (resolved) return resolved;
     }
     return null;
@@ -407,8 +446,14 @@ function resolveTsconfigExportTarget(
 
   if (target && typeof target === "object") {
     for (const [condition, candidate] of Object.entries(target)) {
-      if (condition !== "default" && !TSCONFIG_EXPORT_CONDITIONS.has(condition)) continue;
-      const resolved = resolveTsconfigExportTarget(packageRoot, candidate, replacement);
+      if (
+        condition !== "default" &&
+        !TSCONFIG_EXPORT_CONDITIONS.has(condition) &&
+        !isApplicableVersionedTypesCondition(condition, typescript)
+      ) {
+        continue;
+      }
+      const resolved = resolveTsconfigExportTarget(packageRoot, candidate, replacement, typescript);
       if (resolved) return resolved;
     }
   }
@@ -420,21 +465,26 @@ function resolveTsconfigPackageExport(
   packageRoot: string,
   exportsField: unknown,
   packageSubpath: string,
+  typescript: TypeScriptModule | null,
 ): string | null {
   const exportKey = packageSubpath ? `./${packageSubpath}` : ".";
   if (!exportsField || typeof exportsField !== "object") {
-    return packageSubpath ? null : resolveTsconfigExportTarget(packageRoot, exportsField);
+    return packageSubpath
+      ? null
+      : resolveTsconfigExportTarget(packageRoot, exportsField, "", typescript);
   }
 
   if (!Array.isArray(exportsField)) {
     const exportsMap = exportsField as Record<string, unknown>;
     const subpathKeys = Object.keys(exportsMap).filter((key) => key.startsWith("."));
     if (subpathKeys.length === 0) {
-      return packageSubpath ? null : resolveTsconfigExportTarget(packageRoot, exportsField);
+      return packageSubpath
+        ? null
+        : resolveTsconfigExportTarget(packageRoot, exportsField, "", typescript);
     }
 
     if (Object.hasOwn(exportsMap, exportKey)) {
-      return resolveTsconfigExportTarget(packageRoot, exportsMap[exportKey]);
+      return resolveTsconfigExportTarget(packageRoot, exportsMap[exportKey], "", typescript);
     }
 
     const matchingPattern = subpathKeys
@@ -458,12 +508,19 @@ function resolveTsconfigPackageExport(
         starIndex,
         exportKey.length - (matchingPattern.length - starIndex - 1),
       );
-      return resolveTsconfigExportTarget(packageRoot, exportsMap[matchingPattern], replacement);
+      return resolveTsconfigExportTarget(
+        packageRoot,
+        exportsMap[matchingPattern],
+        replacement,
+        typescript,
+      );
     }
     return null;
   }
 
-  return packageSubpath ? null : resolveTsconfigExportTarget(packageRoot, exportsField);
+  return packageSubpath
+    ? null
+    : resolveTsconfigExportTarget(packageRoot, exportsField, "", typescript);
 }
 
 function resolveTsconfigExtends(configPath: string, specifier: string): string | null {
@@ -513,7 +570,12 @@ function resolveTsconfigExtends(configPath: string, specifier: string): string |
   try {
     const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8"));
     if (packageJson.exports !== undefined) {
-      return resolveTsconfigPackageExport(packageRoot, packageJson.exports, packageSubpath);
+      return resolveTsconfigPackageExport(
+        packageRoot,
+        packageJson.exports,
+        packageSubpath,
+        loadTypeScriptModule(configPath),
+      );
     }
     if (packageSubpath) {
       return resolveTsconfigPathCandidate(path.join(packageRoot, packageSubpath));
@@ -1850,12 +1912,6 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           viteMajorVersion >= 8 &&
           !selectedTsconfig.custom &&
           userResolve?.tsconfigPaths === undefined;
-        // Custom configs are owned by vite-tsconfig-paths, including its dev
-        // watcher. Do not materialize duplicate aliases that would become stale
-        // after paths/baseUrl edits and override the plugin's refreshed resolver.
-        if (selectedTsconfig.custom && selectedTsconfig.path) {
-          loadTsconfigPathAliases(selectedTsconfig.path, root, new Set(), true);
-        }
         const tsconfigPathAliases = selectedTsconfig.custom
           ? {}
           : resolveTsconfigAliases(root, selectedTsconfig.path);

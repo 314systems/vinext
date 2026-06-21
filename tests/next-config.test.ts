@@ -1762,7 +1762,15 @@ describe("resolveNextConfig typescript.tsconfigPath", () => {
     expect(resolved.tsconfigPath).toBe("config/web.tsconfig.json");
   });
 
-  it.each(["", 42, null])("rejects invalid values: %j", async (tsconfigPath) => {
+  it("treats an empty string as the default tsconfig path", async () => {
+    const resolved = await resolveNextConfig({
+      typescript: { tsconfigPath: "" },
+    });
+
+    expect(resolved.tsconfigPath).toBeUndefined();
+  });
+
+  it.each([42, null])("rejects invalid values: %j", async (tsconfigPath) => {
     await expect(
       resolveNextConfig({
         typescript: { tsconfigPath } as never,

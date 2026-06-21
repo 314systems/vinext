@@ -114,6 +114,43 @@ describe("Vite tsconfig paths support", () => {
     expect(resolvedConfig?.resolve?.tsconfigPaths).toBe(true);
   });
 
+  it("treats an empty typescript.tsconfigPath as the default tsconfig.json", async () => {
+    const root = setupProject({ name: "vite", version: "8.0.0" });
+    process.chdir(root);
+    fs.writeFileSync(
+      path.join(root, "next.config.mjs"),
+      "export default { typescript: { tsconfigPath: '' } };\n",
+    );
+    fs.writeFileSync(
+      path.join(root, "tsconfig.json"),
+      JSON.stringify({ compilerOptions: { paths: { "@/*": ["./src/*"] } } }),
+    );
+    fs.writeFileSync(
+      path.join(root, "jsconfig.json"),
+      JSON.stringify({ compilerOptions: { paths: { "#/*": ["./legacy/*"] } } }),
+    );
+
+    const plugins = vinext({ appDir: root });
+    const configPlugin = findNamedPlugin(plugins, "vinext:config") as {
+      config?: (
+        config: { root: string },
+        env: { command: "serve"; mode: string },
+      ) => Promise<{ resolve?: Record<string, unknown> }>;
+    };
+    const resolvedConfig = await configPlugin.config?.(
+      { root },
+      { command: "serve", mode: "development" },
+    );
+
+    expect(resolvedConfig?.resolve?.tsconfigPaths).toBe(true);
+    expect(resolvedConfig?.resolve?.alias).toEqual(
+      expect.objectContaining({
+        "@": "/src",
+      }),
+    );
+    expect(resolvedConfig?.resolve?.alias).not.toHaveProperty("#");
+  });
+
   it("materializes simple tsconfig path aliases into resolve.alias on Vite 8", async () => {
     const root = setupProject({ name: "vite", version: "8.0.0" });
     process.chdir(root);
@@ -371,6 +408,77 @@ describe("Vite tsconfig paths support", () => {
         (candidate) => candidate,
       ),
     ).resolves.toHaveProperty("id", path.join(fs.realpathSync(packageRoot), "inherited.ts"));
+  });
+
+  it("prefers a matching versioned types condition before plain types", async () => {
+    const root = setupProject({ name: "vite", version: "8.0.0" });
+    process.chdir(root);
+    const packageRoot = path.join(root, "node_modules/preset");
+    fs.mkdirSync(packageRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "preset",
+        exports: {
+          "./base": {
+            "types@>=5.9": "./typescript-5.9.json",
+            types: "./fallback.json",
+          },
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(packageRoot, "typescript-5.9.json"),
+      JSON.stringify({ compilerOptions: { paths: { selected: ["./typescript-5.9.ts"] } } }),
+    );
+    fs.writeFileSync(
+      path.join(packageRoot, "fallback.json"),
+      JSON.stringify({ compilerOptions: { paths: { selected: ["./fallback.ts"] } } }),
+    );
+
+    const plugin = await configureCustomTsconfig(root, { extends: "preset/base" });
+    await expect(
+      resolveWithCustomTsconfig(
+        plugin,
+        "selected",
+        path.join(root, "pages/index.tsx"),
+        (candidate) => candidate,
+      ),
+    ).resolves.toHaveProperty("id", path.join(fs.realpathSync(packageRoot), "typescript-5.9.ts"));
+  });
+
+  it("skips non-matching versioned types conditions", async () => {
+    const root = setupProject({ name: "vite", version: "8.0.0" });
+    process.chdir(root);
+    const packageRoot = path.join(root, "node_modules/preset");
+    fs.mkdirSync(packageRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "preset",
+        exports: {
+          "./base": {
+            "types@>=6": "./typescript-6.json",
+            types: "./fallback.json",
+          },
+        },
+      }),
+    );
+    fs.writeFileSync(path.join(packageRoot, "typescript-6.json"), JSON.stringify({}));
+    fs.writeFileSync(
+      path.join(packageRoot, "fallback.json"),
+      JSON.stringify({ compilerOptions: { paths: { selected: ["./fallback.ts"] } } }),
+    );
+
+    const plugin = await configureCustomTsconfig(root, { extends: "preset/base" });
+    await expect(
+      resolveWithCustomTsconfig(
+        plugin,
+        "selected",
+        path.join(root, "pages/index.tsx"),
+        (candidate) => candidate,
+      ),
+    ).resolves.toHaveProperty("id", path.join(fs.realpathSync(packageRoot), "fallback.ts"));
   });
 
   it("tries later package export array targets when an earlier target is missing", async () => {
