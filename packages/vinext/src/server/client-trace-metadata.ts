@@ -11,9 +11,9 @@
  *  - packages/next/src/server/app-render/make-get-server-inserted-html.tsx (traceMetaTags)
  *
  * OpenTelemetry is optional. We read the API's registered global delegates
- * directly and silently no-op when no context manager or propagator has been
- * registered. This avoids requiring the optional package from ESM runtimes
- * while still observing the same globals as the user's `@opentelemetry/api`.
+ * directly and silently no-op when no compatible context manager or propagator
+ * has been registered. This avoids requiring the optional package from ESM
+ * runtimes while still observing the same delegates as `@opentelemetry/api`.
  */
 import { escapeHtmlAttr } from "./html.js";
 
@@ -42,32 +42,36 @@ const carrierSetter: TextMapSetter = {
  * we call `propagation.inject(activeContext, entries, setter)` and let the
  * setter push entries into our carrier array.
  */
-type OpenTelemetryApi = {
-  context: { active(): unknown };
-  propagation: {
+type OpenTelemetryGlobalRegistry = {
+  version: string;
+  context?: { active(): unknown };
+  propagation?: {
     inject(context: unknown, carrier: ClientTraceDataEntry[], setter: TextMapSetter): void;
   };
 };
 
 const OPEN_TELEMETRY_API_GLOBAL = Symbol.for("opentelemetry.js.api.1");
+const OPEN_TELEMETRY_API_VERSION = /^1\.\d+\.\d+$/;
 
-function getOpenTelemetryApi(): OpenTelemetryApi | undefined {
-  const api = Reflect.get(globalThis, OPEN_TELEMETRY_API_GLOBAL) as
-    | Partial<OpenTelemetryApi>
+function getOpenTelemetryRegistry(): OpenTelemetryGlobalRegistry | undefined {
+  const registry = Reflect.get(globalThis, OPEN_TELEMETRY_API_GLOBAL) as
+    | Partial<OpenTelemetryGlobalRegistry>
     | undefined;
-  if (typeof api?.context?.active !== "function") return undefined;
-  if (typeof api.propagation?.inject !== "function") return undefined;
-  return api as OpenTelemetryApi;
+  if (typeof registry?.version !== "string") return undefined;
+  if (!OPEN_TELEMETRY_API_VERSION.test(registry.version)) return undefined;
+  if (typeof registry.context?.active !== "function") return undefined;
+  if (typeof registry.propagation?.inject !== "function") return undefined;
+  return registry as OpenTelemetryGlobalRegistry;
 }
 
 function getOpenTelemetryTraceData(): ClientTraceDataEntry[] {
-  const api = getOpenTelemetryApi();
-  if (!api) return [];
+  const registry = getOpenTelemetryRegistry();
+  if (!registry?.context || !registry.propagation) return [];
 
   try {
-    const activeContext = api.context.active();
+    const activeContext = registry.context.active();
     const entries: ClientTraceDataEntry[] = [];
-    api.propagation.inject(activeContext, entries, carrierSetter);
+    registry.propagation.inject(activeContext, entries, carrierSetter);
     return entries;
   } catch {
     return [];

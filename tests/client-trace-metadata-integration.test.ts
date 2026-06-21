@@ -3,6 +3,7 @@
  * https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/opentelemetry/client-trace-metadata/client-trace-metadata.test.ts
  */
 import path from "node:path";
+import { context, isValidSpanId, propagation } from "@opentelemetry/api";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import type { ViteDevServer } from "vite";
 import { fetchHtml, startFixtureServer } from "./helpers.js";
@@ -15,28 +16,35 @@ let server: ViteDevServer | undefined;
 afterEach(async () => {
   await server?.close();
   server = undefined;
-  Reflect.deleteProperty(globalThis, Symbol.for("opentelemetry.js.api.1"));
+  context.disable();
+  propagation.disable();
 });
 
-function expectTraceMetadata(html: string) {
+function getTraceSpanId(html: string): string {
   expect(html).toContain('<meta name="my-test-key-1" content="my-test-value-1"/>');
-  expect(html).toContain('<meta name="my-test-key-2" content="my-test-value-2"/>');
-  expect(html).toContain('<meta name="my-parent-span-id" content="abc123def4567890"/>');
-  expect(html).not.toContain("non-metadata-key-3");
+  expect(html).not.toContain("non-metadata-key-2");
+  const spanId = html.match(/<meta name="my-parent-span-id" content="([a-f0-9]{16})"\/>/)?.[1];
+  expect(spanId).toBeDefined();
+  expect(isValidSpanId(spanId!)).toBe(true);
+  return spanId!;
+}
+
+async function expectDistinctRequestSpanIds(baseUrl: string): Promise<void> {
+  const first = getTraceSpanId((await fetchHtml(baseUrl, "/")).html);
+  const second = getTraceSpanId((await fetchHtml(baseUrl, "/")).html);
+  expect(second).not.toBe(first);
 }
 
 describe("clientTraceMetadata SSR", () => {
   it("injects propagation data for an App Router page", async () => {
     const fixture = await startFixtureServer(APP_FIXTURE, { appRouter: true });
     server = fixture.server;
-    const { html } = await fetchHtml(fixture.baseUrl, "/");
-    expectTraceMetadata(html);
+    await expectDistinctRequestSpanIds(fixture.baseUrl);
   });
 
   it("injects propagation data for a Pages Router page", async () => {
     const fixture = await startFixtureServer(PAGES_FIXTURE);
     server = fixture.server;
-    const { html } = await fetchHtml(fixture.baseUrl, "/");
-    expectTraceMetadata(html);
+    await expectDistinctRequestSpanIds(fixture.baseUrl);
   });
 });

@@ -5,6 +5,15 @@
  * Source: packages/next/src/server/lib/trace/utils.ts (getTracedMetadata)
  *         packages/next/src/server/app-render/make-get-server-inserted-html.tsx
  */
+import {
+  ROOT_CONTEXT,
+  context,
+  propagation,
+  trace,
+  type Context,
+  type ContextManager,
+  type TextMapPropagator,
+} from "@opentelemetry/api";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import {
   filterClientTraceMetadata,
@@ -79,10 +88,9 @@ describe("client trace metadata: renderClientTraceMetadataTags", () => {
 });
 
 describe("client trace metadata: getClientTraceMetadataHTML", () => {
-  const otelGlobal = Symbol.for("opentelemetry.js.api.1");
-
   afterEach(() => {
-    Reflect.deleteProperty(globalThis, otelGlobal);
+    context.disable();
+    propagation.disable();
   });
 
   it("returns empty string when the allow-list is unset", () => {
@@ -90,29 +98,53 @@ describe("client trace metadata: getClientTraceMetadataHTML", () => {
     expect(getClientTraceMetadataHTML([])).toBe("");
   });
 
-  it("returns empty string when OpenTelemetry globals are not registered", () => {
+  it("returns empty string when OpenTelemetry delegates are not registered", () => {
     expect(getClientTraceMetadataHTML(["my-test-key-1"])).toBe("");
   });
 
   it("renders <meta> tags for keys in the allow-list when an OTel propagator is registered", () => {
-    const propagator = {
-      inject(
-        _ctx: unknown,
-        carrier: ClientTraceDataEntry[],
-        setter: { set(carrier: ClientTraceDataEntry[], key: string, value: string): void },
-      ) {
+    const activeContext = trace.setSpanContext(ROOT_CONTEXT, {
+      traceId: "1234567890abcdef1234567890abcdef",
+      spanId: "abc123def4567890",
+      traceFlags: 1,
+    });
+    const contextManager: ContextManager = {
+      active: () => activeContext,
+      with<A extends unknown[], F extends (...args: A) => ReturnType<F>>(
+        _activeContext: Context,
+        fn: F,
+        thisArg?: ThisParameterType<F>,
+        ...args: A
+      ): ReturnType<F> {
+        return fn.apply(thisArg, args);
+      },
+      bind<T>(_activeContext: Context, target: T): T {
+        return target;
+      },
+      enable() {
+        return this;
+      },
+      disable() {
+        return this;
+      },
+    };
+    const propagator: TextMapPropagator = {
+      inject(ctx, carrier, setter) {
         setter.set(carrier, "my-test-key-1", "my-test-value-1");
         setter.set(carrier, "my-test-key-2", "my-test-value-2");
         setter.set(carrier, "non-metadata-key-3", "non-metadata-key-3");
-        setter.set(carrier, "my-parent-span-id", "abc123def4567890");
+        setter.set(carrier, "my-parent-span-id", trace.getSpanContext(ctx)?.spanId ?? "");
+      },
+      extract(ctx) {
+        return ctx;
+      },
+      fields() {
+        return [];
       },
     };
 
-    Reflect.set(globalThis, otelGlobal, {
-      version: "1.9.0",
-      context: { active: () => ({}) },
-      propagation: propagator,
-    });
+    expect(context.setGlobalContextManager(contextManager)).toBe(true);
+    expect(propagation.setGlobalPropagator(propagator)).toBe(true);
 
     const html = getClientTraceMetadataHTML([
       "my-test-key-1",
