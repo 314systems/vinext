@@ -2082,10 +2082,14 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 "styled-jsx/style": resolveShimModulePath(shimsDir, "styled-jsx-style"),
                 "styled-jsx/style.js": resolveShimModulePath(shimsDir, "styled-jsx-style"),
               }).map(([find, replacement]) => ({ find, replacement })),
-              {
-                find: /^styled-jsx$/,
-                replacement: resolveOptionalDependency(earlyBaseDir, "styled-jsx")!,
-              },
+              ...(!hasCloudflarePlugin && !hasNitroPlugin && env?.command === "build"
+                ? [
+                    {
+                      find: /^styled-jsx$/,
+                      replacement: resolveOptionalDependency(earlyBaseDir, "styled-jsx")!,
+                    },
+                  ]
+                : []),
             ],
             // Dedupe React packages to prevent dual-instance errors.
             // When vinext is linked (npm link / bun link) or any dependency
