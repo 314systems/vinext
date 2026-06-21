@@ -50,7 +50,10 @@ function sourceModuleLang(modulePath: string): "js" | "jsx" | "ts" | "tsx" {
   return "js";
 }
 
-function extractModuleSources(modulePath: string, source: string): string[] {
+function extractModuleSources(
+  modulePath: string,
+  source: string,
+): Array<{ source: string; isDynamic: boolean }> {
   const result = parseSync(modulePath, source, {
     astType: "ts",
     lang: sourceModuleLang(modulePath),
@@ -63,7 +66,7 @@ function extractModuleSources(modulePath: string, source: string): string[] {
     );
   }
 
-  const sources = new Set<string>();
+  const sources = new Map<string, boolean>();
 
   function visit(node: ESTree.Node | ESTree.Node[] | null | undefined): void {
     if (!node) return;
@@ -77,13 +80,15 @@ function extractModuleSources(modulePath: string, source: string): string[] {
       node.type === "ExportNamedDeclaration" ||
       node.type === "ExportAllDeclaration"
     ) {
-      if (node.source && typeof node.source.value === "string") sources.add(node.source.value);
+      if (node.source && typeof node.source.value === "string") {
+        sources.set(node.source.value, false);
+      }
     } else if (
       node.type === "ImportExpression" &&
       node.source.type === "Literal" &&
       typeof node.source.value === "string"
     ) {
-      sources.add(node.source.value);
+      if (!sources.has(node.source.value)) sources.set(node.source.value, true);
     }
 
     for (const [key, value] of Object.entries(node)) {
@@ -97,10 +102,13 @@ function extractModuleSources(modulePath: string, source: string): string[] {
   }
 
   visit(result.program);
-  return [...sources];
+  return [...sources].map(([source, isDynamic]) => ({ source, isDynamic }));
 }
 
-export function createLayoutOwnedGlobalCssPlugin(getAppDir: () => string): Plugin {
+export function createLayoutOwnedGlobalCssPlugin(
+  getAppDir: () => string,
+  getPagesDir: () => string | null = () => null,
+): Plugin {
   const ownerDirectories = new Map<string, Set<string>>();
   const moduleOwners = new Map<string, Set<string>>();
   const moduleImports = new Map<string, Set<string>>();
@@ -136,7 +144,7 @@ export function createLayoutOwnedGlobalCssPlugin(getAppDir: () => string): Plugi
     }
   }
 
-  function addImport(importer: string, importedId: string): void {
+  function addImport(importer: string, importedId: string, propagateOwners = true): void {
     importer = graphModuleId(importer);
     importedId = graphModuleId(importedId);
     let imports = moduleImports.get(importer);
@@ -144,7 +152,7 @@ export function createLayoutOwnedGlobalCssPlugin(getAppDir: () => string): Plugi
       imports = new Set();
       moduleImports.set(importer, imports);
     }
-    imports.add(importedId);
+    if (propagateOwners) imports.add(importedId);
 
     let importers = moduleImporters.get(importedId);
     if (!importers) {
@@ -211,7 +219,12 @@ export function createLayoutOwnedGlobalCssPlugin(getAppDir: () => string): Plugi
 
     const visited = new Set<string>();
     const pending = [rootModuleId];
-    const edges: Array<{ importer: string; imported: string; globalStylesheet: boolean }> = [];
+    const edges: Array<{
+      importer: string;
+      imported: string;
+      globalStylesheet: boolean;
+      isDynamic: boolean;
+    }> = [];
 
     while (pending.length > 0) {
       const moduleId = pending.pop()!;
@@ -231,22 +244,29 @@ export function createLayoutOwnedGlobalCssPlugin(getAppDir: () => string): Plugi
         continue;
       }
 
-      for (const importSource of extractModuleSources(modulePath, source)) {
+      for (const { source: importSource, isDynamic } of extractModuleSources(modulePath, source)) {
         const importedPath = await resolveExternalImport(context, importSource, modulePath);
         if (!importedPath) continue;
         const globalStylesheet =
           STYLESHEET_RE.test(cleanModuleId(importedPath)) &&
           !CSS_MODULE_RE.test(cleanModuleId(importedPath)) &&
           !hasNonStylesheetQuery(importSource);
-        edges.push({ importer: moduleId, imported: importedPath, globalStylesheet });
-        if (!globalStylesheet) pending.push(importedPath);
+        edges.push({
+          importer: moduleId,
+          imported: importedPath,
+          globalStylesheet: globalStylesheet && !isDynamic,
+          isDynamic,
+        });
+        if (!globalStylesheet && !isDynamic) pending.push(importedPath);
       }
     }
 
     for (const edge of edges) {
-      addImport(edge.importer, edge.imported);
+      addImport(edge.importer, edge.imported, !edge.isDynamic);
       if (edge.globalStylesheet) globalStylesheets.add(edge.imported);
-      addOwners(edge.imported, moduleOwners.get(graphModuleId(edge.importer)) ?? []);
+      if (!edge.isDynamic) {
+        addOwners(edge.imported, moduleOwners.get(graphModuleId(edge.importer)) ?? []);
+      }
     }
   }
 
@@ -255,6 +275,14 @@ export function createLayoutOwnedGlobalCssPlugin(getAppDir: () => string): Plugi
     enforce: "pre",
     apply: "build",
 
+    async resolveDynamicImport(source, importer) {
+      if (this.environment?.name !== "rsc" || typeof source !== "string" || !importer) return null;
+      const resolved = await this.resolve(source, importer, { skipSelf: true });
+      if (!resolved || resolved.id.startsWith("\0")) return null;
+      addImport(importer, resolved.id, false);
+      return resolved;
+    },
+
     async resolveId(source, importer) {
       if (!importer || source.startsWith(EMPTY_LAYOUT_CSS_PREFIX)) return null;
 
@@ -262,6 +290,19 @@ export function createLayoutOwnedGlobalCssPlugin(getAppDir: () => string): Plugi
       const isGlobalStylesheet = STYLESHEET_RE.test(sourcePath) && !CSS_MODULE_RE.test(sourcePath);
       const importerPath = path.resolve(cleanModuleId(importer));
       const normalizedAppDir = path.resolve(getAppDir());
+      const pagesDir = getPagesDir();
+      const normalizedPagesDir = pagesDir ? path.resolve(pagesDir) : null;
+
+      if (
+        this.environment?.name === "ssr" &&
+        normalizedPagesDir &&
+        isDescendantPath(importerPath, normalizedPagesDir)
+      ) {
+        const resolved = await this.resolve(source, importer, { skipSelf: true });
+        if (!resolved || resolved.id.startsWith("\0")) return null;
+        addImport(importer, resolved.id, false);
+        return null;
+      }
 
       if (this.environment?.name === "rsc") {
         if (

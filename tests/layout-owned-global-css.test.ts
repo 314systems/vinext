@@ -493,4 +493,92 @@ describe("layout-owned global CSS", () => {
       ).resolves.toBeNull();
     }
   });
+
+  it("does not propagate layout ownership through dynamic imports", async () => {
+    const appDir = path.resolve("/project/app");
+    const plugin = createLayoutOwnedGlobalCssPlugin(() => appDir);
+    const resolveId =
+      typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
+    const resolveDynamicImport =
+      typeof plugin.resolveDynamicImport === "object"
+        ? plugin.resolveDynamicImport.handler
+        : plugin.resolveDynamicImport;
+    expect(resolveId).toBeTypeOf("function");
+    expect(resolveDynamicImport).toBeTypeOf("function");
+
+    const layout = path.join(appDir, "dashboard", "layout.tsx");
+    const dynamicClient = path.join(appDir, "dashboard", "dynamic-client.tsx");
+    const layoutStylesheet = path.join(appDir, "dashboard", "layout.css");
+    const stylesheet = path.join(appDir, "dashboard", "dynamic.css");
+
+    await resolveId!.call(createContext("rsc", layoutStylesheet) as never, "./layout.css", layout, {
+      isEntry: false,
+    });
+    await resolveDynamicImport!.call(
+      createContext("rsc", dynamicClient) as never,
+      "./dynamic-client",
+      layout,
+    );
+    await resolveId!.call(
+      createContext("rsc", stylesheet) as never,
+      "./dynamic.css",
+      dynamicClient,
+      { isEntry: false },
+    );
+
+    await expect(
+      resolveId!.call(
+        createContext("client", stylesheet) as never,
+        "./dynamic.css",
+        dynamicClient,
+        { isEntry: false },
+      ),
+    ).resolves.toBeNull();
+  });
+
+  it("keeps shared CSS when a Pages route also consumes the module", async () => {
+    const appDir = path.resolve("/project/app");
+    const pagesDir = path.resolve("/project/pages");
+    const plugin = createLayoutOwnedGlobalCssPlugin(
+      () => appDir,
+      () => pagesDir,
+    );
+    const resolveId =
+      typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
+    expect(resolveId).toBeTypeOf("function");
+
+    const layout = path.join(appDir, "dashboard", "layout.tsx");
+    const appHelper = path.join(appDir, "dashboard", "shared.tsx");
+    const pagesRoute = path.join(pagesDir, "shared.tsx");
+    const sharedClient = path.resolve("/project/src/components/shared-client.tsx");
+    const stylesheet = path.resolve("/project/src/components/shared.css");
+
+    for (const [source, importer, resolved] of [
+      ["./shared", layout, appHelper],
+      ["@shared/client", appHelper, sharedClient],
+      ["./shared.css", sharedClient, stylesheet],
+    ] as const) {
+      await resolveId!.call(
+        createContext("rsc", { [source]: resolved }) as never,
+        source,
+        importer,
+        { isEntry: false },
+      );
+    }
+    await resolveId!.call(
+      createContext("ssr", { "@shared/client": sharedClient }) as never,
+      "@shared/client",
+      pagesRoute,
+      { isEntry: false },
+    );
+
+    await expect(
+      resolveId!.call(
+        createContext("client", { "./shared.css": stylesheet }) as never,
+        "./shared.css",
+        sharedClient,
+        { isEntry: false },
+      ),
+    ).resolves.toBeNull();
+  });
 });

@@ -135,6 +135,21 @@ export default function CrossRouteComponent() {
     path.join(sharedDir, "cross-route.css"),
     `.dynamic-css-cross-route { color: rgb(128, 0, 128); }\n`,
   );
+  await fs.writeFile(
+    path.join(sharedDir, "hybrid-shared-component.tsx"),
+    `"use client";
+
+import "./hybrid-shared.css";
+
+export default function HybridSharedComponent() {
+  return <p id="dynamic-css-hybrid-shared" className="dynamic-css-hybrid-shared">Hybrid shared</p>;
+}
+`,
+  );
+  await fs.writeFile(
+    path.join(sharedDir, "hybrid-shared.css"),
+    `.dynamic-css-hybrid-shared { color: rgb(0, 128, 128); }\n`,
+  );
   const marketingDir = path.join(appDir, "marketing");
   await fs.mkdir(marketingDir, { recursive: true });
   await fs.writeFile(
@@ -150,9 +165,55 @@ export default function MarketingPage() {
     path.join(appDir, "page", "shared-layout-styles.tsx"),
     `import "../../src/components/shared-dynamic-component";
 import CrossRouteComponent from "../../src/components/cross-route-component";
+import HybridSharedComponent from "../../src/components/hybrid-shared-component";
 
 export default function SharedLayoutStyles() {
-  return <CrossRouteComponent />;
+  return (
+    <>
+      <CrossRouteComponent />
+      <HybridSharedComponent />
+    </>
+  );
+}
+`,
+  );
+  await fs.writeFile(
+    path.join(appDir, "page", "dynamic-layout-component.tsx"),
+    `"use client";
+
+import "./dynamic-layout.css";
+
+export default function DynamicLayoutComponent() {
+  return <p id="dynamic-css-layout-import" className="dynamic-css-layout-import">Dynamic layout import</p>;
+}
+`,
+  );
+  await fs.writeFile(
+    path.join(appDir, "page", "dynamic-layout.css"),
+    `.dynamic-css-layout-import { color: rgb(255, 165, 0); }\n`,
+  );
+  await fs.writeFile(
+    path.join(appDir, "page", "layout.tsx"),
+    `import type { ReactNode } from "react";
+import dynamic from "next/dynamic";
+import SharedLayoutStyles from "./shared-layout-styles";
+import server from "./server.module.css";
+import Inner from "./inner";
+
+const DynamicLayoutComponent = dynamic(() => import("./dynamic-layout-component"));
+
+export default function DynamicCssPageLayout({ children }: { children: ReactNode }) {
+  return (
+    <>
+      <SharedLayoutStyles />
+      <DynamicLayoutComponent />
+      <p id="dynamic-css-server" className={\`dynamic-css-global \${server.class}\`}>
+        Hello Server
+      </p>
+      <Inner />
+      {children}
+    </>
+  );
 }
 `,
   );
@@ -173,6 +234,17 @@ export default function Inner() {
       <SharedComponent />
     </Suspense>
   );
+}
+`,
+  );
+  const pagesDir = path.join(fixtureRoot, "pages");
+  await fs.mkdir(pagesDir, { recursive: true });
+  await fs.writeFile(
+    path.join(pagesDir, "shared.tsx"),
+    `import HybridSharedComponent from "../src/components/hybrid-shared-component";
+
+export default function SharedPage() {
+  return <HybridSharedComponent />;
 }
 `,
   );
@@ -269,6 +341,8 @@ test("preserves CSS order across layouts, client components, and next/dynamic", 
       "rgb(0, 0, 255)",
     );
     await expect(page.locator("#dynamic-css-cross-route")).toHaveCSS("color", "rgb(128, 0, 128)");
+    await expect(page.locator("#dynamic-css-layout-import")).toHaveCSS("color", "rgb(255, 165, 0)");
+    await expect(page.locator("#dynamic-css-hybrid-shared")).toHaveCSS("color", "rgb(0, 128, 128)");
 
     await page.goto(`${app.baseUrl}/marketing`, { waitUntil: "load" });
     await expect(page.locator("#dynamic-css-cross-route")).toHaveText("Cross route");
@@ -277,6 +351,10 @@ test("preserves CSS order across layouts, client components, and next/dynamic", 
       "color",
       "rgb(0, 0, 255)",
     );
+
+    await page.goto(`${app.baseUrl}/shared`, { waitUntil: "load" });
+    await expect(page.locator("#dynamic-css-hybrid-shared")).toHaveText("Hybrid shared");
+    await expect(page.locator("#dynamic-css-hybrid-shared")).toHaveCSS("color", "rgb(0, 128, 128)");
   } finally {
     await closeServer(app.server);
     await fs.rm(app.fixtureRoot, { recursive: true, force: true });

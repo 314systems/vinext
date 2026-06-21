@@ -3112,7 +3112,10 @@ export const loadServerActionClient = ${
         },
       },
     },
-    createLayoutOwnedGlobalCssPlugin(() => appDir),
+    createLayoutOwnedGlobalCssPlugin(
+      () => appDir,
+      () => (hasPagesDir ? pagesDir : null),
+    ),
     // CSS url() asset parity with Next.js. Build-only: dev CSS is untouched.
     // Apply the transient marker in every environment so CSS Modules receives
     // identical source text and generates identical class names for server and
