@@ -478,7 +478,7 @@ function resolveTsconfigPackageExport(
     const exportsMap = exportsField as Record<string, unknown>;
     const exportKeys = Object.keys(exportsMap);
     const subpathKeys = exportKeys.filter((key) => key.startsWith("."));
-    if (subpathKeys.length > 0 && subpathKeys.length !== exportKeys.length) {
+    if (packageSubpath && subpathKeys.length > 0 && subpathKeys.length !== exportKeys.length) {
       return null;
     }
     if (subpathKeys.length === 0) {

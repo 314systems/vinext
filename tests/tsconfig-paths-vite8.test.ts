@@ -842,6 +842,43 @@ describe("Vite tsconfig paths support", () => {
     );
   });
 
+  it("uses the main export from package exports that mix subpaths and conditions", async () => {
+    const root = setupProject({ name: "vite", version: "8.0.0" });
+    process.chdir(root);
+    const packageRoot = path.join(root, "node_modules/preset");
+    fs.mkdirSync(packageRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "preset",
+        exports: {
+          ".": "./main.json",
+          default: "./default.json",
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(packageRoot, "main.json"),
+      JSON.stringify({ compilerOptions: { paths: { selected: ["./main.ts"] } } }),
+    );
+    fs.writeFileSync(
+      path.join(packageRoot, "default.json"),
+      JSON.stringify({ compilerOptions: { paths: { selected: ["./default.ts"] } } }),
+    );
+    fs.writeFileSync(path.join(packageRoot, "main.ts"), "export default 'main';");
+    fs.writeFileSync(path.join(packageRoot, "default.ts"), "export default 'default';");
+    const plugin = await configureCustomTsconfig(root, { extends: "preset" });
+
+    await expect(
+      resolveWithCustomTsconfig(
+        plugin,
+        "selected",
+        path.join(root, "pages/index.tsx"),
+        (candidate) => candidate,
+      ),
+    ).resolves.toHaveProperty("id", path.join(fs.realpathSync(packageRoot), "main.ts"));
+  });
+
   it("throws a TypeScript-style diagnostic for direct and package extends cycles", async () => {
     const root = setupProject({ name: "vite", version: "8.0.0" });
     process.chdir(root);
