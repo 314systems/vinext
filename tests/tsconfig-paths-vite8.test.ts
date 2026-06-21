@@ -476,7 +476,7 @@ describe("Vite tsconfig paths support", () => {
     );
   });
 
-  it("rejects package export symlinks that escape the package root", async () => {
+  it("loads package export symlinks that resolve outside the package root", async () => {
     const root = setupProject({ name: "vite", version: "8.0.0" });
     process.chdir(root);
     const packageRoot = path.join(root, "node_modules/preset");
@@ -486,8 +486,35 @@ describe("Vite tsconfig paths support", () => {
       JSON.stringify({ name: "preset", exports: { "./base": "./base.json" } }),
     );
     const outsideConfig = path.join(root, "outside.json");
-    fs.writeFileSync(outsideConfig, JSON.stringify({}));
+    fs.writeFileSync(
+      outsideConfig,
+      JSON.stringify({ compilerOptions: { paths: { selected: ["./outside.ts"] } } }),
+    );
     fs.symlinkSync(outsideConfig, path.join(packageRoot, "base.json"));
+
+    const plugin = await configureCustomTsconfig(root, { extends: "preset/base" });
+    await expect(
+      resolveWithCustomTsconfig(
+        plugin,
+        "selected",
+        path.join(root, "pages/index.tsx"),
+        (candidate) => candidate,
+      ),
+    ).resolves.toHaveProperty("id", path.join(fs.realpathSync(root), "outside.ts"));
+  });
+
+  it("rejects package export targets containing backslashes on POSIX", async () => {
+    if (process.platform === "win32") return;
+
+    const root = setupProject({ name: "vite", version: "8.0.0" });
+    process.chdir(root);
+    const packageRoot = path.join(root, "node_modules/preset");
+    fs.mkdirSync(packageRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "preset", exports: { "./base": String.raw`./config\base.json` } }),
+    );
+    fs.writeFileSync(path.join(packageRoot, String.raw`config\base.json`), JSON.stringify({}));
 
     await expect(configureCustomTsconfig(root, { extends: "preset/base" })).rejects.toThrow(
       "Cannot read file 'preset/base'.",
