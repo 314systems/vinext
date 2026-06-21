@@ -997,6 +997,7 @@ export default createAppRscHandler({
         __clearRequestContext();
       },
       contentType,
+      draftModeSecret: __draftModeSecret,
       createNotFoundElement(actionRouteId) {
         return {
           ...__AppElementsWire.createMetadataEntries({
