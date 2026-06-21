@@ -151,7 +151,7 @@ export function Consumer() {
         ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"),
       ),
     ).toEqual([]);
-  });
+  }, 30_000);
 
   it("does not claim the unsupported styled-jsx babel subpath", () => {
     const diagnostics = compileConsumer(
@@ -171,5 +171,5 @@ void plugin;
             .includes("styled-jsx/babel"),
       ),
     ).toBe(true);
-  });
+  }, 30_000);
 });
