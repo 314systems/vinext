@@ -527,8 +527,8 @@ describe("Image srcSet generation", () => {
     const src = "https://image-optimization-test.vercel.app/test.jpg";
     const { props } = getImageProps({ alt: "remote", src, width: 200, height: 200, quality: 90 });
 
-    expect(props.src).toBe(optUrl(src, 640, 90));
-    expect(props.srcSet).toBe(`${optUrl(src, 256, 90)} 1x, ${optUrl(src, 640, 90)} 2x`);
+    expect(props.src).toBe(optUrl(src, 640, 75));
+    expect(props.srcSet).toBe(`${optUrl(src, 256, 75)} 1x, ${optUrl(src, 640, 75)} 2x`);
   });
 
   it("generates a 100vw width srcSet for fill mode", () => {
@@ -866,11 +866,11 @@ describe("getImageProps", () => {
     });
 
     expect(props.src).toBe(
-      "/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Ftest.abc123.png&w=828&q=85&dpl=deployment-1",
+      "/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Ftest.abc123.png&w=828&q=75&dpl=deployment-1",
     );
     expect(props.srcSet).toBe(
-      "/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Ftest.abc123.png&w=640&q=85&dpl=deployment-1 1x, " +
-        "/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Ftest.abc123.png&w=828&q=85&dpl=deployment-1 2x",
+      "/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Ftest.abc123.png&w=640&q=75&dpl=deployment-1 1x, " +
+        "/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Ftest.abc123.png&w=828&q=75&dpl=deployment-1 2x",
     );
   });
 

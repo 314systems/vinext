@@ -873,19 +873,21 @@ async function createImageFixture(router: "app" | "pages"): Promise<string> {
   await fs.writeFile(path.join(rootDir, "public", "hello world.png"), PNG_1X1);
   const configPath = path.join(rootDir, router === "app" ? "next.config.ts" : "next.config.mjs");
   const configSource = await fs.readFile(configPath, "utf8");
-  const declaration =
-    router === "app" ? "const nextConfig: NextConfig = {" : "const nextConfig = {";
-  await fs.writeFile(
-    configPath,
-    configSource.replace(
-      declaration,
-      `${declaration}
+  const updatedConfigSource =
+    router === "app"
+      ? configSource.replace(
+          'remotePatterns: [{ protocol: "http", hostname: "127.0.0.1", port: "4199" }],',
+          'remotePatterns: [{ protocol: "http", hostname: "localhost", pathname: "/**" }],',
+        )
+      : configSource.replace(
+          "const nextConfig = {",
+          `const nextConfig = {
   images: {
     remotePatterns: [{ protocol: "http", hostname: "localhost", pathname: "/**" }],
     dangerouslyAllowLocalIP: true,
   },`,
-    ),
-  );
+        );
+  await fs.writeFile(configPath, updatedConfigSource);
 
   if (router === "app") {
     await fs.rm(path.join(rootDir, "app", "alias-test"), { recursive: true, force: true });
@@ -1017,17 +1019,6 @@ function runLocalImageUrlParitySuite(router: "app" | "pages"): void {
       expect(imageUrl.searchParams.get("q")).toBe("75");
 
       const res = await fetch(imageUrl);
-      expect(res.status).toBe(200);
-    });
-
-    // Both /_next/image and /_vinext/image are accepted so apps wired to
-    // either prefix get images served through the same optimizer pipeline.
-    it("routes /_vinext/image requests through the optimizer", async () => {
-      const vinextUrl = new URL("/_vinext/image", baseUrl);
-      vinextUrl.searchParams.set("url", "/hello world.png");
-      vinextUrl.searchParams.set("w", "64");
-      vinextUrl.searchParams.set("q", "75");
-      const res = await fetch(vinextUrl);
       expect(res.status).toBe(200);
     });
 

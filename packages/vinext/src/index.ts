@@ -4719,7 +4719,7 @@ export default __loader;`
           code: new RegExp(`import\\s+\\w+\\s+from\\s+['"][^'"]+\\.(${IMAGE_EXTS})['"]`),
         },
         async handler(code, id) {
-          if (nextConfig.images?.disableStaticImages) return null;
+          if (nextConfig?.images?.disableStaticImages) return null;
           // The `code` filter above (a regex) only decides whether to invoke
           // this handler; it can fire on text inside comments, strings, or
           // template literals. Scanning must therefore be AST-based so we only

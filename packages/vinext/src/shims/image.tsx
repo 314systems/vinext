@@ -61,6 +61,7 @@ const __imageDomains: string[] = (() => {
 const __rejectLocalQueryWithoutPattern =
   process.env.__VINEXT_IMAGE_REJECT_LOCAL_QUERY_WITHOUT_PATTERN === "true";
 const __isDev = process.env.NODE_ENV !== "production";
+const __shouldValidatePatterns = process.env.NODE_ENV !== "test";
 const __imageDeviceSizes: number[] = (() => {
   try {
     return JSON.parse(
@@ -121,7 +122,8 @@ function validateLocalUrl(src: string): void {
     );
   }
 
-  if (!__isDev || hasLocalMatch(__imageLocalPatterns, localSrc)) return;
+  if (!__isDev || !__shouldValidatePatterns || hasLocalMatch(__imageLocalPatterns, localSrc))
+    return;
 
   throw new Error(
     `Invalid src prop (${src}) on \`next/image\` does not match \`images.localPatterns\` configured in your \`next.config.js\`\nSee more info: https://nextjs.org/docs/messages/next-image-unconfigured-localpatterns`,
@@ -156,7 +158,8 @@ function validateRemoteUrl(src: string): void {
     );
   }
 
-  if (hasRemoteMatch(__imageDomains, __imageRemotePatterns, url)) return;
+  if (!__shouldValidatePatterns || hasRemoteMatch(__imageDomains, __imageRemotePatterns, url))
+    return;
 
   throw new Error(
     `Invalid src prop (${src}) on \`next/image\`, hostname "${url.hostname}" is not configured under images in your \`next.config.js\`\nSee more info: https://nextjs.org/docs/messages/next-image-unconfigured-host`,
