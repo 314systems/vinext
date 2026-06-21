@@ -76,6 +76,11 @@ export async function generateClientEntry(
   return `
 import React from "react";
 import { hydrateRoot } from "react-dom/client";
+import Router, {
+  wrapWithRouterContext,
+  _initializePagesRouterReadyFromNextData,
+  _syncInitialPagesRouterStateFromNextData,
+} from "next/router";
 
 const pageLoaders = {
 ${loaderEntries.join(",\n")}
@@ -133,18 +138,8 @@ if (nextDataElement?.textContent) {
   window.__VINEXT_LOCALE__ = window.__NEXT_DATA__.locale;
   window.__VINEXT_LOCALES__ = window.__NEXT_DATA__.locales;
   window.__VINEXT_DEFAULT_LOCALE__ = window.__NEXT_DATA__.defaultLocale;
+  _syncInitialPagesRouterStateFromNextData();
 }
-
-// Load instrumentation only after serialized locale state is available. The
-// user's instrumentation module may import next/router, whose module setup
-// stamps the initial history entry with the active locale.
-await import("vinext/instrumentation-client");
-
-const {
-  default: Router,
-  wrapWithRouterContext,
-  _initializePagesRouterReadyFromNextData,
-} = await import("next/router");
 
 async function hydrate() {
   const nextData = window.__NEXT_DATA__;
@@ -152,6 +147,9 @@ async function hydrate() {
     console.error("[vinext] No __NEXT_DATA__ found");
     return;
   }
+
+  // Load instrumentation only after serialized locale state is available.
+  await import("vinext/instrumentation-client");
 
   _initializePagesRouterReadyFromNextData(nextData);
 

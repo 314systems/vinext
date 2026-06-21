@@ -814,10 +814,16 @@ function buildInitialRouterState(): VinextHistoryState {
 function stampInitialHistoryState(): void {
   installManualScrollRestoration();
 
+  syncInitialHistoryStateFromNextData();
+}
+
+function syncInitialHistoryStateFromNextData(): void {
   if (!window.history) return;
 
   const existingState = window.history.state;
   const initialState = buildInitialRouterState();
+  const existingKey = getRouterStateKey(existingState);
+  if (existingKey !== undefined) initialState.key = existingKey;
   routerRuntimeState.currentHistoryKey = initialState.key;
   window.history.replaceState(
     isUnknownRecord(existingState) ? { ...existingState, ...initialState } : initialState,
@@ -3587,5 +3593,6 @@ const _PAGES_NAVIGATION_ACCESSOR_KEY = Symbol.for(
 // without relying on React effect timing in a Node test environment.
 export { markPagesRouterReady as _markPagesRouterReady };
 export { initializePagesRouterReadyFromNextData as _initializePagesRouterReadyFromNextData };
+export { syncInitialHistoryStateFromNextData as _syncInitialPagesRouterStateFromNextData };
 
 export default Router;

@@ -1071,12 +1071,13 @@ describe("Pages Router entry template", () => {
       const instrumentationImportIndex = code.indexOf(
         'await import("vinext/instrumentation-client")',
       );
-      const routerImportIndex = code.indexOf('await import("next/router")');
+      const routerImportIndex = code.indexOf('from "next/router"');
       const hydrateRootIndex = code.indexOf("hydrateRoot(");
 
       expect(localeBootstrapIndex).toBeGreaterThanOrEqual(0);
       expect(instrumentationImportIndex).toBeGreaterThan(localeBootstrapIndex);
-      expect(routerImportIndex).toBeGreaterThan(instrumentationImportIndex);
+      expect(routerImportIndex).toBeGreaterThanOrEqual(0);
+      expect(routerImportIndex).toBeLessThan(localeBootstrapIndex);
       expect(hydrateRootIndex).toBeGreaterThanOrEqual(0);
       expect(instrumentationImportIndex).toBeLessThan(hydrateRootIndex);
       expect(code).not.toContain(`import ${JSON.stringify(instrumentationClientPath)}`);
