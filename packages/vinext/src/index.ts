@@ -128,6 +128,7 @@ import {
   INSTRUMENTATION_CLIENT_EMPTY_MODULE,
 } from "./client/instrumentation-client-inject.js";
 import { createMiddlewareServerOnlyPlugin } from "./plugins/middleware-server-only.js";
+import { createPagesNodeExternalsPlugin } from "./plugins/pages-node-externals.js";
 import { validateMiddlewareModuleExports } from "./plugins/middleware-export-validation.js";
 import { createOptimizeImportsPlugin } from "./plugins/optimize-imports.js";
 import { createDynamicPreloadMetadataPlugin } from "./plugins/dynamic-preload-metadata.js";
@@ -1220,6 +1221,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
       getCanonicalMiddlewarePath: () =>
         middlewarePath ? (tryRealpathSync(middlewarePath) ?? middlewarePath) : null,
       serverOnlyShimPath: resolveShimModulePath(shimsDir, "server-only"),
+    }),
+    createPagesNodeExternalsPlugin({
+      getPagesDir: () => (hasPagesDir ? pagesDir : null),
+      getTranspilePackages: () => nextConfig?.transpilePackages ?? [],
+      isEnabled: () => !hasCloudflarePlugin && !hasNitroPlugin,
     }),
     // Resolve `data:text/css[+module],...` imports into virtual CSS files so
     // Vite's CSS pipeline (LightningCSS, CSS modules) processes them instead
