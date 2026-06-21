@@ -70,9 +70,12 @@ export async function renderAppPageCacheArtifacts(
   const rscCapture = teeAppPageRscStreamForCapture(rscStream, options.captureRscData);
   const capturedRscDataRef: { value: Promise<ArrayBuffer> | null } = { value: null };
   const ssrHandler = await options.loadSsrHandler();
+  const navigationContext = options.getNavigationContext();
   const htmlResult = await ssrHandler.handleSsr(
     rscCapture.ssrStream,
-    options.getNavigationContext(),
+    navigationContext === null || options.waitForAllReady !== true
+      ? navigationContext
+      : { ...navigationContext, isStaticGeneration: true },
     {
       links: options.getFontLinks(),
       styles: options.getFontStyles(),

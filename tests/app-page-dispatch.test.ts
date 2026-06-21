@@ -36,6 +36,7 @@ import { connection } from "../packages/vinext/src/shims/server.js";
 import type { AppPageMiddlewareContext } from "../packages/vinext/src/server/app-page-response.js";
 import type { ISRCacheEntry } from "../packages/vinext/src/server/isr-cache.js";
 import type { CachedAppPageValue } from "../packages/vinext/src/shims/cache.js";
+import type { NavigationContext } from "../packages/vinext/src/shims/navigation.js";
 import { markAppPprDynamicFallbackShellHtml } from "../packages/vinext/src/server/app-ppr-fallback-shell.js";
 import { appPagePprRuntime } from "../packages/vinext/src/server/app-page-ppr-runtime.js";
 import {
@@ -2335,6 +2336,7 @@ describe("app page dispatch", () => {
     };
     let capturedWaitForAllReady: boolean | undefined;
     let capturedFallbackToErrorDocument: boolean | undefined;
+    let capturedNavigationContext: NavigationContext | null = null;
     const isrSet = vi.fn(async () => {});
     const { options } = createDispatchOptions({
       buildPageElement: async () => React.createElement("main", null, "fresh"),
@@ -2346,7 +2348,8 @@ describe("app page dispatch", () => {
       isrSet,
       hasCustomGlobalError: false,
       loadSsrHandler: async () => ({
-        async handleSsr(_rscStream, _navigationContext, _fontData, captureOptions) {
+        async handleSsr(_rscStream, navigationContext, _fontData, captureOptions) {
+          capturedNavigationContext = navigationContext;
           capturedWaitForAllReady = captureOptions?.waitForAllReady;
           capturedFallbackToErrorDocument = captureOptions?.fallbackToErrorDocumentOnShellError;
           if (captureOptions?.capturedRscDataRef) {
@@ -2378,6 +2381,12 @@ describe("app page dispatch", () => {
     await scheduledRender();
 
     expect(capturedWaitForAllReady).toBe(true);
+    expect(capturedNavigationContext).toEqual({
+      pathname: "/posts/hello",
+      searchParams: new URLSearchParams(),
+      params: { slug: "hello" },
+      isStaticGeneration: true,
+    });
     expect(capturedFallbackToErrorDocument).toBeUndefined();
     expect(isrSet).toHaveBeenCalled();
   });
