@@ -1263,7 +1263,11 @@ function getPathnameAndQuery(): {
   for (const [key, value] of params) {
     addQueryParam(searchQuery, key, value);
   }
-  const query = { ...searchQuery, ...routeQuery };
+  const query = { ...routeQuery, ...searchQuery };
+  for (const routeParamName of extractRouteParamNames(nextData?.page ?? "")) {
+    const routeParam = routeQuery[routeParamName];
+    if (routeParam !== undefined) query[routeParamName] = routeParam;
+  }
   // asPath uses the resolved browser path, not the route pattern
   const asPath =
     getCurrentHistoryAsPath() ?? resolvedPath + window.location.search + window.location.hash;
