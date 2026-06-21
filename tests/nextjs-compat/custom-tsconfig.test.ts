@@ -13,7 +13,7 @@ import type { ViteDevServer } from "vite-plus";
 import { buildAppFixture, buildPagesFixture, fetchHtml, startFixtureServer } from "../helpers.js";
 
 const FIXTURE_DIR = path.resolve(import.meta.dirname, "../fixtures/custom-tsconfig");
-const CUSTOM_TSCONFIG_PATH = path.join(FIXTURE_DIR, "config/web.json");
+const CUSTOM_TSCONFIG_PARENT_PATH = path.join(FIXTURE_DIR, "config/web.base.json");
 
 async function waitForHtml(baseUrl: string, expected: string[]): Promise<string> {
   const deadline = Date.now() + 10_000;
@@ -59,8 +59,8 @@ describe("Next.js compat: typescript.tsconfigPath dev", () => {
     });
   });
 
-  it("applies custom paths and baseUrl edits without restarting dev", async () => {
-    const originalConfig = await fs.readFile(CUSTOM_TSCONFIG_PATH, "utf8");
+  it("applies extended parent paths and baseUrl edits without restarting dev", async () => {
+    const originalConfig = await fs.readFile(CUSTOM_TSCONFIG_PARENT_PATH, "utf8");
     const pagePath = path.join(FIXTURE_DIR, "app/page.tsx");
     const originalPage = await fs.readFile(pagePath, "utf8");
     const editedBaseUrlDir = path.join(FIXTURE_DIR, "config/edited-src");
@@ -74,15 +74,13 @@ describe("Next.js compat: typescript.tsconfigPath dev", () => {
 
     try {
       await fs.writeFile(
-        CUSTOM_TSCONFIG_PATH,
+        CUSTOM_TSCONFIG_PARENT_PATH,
         JSON.stringify(
           {
             compilerOptions: {
               baseUrl: "./edited-src",
               paths: { foo: ["../edited-bar.ts"] },
-              jsx: "react-jsx",
             },
-            include: ["**/*.ts", "**/*.tsx"],
           },
           null,
           2,
@@ -95,7 +93,7 @@ describe("Next.js compat: typescript.tsconfigPath dev", () => {
       expect(html).not.toContain("bar123");
       expect(html).not.toContain("custom-base-url");
     } finally {
-      await fs.writeFile(CUSTOM_TSCONFIG_PATH, originalConfig);
+      await fs.writeFile(CUSTOM_TSCONFIG_PARENT_PATH, originalConfig);
       await new Promise((resolve) => setTimeout(resolve, 100));
       await fs.writeFile(pagePath, originalPage);
       await waitForHtml(baseUrl, ["app:", "bar123", "custom-base-url"]);

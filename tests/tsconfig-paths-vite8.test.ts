@@ -138,6 +138,8 @@ describe("Vite tsconfig paths support", () => {
       path.join(root, "config/web.json"),
       JSON.stringify(
         {
+          include: ["config-only/**/*"],
+          exclude: ["../app/**/*", "../pages/**/*", "../middleware.ts"],
           compilerOptions: {
             baseUrl: "./custom-src",
             paths: {

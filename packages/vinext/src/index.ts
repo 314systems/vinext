@@ -522,6 +522,55 @@ function loadTsconfigPathAliases(
   };
 }
 
+type CustomTsconfigResolution = {
+  baseUrl?: string;
+  paths?: Array<{ pattern: RegExp; targets: string[] }>;
+  watchedFiles: Set<string>;
+};
+
+function loadCustomTsconfigResolution(
+  configPath: string,
+  seen = new Set<string>(),
+): CustomTsconfigResolution {
+  const normalizedPath = tryRealpathSync(configPath) ?? configPath;
+  if (seen.has(normalizedPath)) return { watchedFiles: new Set() };
+  seen.add(normalizedPath);
+
+  const contents = fs.readFileSync(normalizedPath, "utf-8");
+  const parsed = contents.trim() === "" ? {} : parseStaticObjectLiteral(contents);
+  if (!parsed) throw new Error(`Failed to parse "${normalizedPath}"`);
+
+  const watchedFiles = new Set<string>([normalizedPath]);
+  let resolution: Omit<CustomTsconfigResolution, "watchedFiles"> = {};
+  for (const extendsSpecifier of normalizeTsconfigExtends(parsed.extends)) {
+    const extendedPath = resolveTsconfigExtends(normalizedPath, extendsSpecifier);
+    if (!extendedPath) continue;
+    const parent = loadCustomTsconfigResolution(extendedPath, seen);
+    parent.watchedFiles.forEach((file) => watchedFiles.add(file));
+    if (parent.baseUrl !== undefined) resolution.baseUrl = parent.baseUrl;
+    if (parent.paths !== undefined) resolution.paths = [...parent.paths];
+  }
+
+  const compilerOptions = isRecord(parsed.compilerOptions) ? parsed.compilerOptions : null;
+  if (compilerOptions && typeof compilerOptions.baseUrl === "string") {
+    resolution.baseUrl = path.resolve(path.dirname(normalizedPath), compilerOptions.baseUrl);
+  }
+  if (compilerOptions && isRecord(compilerOptions.paths)) {
+    const pathsRoot = resolution.baseUrl ?? path.dirname(normalizedPath);
+    resolution.paths = Object.entries(compilerOptions.paths).flatMap(([find, rawTargets]) => {
+      if (!Array.isArray(rawTargets)) return [];
+      const targets = rawTargets
+        .filter((target): target is string => typeof target === "string")
+        .map((target) => path.resolve(pathsRoot, target));
+      if (targets.length === 0) return [];
+      const escaped = find.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return [{ pattern: new RegExp(`^${escaped.replace(/\\\*/g, "(.*)")}$`), targets }];
+    });
+  }
+
+  return { ...resolution, watchedFiles };
+}
+
 /**
  * Read the vinext package version once at plugin load. Surfaced via
  * `process.env.__NEXT_VERSION` define so `window.next.version` lands a
@@ -926,7 +975,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   let hasNitroPlugin = false;
   let rscCompatibilityId: string | undefined;
   let tsconfigPathsDelegate = viteMajorVersion >= 8 ? undefined : tsconfigPaths();
-  let customTsconfigScope: { projectRoot: string; configDir: string } | undefined;
+  let customTsconfigPath: string | undefined;
+  let customTsconfigProjectRoot: string | undefined;
+  let customTsconfigResolution: CustomTsconfigResolution | undefined;
   const draftModeSecret = randomUUID();
 
   // Per-plugin-instance binding of the Sass-aware CSS Modules Loader. The
@@ -1207,24 +1258,70 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         tsconfigPathsDelegate?.configResolved(config);
       },
       configureServer(server) {
-        return tsconfigPathsDelegate?.configureServer(server);
+        tsconfigPathsDelegate?.configureServer(server);
+        if (!customTsconfigPath || !customTsconfigResolution) return;
+        const configPath = customTsconfigPath;
+        server.watcher.add([...customTsconfigResolution.watchedFiles]);
+        server.watcher.on("all", (event, file) => {
+          if (
+            (event !== "change" && event !== "add" && event !== "unlink") ||
+            !customTsconfigResolution?.watchedFiles.has(tryRealpathSync(file) ?? file)
+          ) {
+            return;
+          }
+          try {
+            customTsconfigResolution = loadCustomTsconfigResolution(configPath);
+            server.watcher.add([...customTsconfigResolution.watchedFiles]);
+            server.moduleGraph.invalidateAll();
+            server.ws.send({ type: "full-reload" });
+          } catch (error) {
+            server.config.logger.error(
+              `[vinext] Failed to reload custom tsconfig "${configPath}"`,
+              { error: error instanceof Error ? error : new Error(String(error)) },
+            );
+          }
+        });
       },
       buildStart() {
+        if (customTsconfigPath) {
+          customTsconfigResolution = loadCustomTsconfigResolution(customTsconfigPath);
+        }
         return tsconfigPathsDelegate?.buildStart.call(this);
       },
-      resolveId(id, importer, resolveOptions) {
-        let scopedImporter = importer;
-        if (importer && customTsconfigScope) {
-          const cleanImporter = importer.split("?", 1)[0];
-          const relativeImporter = relativeWithinRoot(
-            customTsconfigScope.projectRoot,
-            cleanImporter,
-          );
-          if (relativeImporter) {
-            scopedImporter = path.join(customTsconfigScope.configDir, relativeImporter);
+      async resolveId(id, importer, resolveOptions) {
+        const importerFile = importer?.split(/[?#]/, 1)[0];
+        if (
+          importerFile &&
+          customTsconfigProjectRoot &&
+          relativeWithinRoot(customTsconfigProjectRoot, importerFile) &&
+          customTsconfigResolution &&
+          !id.startsWith(".") &&
+          !id.startsWith("/") &&
+          !id.includes("\0")
+        ) {
+          for (const mapping of customTsconfigResolution.paths ?? []) {
+            const match = id.match(mapping.pattern);
+            if (!match) continue;
+            for (const target of mapping.targets) {
+              let starIndex = 0;
+              const candidate = target.replace(/\*/g, () => match[++starIndex] ?? "");
+              const resolved = await this.resolve(candidate, importer, {
+                ...resolveOptions,
+                skipSelf: true,
+              });
+              if (resolved) return resolved;
+            }
+          }
+          if (customTsconfigResolution.baseUrl) {
+            const resolved = await this.resolve(
+              path.join(customTsconfigResolution.baseUrl, id),
+              importer,
+              { ...resolveOptions, skipSelf: true },
+            );
+            if (resolved) return resolved;
           }
         }
-        return tsconfigPathsDelegate?.resolveId.call(this, id, scopedImporter, resolveOptions);
+        return tsconfigPathsDelegate?.resolveId.call(this, id, importer, resolveOptions);
       },
     },
     // React Fast Refresh + JSX transform for client components.
@@ -1466,20 +1563,15 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         fileMatcher = createValidFileMatcher(nextConfig.pageExtensions);
         const selectedTsconfig = selectTsconfig(root, nextConfig.tsconfigPath);
         tsconfigPathsDelegate = selectedTsconfig.custom
-          ? selectedTsconfig.path
-            ? tsconfigPaths({
-                root,
-                projects: [path.relative(root, selectedTsconfig.path)],
-                loose: true,
-              })
-            : undefined
+          ? undefined
           : viteMajorVersion >= 8
             ? undefined
             : tsconfigPaths();
-        customTsconfigScope =
-          selectedTsconfig.custom && selectedTsconfig.path
-            ? { projectRoot: root, configDir: path.dirname(selectedTsconfig.path) }
-            : undefined;
+        customTsconfigPath = selectedTsconfig.custom ? selectedTsconfig.path : undefined;
+        customTsconfigProjectRoot = selectedTsconfig.custom ? root : undefined;
+        customTsconfigResolution = customTsconfigPath
+          ? loadCustomTsconfigResolution(customTsconfigPath)
+          : undefined;
         const shouldEnableNativeTsconfigPaths =
           viteMajorVersion >= 8 &&
           !selectedTsconfig.custom &&
