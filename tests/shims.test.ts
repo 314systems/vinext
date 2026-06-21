@@ -21543,11 +21543,20 @@ describe("shim alias map .js variants", () => {
       { mode: "development", command: "serve" },
     );
 
-    const aliases = result?.resolve?.alias as Record<string, string> | undefined;
+    const aliases = result?.resolve?.alias as
+      | Array<{ find: string | RegExp; replacement: string }>
+      | undefined;
     expect(aliases).toBeDefined();
+    const aliasMap = new Map(
+      aliases!
+        .filter(
+          (alias): alias is { find: string; replacement: string } => typeof alias.find === "string",
+        )
+        .map(({ find, replacement }) => [find, replacement]),
+    );
 
     // Collect top-level next/<name> keys (exclude next/dist/*, next/font/*, next/compat/*, next/legacy/*)
-    const topLevel = Object.keys(aliases!).filter((key) => {
+    const topLevel = [...aliasMap.keys()].filter((key) => {
       if (!key.startsWith("next/")) return false;
       if (key.endsWith(".js")) return false;
       const segment = key.slice("next/".length);
@@ -21560,7 +21569,7 @@ describe("shim alias map .js variants", () => {
 
     expect(topLevel.length).toBeGreaterThan(0);
 
-    const missing = topLevel.filter((key) => !(key + ".js" in aliases!));
+    const missing = topLevel.filter((key) => !aliasMap.has(key + ".js"));
     expect(missing, `Missing .js aliases for: ${missing.join(", ")}`).toEqual([]);
   });
 
@@ -21708,7 +21717,7 @@ describe("shim alias map .js variants", () => {
     ).toBeUndefined();
   });
 
-  it("bundles the styled-jsx package for Cloudflare without aliasing its CommonJS entry", async () => {
+  it("bundles the styled-jsx package for Cloudflare using an exact CommonJS alias", async () => {
     const plugins = vinext() as Plugin[];
     const configPlugin = plugins.find((plugin) => plugin.name === "vinext:config");
     if (!configPlugin?.config) throw new Error("vinext:config hook not found");
@@ -21731,11 +21740,10 @@ describe("shim alias map .js variants", () => {
     );
 
     expect(resolved.ssr?.noExternal).toContain("styled-jsx");
-    expect(
-      resolved.resolve?.alias?.some(
-        ({ find }) => find === "styled-jsx" || (find instanceof RegExp && find.test("styled-jsx")),
-      ),
-    ).toBe(false);
+    const styledJsxAlias = resolved.resolve?.alias?.find(
+      ({ find }) => find instanceof RegExp && find.source === "^styled-jsx$",
+    );
+    expect(styledJsxAlias?.replacement).toContain("styled-jsx");
   });
 
   it("uses distinct Pages and hybrid App SSR build entries", async () => {
