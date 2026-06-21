@@ -2512,8 +2512,8 @@ describe("Virtual server entry generation", () => {
       // matching, while pageLoaders must use Next.js bracket format.
       const codeWithoutRouteManifests = code
         .replace(
-        /__VINEXT_PAGES_LINK_PREFETCH_ROUTES__\s*=\s*(\[[\s\S]*?\]);/,
-        "__VINEXT_PAGES_LINK_PREFETCH_ROUTES__ = /* stripped for test */;",
+          /__VINEXT_PAGES_LINK_PREFETCH_ROUTES__\s*=\s*(\[[\s\S]*?\]);/,
+          "__VINEXT_PAGES_LINK_PREFETCH_ROUTES__ = /* stripped for test */;",
         )
         .replace(
           /__VINEXT_CLIENT_REWRITES__\s*=\s*([^;]+);/,
