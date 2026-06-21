@@ -69,15 +69,19 @@ async function createConditionalExportFixture(): Promise<string> {
   temporaryDirectories.push(projectDir);
   await writeFile(
     path.join(projectDir, "app", "layout.js"),
-    `import Shared from "../src/shared.js";\nexport default function Layout() { return Shared(); }\n`,
+    `import { sharedClassName } from "../src/shared.js";\nexport default function Layout({ children }) { return { className: sharedClassName, children }; }\n`,
   );
   await writeFile(
     path.join(projectDir, "pages", "index.js"),
-    `import "conditional-package";\nexport default function Home() {}\n`,
+    `import { conditionalClassName, conditionalTarget } from "conditional-package";\nexport { conditionalTarget };\nexport default function Home() { return { className: conditionalClassName }; }\n`,
   );
   await writeFile(
     path.join(projectDir, "src", "shared.js"),
-    `import "./global.css";\nexport default function Shared() {}\n`,
+    `import "./global.css";\nexport const sharedClassName = "conditional-export-owner";\n`,
+  );
+  await writeFile(
+    path.join(projectDir, "src", "client.js"),
+    `import { sharedClassName } from "./shared.js";\ndocument.documentElement.className = sharedClassName;\n`,
   );
   await writeFile(
     path.join(projectDir, "src", "global.css"),
@@ -93,11 +97,11 @@ async function createConditionalExportFixture(): Promise<string> {
   );
   await writeFile(
     path.join(projectDir, "node_modules", "conditional-package", "worker.js"),
-    `import "../../src/shared.js";\n`,
+    `export { sharedClassName as conditionalClassName } from "../../src/shared.js";\nexport const conditionalTarget = "workerd-conditional-export";\n`,
   );
   await writeFile(
     path.join(projectDir, "node_modules", "conditional-package", "default.js"),
-    `export {};\n`,
+    `export const conditionalClassName = "default-conditional-export";\nexport const conditionalTarget = "default-conditional-export";\n`,
   );
   return projectDir;
 }
@@ -125,7 +129,10 @@ async function buildConditionalExportFixture(projectDir: string): Promise<string
       },
       pages_router_cloudflare: {
         consumer: "server",
-        resolve: { conditions: ["workerd", "worker", "module", "browser"] },
+        resolve: {
+          conditions: ["workerd", "worker", "module", "browser"],
+          noExternal: ["conditional-package"],
+        },
         build: {
           ssr: true,
           outDir: "dist/pages",
@@ -137,7 +144,7 @@ async function buildConditionalExportFixture(projectDir: string): Promise<string
         build: {
           outDir: "dist/client",
           cssCodeSplit: false,
-          rolldownOptions: { input: path.join(projectDir, "src", "shared.js") },
+          rolldownOptions: { input: path.join(projectDir, "src", "client.js") },
         },
       },
     },
@@ -146,6 +153,23 @@ async function buildConditionalExportFixture(projectDir: string): Promise<string
   await builder.build(builder.environments.rsc);
   await builder.build(builder.environments.pages_router_cloudflare);
   await builder.build(builder.environments.client);
+
+  const pagesOutputDir = path.join(projectDir, "dist", "pages");
+  const pagesOutputFiles = await fs.readdir(pagesOutputDir, { recursive: true });
+  const pagesJavaScriptFiles = pagesOutputFiles.filter((file) => /\.[cm]?js$/.test(file));
+  const pagesJavaScript = (
+    await Promise.all(
+      pagesJavaScriptFiles.map((file) => fs.readFile(path.join(pagesOutputDir, file), "utf8")),
+    )
+  ).join("\n");
+  if (!pagesJavaScript.includes("workerd-conditional-export")) {
+    throw new Error(
+      `Expected the Pages build to use the workerd conditional export. Emitted JavaScript: ${pagesJavaScript}`,
+    );
+  }
+  if (pagesJavaScript.includes("default-conditional-export")) {
+    throw new Error("Expected the Pages build not to use the default conditional export.");
+  }
 
   const clientOutputDir = path.join(projectDir, "dist", "client");
   const outputFiles = await fs.readdir(clientOutputDir, { recursive: true });
