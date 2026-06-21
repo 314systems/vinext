@@ -380,7 +380,12 @@ function resolveTsconfigExportTarget(
 ): string | null {
   if (typeof target === "string") {
     if (!target.startsWith("./")) return null;
-    const resolvedTarget = path.resolve(packageRoot, target.replaceAll("*", replacement));
+    const replacedTarget = target.replaceAll("*", replacement);
+    const targetSegments = replacedTarget.split(/[\\/]/);
+    if (targetSegments.slice(1).some((segment) => segment === "." || segment === "..")) {
+      return null;
+    }
+    const resolvedTarget = path.resolve(packageRoot, replacedTarget);
     const relativeTarget = path.relative(packageRoot, resolvedTarget);
     if (relativeTarget === ".." || relativeTarget.startsWith(`..${path.sep}`)) return null;
     if (relativeTarget.split(path.sep).includes("node_modules")) return null;
