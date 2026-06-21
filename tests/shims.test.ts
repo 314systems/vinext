@@ -19826,6 +19826,25 @@ describe("next/navigation enhancements", () => {
     }
   });
 
+  it("useSearchParams returns empty params during force-static generation", async () => {
+    const { setNavigationContext, useSearchParams } =
+      await import("../packages/vinext/src/shims/navigation.js");
+
+    setNavigationContext({
+      pathname: "/force-static",
+      searchParams: new URLSearchParams(),
+      params: {},
+      isStaticGeneration: true,
+      isForceStatic: true,
+    });
+
+    try {
+      expect(useSearchParams().toString()).toBe("");
+    } finally {
+      setNavigationContext(null);
+    }
+  });
+
   it("useSearchParams reuses the same readonly wrapper for the same server context", async () => {
     const { setNavigationContext, useSearchParams } =
       await import("../packages/vinext/src/shims/navigation.js");

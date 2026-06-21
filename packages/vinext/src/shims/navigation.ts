@@ -1326,7 +1326,11 @@ export function usePathname(): string | null {
 export function useSearchParams(): ReadonlyURLSearchParams {
   if (isServer) {
     markPprFallbackShellDynamicBoundary();
-    if (getNavigationContext()?.isStaticGeneration === true) {
+    const navigationContext = getNavigationContext();
+    if (
+      navigationContext?.isStaticGeneration === true &&
+      navigationContext.isForceStatic !== true
+    ) {
       throw new BailoutToCSRError("useSearchParams()");
     }
     // During SSR for "use client" components, the navigation context may not be set.

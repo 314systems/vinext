@@ -348,11 +348,7 @@ export type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
   scheduleBackgroundRegeneration: AppPageBackgroundRegenerator;
   scriptNonce?: string;
   searchParams: URLSearchParams;
-  setNavigationContext: (context: {
-    params: AppPageParams;
-    pathname: string;
-    searchParams: URLSearchParams;
-  }) => void;
+  setNavigationContext: (context: NavigationContext) => void;
   renderMode?: AppRscRenderMode;
 };
 
@@ -502,6 +498,7 @@ async function runAppPageRevalidationContext<
       pathname: options.displayPathname ?? options.cleanPathname,
       searchParams: new URLSearchParams(),
       params: options.params,
+      isForceStatic: options.dynamicConfig === "force-static",
     });
     return await runWithFetchDedupe(renderFn);
   });
@@ -599,6 +596,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
       pathname: options.displayPathname ?? options.cleanPathname,
       searchParams: new URLSearchParams(),
       params: staticNavigationParams,
+      isForceStatic,
     });
   }
 
@@ -951,6 +949,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     pathname: options.displayPathname ?? options.cleanPathname,
     searchParams: pageSearchParams,
     params: navigationParams,
+    isForceStatic,
   });
 
   const layoutClassifications = getEffectiveLayoutClassifications(

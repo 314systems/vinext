@@ -2498,6 +2498,65 @@ describe("app page dispatch", () => {
     },
   );
 
+  it("preserves force-static navigation context during stale cache regeneration", async () => {
+    const route = createRoute({ pattern: "/static", routeSegments: ["static"] });
+    let scheduledRender: unknown = null;
+    let capturedNavigationContext: NavigationContext | null = null;
+    let currentNavigationContext: NavigationContext | null = null;
+    const { options } = createDispatchOptions({
+      buildPageElement: async () => React.createElement("main", null, "fresh"),
+      cleanPathname: "/static",
+      dynamicConfig: "force-static",
+      getNavigationContext: () => currentNavigationContext,
+      isProduction: true,
+      isrGet: vi.fn(async () =>
+        buildISRCacheEntry(buildCachedAppPageValue("<html>stale</html>"), true),
+      ),
+      loadSsrHandler: async () => ({
+        async handleSsr(_rscStream, navigationContext, _fontData, captureOptions) {
+          capturedNavigationContext = navigationContext;
+          if (captureOptions?.capturedRscDataRef) {
+            captureOptions.capturedRscDataRef.value = Promise.resolve(
+              new TextEncoder().encode("fresh-flight").buffer,
+            );
+          }
+          void captureOptions?.sideStream?.cancel().catch(() => {});
+          return createStream(["<html>fresh</html>"]);
+        },
+      }),
+      renderToReadableStream() {
+        return createStream(["flight"]);
+      },
+      revalidateSeconds: 60,
+      route,
+      params: {},
+      request: new Request("https://example.test/static"),
+      scheduleBackgroundRegeneration(_key, renderFn) {
+        scheduledRender = renderFn;
+      },
+      setNavigationContext(context) {
+        currentNavigationContext = context;
+      },
+    });
+
+    const response = await dispatchAppPage(options);
+    await response.text();
+    expect(typeof scheduledRender).toBe("function");
+    if (typeof scheduledRender !== "function") {
+      throw new Error("expected stale HTML response to schedule regeneration");
+    }
+
+    await scheduledRender();
+
+    expect(capturedNavigationContext).toEqual({
+      pathname: "/static",
+      searchParams: new URLSearchParams(),
+      params: {},
+      isForceStatic: true,
+      isStaticGeneration: true,
+    });
+  });
+
   it("preserves stale HTML when SSR shell rendering fails during regeneration", async () => {
     const route = createRoute({ pattern: "/posts/[slug]", routeSegments: ["posts", "[slug]"] });
     let scheduledRender: unknown = null;

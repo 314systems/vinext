@@ -53,6 +53,17 @@ export default function Page() {
   return <Suspense fallback={<p>search params suspense</p>}><SearchParams /></Suspense>;
 }`,
     );
+    await writeFile(
+      path.join(fixtureRoot, "app", "force-static", "page.tsx"),
+      `export const dynamic = "force-static";
+
+import { Suspense } from "react";
+import SearchParams from "../search-params";
+
+export default function Page() {
+  return <Suspense fallback={<p>search params suspense</p>}><SearchParams /></Suspense>;
+}`,
+    );
     await fs.symlink(
       path.join(workspaceRoot, "node_modules"),
       path.join(fixtureRoot, "node_modules"),
@@ -84,5 +95,12 @@ export default function Page() {
     );
     expect(html).toContain("<p>search params suspense</p>");
     expect(html).not.toContain('<p id="value">missing</p>');
+
+    const forceStaticHtml = await fs.readFile(
+      path.join(fixtureRoot, "dist", "server", "prerendered-routes", "force-static.html"),
+      "utf8",
+    );
+    expect(forceStaticHtml).not.toContain("<p>search params suspense</p>");
+    expect(forceStaticHtml).toContain('<p id="value">missing</p>');
   }, 60_000);
 });
