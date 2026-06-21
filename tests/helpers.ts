@@ -225,10 +225,8 @@ export async function requestNodeServerWithHost(
  * Returns the path to the built bundle (`entry.js`).
  */
 export async function buildPagesFixture(fixtureDir: string): Promise<string> {
-  const serverOutDir = path.join(
-    await fs.mkdtemp(path.join(os.tmpdir(), "vinext-pages-build-")),
-    "server",
-  );
+  const buildDir = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-pages-build-"));
+  const serverOutDir = path.join(buildDir, "server");
 
   // Use disableAppRouter: true so the RSC/App Router pipeline is not activated.
   // This is required when the fixture has both app/ and pages/ directories
@@ -247,6 +245,12 @@ export async function buildPagesFixture(fixtureDir: string): Promise<string> {
       },
     },
   });
+
+  // The Pages bundle keeps React external so styled-jsx and the renderer share
+  // the same instance. Temp build directories are outside the repo's normal
+  // node_modules lookup path, so expose the workspace dependencies there.
+  const projectNodeModules = path.resolve(import.meta.dirname, "../node_modules");
+  await fs.symlink(projectNodeModules, path.join(buildDir, "node_modules"));
 
   return path.join(serverOutDir, "entry.js");
 }
