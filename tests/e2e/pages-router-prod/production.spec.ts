@@ -40,6 +40,33 @@ test.describe("Pages Router Production Build", () => {
     expect(nextData.props.pageProps.message).toBe("Hello from getServerSideProps");
   });
 
+  test("omits gssp from __NEXT_DATA__ for non-GSSP pages", async ({ page }) => {
+    // Ported from Next.js: test/e2e/getserversideprops/test/index.test.ts
+    // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/getserversideprops/test/index.test.ts
+    await page.goto(`${BASE}/about`);
+    const nextData = await page.evaluate(() => (window as any).__NEXT_DATA__);
+    expect("gssp" in nextData).toBe(false);
+  });
+
+  for (const href of ["/gssp-not-found?hiding=true", "/gssp-not-found/first?hiding=true"]) {
+    test(`renders the 404 page on GSSP client navigation to ${href}`, async ({ page }) => {
+      // Ported from Next.js: test/e2e/getserversideprops/test/index.test.ts
+      // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/getserversideprops/test/index.test.ts
+      await page.goto(`${BASE}/`);
+      await page.evaluate((target) => (window as any).next.router.push(target), href);
+      await expect(page.getByTestId("error-title")).toBeVisible();
+      expect(page.url()).toContain(href);
+    });
+  }
+
+  test("renders non-JSON getServerSideProps values in production", async ({ request }) => {
+    // Ported from Next.js: test/e2e/getserversideprops/test/index.test.ts
+    // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/getserversideprops/test/index.test.ts
+    const response = await request.get(`${BASE}/gssp-non-json`);
+    expect(response.status()).toBe(200);
+    expect(await response.text()).toContain("hello ");
+  });
+
   test("API route returns JSON", async ({ request }) => {
     const response = await request.get(`${BASE}/api/hello`);
     expect(response.status()).toBe(200);

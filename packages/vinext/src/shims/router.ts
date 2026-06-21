@@ -2246,6 +2246,29 @@ async function navigateClientData(
     return;
   }
 
+  if (res.status === 404) {
+    let isNotFound = false;
+    try {
+      const notFoundBody = (await res.clone().json()) as unknown;
+      isNotFound = isUnknownRecord(notFoundBody) && notFoundBody.notFound === true;
+    } catch {
+      // A stale build/data URL can return a non-JSON 404. Keep the existing
+      // deploy-skew hard-navigation fallback for that response shape.
+    }
+
+    if (isNotFound) {
+      const notFoundFetchUrl = resolvePagesErrorHtmlFetchUrl("/404", initialTarget.locale);
+      if (!notFoundFetchUrl) {
+        scheduleHardNavigationAndThrow(url, "Data navigation failed: no 404 route available");
+      }
+      await navigateClientHtml(url, notFoundFetchUrl, controller, navId, assertStillCurrent, {
+        ...options,
+        allowNotFoundResponse: true,
+      });
+      return;
+    }
+  }
+
   if (!res.ok) {
     if (options.isHydrationQueryUpdate) {
       return;
