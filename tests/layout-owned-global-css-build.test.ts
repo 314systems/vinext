@@ -147,10 +147,18 @@ async function buildConditionalExportFixture(projectDir: string): Promise<string
   await builder.build(builder.environments.pages_router_cloudflare);
   await builder.build(builder.environments.client);
 
-  const assets = await fs.readdir(path.join(projectDir, "dist", "client", "assets"));
-  const cssFile = assets.find((file) => file.endsWith(".css"));
-  if (!cssFile) throw new Error("Expected the client build to emit CSS");
-  return fs.readFile(path.join(projectDir, "dist", "client", "assets", cssFile), "utf8");
+  const clientOutputDir = path.join(projectDir, "dist", "client");
+  const outputFiles = await fs.readdir(clientOutputDir, { recursive: true });
+  const cssFiles = outputFiles.filter((file) => file.endsWith(".css"));
+  if (cssFiles.length === 0) {
+    throw new Error(
+      `Expected the client build to emit CSS. Emitted files: ${outputFiles.join(", ")}`,
+    );
+  }
+  const cssContents = await Promise.all(
+    cssFiles.map((file) => fs.readFile(path.join(clientOutputDir, file), "utf8")),
+  );
+  return cssContents.join("\n");
 }
 
 afterEach(async () => {
