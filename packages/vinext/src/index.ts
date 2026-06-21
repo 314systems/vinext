@@ -131,6 +131,7 @@ import { clientReferenceDedupPlugin } from "./plugins/client-reference-dedup.js"
 import { dataUrlCssPlugin } from "./plugins/css-data-url.js";
 import { createRscClientReferenceLoadersPlugin } from "./plugins/rsc-client-reference-loaders.js";
 import { createInstrumentationClientTransformPlugin } from "./plugins/instrumentation-client.js";
+import { createLayoutOwnedGlobalCssPlugin } from "./plugins/layout-owned-global-css.js";
 import {
   generateInstrumentationClientInjectModule,
   INSTRUMENTATION_CLIENT_EMPTY_MODULE,
@@ -3111,6 +3112,7 @@ export const loadServerActionClient = ${
         },
       },
     },
+    createLayoutOwnedGlobalCssPlugin(() => appDir),
     // CSS url() asset parity with Next.js. Build-only: dev CSS is untouched.
     // Apply the transient marker in every environment so CSS Modules receives
     // identical source text and generates identical class names for server and
