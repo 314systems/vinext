@@ -8,8 +8,13 @@ export async function generateMetadata() {
 
 export default function Page() {
   return (
-    <Link id="metadata-icons-sub-link" href="/metadata-icons-stream/sub">
-      Sub icon
-    </Link>
+    <>
+      <Link id="metadata-icons-sub-link" href="/metadata-icons-stream/sub">
+        Sub icon
+      </Link>
+      <Link id="metadata-icons-none-link" href="/metadata-icons-stream/no-icon">
+        No icon
+      </Link>
+    </>
   );
 }

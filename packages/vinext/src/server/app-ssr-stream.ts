@@ -14,7 +14,7 @@ import { NAVIGATION_RUNTIME_SYMBOL_DESCRIPTION } from "../client/navigation-runt
 
 const METADATA_ICON_LINK_RE =
   /<link\b(?=[^>]*\brel=(?:"(?:icon|apple-touch-icon)"|'(?:icon|apple-touch-icon)'|(?:icon|apple-touch-icon)(?:\s|>)))[^>]*>/i;
-const REINSERT_ICON_SCRIPT = `document.querySelectorAll('body link[rel="icon"], body link[rel="apple-touch-icon"]').forEach(el => document.head.appendChild(el))`;
+const REINSERT_ICON_SCRIPT = `document.querySelectorAll('body link[rel="icon"], body link[rel="apple-touch-icon"]').forEach(el => { el.setAttribute('data-vinext-relocated-metadata-icon', ''); document.head.appendChild(el) })`;
 
 type RscEmbedTransform = {
   flush(): string;

@@ -106,8 +106,9 @@ test.describe("Streaming metadata icons", () => {
     // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/metadata-icons/metadata-icons.test.ts
     const html = await (await page.request.get(`${BASE}/metadata-icons-stream`)).text();
     expect(html).toContain(
-      `document.querySelectorAll('body link[rel="icon"], body link[rel="apple-touch-icon"]').forEach(el => document.head.appendChild(el))`,
+      `document.querySelectorAll('body link[rel="icon"], body link[rel="apple-touch-icon"]')`,
     );
+    expect(html).toContain("data-vinext-relocated-metadata-icon");
     expect(html).not.toContain("«nxt-icon»");
 
     await page.goto(`${BASE}/metadata-icons-stream`);
@@ -120,5 +121,29 @@ test.describe("Streaming metadata icons", () => {
     await expect(page.locator('body link[rel="icon"]')).toHaveCount(0);
     await expect(page.locator('head link[rel="icon"][href^="/star.png"]')).toHaveCount(1);
     await expect(page.locator('head link[rel="icon"][href^="/heart.png"]')).toHaveCount(0);
+  });
+
+  test("preserves manual icons and clears managed icons across empty routes and history", async ({
+    page,
+  }) => {
+    await page.goto(`${BASE}/metadata-icons-stream`);
+    await expect(page.locator('head link[rel="icon"][href^="/heart.png"]')).toHaveCount(1);
+    const layoutIcon = page.locator('head link[data-testid="manual-layout-icon"]');
+    await expect(layoutIcon).toHaveCount(1);
+
+    await page.locator("#metadata-icons-none-link").click();
+    await expect(page).toHaveURL(/\/metadata-icons-stream\/no-icon$/);
+    await expect(page.locator('head link[rel="icon"][href^="/heart.png"]')).toHaveCount(0);
+    await expect(layoutIcon).toHaveCount(1);
+
+    await page.goBack();
+    await expect(page).toHaveURL(/\/metadata-icons-stream$/);
+    await expect(page.locator('head link[rel="icon"][href^="/heart.png"]')).toHaveCount(1);
+    await expect(layoutIcon).toHaveCount(1);
+
+    await page.goForward();
+    await expect(page).toHaveURL(/\/metadata-icons-stream\/no-icon$/);
+    await expect(page.locator('head link[rel="icon"][href^="/heart.png"]')).toHaveCount(0);
+    await expect(layoutIcon).toHaveCount(1);
   });
 });

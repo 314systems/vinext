@@ -227,6 +227,7 @@ it("adds a nonce-aware relocation script after streamed body metadata icons", as
 
   expect(out).toContain('<script nonce="icon-nonce">document.querySelectorAll');
   expect(out).toContain('body link[rel="icon"]');
+  expect(out).toContain("data-vinext-relocated-metadata-icon");
 });
 
 it("does not add a relocation script when metadata icons render in head", async () => {
