@@ -21686,10 +21686,7 @@ describe("shim alias map .js variants", () => {
     }
 
     const nodeResult = await resolveStyledJsxReact([]);
-    expect(nodeResult).toMatchObject({ external: true });
-    expect(
-      typeof nodeResult === "object" && nodeResult ? path.isAbsolute(nodeResult.id) : false,
-    ).toBe(true);
+    expect(nodeResult).toEqual({ id: "react", external: true });
 
     expect(
       await resolveStyledJsxReact([], "client", {

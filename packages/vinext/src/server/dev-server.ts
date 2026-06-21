@@ -250,7 +250,6 @@ async function streamPageToResponse(
   });
 
   let bodyStream: ReadableStream<Uint8Array>;
-  let bodyAllReady: Promise<void> | null = null;
   if (documentRenderPage.status === "rendered") {
     const synthesised = documentRenderPage.bodyHtml;
     bodyStream = new ReadableStream<Uint8Array>({
@@ -267,7 +266,6 @@ async function streamPageToResponse(
       styledJsx.wrap(element) as React.ReactElement,
     );
     bodyStream = renderedStream;
-    bodyAllReady = renderedStream.allReady;
   }
 
   // Fold any head tags returned by `_document.getInitialProps()` into the same
@@ -292,7 +290,6 @@ async function streamPageToResponse(
   if (documentRenderPage.status === "rendered" && documentRenderPage.stylesHTML) {
     headHTML += `\n  ${documentRenderPage.stylesHTML}`;
   }
-  await bodyAllReady;
   const styledJsxHTML = styledJsx.stylesHTML({ nonce: scriptNonce });
   if (styledJsxHTML) headHTML += `\n  ${styledJsxHTML}`;
 
@@ -370,7 +367,7 @@ async function streamPageToResponse(
   res.write(prefix);
 
   if (bufferedBody !== null) {
-    res.end(bufferedBody + suffix);
+    res.end(bufferedBody + styledJsx.stylesHTML({ nonce: scriptNonce }) + suffix);
     return;
   }
 
@@ -387,7 +384,7 @@ async function streamPageToResponse(
   }
 
   // Write the document suffix (closing tags, scripts)
-  res.end(suffix);
+  res.end(styledJsx.stylesHTML({ nonce: scriptNonce }) + suffix);
 }
 
 /**

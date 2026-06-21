@@ -379,6 +379,31 @@ async function buildPagesCompositeStream(
   });
 }
 
+function appendPagesStreamHTML(
+  bodyStream: ReadableStream<Uint8Array>,
+  getTrailingHTML: () => string,
+): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+
+  return new ReadableStream({
+    async start(controller) {
+      const reader = bodyStream.getReader();
+      try {
+        for (;;) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          controller.enqueue(chunk.value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      const trailingHTML = getTrailingHTML();
+      if (trailingHTML) controller.enqueue(encoder.encode(trailingHTML));
+      controller.close();
+    },
+  });
+}
+
 async function reportPagesIsrCacheWriteError(
   error: unknown,
   cacheKey: string,
@@ -526,7 +551,6 @@ export async function renderPagesPageResponse(
   });
 
   let bodyStream: ReadableStream<Uint8Array>;
-  let bodyAllReady: Promise<void> | null = null;
   if (documentRenderPage.status === "rendered") {
     bodyStream = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -548,9 +572,7 @@ export async function renderPagesPageResponse(
       styledJsx.wrap(options.createPageElement(renderProps)),
       options.scriptNonce,
     );
-    const renderedStream = await options.renderToReadableStream(pageElement);
-    bodyStream = renderedStream;
-    bodyAllReady = renderedStream.allReady ?? null;
+    bodyStream = await options.renderToReadableStream(pageElement);
   }
 
   // Fold any head tags returned by `_document.getInitialProps()` into the
@@ -580,7 +602,6 @@ export async function renderPagesPageResponse(
   if (documentRenderPage.status === "rendered" && documentRenderPage.stylesHTML) {
     ssrHeadHTML += `\n  ${documentRenderPage.stylesHTML}`;
   }
-  await bodyAllReady;
   const styledJsxHTML = styledJsx.stylesHTML({ nonce: options.scriptNonce });
   if (styledJsxHTML) ssrHeadHTML += `\n  ${styledJsxHTML}`;
   const shellHtml = await buildPagesShellHtml(bodyMarker, fontHeadHTML, nextDataScript, {
@@ -602,7 +623,9 @@ export async function renderPagesPageResponse(
   const responseHeaders = new Headers({ "Content-Type": "text/html" });
   const finalStatus = applyGsspHeaders(responseHeaders, options.gsspRes, options.statusCode);
 
-  let responseBodyStream = bodyStream;
+  let responseBodyStream = appendPagesStreamHTML(bodyStream, () =>
+    styledJsx.stylesHTML({ nonce: options.scriptNonce }),
+  );
   if (
     // Keep nonce-bearing pages out of ISR writes: rewritePagesCachedHtml()
     // later matches the cached __NEXT_DATA__ block via a bare <script> marker.
@@ -610,7 +633,7 @@ export async function renderPagesPageResponse(
     options.isrRevalidateSeconds !== null &&
     options.isrRevalidateSeconds > 0
   ) {
-    const cacheBodyStreamPair = bodyStream.tee();
+    const cacheBodyStreamPair = responseBodyStream.tee();
     responseBodyStream = cacheBodyStreamPair[0];
     const cacheBodyStream = cacheBodyStreamPair[1];
     const isrPathname = options.routeUrl.split("?")[0];

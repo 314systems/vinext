@@ -2763,7 +2763,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               hasPagesServerBuildInput(this.environment.config.build?.ssr))
           ) {
             return {
-              id: resolveOptionalDependency(earlyBaseDir, "react")!,
+              id: "react",
               external: true,
             };
           }
