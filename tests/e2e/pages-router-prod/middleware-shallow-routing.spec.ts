@@ -3,7 +3,7 @@ import { waitForHydration } from "../helpers";
 
 const BASE = "http://localhost:4175";
 
-// Ported from Next.js: test/e2e/middleware-general/test/index.test.ts
+// Extends the shallow-routing scenario from Next.js with middleware-injected query state:
 // https://github.com/vercel/next.js/blob/canary/test/e2e/middleware-general/test/index.test.ts
 test("middleware alias supports deep then shallow navigation", async ({ page }) => {
   await page.goto(`${BASE}/sha`);
@@ -13,7 +13,9 @@ test("middleware alias supports deep then shallow navigation", async ({ page }) 
   const initialCallId = await page.locator('[data-testid="gssp-call-id"]').textContent();
   await page.evaluate(() => (window as any).next.router.push("/sha?hello=goodbye"));
   await expect(page).toHaveURL(`${BASE}/sha?hello=goodbye`);
-  await expect(page.locator('[data-testid="router-query"]')).toHaveText('{"hello":"goodbye"}');
+  await expect(page.locator('[data-testid="router-query"]')).toHaveText(
+    '{"hello":"goodbye","from":"middleware"}',
+  );
   await expect
     .poll(() => page.evaluate(() => (window as any).__NEXT_DATA__.query))
     .toEqual({ hello: "goodbye", from: "middleware" });

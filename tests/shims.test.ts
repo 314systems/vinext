@@ -13922,8 +13922,6 @@ describe("next/compat/router shim", () => {
   });
 
   it("prefers the current search query over stale rewrite query state", async () => {
-    // Ported from Next.js: test/e2e/middleware-general/test/index.test.ts
-    // https://github.com/vercel/next.js/blob/canary/test/e2e/middleware-general/test/index.test.ts
     const React = await import("react");
     const { renderToStaticMarkup } = await import("react-dom/server");
     const { useRouter: useCompatRouter } =
@@ -13937,6 +13935,7 @@ describe("next/compat/router shim", () => {
         search: "?hello=world",
         hash: "",
       },
+      history: { state: { options: { shallow: true } } },
       __NEXT_DATA__: {
         page: "/shallow-test",
         query: { hello: "goodbye", from: "middleware" },
@@ -13958,6 +13957,53 @@ describe("next/compat/router shim", () => {
 
       expect(captured).not.toBeNull();
       expect((captured as any).query).toEqual({ hello: "world" });
+      expect((captured as any).pathname).toBe("/shallow-test");
+      expect((captured as any).asPath).toBe("/sha?hello=world");
+    } finally {
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+    }
+  });
+
+  it("preserves rewrite query state after deep navigation", async () => {
+    const React = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { useRouter: useCompatRouter } =
+      await import("../packages/vinext/src/shims/compat-router.js");
+    const { wrapWithRouterContext } = await import("../packages/vinext/src/shims/router.js");
+
+    const previousWindow = (globalThis as any).window;
+    (globalThis as any).window = {
+      location: {
+        pathname: "/sha",
+        search: "?hello=world",
+        hash: "",
+      },
+      history: { state: { options: { shallow: false } } },
+      __NEXT_DATA__: {
+        page: "/shallow-test",
+        query: { hello: "goodbye", from: "middleware" },
+        isFallback: false,
+      },
+      __VINEXT_LOCALE__: undefined,
+      __VINEXT_LOCALES__: undefined,
+      __VINEXT_DEFAULT_LOCALE__: undefined,
+    };
+
+    try {
+      let captured: unknown = "NOT_SET";
+      function Probe() {
+        captured = useCompatRouter();
+        return React.createElement("div", null, "probe");
+      }
+
+      renderToStaticMarkup(wrapWithRouterContext(React.createElement(Probe)));
+
+      expect(captured).not.toBeNull();
+      expect((captured as any).query).toEqual({ hello: "goodbye", from: "middleware" });
       expect((captured as any).pathname).toBe("/shallow-test");
       expect((captured as any).asPath).toBe("/sha?hello=world");
     } finally {
