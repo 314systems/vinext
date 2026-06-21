@@ -37,4 +37,32 @@ describe("styled-jsx transform", () => {
 
     expect(result).toBeUndefined();
   });
+
+  it("compiles external styled-jsx/css resolve modules and returns a source map", async () => {
+    // Ported from Next.js: test/e2e/app-dir/use-server-inserted-html/app/css-in-js/styled-jsx.js
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/use-server-inserted-html/app/css-in-js/styled-jsx.js
+    const source = `
+      import css from "styled-jsx/css";
+      export const elementStyles = css\`
+        .external-element { background: yellow; }
+      \`;
+      export const externalStyles = css.resolve\`
+        .external { color: hotpink; }
+      \`;
+    `;
+
+    const result = await getTransform().call({} as never, source, "/app/styles.tsx", {
+      moduleType: "js",
+    });
+
+    expect(result).toBeTruthy();
+    expect(typeof result === "object" && result ? result.code : "").toMatch(
+      /color:(?:hotpink|#ff69b4)/,
+    );
+    expect(typeof result === "object" && result ? result.code : "").toMatch(
+      /background:(?:yellow|#ff0)/,
+    );
+    expect(typeof result === "object" && result ? result.code : "").toContain("className");
+    expect(typeof result === "object" && result ? result.map : null).toBeTruthy();
+  });
 });

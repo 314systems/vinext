@@ -23,6 +23,24 @@ declare module "styled-jsx/babel" {
   export default plugin;
 }
 
+declare module "styled-jsx/css" {
+  import type { ReactElement } from "react";
+
+  type ResolvedStyle = {
+    className: string;
+    styles: ReactElement;
+  };
+
+  type CssTag = {
+    (strings: TemplateStringsArray, ...values: unknown[]): string;
+    global(strings: TemplateStringsArray, ...values: unknown[]): string;
+    resolve(strings: TemplateStringsArray, ...values: unknown[]): ResolvedStyle;
+  };
+
+  const css: CssTag;
+  export default css;
+}
+
 declare module "@babel/core" {
   export function transformAsync(
     code: string,

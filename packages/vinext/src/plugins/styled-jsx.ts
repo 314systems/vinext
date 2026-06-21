@@ -1,12 +1,24 @@
 import type { Plugin } from "vite";
 
 const STYLE_JSX_RE = /<style\s+[^>]*\bjsx(?:\s|=|>)/;
+const STYLE_JSX_CSS_RE = /["']styled-jsx\/css["']/;
 
 type BabelCore = {
   transformAsync(
     code: string,
     options: Record<string, unknown>,
-  ): Promise<{ code?: string | null; map?: unknown } | null>;
+  ): Promise<{
+    code?: string | null;
+    map?: {
+      version: number;
+      sources: string[];
+      names: string[];
+      mappings: string;
+      file?: string;
+      sourceRoot?: string;
+      sourcesContent?: Array<string | null>;
+    } | null;
+  } | null>;
 };
 
 let compilerPromise: Promise<{
@@ -34,7 +46,7 @@ export function createStyledJsxPlugin(): Plugin {
       filter: { id: /\.(?:[cm]?[jt]sx?)(?:\?.*)?$/ },
       async handler(code, id) {
         if (id.includes("/node_modules/") || id.includes("?")) return;
-        if (!STYLE_JSX_RE.test(code)) return;
+        if (!STYLE_JSX_RE.test(code) && !STYLE_JSX_CSS_RE.test(code)) return;
 
         const { babel, styledJsxPlugin } = await loadCompiler();
         const result = await babel.transformAsync(code, {
@@ -49,7 +61,7 @@ export function createStyledJsxPlugin(): Plugin {
         });
 
         if (!result?.code) return;
-        return { code: result.code };
+        return { code: result.code, map: result.map ?? null };
       },
     },
   };

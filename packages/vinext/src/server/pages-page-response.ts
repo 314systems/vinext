@@ -189,7 +189,9 @@ type RenderPagesPageResponseOptions = {
   params: Record<string, unknown>;
   query?: Record<string, unknown>;
   renderDocumentToString: (element: ReactNode) => Promise<string>;
-  renderToReadableStream: (element: ReactNode) => Promise<ReadableStream<Uint8Array>>;
+  renderToReadableStream: (
+    element: ReactNode,
+  ) => Promise<ReadableStream<Uint8Array> & { allReady: Promise<void> }>;
   resetSSRHead?: (() => void) | undefined;
   routePattern: string;
   routeUrl: string;
@@ -524,6 +526,7 @@ export async function renderPagesPageResponse(
   });
 
   let bodyStream: ReadableStream<Uint8Array>;
+  let bodyAllReady: Promise<void> | null = null;
   if (documentRenderPage.status === "rendered") {
     bodyStream = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -545,7 +548,9 @@ export async function renderPagesPageResponse(
       styledJsx.wrap(options.createPageElement(renderProps)),
       options.scriptNonce,
     );
-    bodyStream = await options.renderToReadableStream(pageElement);
+    const renderedStream = await options.renderToReadableStream(pageElement);
+    bodyStream = renderedStream;
+    bodyAllReady = renderedStream.allReady;
   }
 
   // Fold any head tags returned by `_document.getInitialProps()` into the
@@ -575,6 +580,7 @@ export async function renderPagesPageResponse(
   if (documentRenderPage.status === "rendered" && documentRenderPage.stylesHTML) {
     ssrHeadHTML += `\n  ${documentRenderPage.stylesHTML}`;
   }
+  await bodyAllReady;
   const styledJsxHTML = styledJsx.stylesHTML({ nonce: options.scriptNonce });
   if (styledJsxHTML) ssrHeadHTML += `\n  ${styledJsxHTML}`;
   const shellHtml = await buildPagesShellHtml(bodyMarker, fontHeadHTML, nextDataScript, {

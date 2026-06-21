@@ -250,6 +250,7 @@ async function streamPageToResponse(
   });
 
   let bodyStream: ReadableStream<Uint8Array>;
+  let bodyAllReady: Promise<void> | null = null;
   if (documentRenderPage.status === "rendered") {
     const synthesised = documentRenderPage.bodyHtml;
     bodyStream = new ReadableStream<Uint8Array>({
@@ -262,7 +263,11 @@ async function streamPageToResponse(
     // Start the React body stream FIRST — the promise resolves when the
     // shell is ready (synchronous content outside Suspense boundaries).
     // This triggers the render which populates <Head> tags.
-    bodyStream = await renderToReadableStream(styledJsx.wrap(element) as React.ReactElement);
+    const renderedStream = await renderToReadableStream(
+      styledJsx.wrap(element) as React.ReactElement,
+    );
+    bodyStream = renderedStream;
+    bodyAllReady = renderedStream.allReady;
   }
 
   // Fold any head tags returned by `_document.getInitialProps()` into the same
@@ -287,6 +292,7 @@ async function streamPageToResponse(
   if (documentRenderPage.status === "rendered" && documentRenderPage.stylesHTML) {
     headHTML += `\n  ${documentRenderPage.stylesHTML}`;
   }
+  await bodyAllReady;
   const styledJsxHTML = styledJsx.stylesHTML({ nonce: scriptNonce });
   if (styledJsxHTML) headHTML += `\n  ${styledJsxHTML}`;
 

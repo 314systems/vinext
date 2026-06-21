@@ -1,12 +1,7 @@
 import { expect, test } from "@playwright/test";
 
-test("renders late and external styled-jsx CSS in streamed Pages SSR", async ({
-  request,
-  baseURL,
-}) => {
-  // Ported from Next.js: test/e2e/streaming-ssr/index.test.ts
-  // https://github.com/vercel/next.js/blob/canary/test/e2e/streaming-ssr/index.test.ts
-  const response = await request.get(`${baseURL}/styled-jsx-streaming`);
+test("renders late and external styled-jsx CSS in production Pages SSR", async ({ request }) => {
+  const response = await request.get("http://localhost:4175/styled-jsx-streaming");
   expect(response.status()).toBe(200);
 
   const html = await response.text();
