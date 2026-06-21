@@ -2082,11 +2082,14 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 "styled-jsx/style": resolveShimModulePath(shimsDir, "styled-jsx-style"),
                 "styled-jsx/style.js": resolveShimModulePath(shimsDir, "styled-jsx-style"),
               }).map(([find, replacement]) => ({ find, replacement })),
-              ...(!hasCloudflarePlugin && !hasNitroPlugin && env?.command === "build"
+              ...(hasCloudflarePlugin || hasNitroPlugin || env?.command === "build"
                 ? [
                     {
                       find: /^styled-jsx$/,
-                      replacement: resolveOptionalDependency(earlyBaseDir, "styled-jsx")!,
+                      replacement: resolveOptionalDependency(
+                        earlyBaseDir,
+                        "styled-jsx/dist/index/index.js",
+                      )!,
                     },
                   ]
                 : []),

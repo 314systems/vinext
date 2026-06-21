@@ -21717,7 +21717,7 @@ describe("shim alias map .js variants", () => {
     ).toBeUndefined();
   });
 
-  it("bundles the styled-jsx package for Cloudflare without aliasing its CommonJS entry", async () => {
+  it("bundles the styled-jsx package for Cloudflare through its transformable entry", async () => {
     const plugins = vinext() as Plugin[];
     const configPlugin = plugins.find((plugin) => plugin.name === "vinext:config");
     if (!configPlugin?.config) throw new Error("vinext:config hook not found");
@@ -21740,11 +21740,10 @@ describe("shim alias map .js variants", () => {
     );
 
     expect(resolved.ssr?.noExternal).toContain("styled-jsx");
-    expect(
-      resolved.resolve?.alias?.some(
-        ({ find }) => find === "styled-jsx" || (find instanceof RegExp && find.test("styled-jsx")),
-      ),
-    ).toBe(false);
+    const styledJsxAlias = resolved.resolve?.alias?.find(
+      ({ find }) => find instanceof RegExp && find.source === "^styled-jsx$",
+    );
+    expect(styledJsxAlias?.replacement).toContain("styled-jsx/dist/index/index.js");
   });
 
   it("uses distinct Pages and hybrid App SSR build entries", async () => {

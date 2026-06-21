@@ -14,35 +14,41 @@ async function writeFile(file: string, source: string): Promise<void> {
 }
 
 describe("styled-jsx production build", () => {
-  it("resolves bundled root and css imports without an app dependency", async () => {
-    // Ported from Next.js: test/e2e/app-dir/use-server-inserted-html/app/root-style-registry.js
-    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/use-server-inserted-html/app/root-style-registry.js
-    const fixtureRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vinext-styled-jsx-build-"));
-    try {
-      await fsp.symlink(ROOT_NODE_MODULES, path.join(fixtureRoot, "node_modules"), "junction");
-      await writeFile(
-        path.join(fixtureRoot, "package.json"),
-        `${JSON.stringify({ type: "module", dependencies: {} }, null, 2)}\n`,
-      );
-      await writeFile(
-        path.join(fixtureRoot, "styled-jsx-macro.ts"),
-        `export const macroSource = "app-local-styled-jsx-macro";\n`,
-      );
+  it.each([
+    { name: "node", plugins: [] },
+    { name: "cloudflare", plugins: [{ name: "vite-plugin-cloudflare" }] },
+    { name: "nitro", plugins: [{ name: "nitro" }] },
+  ])(
+    "resolves bundled root and css imports for $name",
+    async ({ plugins }) => {
+      // Ported from Next.js: test/e2e/app-dir/use-server-inserted-html/app/root-style-registry.js
+      // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/use-server-inserted-html/app/root-style-registry.js
+      const fixtureRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vinext-styled-jsx-build-"));
+      try {
+        await fsp.symlink(ROOT_NODE_MODULES, path.join(fixtureRoot, "node_modules"), "junction");
+        await writeFile(
+          path.join(fixtureRoot, "package.json"),
+          `${JSON.stringify({ type: "module", dependencies: {} }, null, 2)}\n`,
+        );
+        await writeFile(
+          path.join(fixtureRoot, "styled-jsx-macro.ts"),
+          `export const macroSource = "app-local-styled-jsx-macro";\n`,
+        );
 
-      const fixtureRequire = createRequire(path.join(fixtureRoot, "package.json"));
-      expect(() => fixtureRequire.resolve("styled-jsx")).toThrow();
-      expect(() => fixtureRequire.resolve("styled-jsx/css")).toThrow();
+        const fixtureRequire = createRequire(path.join(fixtureRoot, "package.json"));
+        expect(() => fixtureRequire.resolve("styled-jsx")).toThrow();
+        expect(() => fixtureRequire.resolve("styled-jsx/css")).toThrow();
 
-      await writeFile(
-        path.join(fixtureRoot, "app", "layout.tsx"),
-        `export default function RootLayout({ children }: { children: React.ReactNode }) {
+        await writeFile(
+          path.join(fixtureRoot, "app", "layout.tsx"),
+          `export default function RootLayout({ children }: { children: React.ReactNode }) {
   return <html><body>{children}</body></html>;
 }
 `,
-      );
-      await writeFile(
-        path.join(fixtureRoot, "app", "styled.tsx"),
-        `"use client";
+        );
+        await writeFile(
+          path.join(fixtureRoot, "app", "styled.tsx"),
+          `"use client";
 
 import { createStyleRegistry } from "styled-jsx";
 import css from "styled-jsx/css";
@@ -61,46 +67,48 @@ export function Styled() {
   );
 }
 `,
-      );
-      await writeFile(
-        path.join(fixtureRoot, "app", "page.tsx"),
-        `import { Styled } from "./styled";
+        );
+        await writeFile(
+          path.join(fixtureRoot, "app", "page.tsx"),
+          `import { Styled } from "./styled";
 
 export default function Page() {
   return <Styled />;
 }
 `,
-      );
+        );
 
-      const builder = await createBuilder({
-        root: fixtureRoot,
-        configFile: false,
-        plugins: [vinext({ appDir: fixtureRoot })],
-        resolve: {
-          alias: {
-            "styled-jsx/macro": path.join(fixtureRoot, "styled-jsx-macro.ts"),
+        const builder = await createBuilder({
+          root: fixtureRoot,
+          configFile: false,
+          plugins: [...plugins, vinext({ appDir: fixtureRoot })],
+          resolve: {
+            alias: {
+              "styled-jsx/macro": path.join(fixtureRoot, "styled-jsx-macro.ts"),
+            },
           },
-        },
-        logLevel: "silent",
-      });
-      await builder.buildApp();
+          logLevel: "silent",
+        });
+        await builder.buildApp();
 
-      const chunkDir = path.join(fixtureRoot, "dist", "client", "_next", "static", "chunks");
-      const output = (
-        await Promise.all(
-          (
-            await fsp.readdir(chunkDir)
+        const chunkDir = path.join(fixtureRoot, "dist", "client", "_next", "static", "chunks");
+        const output = (
+          await Promise.all(
+            (
+              await fsp.readdir(chunkDir)
+            )
+              .filter((file) => file.endsWith(".js"))
+              .map((file) => fsp.readFile(path.join(chunkDir, file), "utf8")),
           )
-            .filter((file) => file.endsWith(".js"))
-            .map((file) => fsp.readFile(path.join(chunkDir, file), "utf8")),
-        )
-      ).join("\n");
+        ).join("\n");
 
-      expect(output).toContain("hotpink");
-      expect(output).toContain("purple");
-      expect(output).toContain("app-local-styled-jsx-macro");
-    } finally {
-      await fsp.rm(fixtureRoot, { recursive: true, force: true }).catch(() => {});
-    }
-  }, 120_000);
+        expect(output).toContain("hotpink");
+        expect(output).toContain("purple");
+        expect(output).toContain("app-local-styled-jsx-macro");
+      } finally {
+        await fsp.rm(fixtureRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+    120_000,
+  );
 });
