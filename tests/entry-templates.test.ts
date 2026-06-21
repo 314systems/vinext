@@ -124,6 +124,57 @@ const minimalAppRoutes: AppRoute[] = [
 // ── App Router manifest construction ─────────────────────────────────
 
 describe("App Router generated manifest construction", () => {
+  it("isolates edge route modules with an edge runtime module graph", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-app-route-runtime-"));
+    const rootLayout = path.join(root, "app/layout.tsx");
+    const edgeLayout = path.join(root, "app/edge/layout.tsx");
+    const sharedPage = path.join(root, "app/shared/page.tsx");
+    fs.mkdirSync(path.dirname(edgeLayout), { recursive: true });
+    fs.mkdirSync(path.dirname(sharedPage), { recursive: true });
+    fs.writeFileSync(
+      rootLayout,
+      `export default function Layout({ children }) { return children }`,
+    );
+    fs.writeFileSync(
+      edgeLayout,
+      `export const runtime = "edge"; export { default } from "../layout"`,
+    );
+    fs.writeFileSync(
+      sharedPage,
+      `export default function Page() { return process.env.NEXT_RUNTIME }`,
+    );
+
+    const base = minimalAppRoutes[0]!;
+    try {
+      const manifest = buildAppRscManifestCode({
+        routes: [
+          { ...base, pattern: "/node", pagePath: sharedPage, layouts: [rootLayout] },
+          {
+            ...base,
+            pattern: "/edge",
+            pagePath: sharedPage,
+            layouts: [rootLayout, edgeLayout],
+            layoutErrorPaths: [null, null],
+            notFoundPaths: [null, null],
+            forbiddenPaths: [null, null],
+            unauthorizedPaths: [null, null],
+            layoutTreePositions: [0, 1],
+          },
+        ],
+      });
+      const imports = manifest.imports.join("\n");
+      expect(imports).toContain(`import(${JSON.stringify(sharedPage)})`);
+      expect(imports).toContain(
+        `import(${JSON.stringify(`${sharedPage}?__vinext_app_runtime=edge`)})`,
+      );
+      expect(imports).toContain(
+        `import(${JSON.stringify(`${edgeLayout}?__vinext_app_runtime=edge`)})`,
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("embeds client rewrite rules in the App browser entry", () => {
     const code = generateBrowserEntry([], null, [], {
       afterFiles: [],
