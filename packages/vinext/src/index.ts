@@ -2252,6 +2252,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           (config.optimizeDeps?.exclude as string[] | undefined) ?? [];
         const incomingInclude: string[] =
           (config.optimizeDeps?.include as string[] | undefined) ?? [];
+        const transpilePackages = nextConfig?.transpilePackages ?? [];
 
         // Merge incoming excludes into the top-level optimizeDeps so
         // Pages Router builds (which don't set per-environment configs)
@@ -2277,9 +2278,12 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         // environments, where Vite's keepProcessEnv default prevents replacement.
         viteConfig.optimizeDeps = {
           // @tailwindcss/oxide contains native .node bindings that Rolldown cannot process
-          exclude: mergeOptimizeDepsExclude(incomingExclude, VINEXT_OPTIMIZE_DEPS_EXCLUDE, [
-            "@tailwindcss/oxide",
-          ]),
+          exclude: mergeOptimizeDepsExclude(
+            incomingExclude,
+            VINEXT_OPTIMIZE_DEPS_EXCLUDE,
+            ["@tailwindcss/oxide"],
+            transpilePackages,
+          ),
           ...(incomingInclude.length > 0 ? { include: incomingInclude } : {}),
           ...depOptimizeNodeEnvOptions,
           rolldownOptions: {
@@ -2352,7 +2356,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                     },
                   }),
               optimizeDeps: {
-                exclude: mergeOptimizeDepsExclude(incomingExclude, VINEXT_OPTIMIZE_DEPS_EXCLUDE),
+                exclude: mergeOptimizeDepsExclude(
+                  incomingExclude,
+                  VINEXT_OPTIMIZE_DEPS_EXCLUDE,
+                  transpilePackages,
+                ),
                 entries: optimizeEntries,
                 // plugin-rsc pre-includes server.edge, but not its vendored
                 // static.edge import, which it rewrites to this package specifier.
@@ -2428,6 +2436,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                   userSsrExternal === true || externalizeSsrReactInDev
                     ? SSR_EXTERNAL_REACT_ENTRIES
                     : [],
+                  transpilePackages,
                 ),
                 entries: optimizeEntries,
                 ...depOptimizeNodeEnvOptions,
@@ -2460,6 +2469,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                   incomingExclude,
                   VINEXT_OPTIMIZE_DEPS_EXCLUDE,
                   nextServerExternal,
+                  transpilePackages,
                 ),
                 // Crawl app/ source files up front so client-only deps imported
                 // by user components are discovered during startup instead of
@@ -2505,8 +2515,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           viteConfig.environments = {
             client: {
               consumer: "client",
-              optimizeDeps:
-                pagesOptimizeEntries.length > 0 ? { entries: pagesOptimizeEntries } : undefined,
+              optimizeDeps: {
+                exclude: mergeOptimizeDepsExclude(incomingExclude, transpilePackages),
+                ...(pagesOptimizeEntries.length > 0 ? { entries: pagesOptimizeEntries } : {}),
+              },
               build: {
                 manifest: true,
                 ssrManifest: true,
@@ -2531,8 +2543,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           viteConfig.environments = {
             client: {
               consumer: "client",
-              optimizeDeps:
-                pagesOptimizeEntries.length > 0 ? { entries: pagesOptimizeEntries } : undefined,
+              optimizeDeps: {
+                exclude: mergeOptimizeDepsExclude(incomingExclude, transpilePackages),
+                ...(pagesOptimizeEntries.length > 0 ? { entries: pagesOptimizeEntries } : {}),
+              },
               build: {
                 outDir: "dist/client",
                 manifest: true,
@@ -2557,7 +2571,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 // optimizer avoids the "new dependencies optimized" full
                 // reload the first time a Pages Router page renders an
                 // <Image>.
-                exclude: ["ipaddr.js"],
+                exclude: mergeOptimizeDepsExclude(
+                  incomingExclude,
+                  ["ipaddr.js"],
+                  transpilePackages,
+                ),
                 ...depOptimizeNodeEnvOptions,
               },
               build: {

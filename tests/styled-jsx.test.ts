@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createStyledJsxPlugin } from "../packages/vinext/src/plugins/styled-jsx.js";
+import { startFixtureServer } from "./helpers.js";
 
 function getTransform(transpilePackages: readonly string[] = []) {
   const transform = createStyledJsxPlugin({
@@ -118,6 +119,69 @@ describe("styled-jsx transform", () => {
       await fsp.rm(fixtureRoot, { recursive: true, force: true });
     }
   });
+
+  it("compiles transpilePackages styled-jsx through the dev server", async () => {
+    // Next.js sends transpilePackages dependencies through its normal compiler:
+    // packages/next/src/build/webpack-config.ts and next-swc-loader.ts.
+    const fixtureRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vinext-styled-jsx-dev-"));
+    const packageRoot = path.join(fixtureRoot, "node_modules", "raw-styled-jsx");
+    let server: Awaited<ReturnType<typeof startFixtureServer>>["server"] | undefined;
+
+    try {
+      await fsp.mkdir(path.join(fixtureRoot, "pages"), { recursive: true });
+      await fsp.mkdir(path.join(fixtureRoot, "node_modules"));
+      const rootNodeModules = path.join(process.cwd(), "node_modules");
+      for (const entry of await fsp.readdir(rootNodeModules)) {
+        if (entry.startsWith(".")) continue;
+        await fsp.symlink(
+          path.join(rootNodeModules, entry),
+          path.join(fixtureRoot, "node_modules", entry),
+          "junction",
+        );
+      }
+      await fsp.mkdir(packageRoot, { recursive: true });
+      await fsp.writeFile(
+        path.join(fixtureRoot, "next.config.mjs"),
+        `export default { transpilePackages: ["raw-styled-jsx"] };\n`,
+      );
+      await fsp.writeFile(
+        path.join(packageRoot, "package.json"),
+        JSON.stringify({ name: "raw-styled-jsx", type: "module", exports: "./index.jsx" }),
+      );
+      await fsp.writeFile(
+        path.join(packageRoot, "index.jsx"),
+        `export function PackageComponent() {
+  return <div><style jsx>{\`p { color: rgb(1, 2, 3); }\`}</style><p>optimized package</p></div>;
+}\n`,
+      );
+      await fsp.writeFile(
+        path.join(fixtureRoot, "pages", "index.jsx"),
+        `import { PackageComponent } from "raw-styled-jsx";
+export default function Page() { return <PackageComponent />; }\n`,
+      );
+
+      const started = await startFixtureServer(fixtureRoot, { appDir: null });
+      server = started.server;
+      const pageResponse = await fetch(`${started.baseUrl}/pages/index.jsx`);
+      const pageModule = await pageResponse.text();
+
+      expect(pageResponse.status).toBe(200);
+      expect(pageModule).toContain('from "raw-styled-jsx"');
+
+      const clientEnvironment = server.environments.client;
+      const resolvedPackage = await clientEnvironment.pluginContainer.resolveId(
+        "raw-styled-jsx",
+        path.join(fixtureRoot, "pages", "index.jsx"),
+      );
+      expect(resolvedPackage?.id).toContain(path.join("node_modules", "raw-styled-jsx"));
+      expect(resolvedPackage?.id).not.toContain(`${path.sep}.vite${path.sep}deps${path.sep}`);
+      expect(server.config.optimizeDeps.exclude).toContain("raw-styled-jsx");
+      expect(server.environments.client.config.optimizeDeps.exclude).toContain("raw-styled-jsx");
+    } finally {
+      await server?.close();
+      await fsp.rm(fixtureRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    }
+  }, 30000);
 
   it("skips external, precompiled, and styled-jsx dependency modules", async () => {
     const rawSource = `
