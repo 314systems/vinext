@@ -628,4 +628,213 @@ describe("layout-owned global CSS", () => {
 
     await fs.rm(projectDir, { recursive: true, force: true });
   });
+
+  it("pre-scans configured MDX Pages routes before the App client build", async () => {
+    const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-layout-css-mdx-"));
+    const appDir = path.join(projectDir, "app");
+    const pagesDir = path.join(projectDir, "pages");
+    const sourceDir = path.join(projectDir, "src");
+    await fs.mkdir(path.join(appDir, "dashboard"), { recursive: true });
+    await fs.mkdir(pagesDir, { recursive: true });
+    await fs.mkdir(sourceDir, { recursive: true });
+
+    const layout = path.join(appDir, "dashboard", "layout.tsx");
+    const appHelper = path.join(appDir, "dashboard", "shared.tsx");
+    const pagesRoute = path.join(pagesDir, "shared.mdx");
+    const sharedClient = path.join(sourceDir, "shared-client.tsx");
+    const stylesheet = path.join(sourceDir, "shared.css");
+    await fs.writeFile(pagesRoute, `import Shared from "../src/shared-client"\n\n<Shared />\n`);
+    await fs.writeFile(sharedClient, `import "./shared.css";\nexport default function Shared() {}`);
+    await fs.writeFile(stylesheet, `.shared { color: teal; }\n`);
+
+    const plugin = createLayoutOwnedGlobalCssPlugin(
+      () => appDir,
+      () => pagesDir,
+      { getPageExtensions: () => ["mdx", "tsx"] },
+    );
+    const resolveId =
+      typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
+    const configResolved =
+      typeof plugin.configResolved === "object"
+        ? plugin.configResolved.handler
+        : plugin.configResolved;
+    await configResolved?.call(
+      {} as never,
+      {
+        createResolver: () => async (source: string, importer?: string) => {
+          if (!importer) return undefined;
+          if (source === "../src/shared-client") return sharedClient;
+          if (source === "./shared.css") return stylesheet;
+          return undefined;
+        },
+      } as never,
+    );
+
+    for (const [source, importer, resolved] of [
+      ["./shared", layout, appHelper],
+      ["@shared/client", appHelper, sharedClient],
+      ["./shared.css", sharedClient, stylesheet],
+    ] as const) {
+      await resolveId!.call(
+        createContext("rsc", { [source]: resolved }) as never,
+        source,
+        importer,
+        { isEntry: false },
+      );
+    }
+
+    await expect(
+      resolveId!.call(createContext("client", stylesheet) as never, "./shared.css", sharedClient, {
+        isEntry: false,
+      }),
+    ).resolves.toBeNull();
+
+    await fs.rm(projectDir, { recursive: true, force: true });
+  });
+
+  it("uses Pages SSR conditions when pre-scanning conditional exports", async () => {
+    const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-layout-css-conditions-"));
+    const appDir = path.join(projectDir, "app");
+    const pagesDir = path.join(projectDir, "pages");
+    const sourceDir = path.join(projectDir, "src");
+    await fs.mkdir(path.join(appDir, "dashboard"), { recursive: true });
+    await fs.mkdir(pagesDir, { recursive: true });
+    await fs.mkdir(sourceDir, { recursive: true });
+
+    const layout = path.join(appDir, "dashboard", "layout.tsx");
+    const appHelper = path.join(appDir, "dashboard", "shared.tsx");
+    const pagesRoute = path.join(pagesDir, "shared.tsx");
+    const serverEntry = path.join(sourceDir, "conditional-server.ts");
+    const clientEntry = path.join(sourceDir, "conditional-client.ts");
+    const sharedClient = path.join(sourceDir, "shared-client.tsx");
+    const stylesheet = path.join(sourceDir, "shared.css");
+    await fs.writeFile(pagesRoute, `import "conditional-package";\n`);
+    await fs.writeFile(serverEntry, `import "./shared-client";\n`);
+    await fs.writeFile(clientEntry, `export {};\n`);
+    await fs.writeFile(sharedClient, `import "./shared.css";\n`);
+    await fs.writeFile(stylesheet, `.shared { color: teal; }\n`);
+
+    const ssrFlags: boolean[] = [];
+    const plugin = createLayoutOwnedGlobalCssPlugin(
+      () => appDir,
+      () => pagesDir,
+    );
+    const resolveId =
+      typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
+    const configResolved =
+      typeof plugin.configResolved === "object"
+        ? plugin.configResolved.handler
+        : plugin.configResolved;
+    await configResolved?.call(
+      {} as never,
+      {
+        createResolver:
+          () =>
+          async (
+            source: string,
+            importer: string | undefined,
+            _aliasOnly: boolean,
+            ssr: boolean,
+          ) => {
+            ssrFlags.push(ssr);
+            if (source === "conditional-package") return ssr ? serverEntry : clientEntry;
+            if (source === "./shared-client") return sharedClient;
+            if (source === "./shared.css") return stylesheet;
+            return undefined;
+          },
+      } as never,
+    );
+
+    for (const [source, importer, resolved] of [
+      ["./shared", layout, appHelper],
+      ["@shared/client", appHelper, sharedClient],
+      ["./shared.css", sharedClient, stylesheet],
+    ] as const) {
+      await resolveId!.call(
+        createContext("rsc", { [source]: resolved }) as never,
+        source,
+        importer,
+        { isEntry: false },
+      );
+    }
+
+    await expect(
+      resolveId!.call(createContext("client", stylesheet) as never, "./shared.css", sharedClient, {
+        isEntry: false,
+      }),
+    ).resolves.toBeNull();
+    expect(ssrFlags.length).toBeGreaterThan(0);
+    expect(ssrFlags.every(Boolean)).toBe(true);
+
+    await fs.rm(projectDir, { recursive: true, force: true });
+  });
+
+  it("falls back conservatively when the Pages pre-scan exceeds its bound", async () => {
+    const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-layout-css-bounded-"));
+    const appDir = path.join(projectDir, "app");
+    const pagesDir = path.join(projectDir, "pages");
+    const sourceDir = path.join(projectDir, "src");
+    await fs.mkdir(path.join(appDir, "dashboard"), { recursive: true });
+    await fs.mkdir(pagesDir, { recursive: true });
+    await fs.mkdir(sourceDir, { recursive: true });
+
+    const layout = path.join(appDir, "dashboard", "layout.tsx");
+    const appHelper = path.join(appDir, "dashboard", "shared.tsx");
+    const pagesRoute = path.join(pagesDir, "shared.tsx");
+    const chainOne = path.join(sourceDir, "one.ts");
+    const chainTwo = path.join(sourceDir, "two.ts");
+    const sharedClient = path.join(sourceDir, "shared-client.tsx");
+    const stylesheet = path.join(sourceDir, "shared.css");
+    await fs.writeFile(pagesRoute, `import "../src/one";\n`);
+    await fs.writeFile(chainOne, `import "./two";\n`);
+    await fs.writeFile(chainTwo, `import "./shared-client";\n`);
+    await fs.writeFile(sharedClient, `import "./shared.css";\n`);
+    await fs.writeFile(stylesheet, `.shared { color: teal; }\n`);
+
+    const resolutions = new Map([
+      [`${pagesRoute}:../src/one`, chainOne],
+      [`${chainOne}:./two`, chainTwo],
+      [`${chainTwo}:./shared-client`, sharedClient],
+      [`${sharedClient}:./shared.css`, stylesheet],
+    ]);
+    const plugin = createLayoutOwnedGlobalCssPlugin(
+      () => appDir,
+      () => pagesDir,
+      { maxPagesGraphModules: 2 },
+    );
+    const resolveId =
+      typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
+    const configResolved =
+      typeof plugin.configResolved === "object"
+        ? plugin.configResolved.handler
+        : plugin.configResolved;
+    await configResolved?.call(
+      {} as never,
+      {
+        createResolver: () => async (source: string, importer?: string) =>
+          importer ? resolutions.get(`${importer}:${source}`) : undefined,
+      } as never,
+    );
+
+    for (const [source, importer, resolved] of [
+      ["./shared", layout, appHelper],
+      ["@shared/client", appHelper, sharedClient],
+      ["./shared.css", sharedClient, stylesheet],
+    ] as const) {
+      await resolveId!.call(
+        createContext("rsc", { [source]: resolved }) as never,
+        source,
+        importer,
+        { isEntry: false },
+      );
+    }
+
+    await expect(
+      resolveId!.call(createContext("client", stylesheet) as never, "./shared.css", sharedClient, {
+        isEntry: false,
+      }),
+    ).resolves.toBeNull();
+
+    await fs.rm(projectDir, { recursive: true, force: true });
+  });
 });

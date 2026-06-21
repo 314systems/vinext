@@ -10,6 +10,12 @@ const APP_SHARED_OWNER_RE = /(?:^|\/)(?:layout|template)\.(?:[cm]?[jt]sx?)$/i;
 const EMPTY_LAYOUT_CSS_PREFIX = "\0vinext:layout-owned-global-css/";
 const SOURCE_MODULE_RE = /\.(?:[cm]?[jt]sx?)$/i;
 const MAX_EXTERNAL_GRAPH_MODULES_PER_ROOT = 10_000;
+const MAX_PAGES_GRAPH_MODULES = 10_000;
+
+type LayoutOwnedGlobalCssOptions = {
+  getPageExtensions?: () => string[];
+  maxPagesGraphModules?: number;
+};
 
 type ResolveContext = {
   resolve(
@@ -105,9 +111,20 @@ function extractModuleSources(
   return [...sources].map(([source, isDynamic]) => ({ source, isDynamic }));
 }
 
+function extractMdxModuleSources(source: string): Array<{ source: string; isDynamic: false }> {
+  const sources = new Set<string>();
+  const esmStatement = /^\s*(?:import|export)\s[\s\S]*?\sfrom\s*["']([^"']+)["']\s*;?\s*$/gm;
+  const sideEffectImport = /^\s*import\s*["']([^"']+)["']\s*;?\s*$/gm;
+  for (const matcher of [esmStatement, sideEffectImport]) {
+    for (const match of source.matchAll(matcher)) sources.add(match[1]);
+  }
+  return [...sources].map((importSource) => ({ source: importSource, isDynamic: false }));
+}
+
 export function createLayoutOwnedGlobalCssPlugin(
   getAppDir: () => string,
   getPagesDir: () => string | null = () => null,
+  options: LayoutOwnedGlobalCssOptions = {},
 ): Plugin {
   const ownerDirectories = new Map<string, Set<string>>();
   const moduleOwners = new Map<string, Set<string>>();
@@ -117,6 +134,9 @@ export function createLayoutOwnedGlobalCssPlugin(
   const pagesConsumers = new Set<string>();
   const pagesImports = new Map<string, Set<string>>();
   let pagesConsumerScan: Promise<void> | null = null;
+  let pagesScanIsConservative = false;
+  let pagesSsrResolve: ((source: string, importer?: string) => Promise<string | undefined>) | null =
+    null;
 
   function addOwners(moduleId: string, owners: Iterable<string>): void {
     moduleId = graphModuleId(moduleId);
@@ -196,6 +216,7 @@ export function createLayoutOwnedGlobalCssPlugin(
       visited.add(currentId);
 
       if (pagesConsumers.has(currentId)) return false;
+      if (pagesScanIsConservative) return false;
 
       const currentPath = path.resolve(cleanModuleId(currentId));
       if (APP_SHARED_OWNER_RE.test(currentPath) && path.dirname(currentPath) === owner) return true;
@@ -238,6 +259,20 @@ export function createLayoutOwnedGlobalCssPlugin(
     } catch {
       return null;
     }
+  }
+
+  async function resolvePagesImport(
+    context: ResolveContext,
+    source: string,
+    importer: string,
+  ): Promise<string | null> {
+    if (pagesSsrResolve) {
+      const resolved = await pagesSsrResolve(source, cleanModuleId(importer));
+      if (resolved && !resolved.startsWith("\0") && path.isAbsolute(cleanModuleId(resolved))) {
+        return resolved;
+      }
+    }
+    return resolveExternalImport(context, source, importer);
   }
 
   async function scanExternalModule(context: ResolveContext, rootModuleId: string): Promise<void> {
@@ -303,13 +338,20 @@ export function createLayoutOwnedGlobalCssPlugin(
     if (pagesConsumerScan) return pagesConsumerScan;
 
     pagesConsumerScan = (async () => {
+      const pageExtensions = options.getPageExtensions?.() ?? ["tsx", "ts", "jsx", "js"];
+      const pageExtensionSet = new Set(pageExtensions.map((extension) => extension.toLowerCase()));
+      const maxModules = options.maxPagesGraphModules ?? MAX_PAGES_GRAPH_MODULES;
+      const isScannableModule = (modulePath: string) =>
+        SOURCE_MODULE_RE.test(modulePath) ||
+        pageExtensionSet.has(path.extname(modulePath).slice(1).toLowerCase());
       const pending: string[] = [];
       const directoryEntries = await fs.readdir(pagesDir, {
         recursive: true,
         withFileTypes: true,
       });
       for (const entry of directoryEntries) {
-        if (!entry.isFile() || !SOURCE_MODULE_RE.test(entry.name)) continue;
+        const extension = path.extname(entry.name).slice(1).toLowerCase();
+        if (!entry.isFile() || !pageExtensionSet.has(extension)) continue;
         const modulePath = path.join(entry.parentPath, entry.name);
         markPagesConsumer(modulePath);
         pending.push(modulePath);
@@ -319,21 +361,41 @@ export function createLayoutOwnedGlobalCssPlugin(
       while (pending.length > 0) {
         const modulePath = pending.pop()!;
         const cleanPath = cleanModuleId(modulePath);
-        if (visited.has(cleanPath) || !SOURCE_MODULE_RE.test(cleanPath)) continue;
+        if (visited.has(cleanPath)) continue;
         visited.add(cleanPath);
+        if (visited.size > maxModules) {
+          pagesScanIsConservative = true;
+          return;
+        }
 
         let source: string;
         try {
           source = await fs.readFile(cleanPath, "utf8");
         } catch {
-          continue;
+          pagesScanIsConservative = true;
+          return;
         }
 
-        for (const { source: importSource } of extractModuleSources(cleanPath, source)) {
-          const resolved = await resolveExternalImport(context, importSource, cleanPath);
-          if (!resolved) continue;
+        let imports: Array<{ source: string; isDynamic: boolean }>;
+        try {
+          imports = SOURCE_MODULE_RE.test(cleanPath)
+            ? extractModuleSources(cleanPath, source)
+            : path.extname(cleanPath).toLowerCase() === ".mdx"
+              ? extractMdxModuleSources(source)
+              : [];
+        } catch {
+          pagesScanIsConservative = true;
+          return;
+        }
+
+        for (const { source: importSource } of imports) {
+          const resolved = await resolvePagesImport(context, importSource, cleanPath);
+          if (!resolved) {
+            pagesScanIsConservative = true;
+            return;
+          }
           addPagesImport(cleanPath, resolved);
-          if (SOURCE_MODULE_RE.test(cleanModuleId(resolved))) pending.push(resolved);
+          if (isScannableModule(cleanModuleId(resolved))) pending.push(resolved);
         }
       }
     })();
@@ -345,6 +407,11 @@ export function createLayoutOwnedGlobalCssPlugin(
     name: "vinext:layout-owned-global-css",
     enforce: "pre",
     apply: "build",
+
+    configResolved(config) {
+      const resolver = config.createResolver();
+      pagesSsrResolve = (source, importer) => resolver(source, importer, false, true);
+    },
 
     async resolveDynamicImport(source, importer) {
       if (typeof source !== "string" || !importer) return null;
