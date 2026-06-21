@@ -11,6 +11,7 @@ declare module "styled-jsx" {
     children?: ReactNode;
   }>;
   export function createStyleRegistry(): StyleRegistryInstance;
+  export function useStyleRegistry(): StyleRegistryInstance;
   export const style: ComponentType<{
     id: string;
     dynamic?: string;
