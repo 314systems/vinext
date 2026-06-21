@@ -3,9 +3,13 @@
  * https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/opentelemetry/client-trace-metadata/client-trace-metadata.test.ts
  */
 import path from "node:path";
-import { context, isValidSpanId, propagation } from "@opentelemetry/api";
+import { isValidSpanId } from "@opentelemetry/api";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import type { ViteDevServer } from "vite";
+import {
+  instrumentTestServerRequests,
+  resetTestOpenTelemetry,
+} from "./fixtures/client-trace-metadata-otel.js";
 import { fetchHtml, startFixtureServer } from "./helpers.js";
 
 const APP_FIXTURE = path.resolve(import.meta.dirname, "fixtures/client-trace-metadata-app");
@@ -16,8 +20,7 @@ let server: ViteDevServer | undefined;
 afterEach(async () => {
   await server?.close();
   server = undefined;
-  context.disable();
-  propagation.disable();
+  resetTestOpenTelemetry();
 });
 
 function getTraceSpanId(html: string): string {
@@ -39,12 +42,14 @@ describe("clientTraceMetadata SSR", () => {
   it("injects propagation data for an App Router page", async () => {
     const fixture = await startFixtureServer(APP_FIXTURE, { appRouter: true });
     server = fixture.server;
+    instrumentTestServerRequests(server);
     await expectDistinctRequestSpanIds(fixture.baseUrl);
   });
 
   it("injects propagation data for a Pages Router page", async () => {
     const fixture = await startFixtureServer(PAGES_FIXTURE);
     server = fixture.server;
+    instrumentTestServerRequests(server);
     await expectDistinctRequestSpanIds(fixture.baseUrl);
   });
 });

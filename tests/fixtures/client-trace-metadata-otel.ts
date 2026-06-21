@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
+import type { IncomingMessage, RequestListener, ServerResponse } from "node:http";
+import type { ViteDevServer } from "vite";
 import {
   ROOT_CONTEXT,
   context,
@@ -14,11 +16,7 @@ class RequestContextManager implements ContextManager {
   readonly #storage = new AsyncLocalStorage<Context>();
 
   active(): Context {
-    const activeContext = this.#storage.getStore();
-    if (activeContext) return activeContext;
-    const requestContext = createRequestSpanContext();
-    this.#storage.enterWith(requestContext);
-    return requestContext;
+    return this.#storage.getStore() ?? ROOT_CONTEXT;
   }
 
   with<T, A extends unknown[]>(
@@ -71,9 +69,36 @@ const propagator: TextMapPropagator = {
   },
 };
 
+const TEST_OTEL_REGISTRATION = Symbol.for("vinext.test.clientTraceMetadata.otel");
+
 export function registerTestOpenTelemetry(): void {
+  if (Reflect.get(globalThis, TEST_OTEL_REGISTRATION)) return;
   context.disable();
   propagation.disable();
   context.setGlobalContextManager(new RequestContextManager());
   propagation.setGlobalPropagator(propagator);
+  Reflect.set(globalThis, TEST_OTEL_REGISTRATION, true);
+}
+
+export function instrumentTestServerRequests(server: ViteDevServer): void {
+  registerTestOpenTelemetry();
+  const httpServer = server.httpServer;
+  if (!httpServer) throw new Error("Expected fixture server to expose an HTTP server");
+
+  const listeners = httpServer.listeners("request") as RequestListener[];
+  if (listeners.length === 0) throw new Error("Expected fixture server to have a request listener");
+  for (const listener of listeners) httpServer.removeListener("request", listener);
+
+  httpServer.on("request", (request: IncomingMessage, response: ServerResponse) => {
+    const requestContext = createRequestSpanContext();
+    context.with(requestContext, () => {
+      for (const listener of listeners) listener.call(httpServer, request, response);
+    });
+  });
+}
+
+export function resetTestOpenTelemetry(): void {
+  context.disable();
+  propagation.disable();
+  Reflect.deleteProperty(globalThis, TEST_OTEL_REGISTRATION);
 }
