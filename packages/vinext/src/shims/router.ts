@@ -2659,7 +2659,7 @@ async function performNavigation(
   if (!shallow) {
     const result = await runNavigateClient(
       full,
-      resolved,
+      full,
       htmlFetchUrl,
       {
         ...navigateOptions,

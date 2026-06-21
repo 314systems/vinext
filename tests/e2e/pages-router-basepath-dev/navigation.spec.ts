@@ -88,3 +88,70 @@ test("soft navigates with basePath module URLs after ISR regeneration", async ({
   expect(moduleRequests).not.toContain("/pages/isr-basepath.tsx?import");
   expect(moduleRequests.every((moduleRequest) => moduleRequest.startsWith("/docs/"))).toBe(true);
 });
+
+test("includes basePath in router event URLs", async ({ page }) => {
+  await page.goto("/docs/");
+  await page.waitForFunction(() => Boolean((window as any).__VINEXT_ROOT__));
+
+  await page.evaluate(() => {
+    sessionStorage.removeItem("basepath-router-events");
+    (window as any).__basePathRouterEvents = [];
+  });
+  await page.getByRole("link", { name: "About" }).click();
+  await expect(page.getByRole("heading", { name: "About" })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__basePathRouterEvents)).toEqual([
+    ["routeChangeStart", "/docs/about", { shallow: false }],
+    ["beforeHistoryChange", "/docs/about", { shallow: false }],
+    ["routeChangeComplete", "/docs/about", { shallow: false }],
+  ]);
+
+  await page.goto("/docs/");
+  await page.evaluate(() => {
+    sessionStorage.removeItem("basepath-router-events");
+    (window as any).__basePathRouterEvents = [];
+  });
+  await page.getByRole("link", { name: "Hash" }).click();
+  await expect
+    .poll(() => page.evaluate(() => (window as any).__basePathRouterEvents))
+    .toEqual([
+      ["hashChangeStart", "/docs#some-hash", { shallow: false }],
+      ["hashChangeComplete", "/docs#some-hash", { shallow: false }],
+    ]);
+
+  await page.goto("/docs/");
+  await page.evaluate(() => {
+    sessionStorage.removeItem("basepath-router-events");
+    (window as any).__basePathRouterEvents = [];
+  });
+  await page.getByRole("link", { name: "Slow route" }).click();
+  await page.getByRole("link", { name: "About" }).click();
+  await expect(page.getByRole("heading", { name: "About" })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__basePathRouterEvents)).toEqual([
+    ["routeChangeStart", "/docs/slow-route", { shallow: false }],
+    ["routeChangeError", "Route Cancelled", true, "/docs/slow-route", { shallow: false }],
+    ["routeChangeStart", "/docs/about", { shallow: false }],
+    ["beforeHistoryChange", "/docs/about", { shallow: false }],
+    ["routeChangeComplete", "/docs/about", { shallow: false }],
+  ]);
+
+  await page.goto("/docs/");
+  await page.evaluate(() => {
+    sessionStorage.removeItem("basepath-router-events");
+    (window as any).__basePathRouterEvents = [];
+  });
+  await page.getByRole("link", { name: "Error route" }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(() => JSON.parse(sessionStorage.getItem("basepath-router-events") ?? "[]")),
+    )
+    .toEqual([
+      ["routeChangeStart", "/docs/error-route", { shallow: false }],
+      [
+        "routeChangeError",
+        "Failed to load static props",
+        null,
+        "/docs/error-route",
+        { shallow: false },
+      ],
+    ]);
+});
