@@ -48,6 +48,10 @@ function hasNonStylesheetQuery(id: string): boolean {
   return params.has("inline") || params.has("raw") || params.has("url");
 }
 
+function isNonStylesheetImport(source: string, resolvedId: string): boolean {
+  return hasNonStylesheetQuery(source) || hasNonStylesheetQuery(resolvedId);
+}
+
 function isDescendantPath(filePath: string, directory: string): boolean {
   const relative = path.relative(directory, filePath);
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== "..");
@@ -408,7 +412,7 @@ export function createLayoutOwnedGlobalCssPlugin(
         const globalStylesheet =
           STYLESHEET_RE.test(cleanModuleId(importedPath)) &&
           !CSS_MODULE_RE.test(cleanModuleId(importedPath)) &&
-          !hasNonStylesheetQuery(importSource);
+          !isNonStylesheetImport(importSource, importedPath);
         edges.push({
           importer: moduleId,
           imported: importedPath,
@@ -562,21 +566,23 @@ export function createLayoutOwnedGlobalCssPlugin(
           STYLESHEET_RE.test(resolvedPath) && !CSS_MODULE_RE.test(resolvedPath);
         addImport(importer, resolved.id);
 
-        if (isGlobalStylesheet && !hasNonStylesheetQuery(source)) {
+        const isStylesheetImport =
+          isGlobalStylesheet && !isNonStylesheetImport(source, resolved.id);
+        if (isStylesheetImport) {
           globalStylesheets.add(resolved.id);
         }
         addOwners(resolved.id, moduleOwners.get(graphModuleId(importer)) ?? []);
         if (resolved.external) await scanExternalModule(this, resolved.id);
 
-        return isGlobalStylesheet && !hasNonStylesheetQuery(source) ? resolved : null;
+        return isStylesheetImport ? resolved : null;
       }
 
       if (this.environment?.name !== "client") return null;
-      if (hasNonStylesheetQuery(source)) return null;
       await scanPagesConsumers(this);
 
       const resolved = await this.resolve(source, importer, { skipSelf: true });
       if (!resolved || resolved.external || resolved.id.startsWith("\0")) return null;
+      if (isNonStylesheetImport(source, resolved.id)) return null;
       const resolvedPath = cleanModuleId(resolved.id);
       const isGlobalStylesheet =
         STYLESHEET_RE.test(resolvedPath) && !CSS_MODULE_RE.test(resolvedPath);

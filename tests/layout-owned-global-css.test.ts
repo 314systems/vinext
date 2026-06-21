@@ -484,6 +484,45 @@ describe("layout-owned global CSS", () => {
     }
   });
 
+  it("does not register external package CSS imports whose resolved ids return values", async () => {
+    const fixtureRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "vinext-layout-css-external-query-"),
+    );
+    try {
+      const appDir = path.join(fixtureRoot, "app");
+      const layout = path.join(appDir, "layout.tsx");
+      const packageEntry = path.join(fixtureRoot, "node_modules", "design-system", "index.js");
+      const stylesheet = path.join(fixtureRoot, "node_modules", "design-system", "theme.css");
+      await fs.mkdir(path.dirname(packageEntry), { recursive: true });
+      await fs.writeFile(packageEntry, `import "./theme-value";\nexport default {};\n`);
+      await fs.writeFile(stylesheet, `.external-query { color: green; }\n`);
+
+      for (const query of ["?inline", "?raw", "?url"] as const) {
+        const resolvedStylesheet = `${stylesheet}${query}`;
+        const plugin = createLayoutOwnedGlobalCssPlugin(() => appDir);
+        const resolveId =
+          typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
+        const context = createContext("rsc", (source, importer) => {
+          if (source === "design-system") return { id: packageEntry, external: true };
+          if (source === "./theme-value" && importer === packageEntry) return resolvedStylesheet;
+          return null;
+        });
+
+        await resolveId!.call(context as never, "design-system", layout, { isEntry: false });
+        await expect(
+          resolveId!.call(
+            createContext("client", { "./theme-value": resolvedStylesheet }) as never,
+            "./theme-value",
+            packageEntry,
+            { isEntry: false },
+          ),
+        ).resolves.toBeNull();
+      }
+    } finally {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
   it("scans each external package root independently", async () => {
     const fs = await import("node:fs/promises");
     const fixtureRoot = await fs.mkdtemp(
@@ -613,6 +652,29 @@ describe("layout-owned global CSS", () => {
             { isEntry: false },
           ),
         ).resolves.toBeNull();
+
+        const resolved = `${stylesheet}${query}`;
+        const queriedPlugin = createLayoutOwnedGlobalCssPlugin(() => appDir);
+        const queriedResolveId =
+          typeof queriedPlugin.resolveId === "object"
+            ? queriedPlugin.resolveId.handler
+            : queriedPlugin.resolveId;
+        await expect(
+          queriedResolveId!.call(
+            createContext("rsc", { "@/styles/value": resolved }) as never,
+            "@/styles/value",
+            layout,
+            { isEntry: false },
+          ),
+        ).resolves.toBeNull();
+        await expect(
+          queriedResolveId!.call(
+            createContext("client", { "@/styles/value": resolved }) as never,
+            "@/styles/value",
+            client,
+            { isEntry: false },
+          ),
+        ).resolves.toBeNull();
       }
     } finally {
       await fs.rm(fixtureRoot, { recursive: true, force: true });
@@ -655,6 +717,31 @@ describe("layout-owned global CSS", () => {
           { isEntry: false },
         ),
       ).resolves.toSatisfy((id: unknown) => typeof id === "string" && id.charCodeAt(0) === 0);
+
+      for (const query of ["?inline", "?raw", "?url"] as const) {
+        const resolved = `${stylesheet}${query}`;
+        const queriedPlugin = createLayoutOwnedGlobalCssPlugin(() => appDir);
+        const queriedResolveId =
+          typeof queriedPlugin.resolveId === "object"
+            ? queriedPlugin.resolveId.handler
+            : queriedPlugin.resolveId;
+        await expect(
+          queriedResolveId!.call(
+            createContext("rsc", { "theme-package/value": resolved }) as never,
+            "theme-package/value",
+            layout,
+            { isEntry: false },
+          ),
+        ).resolves.toBeNull();
+        await expect(
+          queriedResolveId!.call(
+            createContext("client", { "theme-package/value": resolved }) as never,
+            "theme-package/value",
+            client,
+            { isEntry: false },
+          ),
+        ).resolves.toBeNull();
+      }
     } finally {
       await fs.rm(fixtureRoot, { recursive: true, force: true });
     }
