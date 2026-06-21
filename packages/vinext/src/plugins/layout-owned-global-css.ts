@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
-import type { Plugin } from "vite";
+import { parseSync, type ESTree, type Plugin } from "vite";
 import { fnv1a64 } from "../utils/hash.js";
 
 const STYLESHEET_RE = /\.(?:css|less|sass|scss|styl|stylus)$/i;
@@ -8,7 +9,15 @@ const CSS_MODULE_RE = /\.module\.(?:css|less|sass|scss|styl|stylus)$/i;
 const APP_SHARED_OWNER_RE = /(?:^|\/)(?:layout|template)\.(?:[cm]?[jt]sx?)$/i;
 const EMPTY_LAYOUT_CSS_PREFIX = "\0vinext:layout-owned-global-css/";
 const SOURCE_MODULE_RE = /\.(?:[cm]?[jt]sx?)$/i;
-const MAX_EXTERNAL_GRAPH_MODULES = 100;
+const MAX_EXTERNAL_GRAPH_MODULES_PER_ROOT = 10_000;
+
+type ResolveContext = {
+  resolve(
+    source: string,
+    importer?: string,
+    options?: { skipSelf?: boolean },
+  ): Promise<{ id: string } | null>;
+};
 
 function cleanModuleId(id: string): string {
   const suffixIndex = id.search(/[?#]/);
@@ -34,13 +43,69 @@ function isDescendantPath(filePath: string, directory: string): boolean {
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== "..");
 }
 
+function sourceModuleLang(modulePath: string): "js" | "jsx" | "ts" | "tsx" {
+  if (/\.(?:mts|cts|ts)$/i.test(modulePath)) return "ts";
+  if (/\.tsx$/i.test(modulePath)) return "tsx";
+  if (/\.jsx$/i.test(modulePath)) return "jsx";
+  return "js";
+}
+
+function extractModuleSources(modulePath: string, source: string): string[] {
+  const result = parseSync(modulePath, source, {
+    astType: "ts",
+    lang: sourceModuleLang(modulePath),
+    sourceType: "module",
+  });
+  const parseError = result.errors.find((error) => error.severity === "Error");
+  if (parseError) {
+    throw new Error(
+      `Unable to scan layout-owned CSS imports in ${modulePath}: ${parseError.message}`,
+    );
+  }
+
+  const sources = new Set<string>();
+
+  function visit(node: ESTree.Node | ESTree.Node[] | null | undefined): void {
+    if (!node) return;
+    if (Array.isArray(node)) {
+      for (const child of node) visit(child);
+      return;
+    }
+
+    if (
+      node.type === "ImportDeclaration" ||
+      node.type === "ExportNamedDeclaration" ||
+      node.type === "ExportAllDeclaration"
+    ) {
+      if (node.source && typeof node.source.value === "string") sources.add(node.source.value);
+    } else if (
+      node.type === "ImportExpression" &&
+      node.source.type === "Literal" &&
+      typeof node.source.value === "string"
+    ) {
+      sources.add(node.source.value);
+    }
+
+    for (const [key, value] of Object.entries(node)) {
+      if (key === "type" || key === "start" || key === "end" || key === "loc" || key === "parent") {
+        continue;
+      }
+      if (value && typeof value === "object") {
+        visit(value as ESTree.Node | ESTree.Node[]);
+      }
+    }
+  }
+
+  visit(result.program);
+  return [...sources];
+}
+
 export function createLayoutOwnedGlobalCssPlugin(getAppDir: () => string): Plugin {
   const ownerDirectories = new Map<string, Set<string>>();
   const moduleOwners = new Map<string, Set<string>>();
   const moduleImports = new Map<string, Set<string>>();
   const moduleImporters = new Map<string, Set<string>>();
   const globalStylesheets = new Set<string>();
-  const scannedExternalModules = new Set<string>();
 
   function addOwners(moduleId: string, owners: Iterable<string>): void {
     moduleId = graphModuleId(moduleId);
@@ -113,64 +178,75 @@ export function createLayoutOwnedGlobalCssPlugin(getAppDir: () => string): Plugi
     return visit(moduleId);
   }
 
-  async function resolveExternalRelativeImport(
+  async function resolveExternalImport(
+    context: ResolveContext,
     source: string,
     importer: string,
   ): Promise<string | null> {
-    if (!source.startsWith(".")) return null;
-    const candidate = path.resolve(path.dirname(cleanModuleId(importer)), cleanModuleId(source));
-    const candidates = path.extname(candidate)
-      ? [candidate]
-      : [
-          candidate,
-          ...[".js", ".jsx", ".ts", ".tsx", ".mjs", ".mts", ".cjs", ".cts"].map(
-            (extension) => `${candidate}${extension}`,
-          ),
-          ...[".js", ".jsx", ".ts", ".tsx", ".mjs", ".mts", ".cjs", ".cts"].map((extension) =>
-            path.join(candidate, `index${extension}`),
-          ),
-        ];
-    for (const resolved of candidates) {
+    const resolved = await context.resolve(source, cleanModuleId(importer), { skipSelf: true });
+    if (resolved && !resolved.id.startsWith("\0") && path.isAbsolute(cleanModuleId(resolved.id))) {
+      return resolved.id;
+    }
+
+    if (source.startsWith(".")) {
+      const relativePath = path.resolve(
+        path.dirname(cleanModuleId(importer)),
+        cleanModuleId(source),
+      );
       try {
-        if ((await fs.stat(resolved)).isFile()) return resolved;
+        if ((await fs.stat(relativePath)).isFile()) return relativePath;
       } catch {}
     }
-    return null;
+
+    try {
+      return createRequire(cleanModuleId(importer)).resolve(source);
+    } catch {
+      return null;
+    }
   }
 
-  async function scanExternalModule(moduleId: string): Promise<void> {
-    const modulePath = cleanModuleId(moduleId);
-    if (
-      scannedExternalModules.size >= MAX_EXTERNAL_GRAPH_MODULES ||
-      scannedExternalModules.has(modulePath) ||
-      !SOURCE_MODULE_RE.test(modulePath)
-    ) {
-      return;
+  async function scanExternalModule(context: ResolveContext, rootModuleId: string): Promise<void> {
+    const rootPath = cleanModuleId(rootModuleId);
+    if (!SOURCE_MODULE_RE.test(rootPath)) return;
+
+    const visited = new Set<string>();
+    const pending = [rootModuleId];
+    const edges: Array<{ importer: string; imported: string; globalStylesheet: boolean }> = [];
+
+    while (pending.length > 0) {
+      const moduleId = pending.pop()!;
+      const modulePath = cleanModuleId(moduleId);
+      if (visited.has(modulePath) || !SOURCE_MODULE_RE.test(modulePath)) continue;
+      visited.add(modulePath);
+      if (visited.size > MAX_EXTERNAL_GRAPH_MODULES_PER_ROOT) {
+        throw new Error(
+          `Layout-owned CSS dependency graph from ${rootPath} exceeds ${MAX_EXTERNAL_GRAPH_MODULES_PER_ROOT.toLocaleString()} modules`,
+        );
+      }
+
+      let source: string;
+      try {
+        source = await fs.readFile(modulePath, "utf8");
+      } catch {
+        continue;
+      }
+
+      for (const importSource of extractModuleSources(modulePath, source)) {
+        const importedPath = await resolveExternalImport(context, importSource, modulePath);
+        if (!importedPath) continue;
+        const globalStylesheet =
+          STYLESHEET_RE.test(cleanModuleId(importedPath)) &&
+          !CSS_MODULE_RE.test(cleanModuleId(importedPath)) &&
+          !hasNonStylesheetQuery(importSource);
+        edges.push({ importer: moduleId, imported: importedPath, globalStylesheet });
+        if (!globalStylesheet) pending.push(importedPath);
+      }
     }
-    scannedExternalModules.add(modulePath);
 
-    let source: string;
-    try {
-      source = await fs.readFile(modulePath, "utf8");
-    } catch {
-      return;
-    }
-
-    const importPattern =
-      /(?:\bimport\s*(?:[^"'()]*?\sfrom\s*)?|\bexport\s+[^"']*?\sfrom\s*|\bimport\s*\()(["'])([^"']+)\1/g;
-    for (const match of source.matchAll(importPattern)) {
-      const importSource = match[2];
-      const importedPath = await resolveExternalRelativeImport(importSource, modulePath);
-      if (!importedPath) continue;
-
-      addImport(moduleId, importedPath);
-      const isGlobalStylesheet =
-        STYLESHEET_RE.test(cleanModuleId(importedPath)) &&
-        !CSS_MODULE_RE.test(cleanModuleId(importedPath)) &&
-        !hasNonStylesheetQuery(importSource);
-      if (isGlobalStylesheet) globalStylesheets.add(importedPath);
-      addOwners(importedPath, moduleOwners.get(graphModuleId(moduleId)) ?? []);
-      if (!isGlobalStylesheet) await scanExternalModule(importedPath);
+    for (const edge of edges) {
+      addImport(edge.importer, edge.imported);
+      if (edge.globalStylesheet) globalStylesheets.add(edge.imported);
+      addOwners(edge.imported, moduleOwners.get(graphModuleId(edge.importer)) ?? []);
     }
   }
 
@@ -206,7 +282,7 @@ export function createLayoutOwnedGlobalCssPlugin(getAppDir: () => string): Plugi
           globalStylesheets.add(resolved.id);
         }
         addOwners(resolved.id, moduleOwners.get(graphModuleId(importer)) ?? []);
-        if (resolved.external) await scanExternalModule(resolved.id);
+        if (resolved.external) await scanExternalModule(this, resolved.id);
 
         return isGlobalStylesheet && !hasNonStylesheetQuery(source) ? resolved : null;
       }

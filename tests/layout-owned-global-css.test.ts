@@ -4,12 +4,21 @@ import { createLayoutOwnedGlobalCssPlugin } from "../packages/vinext/src/plugins
 
 function createContext(
   environmentName: string,
-  resolvedIds: Record<string, string | { id: string; external?: boolean }> | string,
+  resolvedIds:
+    | Record<string, string | { id: string; external?: boolean }>
+    | string
+    | ((source: string, importer?: string) => string | { id: string; external?: boolean } | null),
 ) {
   return {
     environment: { name: environmentName },
-    async resolve(source: string) {
-      const resolved = typeof resolvedIds === "string" ? resolvedIds : resolvedIds[source];
+    async resolve(source: string, importer?: string) {
+      const resolved =
+        typeof resolvedIds === "function"
+          ? resolvedIds(source, importer)
+          : typeof resolvedIds === "string"
+            ? resolvedIds
+            : resolvedIds[source];
+      if (!resolved) return null;
       return typeof resolved === "string" ? { id: resolved } : resolved;
     },
   };
@@ -305,6 +314,144 @@ describe("layout-owned global CSS", () => {
           { isEntry: false },
         ),
       ).resolves.toSatisfy((id: unknown) => typeof id === "string" && id.charCodeAt(0) === 0);
+    } finally {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores import-like comments and strings while scanning external packages", async () => {
+    const fs = await import("node:fs/promises");
+    const fixtureRoot = await fs.mkdtemp(
+      path.join(process.env.TMPDIR ?? "/tmp", "vinext-layout-css-lexer-"),
+    );
+    try {
+      const appDir = path.join(fixtureRoot, "app");
+      const layout = path.join(appDir, "layout.tsx");
+      const packageEntry = path.join(fixtureRoot, "node_modules", "design-system", "index.js");
+      const fakeStyles = path.join(fixtureRoot, "node_modules", "design-system", "fake.css");
+      await fs.mkdir(path.dirname(packageEntry), { recursive: true });
+      await fs.writeFile(
+        packageEntry,
+        `// import "./fake.css";\nconst example = 'export { default } from "./fake.css"';\nexport default example;\n`,
+      );
+      await fs.writeFile(fakeStyles, `.fake { color: red; }\n`);
+
+      const plugin = createLayoutOwnedGlobalCssPlugin(() => appDir);
+      const resolveId =
+        typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
+      expect(resolveId).toBeTypeOf("function");
+
+      await resolveId!.call(
+        createContext("rsc", { "design-system": { id: packageEntry, external: true } }) as never,
+        "design-system",
+        layout,
+        { isEntry: false },
+      );
+
+      await expect(
+        resolveId!.call(
+          createContext("client", { "./fake.css": fakeStyles }) as never,
+          "./fake.css",
+          packageEntry,
+          { isEntry: false },
+        ),
+      ).resolves.toBeNull();
+    } finally {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("follows bare package re-exports through Vite resolution", async () => {
+    const fs = await import("node:fs/promises");
+    const fixtureRoot = await fs.mkdtemp(
+      path.join(process.env.TMPDIR ?? "/tmp", "vinext-layout-css-bare-"),
+    );
+    try {
+      const appDir = path.join(fixtureRoot, "app");
+      const layout = path.join(appDir, "layout.tsx");
+      const packageA = path.join(fixtureRoot, "node_modules", "package-a", "index.js");
+      const packageB = path.join(fixtureRoot, "node_modules", "package-b", "index.js");
+      const packageStyles = path.join(fixtureRoot, "node_modules", "package-b", "styles.css");
+      await fs.mkdir(path.dirname(packageA), { recursive: true });
+      await fs.mkdir(path.dirname(packageB), { recursive: true });
+      await fs.writeFile(packageA, `export { default } from "package-b";\n`);
+      await fs.writeFile(packageB, `import "./styles.css";\nexport default function Widget() {}\n`);
+      await fs.writeFile(packageStyles, `.bare-package { color: green; }\n`);
+
+      const resolutions = new Map([
+        ["package-a", { id: packageA, external: true }],
+        ["package-b", { id: packageB, external: true }],
+        ["./styles.css", { id: packageStyles }],
+      ]);
+      const plugin = createLayoutOwnedGlobalCssPlugin(() => appDir);
+      const resolveId =
+        typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
+
+      await resolveId!.call(
+        createContext("rsc", (source) => resolutions.get(source) ?? null) as never,
+        "package-a",
+        layout,
+        { isEntry: false },
+      );
+
+      await expect(
+        resolveId!.call(
+          createContext("client", { "./styles.css": packageStyles }) as never,
+          "./styles.css",
+          packageB,
+          { isEntry: false },
+        ),
+      ).resolves.toSatisfy((id: unknown) => typeof id === "string" && id.charCodeAt(0) === 0);
+    } finally {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("scans each external package root independently", async () => {
+    const fs = await import("node:fs/promises");
+    const fixtureRoot = await fs.mkdtemp(
+      path.join(process.env.TMPDIR ?? "/tmp", "vinext-layout-css-roots-"),
+    );
+    try {
+      const appDir = path.join(fixtureRoot, "app");
+      const layout = path.join(appDir, "layout.tsx");
+      const resolutions = new Map<string, string | { id: string; external?: boolean }>();
+      const packageData: Array<{ entry: string; styles: string }> = [];
+      for (const packageName of ["package-a", "package-b"]) {
+        const entry = path.join(fixtureRoot, "node_modules", packageName, "index.js");
+        const styles = path.join(fixtureRoot, "node_modules", packageName, "styles.css");
+        await fs.mkdir(path.dirname(entry), { recursive: true });
+        await fs.writeFile(entry, `import "./styles.css";\nexport default {};\n`);
+        await fs.writeFile(styles, `.${packageName} { color: green; }\n`);
+        resolutions.set(packageName, { id: entry, external: true });
+        resolutions.set(`${entry}:./styles.css`, styles);
+        packageData.push({ entry, styles });
+      }
+
+      const plugin = createLayoutOwnedGlobalCssPlugin(() => appDir);
+      const resolveId =
+        typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
+      const context = createContext(
+        "rsc",
+        (source, importer) =>
+          resolutions.get(importer ? `${importer}:${source}` : source) ??
+          resolutions.get(source) ??
+          null,
+      );
+      for (const packageName of ["package-a", "package-b"]) {
+        await resolveId!.call(context as never, packageName, layout, { isEntry: false });
+      }
+
+      for (const { entry, styles } of packageData) {
+        await expect(
+          resolveId!.call(
+            createContext("client", { "./styles.css": styles }) as never,
+            "./styles.css",
+            entry,
+            { isEntry: false },
+          ),
+        ).resolves.toSatisfy((id: unknown) => typeof id === "string" && id.charCodeAt(0) === 0);
+      }
     } finally {
       await fs.rm(fixtureRoot, { recursive: true, force: true });
     }
