@@ -11,7 +11,7 @@ import http, { type IncomingHttpHeaders } from "node:http";
 import fs from "node:fs/promises";
 import os from "node:os";
 import { pathToFileURL } from "node:url";
-import { createServer, build, type ViteDevServer } from "vite";
+import { createServer, build, type PluginOption, type ViteDevServer } from "vite";
 import vinext from "../packages/vinext/src/index.js";
 import path from "node:path";
 
@@ -62,6 +62,7 @@ export async function startFixtureServer(
       cors?: boolean;
       port?: number;
     };
+    pluginsBefore?: PluginOption[];
   },
 ): Promise<TestServerResult> {
   // vinext() auto-registers @vitejs/plugin-rsc when app/ is detected.
@@ -80,7 +81,7 @@ export async function startFixtureServer(
   } else {
     plugin = vinext({ appDir: opts?.appDir ?? fixtureDir });
   }
-  const plugins = [plugin];
+  const plugins = [...(opts?.pluginsBefore ?? []), plugin];
 
   const server = await createServer({
     root: fixtureDir,

@@ -151,7 +151,7 @@ describe("styled-jsx transform", () => {
       await fsp.writeFile(
         path.join(packageRoot, "index.jsx"),
         `export function PackageComponent() {
-  return <div><style jsx>{\`p { color: rgb(1, 2, 3); }\`}</style><p>optimized package</p></div>;
+  return <div><style jsx>{\`p { color: rgb(1, 2, 3); }\`}</style><p>transpiled package</p></div>;
 }\n`,
       );
       await fsp.writeFile(
@@ -160,13 +160,29 @@ describe("styled-jsx transform", () => {
 export default function Page() { return <PackageComponent />; }\n`,
       );
 
-      const started = await startFixtureServer(fixtureRoot, { appDir: null });
+      const started = await startFixtureServer(fixtureRoot, {
+        appDir: null,
+        pluginsBefore: [
+          {
+            name: "test:conflicting-optimize-deps-include",
+            config() {
+              return {
+                optimizeDeps: {
+                  include: ["react", "raw-styled-jsx"],
+                },
+              };
+            },
+          },
+        ],
+      });
       server = started.server;
-      const pageResponse = await fetch(`${started.baseUrl}/pages/index.jsx`);
-      const pageModule = await pageResponse.text();
+      const pageResponse = await fetch(`${started.baseUrl}/`);
+      const html = await pageResponse.text();
 
       expect(pageResponse.status).toBe(200);
-      expect(pageModule).toContain('from "raw-styled-jsx"');
+      expect(html).toContain("transpiled package");
+      expect(html).toContain("rgb(1,2,3)");
+      expect(html).toMatch(/class="jsx-[^"]+"/);
 
       const clientEnvironment = server.environments.client;
       const resolvedPackage = await clientEnvironment.pluginContainer.resolveId(
@@ -176,7 +192,13 @@ export default function Page() { return <PackageComponent />; }\n`,
       expect(resolvedPackage?.id).toContain(path.join("node_modules", "raw-styled-jsx"));
       expect(resolvedPackage?.id).not.toContain(`${path.sep}.vite${path.sep}deps${path.sep}`);
       expect(server.config.optimizeDeps.exclude).toContain("raw-styled-jsx");
+      expect(server.config.optimizeDeps.include).toContain("react");
+      expect(server.config.optimizeDeps.include).not.toContain("raw-styled-jsx");
       expect(server.environments.client.config.optimizeDeps.exclude).toContain("raw-styled-jsx");
+      expect(server.environments.client.config.optimizeDeps.include).toContain("react");
+      expect(server.environments.client.config.optimizeDeps.include).not.toContain(
+        "raw-styled-jsx",
+      );
     } finally {
       await server?.close();
       await fsp.rm(fixtureRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
