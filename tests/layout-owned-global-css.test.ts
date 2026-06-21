@@ -1022,12 +1022,14 @@ describe("layout-owned global CSS", () => {
     const appHelper = path.join(appDir, "dashboard", "shared.tsx");
     const pagesRoute = path.join(pagesDir, "index.tsx");
     const apiRoute = path.join(pagesDir, "api", "instrumentation.ts");
+    const rootApiRoute = path.join(pagesDir, "api.tsx");
     const pagesHelper = path.join(sourceDir, "pages-helper.ts");
     const instrumentationState = path.join(sourceDir, "instrumentation-state.ts");
     const sharedClient = path.join(sourceDir, "shared-client.tsx");
     const stylesheet = path.join(sourceDir, "shared.css");
     await fs.writeFile(pagesRoute, `import "../src/pages-helper";\n`);
     await fs.writeFile(apiRoute, `import "../../src/instrumentation-state";\n`);
+    await fs.writeFile(rootApiRoute, `import "../src/instrumentation-state";\n`);
     await fs.writeFile(pagesHelper, `import "./shared-client";\n`);
     await fs.writeFile(instrumentationState, `import "node:fs";\n`);
     await fs.writeFile(sharedClient, `import "./shared.css";\n`);
@@ -1039,6 +1041,7 @@ describe("layout-owned global CSS", () => {
       [`${pagesHelper}:./shared-client`, sharedClient],
       [`${sharedClient}:./shared.css`, stylesheet],
       [`${apiRoute}:../../src/instrumentation-state`, instrumentationState],
+      [`${rootApiRoute}:../src/instrumentation-state`, instrumentationState],
       [`${instrumentationState}:node:fs`, "node:fs"],
     ]);
     const plugin = createLayoutOwnedGlobalCssPlugin(
@@ -1082,7 +1085,78 @@ describe("layout-owned global CSS", () => {
     ).resolves.toBeNull();
     expect(resolvedSources).toContain(`${pagesRoute}:../src/pages-helper`);
     expect(resolvedSources).not.toContain(`${apiRoute}:../../src/instrumentation-state`);
+    expect(resolvedSources).not.toContain(`${rootApiRoute}:../src/instrumentation-state`);
     expect(resolvedSources).not.toContain(`${instrumentationState}:node:fs`);
+
+    await fs.rm(projectDir, { recursive: true, force: true });
+  });
+
+  it("completes Pages discovery after observing only part of the server graph", async () => {
+    const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-layout-css-pages-partial-"));
+    const appDir = path.join(projectDir, "app");
+    const pagesDir = path.join(projectDir, "pages");
+    const sourceDir = path.join(projectDir, "src");
+    await fs.mkdir(path.join(appDir, "dashboard"), { recursive: true });
+    await fs.mkdir(pagesDir, { recursive: true });
+    await fs.mkdir(sourceDir, { recursive: true });
+
+    const layout = path.join(appDir, "dashboard", "layout.tsx");
+    const appHelper = path.join(appDir, "dashboard", "shared.tsx");
+    const firstPage = path.join(pagesDir, "index.tsx");
+    const secondPage = path.join(pagesDir, "other.tsx");
+    const firstHelper = path.join(sourceDir, "first-helper.ts");
+    const sharedClient = path.join(sourceDir, "shared-client.tsx");
+    const stylesheet = path.join(sourceDir, "shared.css");
+    await fs.writeFile(firstPage, `import "../src/first-helper";\n`);
+    await fs.writeFile(secondPage, `import "../src/shared-client";\n`);
+    await fs.writeFile(firstHelper, `export const value = true;\n`);
+    await fs.writeFile(appHelper, `import "../../src/shared-client";\n`);
+    await fs.writeFile(sharedClient, `import "./shared.css";\n`);
+    await fs.writeFile(stylesheet, `.shared { color: teal; }\n`);
+
+    const plugin = createLayoutOwnedGlobalCssPlugin(
+      () => appDir,
+      () => pagesDir,
+    );
+    const resolveId =
+      typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
+    const resolutions = new Map([
+      [`${appHelper}:../../src/shared-client`, sharedClient],
+      [`${firstPage}:../src/first-helper`, firstHelper],
+      [`${secondPage}:../src/shared-client`, sharedClient],
+      [`${sharedClient}:./shared.css`, stylesheet],
+    ]);
+
+    for (const [source, importer, resolved] of [
+      ["./shared", layout, appHelper],
+      ["../../src/shared-client", appHelper, sharedClient],
+      ["./shared.css", sharedClient, stylesheet],
+    ] as const) {
+      await resolveId!.call(
+        createContext("rsc", { [source]: resolved }) as never,
+        source,
+        importer,
+        { isEntry: false },
+      );
+    }
+
+    await resolveId!.call(
+      createContext("pages_router_cloudflare", { "../src/first-helper": firstHelper }) as never,
+      "../src/first-helper",
+      firstPage,
+      { isEntry: false },
+    );
+
+    await expect(
+      resolveId!.call(
+        createContext("client", (source, importer) =>
+          importer ? (resolutions.get(`${importer}:${source}`) ?? null) : null,
+        ) as never,
+        "./shared.css",
+        sharedClient,
+        { isEntry: false },
+      ),
+    ).resolves.toBeNull();
 
     await fs.rm(projectDir, { recursive: true, force: true });
   });

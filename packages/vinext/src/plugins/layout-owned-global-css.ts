@@ -221,23 +221,14 @@ export function createLayoutOwnedGlobalCssPlugin(
   const pagesConsumers = new Set<string>();
   const pagesImports = new Map<string, Set<string>>();
   let pagesConsumerScan: Promise<void> | null = null;
+  let pagesConsumerScanState: "idle" | "scanning" | "complete" = "idle";
   let pagesScanIsConservative = false;
-  let pagesSsrResolve: ((source: string, importer?: string) => Promise<string | undefined>) | null =
-    null;
+  let pagesFallbackResolve:
+    | ((source: string, importer?: string) => Promise<string | undefined>)
+    | null = null;
 
   function isPagesServerEnvironment(environment: { name: string } | undefined): boolean {
     return environment !== undefined && environment.name !== "client" && environment.name !== "rsc";
-  }
-
-  function capturePagesServerResolver(
-    context: ResolveContext,
-    environment: { name: string } | undefined,
-  ): void {
-    if (!isPagesServerEnvironment(environment)) return;
-    pagesSsrResolve = async (source, importer) => {
-      const resolved = await context.resolve(source, importer, { skipSelf: true });
-      return resolved?.id;
-    };
   }
 
   function normalizedPageExtensions(): string[] {
@@ -251,6 +242,14 @@ export function createLayoutOwnedGlobalCssPlugin(
     return normalizedPageExtensions().some(
       (extension) => fileName === `layout.${extension}` || fileName === `template.${extension}`,
     );
+  }
+
+  function isPagesApiRoute(modulePath: string, pagesDir: string): boolean {
+    const relativePath = path.relative(pagesDir, modulePath);
+    if (relativePath.startsWith(`api${path.sep}`)) return true;
+
+    const lowerRelativePath = relativePath.toLowerCase();
+    return normalizedPageExtensions().some((extension) => lowerRelativePath === `api.${extension}`);
   }
 
   function addOwners(moduleId: string, owners: Iterable<string>): void {
@@ -381,8 +380,8 @@ export function createLayoutOwnedGlobalCssPlugin(
     source: string,
     importer: string,
   ): Promise<string | null> {
-    if (pagesSsrResolve) {
-      const resolved = await pagesSsrResolve(source, cleanModuleId(importer));
+    if (pagesFallbackResolve) {
+      const resolved = await pagesFallbackResolve(source, cleanModuleId(importer));
       if (resolved && !resolved.startsWith("\0") && path.isAbsolute(cleanModuleId(resolved))) {
         return resolved;
       }
@@ -450,8 +449,9 @@ export function createLayoutOwnedGlobalCssPlugin(
   async function scanPagesConsumers(context: ResolveContext): Promise<void> {
     const pagesDir = getPagesDir();
     if (!pagesDir) return;
-    if (pagesConsumers.size > 0) return;
+    if (pagesConsumerScanState === "complete") return;
     if (pagesConsumerScan) return pagesConsumerScan;
+    pagesConsumerScanState = "scanning";
 
     pagesConsumerScan = (async () => {
       const configuredPageExtensions = normalizedPageExtensions();
@@ -470,7 +470,7 @@ export function createLayoutOwnedGlobalCssPlugin(
       for (const entry of directoryEntries) {
         if (!entry.isFile() || configuredPageExtension(entry.name) === undefined) continue;
         const modulePath = path.join(entry.parentPath, entry.name);
-        if (isDescendantPath(modulePath, path.join(pagesDir, "api"))) continue;
+        if (isPagesApiRoute(modulePath, pagesDir)) continue;
         markPagesConsumer(modulePath);
         pending.push(modulePath);
       }
@@ -518,7 +518,13 @@ export function createLayoutOwnedGlobalCssPlugin(
       }
     })();
 
-    return pagesConsumerScan;
+    try {
+      await pagesConsumerScan;
+      pagesConsumerScanState = "complete";
+    } finally {
+      pagesConsumerScan = null;
+      if (pagesConsumerScanState === "scanning") pagesConsumerScanState = "idle";
+    }
   }
 
   return {
@@ -529,13 +535,12 @@ export function createLayoutOwnedGlobalCssPlugin(
     configResolved(config) {
       if (!config.environments || config.environments.ssr) {
         const resolver = config.createResolver();
-        pagesSsrResolve = (source, importer) => resolver(source, importer, false, true);
+        pagesFallbackResolve = (source, importer) => resolver(source, importer, false, true);
       }
     },
 
     async resolveDynamicImport(source, importer) {
       if (typeof source !== "string" || !importer) return null;
-      capturePagesServerResolver(this, this.environment);
       const resolved = await this.resolve(source, importer, { skipSelf: true });
       if (!resolved || resolved.id.startsWith("\0")) return null;
       if (this.environment?.name === "rsc") {
@@ -555,7 +560,6 @@ export function createLayoutOwnedGlobalCssPlugin(
 
     async resolveId(source, importer) {
       if (!importer || source.startsWith(EMPTY_LAYOUT_CSS_PREFIX)) return null;
-      capturePagesServerResolver(this, this.environment);
 
       const importerPath = path.resolve(cleanModuleId(importer));
       const normalizedAppDir = path.resolve(getAppDir());
