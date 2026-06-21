@@ -1263,10 +1263,13 @@ function getPathnameAndQuery(): {
   for (const [key, value] of params) {
     addQueryParam(searchQuery, key, value);
   }
-  const query = { ...searchQuery };
-  for (const routeParamName of extractRouteParamNames(nextData?.page ?? "")) {
-    const routeParam = routeQuery[routeParamName];
-    if (routeParam !== undefined) query[routeParamName] = routeParam;
+  const isShallowNavigation = window.history?.state?.options?.shallow === true;
+  const query = isShallowNavigation ? { ...searchQuery } : { ...searchQuery, ...routeQuery };
+  if (isShallowNavigation) {
+    for (const routeParamName of extractRouteParamNames(nextData?.page ?? "")) {
+      const routeParam = routeQuery[routeParamName];
+      if (routeParam !== undefined) query[routeParamName] = routeParam;
+    }
   }
   // asPath uses the resolved browser path, not the route pattern
   const asPath =
