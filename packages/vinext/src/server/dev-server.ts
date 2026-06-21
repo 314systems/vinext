@@ -1599,7 +1599,6 @@ export function createSSRHandler(
         // Stores the React root and page loader for client-side navigation.
         const hydrationScript = `
 <script type="module"${nonceAttr}>
-import "vinext/instrumentation-client";
 import React from "react";
 import { hydrateRoot } from "react-dom/client";
 
@@ -1610,6 +1609,7 @@ if (nextDataElement?.textContent) {
   window.__VINEXT_LOCALES__ = window.__NEXT_DATA__.locales;
   window.__VINEXT_DEFAULT_LOCALE__ = window.__NEXT_DATA__.defaultLocale;
 }
+await import("vinext/instrumentation-client");
 const {
   default: Router,
   wrapWithRouterContext,

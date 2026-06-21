@@ -1042,7 +1042,7 @@ describe("Pages Router entry template", () => {
   //
   // Ported from Next.js: test/e2e/instrumentation-client-hook/instrumentation-client-hook.test.ts
   // https://github.com/vercel/next.js/blob/canary/test/e2e/instrumentation-client-hook/instrumentation-client-hook.test.ts
-  it("imports the user's instrumentation-client.ts before calling hydrateRoot()", async () => {
+  it("loads instrumentation after locale bootstrap and before calling hydrateRoot()", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-pages-client-entry-"));
     const pagesDir = path.join(tmpDir, "pages");
     const instrumentationClientPath = path.join(tmpDir, "instrumentation-client.ts");
@@ -1065,15 +1065,21 @@ describe("Pages Router entry template", () => {
         { instrumentationClientPath },
       );
 
-      // The user's `instrumentation-client.ts` must be imported as a
-      // side-effect import (no `from`, no `as`) so its top-level statements
-      // execute when the client entry module is evaluated.
-      const userImportIndex = code.indexOf(`import ${JSON.stringify(instrumentationClientPath)}`);
+      const localeBootstrapIndex = code.indexOf(
+        "window.__VINEXT_LOCALE__ = window.__NEXT_DATA__.locale",
+      );
+      const instrumentationImportIndex = code.indexOf(
+        'await import("vinext/instrumentation-client")',
+      );
+      const routerImportIndex = code.indexOf('await import("next/router")');
       const hydrateRootIndex = code.indexOf("hydrateRoot(");
 
-      expect(userImportIndex).toBeGreaterThanOrEqual(0);
+      expect(localeBootstrapIndex).toBeGreaterThanOrEqual(0);
+      expect(instrumentationImportIndex).toBeGreaterThan(localeBootstrapIndex);
+      expect(routerImportIndex).toBeGreaterThan(instrumentationImportIndex);
       expect(hydrateRootIndex).toBeGreaterThanOrEqual(0);
-      expect(userImportIndex).toBeLessThan(hydrateRootIndex);
+      expect(instrumentationImportIndex).toBeLessThan(hydrateRootIndex);
+      expect(code).not.toContain(`import ${JSON.stringify(instrumentationClientPath)}`);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -1099,7 +1105,7 @@ describe("Pages Router entry template", () => {
 
       // Sanity check: the entry still wires up hydration and the hooks alias.
       expect(code).toContain("hydrateRoot(");
-      expect(code).toContain("vinext/instrumentation-client");
+      expect(code).toContain('await import("vinext/instrumentation-client")');
       // No spurious bare imports referring to a non-existent project file.
       expect(code).not.toMatch(/import "[^"]*instrumentation-client\.ts"/);
     } finally {

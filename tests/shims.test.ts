@@ -14566,9 +14566,13 @@ describe("Pages Router concurrent navigation", () => {
 
     try {
       vi.resetModules();
-      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      win.__VINEXT_LOCALE__ = "fr";
+      win.__VINEXT_LOCALES__ = ["en", "fr"];
+      win.__VINEXT_DEFAULT_LOCALE__ = "en";
+      const routerModule = await import("./fixtures/instrumentation-client-imports-router.js");
       const initialState = win.history.state;
 
+      expect((win as any).__INSTRUMENTATION_INITIAL_ROUTER_STATE__).toBe(initialState);
       expect(initialState).toEqual(
         expect.objectContaining({
           url: "/fr/about",
@@ -14577,9 +14581,6 @@ describe("Pages Router concurrent navigation", () => {
         }),
       );
 
-      win.__VINEXT_LOCALE__ = "fr";
-      win.__VINEXT_LOCALES__ = ["en", "fr"];
-      win.__VINEXT_DEFAULT_LOCALE__ = "en";
       await routerModule.default.push("/about", undefined, { locale: "en" });
 
       expect(win.__VINEXT_LOCALE__).toBe("en");
