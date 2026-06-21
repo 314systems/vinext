@@ -649,15 +649,32 @@ function getLocalPathname(url: string): string | null {
 function resolveSamePagesRoute(destinationUrl: string): PagesClientRouteResolution | null {
   const currentRoute = window.__NEXT_DATA__?.page;
   if (!currentRoute) return null;
-  if (!window.__VINEXT_PAGES_LINK_PREFETCH_ROUTES__) {
-    const destinationPathname = getLocalPathname(destinationUrl);
-    if (!destinationPathname) return null;
-    const stripLocale = (pathname: string): string => {
-      const locale = getLocalePathPrefix(pathname, window.__VINEXT_LOCALES__);
-      return locale ? pathname.slice(locale.length + 1) || "/" : pathname;
+  const destinationPathname = getLocalPathname(destinationUrl);
+  if (!destinationPathname) return null;
+  const stripLocale = (pathname: string): string => {
+    const locale = getLocalePathPrefix(pathname, window.__VINEXT_LOCALES__);
+    return locale ? pathname.slice(locale.length + 1) || "/" : pathname;
+  };
+  const pathname = stripLocale(destinationPathname);
+  const currentPathname = stripLocale(stripBasePath(window.location.pathname, __basePath));
+  const resolveVisiblePathFallback = (): PagesClientRouteResolution | null => {
+    if (pathname !== currentPathname) return null;
+    const params: Record<string, string | string[]> = {};
+    const nextDataQuery = window.__NEXT_DATA__?.query;
+    for (const paramName of extractRouteParamNames(currentRoute)) {
+      const value = nextDataQuery?.[paramName];
+      if (typeof value === "string" || Array.isArray(value)) {
+        setQueryValue(params, paramName, Array.isArray(value) ? [...value] : value);
+      }
+    }
+    return {
+      href: destinationUrl,
+      params,
+      pattern: currentRoute,
+      query: mergeRouteParamsIntoQuery(parseQueryString(destinationUrl), params),
     };
-    const pathname = stripLocale(destinationPathname);
-    const currentPathname = stripLocale(stripBasePath(window.location.pathname, __basePath));
+  };
+  if (!window.__VINEXT_PAGES_LINK_PREFETCH_ROUTES__) {
     const params =
       pathname === currentPathname
         ? (extractRouteParamsFromPath(currentRoute, pathname) ?? {})
@@ -674,7 +691,10 @@ function resolveSamePagesRoute(destinationUrl: string): PagesClientRouteResoluti
   const destinationRoute = resolvePagesClientRoute(destinationUrl, __basePath);
   const currentPatternParts = routePatternParts(currentRoute);
   const currentRoutePattern = `/${currentPatternParts.join("/")}`;
-  return destinationRoute?.pattern === currentRoutePattern ? destinationRoute : null;
+  if (destinationRoute?.pattern === currentRoutePattern) return destinationRoute;
+  return destinationRoute === null && hasVinextMiddleware(window.__NEXT_DATA__)
+    ? resolveVisiblePathFallback()
+    : null;
 }
 
 function resolvePagesErrorHtmlFetchUrl(
@@ -3086,6 +3106,7 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
     isNextRouterState(state) &&
     state.options?.shallow === true &&
     routerRuntimeState.currentShallow &&
+    state.__vinext_route === window.__NEXT_DATA__?.page &&
     withBasePath(state.as, __basePath) === browserUrl
       ? resolveSamePagesRoute(withBasePath(state.url, __basePath))
       : null;

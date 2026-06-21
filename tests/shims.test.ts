@@ -14647,6 +14647,54 @@ describe("Pages Router concurrent navigation", () => {
     }
   });
 
+  it("keeps same-visible middleware rewrites shallow without retaining middleware-only query", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const { win } = createNavWindow();
+    Object.assign(win.location, {
+      pathname: "/sha",
+      search: "?hello=goodbye",
+      href: "http://localhost/sha?hello=goodbye",
+      origin: "http://localhost",
+    });
+    Object.assign(win, {
+      __VINEXT_PAGES_LINK_PREFETCH_ROUTES__: [
+        { canPrefetchLoadingShell: false, isDynamic: false, patternParts: ["shallow-test"] },
+      ],
+      __NEXT_DATA__: {
+        ...win.__NEXT_DATA__,
+        page: "/shallow-test",
+        query: { hello: "goodbye", from: "middleware" },
+        __vinext: { ...win.__NEXT_DATA__.__vinext, hasMiddleware: true },
+      },
+    });
+    (globalThis as any).window = win;
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error("same-visible middleware rewrite must not fetch page HTML");
+    });
+
+    try {
+      vi.resetModules();
+      const { default: Router } = await import("../packages/vinext/src/shims/router.js");
+
+      await expect(Router.push("/sha?hello=world", undefined, { shallow: true })).resolves.toBe(
+        true,
+      );
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+      expect(Router.query).toEqual({ hello: "world" });
+      expect(win.history.pushState).toHaveBeenLastCalledWith(
+        expect.objectContaining({ options: expect.objectContaining({ shallow: true }) }),
+        "",
+        "/sha?hello=world",
+      );
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it.each([
     {
       name: "prefers a static page over a dynamic page",
@@ -15061,6 +15109,68 @@ describe("Pages Router concurrent navigation", () => {
         view: "list",
       });
       expect(globalThis.fetch).not.toHaveBeenCalled();
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("does not restore shallow state across different stored page routes", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const listeners = new Map<string, (event: any) => void>();
+    const { win } = createNavWindow();
+    Object.assign(win.location, {
+      pathname: "/page-two",
+      href: "http://localhost/page-two",
+      origin: "http://localhost",
+    });
+    Object.assign(win, {
+      addEventListener: vi.fn((type: string, handler: (event: any) => void) => {
+        listeners.set(type, handler);
+      }),
+      __VINEXT_PAGES_LINK_PREFETCH_ROUTES__: [
+        { canPrefetchLoadingShell: false, isDynamic: false, patternParts: ["page-one"] },
+        { canPrefetchLoadingShell: false, isDynamic: false, patternParts: ["page-two"] },
+      ],
+      __NEXT_DATA__: { ...win.__NEXT_DATA__, page: "/page-two", query: {} },
+    });
+    (globalThis as any).window = win;
+    globalThis.fetch = vi.fn(
+      async () => new Response(buildNavHtml("/page-one", "/@fs/pages/page-one.js")),
+    );
+
+    try {
+      vi.resetModules();
+      await import("../packages/vinext/src/shims/router.js");
+      const { installPagesRouterRuntime } =
+        await import("../packages/vinext/src/shims/pages-router-runtime.js");
+      installPagesRouterRuntime();
+      const runtimeState = (globalThis as any).window[
+        Symbol.for("vinext.pagesRouter.runtimeState")
+      ];
+      runtimeState.currentShallow = true;
+
+      Object.assign(win.location, {
+        pathname: "/page-one",
+        search: "?params=testParams",
+        href: "http://localhost/page-one?params=testParams",
+      });
+      listeners.get("popstate")!({
+        state: {
+          __N: true,
+          url: "/page-one?params=testParams",
+          as: "/page-one?params=testParams",
+          options: { shallow: true },
+          key: "page-one",
+          __vinext_route: "/page-one",
+        },
+      });
+
+      await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+      expect(runtimeState.currentShallow).toBe(false);
     } finally {
       vi.resetModules();
       if (previousWindow === undefined) delete (globalThis as any).window;
