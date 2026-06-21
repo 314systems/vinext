@@ -231,14 +231,19 @@ function splitPagesAssetTags(assetTags: string): {
   headAssetTags: string;
   runtimeScriptTags: string;
 } {
+  const headAssetTags: string[] = [];
   const runtimeScriptTags: string[] = [];
-  const headAssetTags = assetTags.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, (tag) => {
-    runtimeScriptTags.push(tag);
-    return "";
-  });
+
+  for (const tag of assetTags.split("\n")) {
+    if (tag.trimStart().startsWith("<script")) {
+      runtimeScriptTags.push(tag);
+    } else if (tag.trim()) {
+      headAssetTags.push(tag);
+    }
+  }
 
   return {
-    headAssetTags: headAssetTags.replace(/\n{2,}/g, "\n").trim(),
+    headAssetTags: headAssetTags.join("\n"),
     runtimeScriptTags: runtimeScriptTags.join("\n"),
   };
 }
