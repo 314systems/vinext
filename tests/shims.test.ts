@@ -14787,17 +14787,12 @@ describe("Pages Router concurrent navigation", () => {
       });
       expect(win.history.pushState).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          __vinext_query: {
-            category: "books",
-            locale: "en",
-            preview: "1",
-            slug: "guide",
-            view: "grid",
-          },
+          __vinext_route: "/catalog/[category]/[slug]/[locale]",
         }),
         "",
         "/store/guide/books?preview=1&view=list&slug=visible",
       );
+      expect(win.history.pushState.mock.calls.at(-1)?.[0]).not.toHaveProperty("__vinext_query");
     } finally {
       vi.resetModules();
       if (previousWindow === undefined) delete (globalThis as any).window;
@@ -14847,6 +14842,221 @@ describe("Pages Router concurrent navigation", () => {
       vi.resetModules();
       if (previousBasePath === undefined) delete process.env.__NEXT_ROUTER_BASEPATH;
       else process.env.__NEXT_ROUTER_BASEPATH = previousBasePath;
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("re-resolves shallow Back and Forward query from each rewrite alias URL", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const listeners = new Map<string, (event: any) => void>();
+    const { win } = createNavWindow();
+    Object.assign(win.location, {
+      pathname: "/catalog/old/entry/fr",
+      href: "http://localhost/catalog/old/entry/fr",
+      origin: "http://localhost",
+    });
+    Object.assign(win, {
+      addEventListener: vi.fn((type: string, handler: (event: any) => void) => {
+        listeners.set(type, handler);
+      }),
+      __VINEXT_PAGES_LINK_PREFETCH_ROUTES__: [
+        {
+          canPrefetchLoadingShell: false,
+          isDynamic: true,
+          patternParts: ["catalog", ":category", ":slug", ":locale"],
+        },
+      ],
+      __VINEXT_CLIENT_REWRITES__: {
+        beforeFiles: [
+          {
+            source: "/store/:slug/:section",
+            destination: "/catalog/:section/:slug/en?view=grid",
+          },
+        ],
+        afterFiles: [],
+        fallback: [],
+      },
+      __NEXT_DATA__: {
+        ...win.__NEXT_DATA__,
+        page: "/catalog/[category]/[slug]/[locale]",
+        query: { category: "old", locale: "fr", slug: "entry" },
+      },
+    });
+    (globalThis as any).window = win;
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error("shallow Back/Forward must not fetch page HTML");
+    });
+
+    try {
+      vi.resetModules();
+      const { default: Router } = await import("../packages/vinext/src/shims/router.js");
+      const { installPagesRouterRuntime } =
+        await import("../packages/vinext/src/shims/pages-router-runtime.js");
+      installPagesRouterRuntime();
+
+      await Router.push("/store/guide/books?step=one", undefined, { shallow: true });
+      const firstState = win.history.pushState.mock.calls.at(-1)?.[0];
+      await Router.push("/store/reference/music?step=two", undefined, { shallow: true });
+      const secondState = win.history.pushState.mock.calls.at(-1)?.[0];
+
+      Object.assign(win.location, {
+        pathname: "/store/guide/books",
+        search: "?step=one",
+        href: "http://localhost/store/guide/books?step=one",
+      });
+      listeners.get("popstate")!({ state: firstState });
+      expect(Router.query).toEqual({
+        category: "books",
+        locale: "en",
+        slug: "guide",
+        step: "one",
+        view: "grid",
+      });
+
+      Object.assign(win.location, {
+        pathname: "/store/reference/music",
+        search: "?step=two",
+        href: "http://localhost/store/reference/music?step=two",
+      });
+      listeners.get("popstate")!({ state: secondState });
+      expect(Router.query).toEqual({
+        category: "music",
+        locale: "en",
+        slug: "reference",
+        step: "two",
+        view: "grid",
+      });
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("demotes stale conditional rewrite history entries from shallow popstate", async () => {
+    const previousWindow = (globalThis as any).window;
+    const previousDocument = (globalThis as any).document;
+    const originalFetch = globalThis.fetch;
+    const listeners = new Map<string, (event: any) => void>();
+    const { win } = createNavWindow();
+    Object.assign(win, {
+      addEventListener: vi.fn((type: string, handler: (event: any) => void) => {
+        listeners.set(type, handler);
+      }),
+      __VINEXT_PAGES_LINK_PREFETCH_ROUTES__: [
+        { canPrefetchLoadingShell: false, isDynamic: true, patternParts: ["catalog", ":slug"] },
+      ],
+      __VINEXT_CLIENT_REWRITES__: {
+        beforeFiles: [
+          {
+            source: "/store/:slug",
+            destination: "/catalog/:slug?access=member",
+            has: [{ type: "cookie", key: "member", value: "yes" }],
+          },
+        ],
+        afterFiles: [],
+        fallback: [],
+      },
+      __NEXT_DATA__: { ...win.__NEXT_DATA__, page: "/catalog/[slug]", query: { slug: "old" } },
+    });
+    (globalThis as any).window = win;
+    (globalThis as any).document = { cookie: "member=yes" };
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          buildNavHtml("/store/[slug]", "/@fs/pages/store/[slug].js", { slug: "guide" }),
+        ),
+    );
+
+    try {
+      vi.resetModules();
+      const { default: Router } = await import("../packages/vinext/src/shims/router.js");
+      const { installPagesRouterRuntime } =
+        await import("../packages/vinext/src/shims/pages-router-runtime.js");
+      installPagesRouterRuntime();
+      await Router.push("/store/guide", undefined, { shallow: true });
+      const state = win.history.pushState.mock.calls.at(-1)?.[0];
+      await Router.push("/store/reference", undefined, { shallow: true });
+
+      (globalThis as any).document.cookie = "";
+      Object.assign(win.location, {
+        pathname: "/store/guide",
+        search: "",
+        href: "http://localhost/store/guide",
+      });
+      listeners.get("popstate")!({ state });
+
+      await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      if (previousDocument === undefined) delete (globalThis as any).document;
+      else (globalThis as any).document = previousDocument;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("ignores forged shallow history query and preserves special query keys safely", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const listeners = new Map<string, (event: any) => void>();
+    const { win } = createNavWindow();
+    Object.assign(win, {
+      addEventListener: vi.fn((type: string, handler: (event: any) => void) => {
+        listeners.set(type, handler);
+      }),
+      __VINEXT_PAGES_LINK_PREFETCH_ROUTES__: [
+        { canPrefetchLoadingShell: false, isDynamic: false, patternParts: [] },
+      ],
+    });
+    (globalThis as any).window = win;
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error("validated same-route shallow popstate must not fetch page HTML");
+    });
+
+    try {
+      vi.resetModules();
+      const { default: Router } = await import("../packages/vinext/src/shims/router.js");
+      const { installPagesRouterRuntime } =
+        await import("../packages/vinext/src/shims/pages-router-runtime.js");
+      installPagesRouterRuntime();
+      await Router.push("/?safe=one", undefined, { shallow: true });
+
+      Object.assign(win.location, {
+        pathname: "/",
+        search: "?safe=two&__proto__=prototype-value&constructor=constructor-value",
+        href: "http://localhost/?safe=two&__proto__=prototype-value&constructor=constructor-value",
+      });
+      listeners.get("popstate")!({
+        state: {
+          __N: true,
+          url: "/?safe=two",
+          as: "/?safe=two&__proto__=prototype-value&constructor=constructor-value",
+          options: { shallow: true },
+          key: "forged-query",
+          __vinext_route: "/",
+          __vinext_query: JSON.parse(
+            '{"safe":"forged","__proto__":"forged-prototype","constructor":"forged-constructor"}',
+          ),
+        },
+      });
+
+      const query = Router.query as Record<string, string | string[]>;
+      expect(query.safe).toBe("two");
+      expect(Object.getPrototypeOf(query)).toBe(Object.prototype);
+      expect(Object.hasOwn(query, "__proto__")).toBe(true);
+      expect(query["__proto__"]).toBe("prototype-value");
+      expect(Object.hasOwn(query, "constructor")).toBe(true);
+      expect(query.constructor).toBe("constructor-value");
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    } finally {
+      vi.resetModules();
       if (previousWindow === undefined) delete (globalThis as any).window;
       else (globalThis as any).window = previousWindow;
       globalThis.fetch = originalFetch;

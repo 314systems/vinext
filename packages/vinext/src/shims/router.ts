@@ -67,6 +67,7 @@ import {
   appendSearchParamsToUrl,
   mergeRouteParamsIntoQuery,
   parseQueryString,
+  setQueryValue,
   type UrlQuery,
   urlQueryToSearchParams,
 } from "../utils/query.js";
@@ -1236,12 +1237,13 @@ function getRouteParamsFromQuery(
   const params: Record<string, string | string[]> = {};
   let hasParam = false;
   for (const name of names) {
+    if (!Object.hasOwn(query, name)) continue;
     const value = query[name];
     if (typeof value === "string") {
-      params[name] = value;
+      setQueryValue(params, name, value);
       hasParam = true;
     } else if (Array.isArray(value)) {
-      params[name] = [...value];
+      setQueryValue(params, name, [...value]);
       hasParam = true;
     }
   }
@@ -1258,9 +1260,9 @@ function getRouteQueryFromNextData(
   if (extractRouteParamsFromPath(nextData.page, resolvedPath) === null) {
     for (const [key, value] of Object.entries(nextData.query)) {
       if (typeof value === "string") {
-        routeQuery[key] = value;
+        setQueryValue(routeQuery, key, value);
       } else if (Array.isArray(value)) {
-        routeQuery[key] = [...value];
+        setQueryValue(routeQuery, key, [...value]);
       }
     }
     return routeQuery;
@@ -1275,9 +1277,9 @@ function getRouteQueryFromNextData(
   for (const key of routeParamNames) {
     const value = nextData.query[key];
     if (typeof value === "string") {
-      routeQuery[key] = value;
+      setQueryValue(routeQuery, key, value);
     } else if (Array.isArray(value)) {
-      routeQuery[key] = [...value];
+      setQueryValue(routeQuery, key, [...value]);
     }
   }
   return routeQuery;
@@ -1293,7 +1295,7 @@ function getPathnameAndQuery(): {
     if (_ssrCtx) {
       const query: Record<string, string | string[]> = {};
       for (const [key, value] of Object.entries(_ssrCtx.query)) {
-        query[key] = Array.isArray(value) ? [...value] : value;
+        setQueryValue(query, key, Array.isArray(value) ? [...value] : value);
       }
       return { pathname: _ssrCtx.pathname, query, asPath: _ssrCtx.asPath };
     }
@@ -1319,7 +1321,7 @@ function getPathnameAndQuery(): {
   if (isShallowNavigation) {
     for (const routeParamName of extractRouteParamNames(nextData?.page ?? "")) {
       const routeParam = query[routeParamName] ?? routeQuery[routeParamName];
-      if (routeParam !== undefined) query[routeParamName] = routeParam;
+      if (routeParam !== undefined) setQueryValue(query, routeParamName, routeParam);
     }
   }
   // asPath uses the resolved browser path, not the route pattern
@@ -2382,7 +2384,6 @@ function updateHistory(
     url: string;
     as: string;
     options: { locale?: string; shallow?: boolean };
-    query?: Record<string, string | string[]>;
   },
 ): void {
   const previousKey = getRouterStateKey(window.history.state);
@@ -2399,7 +2400,6 @@ function updateHistory(
   };
   if (navState.options.shallow === true && window.__NEXT_DATA__?.page) {
     state.__vinext_route = window.__NEXT_DATA__.page;
-    state.__vinext_query = navState.query;
   }
   if (mode === "push") window.history.pushState(state, "", fullUrl);
   else window.history.replaceState(state, "", fullUrl);
@@ -2419,7 +2419,6 @@ type VinextHistoryState = {
   options: { locale?: string; shallow?: boolean };
   __N: true;
   key: string;
-  __vinext_query?: Record<string, string | string[]>;
   __vinext_route?: string;
 };
 
@@ -2676,7 +2675,6 @@ async function performNavigation(
     url: resolvedRouteNoHash,
     as: resolvedNoHash,
     options: navStateOptions,
-    query: shallowRoute?.query,
   };
 
   // Hash-only change — no page fetch needed.
@@ -2956,7 +2954,6 @@ function isNextRouterState(state: unknown): state is {
   options: TransitionOptions;
   __N: true;
   key?: string;
-  __vinext_query?: Record<string, string | string[]>;
   __vinext_route?: string;
 } {
   return (
@@ -3081,14 +3078,16 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
   // Next.js only carries shallow mode across popstate when both the target
   // entry and the current router transition are shallow. A persisted shallow
   // target must not promote a deep traversal back to shallow mode.
-  const shallow =
+  const restoredShallowRoute =
     isNextRouterState(state) &&
     state.options?.shallow === true &&
-    state.__vinext_route === window.__NEXT_DATA__?.page &&
-    routerRuntimeState.currentShallow;
+    routerRuntimeState.currentShallow &&
+    withBasePath(state.as, __basePath) === browserUrl
+      ? resolveSamePagesRoute(browserUrl)
+      : null;
+  const shallow = restoredShallowRoute !== null;
   routerRuntimeState.currentShallow = shallow;
-  routerRuntimeState.currentShallowQuery =
-    shallow && isNextRouterState(state) ? (state.__vinext_query ?? null) : null;
+  routerRuntimeState.currentShallowQuery = restoredShallowRoute?.query ?? null;
 
   // Update trackers only after beforePopState confirms navigation proceeds.
   // If beforePopState cancels, the app stays on the previous history entry,
