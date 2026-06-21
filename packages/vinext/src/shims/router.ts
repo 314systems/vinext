@@ -3018,8 +3018,19 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
   // compatibility.
   routerEvents.emit("beforeHistoryChange", fullAppUrl, { shallow });
   if (shallow) {
-    routerEvents.emit("routeChangeComplete", fullAppUrl, { shallow: true });
-    dispatchNavigateEvent();
+    if (forcedScroll === undefined) {
+      routerEvents.emit("routeChangeComplete", fullAppUrl, { shallow: true });
+      dispatchNavigateEvent();
+      return;
+    }
+    void (async () => {
+      const isCurrent = () =>
+        targetKey === undefined || routerRuntimeState.currentHistoryKey === targetKey;
+      await restorePagesRouterScrollPosition(forcedScroll, isCurrent);
+      if (!isCurrent()) return;
+      routerEvents.emit("routeChangeComplete", fullAppUrl, { shallow: true });
+      dispatchNavigateEvent();
+    })();
     return;
   }
   void (async () => {
