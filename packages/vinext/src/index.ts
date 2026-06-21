@@ -2069,6 +2069,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               "styled-jsx/css": resolveOptionalDependency(earlyBaseDir, "styled-jsx/css")!,
               "styled-jsx/style": resolveShimModulePath(shimsDir, "styled-jsx-style"),
               "styled-jsx/style.js": resolveShimModulePath(shimsDir, "styled-jsx-style"),
+              "styled-jsx": resolveOptionalDependency(earlyBaseDir, "styled-jsx")!,
             },
             // Dedupe React packages to prevent dual-instance errors.
             // When vinext is linked (npm link / bun link) or any dependency
