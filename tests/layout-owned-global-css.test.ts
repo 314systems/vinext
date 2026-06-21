@@ -833,7 +833,7 @@ describe("layout-owned global CSS", () => {
     await fs.rm(projectDir, { recursive: true, force: true });
   });
 
-  it("pre-scans MDX-style imports for configured .md Pages routes", async () => {
+  it("does not treat import-like prose in configured .md Pages routes as ESM", async () => {
     const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-layout-css-md-"));
     const appDir = path.join(projectDir, "app");
     const pagesDir = path.join(projectDir, "pages");
@@ -890,11 +890,16 @@ describe("layout-owned global CSS", () => {
       );
     }
 
-    await expect(
-      resolveId!.call(createContext("client", stylesheet) as never, "./shared.css", sharedClient, {
-        isEntry: false,
-      }),
-    ).resolves.toBeNull();
+    const clientResolution = await resolveId!.call(
+      createContext("client", stylesheet) as never,
+      "./shared.css",
+      sharedClient,
+      { isEntry: false },
+    );
+    if (typeof clientResolution !== "string") {
+      throw new TypeError("Expected the client CSS resolution to be a virtual module ID");
+    }
+    expect(clientResolution.startsWith("\0vinext:layout-owned-global-css/")).toBe(true);
 
     await fs.rm(projectDir, { recursive: true, force: true });
   });
@@ -925,11 +930,15 @@ describe("layout-owned global CSS", () => {
     await fs.writeFile(sharedClient, `import "./shared.css";\n`);
     await fs.writeFile(stylesheet, `.shared { color: teal; }\n`);
 
-    const remarkPaths: string[] = [];
+    const remarkFiles: Array<{ path: string; firstNodeType: string }> = [];
     const recmaPaths: string[] = [];
-    const captureRemarkPath = () => (_tree: unknown, file: { path?: string }) => {
-      remarkPaths.push(String(file.path));
-    };
+    const captureRemarkPath =
+      () => (tree: { children?: Array<{ type?: string }> }, file: { path?: string }) => {
+        remarkFiles.push({
+          path: String(file.path),
+          firstNodeType: String(tree.children?.[0]?.type),
+        });
+      };
     const captureRecmaPath = () => (_tree: unknown, file: { path?: string }) => {
       recmaPaths.push(String(file.path));
     };
@@ -983,8 +992,14 @@ describe("layout-owned global CSS", () => {
         isEntry: false,
       }),
     ).resolves.toBeNull();
-    const expectedPaths = [pagesRoutes[0], pagesRoutes[1], `${pagesRoutes[2]}.mdx`].sort();
-    expect(remarkPaths.sort()).toEqual(expectedPaths);
+    const expectedPaths = [...pagesRoutes].sort();
+    expect(remarkFiles.sort((left, right) => left.path.localeCompare(right.path))).toEqual(
+      [
+        { path: pagesRoutes[0], firstNodeType: "paragraph" },
+        { path: pagesRoutes[1], firstNodeType: "mdxjsEsm" },
+        { path: pagesRoutes[2], firstNodeType: "mdxjsEsm" },
+      ].sort((left, right) => left.path.localeCompare(right.path)),
+    );
     expect(recmaPaths.sort()).toEqual(expectedPaths);
 
     await fs.rm(projectDir, { recursive: true, force: true });

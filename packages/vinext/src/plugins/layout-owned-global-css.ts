@@ -182,12 +182,10 @@ async function extractMdxModuleSources(
   const mdxFactory = mdxRollup.default as (options: Record<string, unknown>) => Plugin;
   const mdxOptions = options.getMdxOptions?.();
   const extension = path.extname(modulePath).toLowerCase();
-  const scanPath = extension === ".md" || extension === ".mdx" ? modulePath : `${modulePath}.mdx`;
   const transformPlugin = mdxFactory({
     ...mdxOptions,
-    include: scanPath,
-    format: "mdx",
-    mdxExtensions: [path.extname(scanPath)],
+    include: modulePath,
+    ...(extension === ".md" || extension === ".mdx" ? {} : { mdxExtensions: [extension] }),
     jsx: true,
     outputFormat: "program",
   });
@@ -197,7 +195,7 @@ async function extractMdxModuleSources(
   const result = await transform.call(
     {} as never,
     maskMdxHtmlComments(source),
-    scanPath,
+    modulePath,
     {} as never,
   );
   if (!result) return [];
