@@ -2757,7 +2757,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             !hasCloudflarePlugin &&
             !hasNitroPlugin &&
             this.environment?.name === "ssr" &&
-            hasPagesServerBuildInput(getBuildBundlerOptions(this.environment.config.build)?.input)
+            (hasPagesServerBuildInput(
+              getBuildBundlerOptions(this.environment.config.build)?.input,
+            ) ||
+              hasPagesServerBuildInput(this.environment.config.build?.ssr))
           ) {
             return {
               id: resolveOptionalDependency(earlyBaseDir, "react")!,

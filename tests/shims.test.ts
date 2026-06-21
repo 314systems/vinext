@@ -21630,7 +21630,9 @@ describe("shim alias map .js variants", () => {
     async function resolveStyledJsxReact(
       pluginNames: string[],
       environment = "ssr",
-      input: string | Record<string, string> = "virtual:vinext-server-entry",
+      build: { rolldownOptions: { input: string | Record<string, string> } } | { ssr: string } = {
+        rolldownOptions: { input: "virtual:vinext-server-entry" },
+      },
     ) {
       const plugins = vinext() as Plugin[];
       const configPlugin = plugins.find((plugin) => plugin.name === "vinext:config");
@@ -21662,9 +21664,9 @@ describe("shim alias map .js variants", () => {
           environment?: {
             name?: string;
             config: {
-              build: {
-                rolldownOptions: { input: string | Record<string, string> };
-              };
+              build:
+                | { rolldownOptions: { input: string | Record<string, string> } }
+                | { ssr: string };
             };
           };
         },
@@ -21675,7 +21677,7 @@ describe("shim alias map .js variants", () => {
         {
           environment: {
             name: environment,
-            config: { build: { rolldownOptions: { input } } },
+            config: { build },
           },
         },
         "react",
@@ -21689,12 +21691,24 @@ describe("shim alias map .js variants", () => {
       typeof nodeResult === "object" && nodeResult ? path.isAbsolute(nodeResult.id) : false,
     ).toBe(true);
 
-    expect(await resolveStyledJsxReact([], "client")).toBeUndefined();
     expect(
-      await resolveStyledJsxReact([], "ssr", { index: "virtual:vinext-app-ssr-entry" }),
+      await resolveStyledJsxReact([], "client", {
+        rolldownOptions: { input: "virtual:vinext-server-entry" },
+      }),
+    ).toBeUndefined();
+    expect(
+      await resolveStyledJsxReact([], "ssr", {
+        rolldownOptions: { input: { index: "virtual:vinext-app-ssr-entry" } },
+      }),
     ).toBeUndefined();
     expect(await resolveStyledJsxReact(["vite-plugin-cloudflare"])).toBeUndefined();
     expect(await resolveStyledJsxReact(["nitro"])).toBeUndefined();
+    expect(
+      await resolveStyledJsxReact([], "ssr", { ssr: "virtual:vinext-server-entry" }),
+    ).toMatchObject({ external: true });
+    expect(
+      await resolveStyledJsxReact([], "ssr", { ssr: "virtual:vinext-app-ssr-entry" }),
+    ).toBeUndefined();
   });
 
   it("uses distinct Pages and hybrid App SSR build entries", async () => {
