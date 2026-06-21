@@ -537,7 +537,11 @@ export function createLayoutOwnedGlobalCssPlugin(
         } else {
           await scanPagesConsumers(this);
         }
-      } else if (this.environment?.name === "client" && pagesConsumerScanState !== "complete") {
+      } else if (
+        this.environment?.name === "client" &&
+        getPagesDir() !== null &&
+        pagesConsumerScanState !== "complete"
+      ) {
         pagesScanIsConservative = true;
       }
     },

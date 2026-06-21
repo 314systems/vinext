@@ -37,6 +37,38 @@ async function runPagesServerDiscovery(
 }
 
 describe("layout-owned global CSS", () => {
+  it("deduplicates pure App Router CSS after client build start", async () => {
+    const appDir = path.resolve("/app");
+    const plugin = createLayoutOwnedGlobalCssPlugin(() => appDir);
+    const resolveId =
+      typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
+    const buildStart =
+      typeof plugin.buildStart === "object" ? plugin.buildStart.handler : plugin.buildStart;
+    const stylesheet = path.join(appDir, "dashboard", "global.css");
+    const layout = path.join(appDir, "dashboard", "layout.tsx");
+    const descendant = path.join(appDir, "dashboard", "widget.tsx");
+
+    await resolveId!.call(createContext("rsc", stylesheet) as never, "./global.css", layout, {
+      isEntry: false,
+    });
+    await buildStart?.call(createContext("client", stylesheet) as never, {} as never);
+
+    const clientResolution = await resolveId!.call(
+      createContext("client", stylesheet) as never,
+      "./global.css",
+      descendant,
+      { isEntry: false },
+    );
+    expect(typeof clientResolution).toBe("string");
+    if (typeof clientResolution !== "string") {
+      throw new TypeError("Expected the client CSS resolution to be a virtual module ID");
+    }
+    expect(clientResolution.startsWith("\0vinext:layout-owned-global-css/")).toBe(true);
+
+    const load = typeof plugin.load === "object" ? plugin.load.handler : plugin.load;
+    expect(load!.call({} as never, clientResolution)).toBe("");
+  });
+
   it("deduplicates descendant client imports without affecting siblings or CSS Modules", async () => {
     const appDir = path.resolve("/app");
     const plugin = createLayoutOwnedGlobalCssPlugin(() => appDir);
