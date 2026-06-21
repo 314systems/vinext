@@ -191,7 +191,7 @@ type RenderPagesPageResponseOptions = {
   renderDocumentToString: (element: ReactNode) => Promise<string>;
   renderToReadableStream: (
     element: ReactNode,
-  ) => Promise<ReadableStream<Uint8Array> & { allReady: Promise<void> }>;
+  ) => Promise<ReadableStream<Uint8Array> & { allReady?: Promise<void> }>;
   resetSSRHead?: (() => void) | undefined;
   routePattern: string;
   routeUrl: string;
@@ -550,7 +550,7 @@ export async function renderPagesPageResponse(
     );
     const renderedStream = await options.renderToReadableStream(pageElement);
     bodyStream = renderedStream;
-    bodyAllReady = renderedStream.allReady;
+    bodyAllReady = renderedStream.allReady ?? null;
   }
 
   // Fold any head tags returned by `_document.getInitialProps()` into the
