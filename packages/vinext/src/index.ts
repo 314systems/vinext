@@ -2079,7 +2079,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 : [
                     {
                       find: /^styled-jsx$/,
-                      replacement: resolveOptionalDependency(earlyBaseDir, "styled-jsx")!,
+                      replacement: resolveOptionalDependency(
+                        earlyBaseDir,
+                        "styled-jsx/dist/index",
+                      )!,
                     },
                   ]),
             ],
@@ -2645,8 +2648,8 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             ...mergeOptimizeDepsInclude(nextConfig.transpilePackages, include),
           );
         };
-        filterTranspilePackageIncludes(config.optimizeDeps.include);
-        for (const environment of Object.values(config.environments)) {
+        filterTranspilePackageIncludes(config.optimizeDeps?.include);
+        for (const environment of Object.values(config.environments ?? {})) {
           filterTranspilePackageIncludes(environment.optimizeDeps?.include);
         }
 
