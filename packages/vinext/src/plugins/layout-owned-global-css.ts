@@ -116,6 +116,7 @@ export function createLayoutOwnedGlobalCssPlugin(
   const globalStylesheets = new Set<string>();
   const pagesConsumers = new Set<string>();
   const pagesImports = new Map<string, Set<string>>();
+  let pagesConsumerScan: Promise<void> | null = null;
 
   function addOwners(moduleId: string, owners: Iterable<string>): void {
     moduleId = graphModuleId(moduleId);
@@ -296,6 +297,50 @@ export function createLayoutOwnedGlobalCssPlugin(
     }
   }
 
+  async function scanPagesConsumers(context: ResolveContext): Promise<void> {
+    const pagesDir = getPagesDir();
+    if (!pagesDir) return;
+    if (pagesConsumerScan) return pagesConsumerScan;
+
+    pagesConsumerScan = (async () => {
+      const pending: string[] = [];
+      const directoryEntries = await fs.readdir(pagesDir, {
+        recursive: true,
+        withFileTypes: true,
+      });
+      for (const entry of directoryEntries) {
+        if (!entry.isFile() || !SOURCE_MODULE_RE.test(entry.name)) continue;
+        const modulePath = path.join(entry.parentPath, entry.name);
+        markPagesConsumer(modulePath);
+        pending.push(modulePath);
+      }
+
+      const visited = new Set<string>();
+      while (pending.length > 0) {
+        const modulePath = pending.pop()!;
+        const cleanPath = cleanModuleId(modulePath);
+        if (visited.has(cleanPath) || !SOURCE_MODULE_RE.test(cleanPath)) continue;
+        visited.add(cleanPath);
+
+        let source: string;
+        try {
+          source = await fs.readFile(cleanPath, "utf8");
+        } catch {
+          continue;
+        }
+
+        for (const { source: importSource } of extractModuleSources(cleanPath, source)) {
+          const resolved = await resolveExternalImport(context, importSource, cleanPath);
+          if (!resolved) continue;
+          addPagesImport(cleanPath, resolved);
+          if (SOURCE_MODULE_RE.test(cleanModuleId(resolved))) pending.push(resolved);
+        }
+      }
+    })();
+
+    return pagesConsumerScan;
+  }
+
   return {
     name: "vinext:layout-owned-global-css",
     enforce: "pre",
@@ -367,6 +412,7 @@ export function createLayoutOwnedGlobalCssPlugin(
 
       if (this.environment?.name !== "client") return null;
       if (!isGlobalStylesheet || hasNonStylesheetQuery(source)) return null;
+      await scanPagesConsumers(this);
 
       const resolved = await this.resolve(source, importer, { skipSelf: true });
       if (!resolved || resolved.external || resolved.id.startsWith("\0")) return null;

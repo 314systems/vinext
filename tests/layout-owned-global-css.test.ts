@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createLayoutOwnedGlobalCssPlugin } from "../packages/vinext/src/plugins/layout-owned-global-css.js";
@@ -536,56 +538,94 @@ describe("layout-owned global CSS", () => {
     ).resolves.toBeNull();
   });
 
-  it("keeps shared CSS when a transitive Pages route also consumes the module", async () => {
-    const appDir = path.resolve("/project/app");
-    const pagesDir = path.resolve("/project/pages");
-    const plugin = createLayoutOwnedGlobalCssPlugin(
+  it("keeps shared CSS before the separate hybrid Pages build starts", async () => {
+    const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-layout-css-hybrid-"));
+    const appDir = path.join(projectDir, "app");
+    const pagesDir = path.join(projectDir, "pages");
+    const sourceDir = path.join(projectDir, "src");
+    await fs.mkdir(path.join(appDir, "dashboard"), { recursive: true });
+    await fs.mkdir(pagesDir, { recursive: true });
+    await fs.mkdir(sourceDir, { recursive: true });
+    const appBuildPlugin = createLayoutOwnedGlobalCssPlugin(
       () => appDir,
       () => pagesDir,
     );
-    const resolveId =
-      typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
-    expect(resolveId).toBeTypeOf("function");
+    const appResolveId =
+      typeof appBuildPlugin.resolveId === "object"
+        ? appBuildPlugin.resolveId.handler
+        : appBuildPlugin.resolveId;
+    expect(appResolveId).toBeTypeOf("function");
 
     const layout = path.join(appDir, "dashboard", "layout.tsx");
     const appHelper = path.join(appDir, "dashboard", "shared.tsx");
     const pagesRoute = path.join(pagesDir, "shared.tsx");
-    const pagesHelper = path.resolve("/project/src/pages-shared-helper.tsx");
-    const sharedClient = path.resolve("/project/src/components/shared-client.tsx");
-    const stylesheet = path.resolve("/project/src/components/shared.css");
+    const pagesHelper = path.join(sourceDir, "pages-shared-helper.tsx");
+    const sharedClient = path.join(sourceDir, "shared-client.tsx");
+    const stylesheet = path.join(sourceDir, "shared.css");
+
+    await fs.writeFile(pagesRoute, `import "../src/pages-shared-helper";\n`);
+    await fs.writeFile(pagesHelper, `import "./shared-client";\n`);
+    await fs.writeFile(sharedClient, `import "./shared.css";\n`);
+    await fs.writeFile(stylesheet, `.shared { color: teal; }\n`);
+
+    const resolvedIds = (source: string, importer?: string) => {
+      if (!importer) return null;
+      const extensions = ["", ".ts", ".tsx", ".js", ".jsx"];
+      const candidate = path.resolve(path.dirname(importer), source);
+      for (const extension of extensions) {
+        const resolved = `${candidate}${extension}`;
+        if (resolved === pagesHelper || resolved === sharedClient || resolved === stylesheet) {
+          return resolved;
+        }
+      }
+      return null;
+    };
 
     for (const [source, importer, resolved] of [
       ["./shared", layout, appHelper],
       ["@shared/client", appHelper, sharedClient],
       ["./shared.css", sharedClient, stylesheet],
     ] as const) {
-      await resolveId!.call(
+      await appResolveId!.call(
         createContext("rsc", { [source]: resolved }) as never,
         source,
         importer,
         { isEntry: false },
       );
     }
-    await resolveId!.call(
-      createContext("ssr", { "@shared/helper": pagesHelper }) as never,
-      "@shared/helper",
-      pagesRoute,
-      { isEntry: false },
-    );
-    await resolveId!.call(
-      createContext("ssr", { "@shared/client": sharedClient }) as never,
-      "@shared/client",
-      pagesHelper,
-      { isEntry: false },
-    );
 
     await expect(
-      resolveId!.call(
-        createContext("client", { "./shared.css": stylesheet }) as never,
+      appResolveId!.call(
+        createContext("client", resolvedIds) as never,
         "./shared.css",
         sharedClient,
         { isEntry: false },
       ),
     ).resolves.toBeNull();
+
+    const pagesBuildPlugin = createLayoutOwnedGlobalCssPlugin(
+      () => appDir,
+      () => pagesDir,
+    );
+    const pagesResolveId =
+      typeof pagesBuildPlugin.resolveId === "object"
+        ? pagesBuildPlugin.resolveId.handler
+        : pagesBuildPlugin.resolveId;
+    expect(pagesResolveId).toBeTypeOf("function");
+
+    await pagesResolveId!.call(
+      createContext("ssr", resolvedIds) as never,
+      "../src/pages-shared-helper",
+      pagesRoute,
+      { isEntry: false },
+    );
+    await pagesResolveId!.call(
+      createContext("ssr", resolvedIds) as never,
+      "./shared-client",
+      pagesHelper,
+      { isEntry: false },
+    );
+
+    await fs.rm(projectDir, { recursive: true, force: true });
   });
 });
