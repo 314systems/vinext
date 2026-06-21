@@ -1147,7 +1147,17 @@ function readOptionalString(value: unknown): string | undefined {
 }
 
 function resolveTsconfigPath(value: unknown): string | undefined {
-  if (value === undefined || value === "") return undefined;
+  if (value === undefined) return undefined;
+  if (value === null || value === "") {
+    const issue =
+      value === null
+        ? "Expected string, received null"
+        : "String must contain at least 1 character(s)";
+    console.warn(
+      `[vinext] Invalid next.config.js options detected:\n  ${issue} at "typescript.tsconfigPath"`,
+    );
+    return undefined;
+  }
   if (typeof value !== "string") {
     throw new Error(
       'Invalid next.config option "typescript.tsconfigPath": expected a non-empty string',

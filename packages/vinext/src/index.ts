@@ -927,8 +927,18 @@ type SelectedTsconfig = {
   custom: boolean;
 };
 
+function hasProjectTypeScript(projectRoot: string): boolean {
+  try {
+    createRequire(path.join(projectRoot, "package.json")).resolve("typescript/package.json");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function selectTsconfig(projectRoot: string, configuredPath?: string): SelectedTsconfig {
-  if (configuredPath !== undefined) {
+  const hasTypeScript = hasProjectTypeScript(projectRoot);
+  if (configuredPath !== undefined && hasTypeScript) {
     // Match Next.js loadJsConfig(): leading slashes remain project-relative
     // because path.join(projectRoot, configuredPath) is used instead of resolve.
     const customPath = path.join(projectRoot, configuredPath);
@@ -949,7 +959,8 @@ function selectTsconfig(projectRoot: string, configuredPath?: string): SelectedT
     };
   }
 
-  for (const name of TSCONFIG_FILES) {
+  const configFiles = hasTypeScript ? TSCONFIG_FILES : ["jsconfig.json"];
+  for (const name of configFiles) {
     const candidate = path.join(projectRoot, name);
     if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
       return { path: candidate, custom: false };

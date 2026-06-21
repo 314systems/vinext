@@ -8,7 +8,10 @@ import vinext from "../packages/vinext/src/index.js";
 const originalCwd = process.cwd();
 let createdRoot: string | undefined;
 
-function setupProject(vitePackageJson: Record<string, unknown>): string {
+function setupProject(
+  vitePackageJson: Record<string, unknown>,
+  options: { typescript?: boolean } = {},
+): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-vite-major-"));
   createdRoot = root;
   fs.mkdirSync(path.join(root, "pages"), { recursive: true });
@@ -21,6 +24,13 @@ function setupProject(vitePackageJson: Record<string, unknown>): string {
     path.join(root, "node_modules", "vite", "package.json"),
     JSON.stringify(vitePackageJson, null, 2),
   );
+  if (options.typescript !== false) {
+    fs.mkdirSync(path.join(root, "node_modules", "typescript"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "node_modules", "typescript", "package.json"),
+      JSON.stringify({ name: "typescript", version: "5.9.3" }),
+    );
+  }
   fs.writeFileSync(
     path.join(root, "pages", "index.tsx"),
     "export default function Page() { return <div>hello</div>; }\n",
@@ -149,6 +159,41 @@ describe("Vite tsconfig paths support", () => {
       }),
     );
     expect(resolvedConfig?.resolve?.alias).not.toHaveProperty("#");
+  });
+
+  it("uses jsconfig when TypeScript is not resolvable from the app", async () => {
+    const root = setupProject({ name: "vite", version: "8.0.0" }, { typescript: false });
+    process.chdir(root);
+    fs.writeFileSync(
+      path.join(root, "next.config.mjs"),
+      "export default { typescript: { tsconfigPath: 'web.tsconfig.json' } };\n",
+    );
+    fs.writeFileSync(
+      path.join(root, "web.tsconfig.json"),
+      JSON.stringify({ compilerOptions: { paths: { "@/*": ["./src/*"] } } }),
+    );
+    fs.writeFileSync(
+      path.join(root, "tsconfig.json"),
+      JSON.stringify({ compilerOptions: { paths: { "$/*": ["./typed/*"] } } }),
+    );
+    fs.writeFileSync(
+      path.join(root, "jsconfig.json"),
+      JSON.stringify({ compilerOptions: { paths: { "#/*": ["./legacy/*"] } } }),
+    );
+
+    const plugins = vinext({ appDir: root });
+    const configPlugin = findNamedPlugin(plugins, "vinext:config") as Plugin;
+    const configHook =
+      typeof configPlugin.config === "object" ? configPlugin.config.handler : configPlugin.config;
+    const resolvedConfig = await configHook?.call(
+      {} as never,
+      { root },
+      { command: "serve", mode: "development" },
+    );
+
+    expect(resolvedConfig?.resolve?.alias).toEqual(expect.objectContaining({ "#": "/legacy" }));
+    expect(resolvedConfig?.resolve?.alias).not.toHaveProperty("@");
+    expect(resolvedConfig?.resolve?.alias).not.toHaveProperty("$");
   });
 
   it("materializes simple tsconfig path aliases into resolve.alias on Vite 8", async () => {

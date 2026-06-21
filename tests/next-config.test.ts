@@ -1762,18 +1762,32 @@ describe("resolveNextConfig typescript.tsconfigPath", () => {
     expect(resolved.tsconfigPath).toBe("config/web.tsconfig.json");
   });
 
-  it("treats an empty string as the default tsconfig path", async () => {
+  it("warns and treats an empty string as the default tsconfig path", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const resolved = await resolveNextConfig({
       typescript: { tsconfigPath: "" },
     });
 
     expect(resolved.tsconfigPath).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("typescript.tsconfigPath"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("at least 1 character"));
   });
 
-  it.each([42, null])("rejects invalid values: %j", async (tsconfigPath) => {
+  it("warns and treats null as the default tsconfig path", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const resolved = await resolveNextConfig({
+      typescript: { tsconfigPath: null } as never,
+    });
+
+    expect(resolved.tsconfigPath).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("typescript.tsconfigPath"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("received null"));
+  });
+
+  it("rejects invalid numeric values", async () => {
     await expect(
       resolveNextConfig({
-        typescript: { tsconfigPath } as never,
+        typescript: { tsconfigPath: 42 } as never,
       }),
     ).rejects.toThrow('Invalid next.config option "typescript.tsconfigPath"');
   });
