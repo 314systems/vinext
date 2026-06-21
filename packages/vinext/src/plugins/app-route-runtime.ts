@@ -31,17 +31,6 @@ function isScriptModule(id: string): boolean {
   return SCRIPT_EXTENSION_RE.test(splitId(id).pathname);
 }
 
-function isProjectModule(id: string, root: string): boolean {
-  const pathname = splitId(id).pathname;
-  const relative = path.relative(root, pathname);
-  return (
-    relative !== "" &&
-    !relative.startsWith(`..${path.sep}`) &&
-    relative !== ".." &&
-    !relative.split(path.sep).includes("node_modules")
-  );
-}
-
 type AstNode = Record<string, unknown> & { end?: number; start?: number; type?: string };
 
 function isRelativeScriptSpecifier(specifier: string): boolean {
@@ -99,11 +88,19 @@ function rewriteRelativeImports(code: string, id: string, runtime: AppRouteRunti
   return changed ? output.toString() : code;
 }
 
-export function createAppRouteRuntimePlugin(getRoot: () => string): Plugin {
+export function createAppRouteRuntimePlugin(): Plugin {
   return {
     name: "vinext:app-route-runtime",
     enforce: "pre",
     async resolveId(source, importer, options) {
+      if (this.environment?.name === "client") {
+        if (!runtimeFromId(source)) return null;
+        return this.resolve(splitId(source).pathname, importer, {
+          ...options,
+          skipSelf: true,
+        });
+      }
+
       if (!importer || options?.isEntry) return null;
       const runtime = runtimeFromId(importer);
       if (!runtime || source.startsWith("\0") || source.startsWith("virtual:")) return null;
@@ -112,19 +109,19 @@ export function createAppRouteRuntimePlugin(getRoot: () => string): Plugin {
         ...options,
         skipSelf: true,
       });
-      if (
-        !resolved ||
-        resolved.external ||
-        !isScriptModule(resolved.id) ||
-        !isProjectModule(resolved.id, getRoot())
-      ) {
+      if (!resolved || !isScriptModule(resolved.id)) {
         return resolved;
       }
-      return { ...resolved, id: withAppRouteRuntime(resolved.id, runtime) };
+      return {
+        ...resolved,
+        id: withAppRouteRuntime(resolved.id, runtime),
+        external: false,
+      };
     },
     load: {
       filter: { id: /[?&]__vinext_app_runtime=(?:edge|nodejs)(?:&|$)/ },
       async handler(id) {
+        if (this.environment?.name === "client") return null;
         const runtime = runtimeFromId(id);
         let code = await fs.readFile(splitId(id).pathname, "utf8");
         if (!runtime) return code;
@@ -135,6 +132,7 @@ export function createAppRouteRuntimePlugin(getRoot: () => string): Plugin {
     transform: {
       filter: { id: /[?&]__vinext_app_runtime=(?:edge|nodejs)(?:&|$)/ },
       handler(code, id) {
+        if (this.environment?.name === "client") return null;
         const runtime = runtimeFromId(id);
         if (!runtime || !code.includes("process.env.NEXT_RUNTIME")) return null;
         return {

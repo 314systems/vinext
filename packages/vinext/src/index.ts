@@ -1177,7 +1177,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   }
 
   const plugins: PluginOption[] = [
-    createAppRouteRuntimePlugin(() => root),
+    createAppRouteRuntimePlugin(),
     // Resolve tsconfig paths/baseUrl aliases so real-world Next.js repos
     // that use @/*, #/*, or baseUrl imports work out of the box.
     // Vite 8+ supports this natively via resolve.tsconfigPaths.

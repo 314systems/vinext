@@ -11,6 +11,7 @@ type RscHandler = (request: Request) => Promise<Response | string | null | undef
 describe("App route NEXT_RUNTIME production parity", () => {
   let root: string;
   let handler: RscHandler;
+  let clientOutDir: string;
 
   beforeAll(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-app-route-runtime-prod-"));
@@ -23,6 +24,11 @@ describe("App route NEXT_RUNTIME production parity", () => {
     await fs.mkdir(path.join(root, "app", "shared"), { recursive: true });
     await fs.mkdir(path.join(root, "app", "nodejs"), { recursive: true });
     await fs.mkdir(path.join(root, "app", "edge"), { recursive: true });
+    await fs.mkdir(path.join(root, "app", "edge", "node_modules", "runtime-probe"), {
+      recursive: true,
+    });
+    await fs.mkdir(path.join(root, "app", "edge-layout"), { recursive: true });
+    await fs.mkdir(path.join(root, "app", "fake-edge"), { recursive: true });
     await fs.writeFile(
       path.join(root, "app", "layout.tsx"),
       `export default function Layout({ children }) { return <html><body>{children}</body></html> }`,
@@ -37,14 +43,56 @@ describe("App route NEXT_RUNTIME production parity", () => {
     );
     await fs.writeFile(
       path.join(root, "app", "edge", "layout.tsx"),
-      `export const runtime = "edge"; export { default } from "../layout"`,
+      `export { default } from "../layout"`,
     );
     await fs.writeFile(
       path.join(root, "app", "edge", "page.tsx"),
-      `export { default } from "../shared/page"`,
+      `
+        export const runtime = \`edge\` satisfies "edge" | "nodejs"
+        export { default } from "../shared/page"
+        export { ClientRuntime } from "./client"
+        import "runtime-probe"
+      `,
+    );
+    await fs.writeFile(
+      path.join(root, "app", "edge", "client.tsx"),
+      `
+        "use client"
+        globalThis.__vinextClientRuntime = "client-runtime:" + process.env.NEXT_RUNTIME
+        export function ClientRuntime() { return null }
+      `,
+    );
+    await fs.writeFile(
+      path.join(root, "app", "edge", "node_modules", "runtime-probe", "package.json"),
+      `{"type":"module","exports":"./index.js"}`,
+    );
+    await fs.writeFile(
+      path.join(root, "app", "edge", "node_modules", "runtime-probe", "index.js"),
+      `
+        if (process.env.NEXT_RUNTIME !== "edge") {
+          throw new Error("dependency runtime: " + process.env.NEXT_RUNTIME)
+        }
+      `,
+    );
+    await fs.writeFile(
+      path.join(root, "app", "edge-layout", "layout.tsx"),
+      `export const runtime = "edge"; export { default } from "../layout"`,
+    );
+    await fs.writeFile(
+      path.join(root, "app", "edge-layout", "route.ts"),
+      `export function GET() { return new Response(process.env.NEXT_RUNTIME) }`,
+    );
+    await fs.writeFile(
+      path.join(root, "app", "fake-edge", "page.tsx"),
+      `
+        // export const runtime = "edge"
+        const example = 'export const runtime = "edge"'
+        export default function Page() { return <div id="runtime">{process.env.NEXT_RUNTIME}</div> }
+      `,
     );
 
     const rscOutDir = path.join(root, "dist", "server");
+    clientOutDir = path.join(root, "dist", "client");
     const builder = await createBuilder({
       root,
       configFile: false,
@@ -53,7 +101,7 @@ describe("App route NEXT_RUNTIME production parity", () => {
           appDir: root,
           rscOutDir,
           ssrOutDir: path.join(rscOutDir, "ssr"),
-          clientOutDir: path.join(root, "dist", "client"),
+          clientOutDir,
         }),
       ],
       logLevel: "silent",
@@ -77,5 +125,28 @@ describe("App route NEXT_RUNTIME production parity", () => {
     const edgeResponse = await handler(new Request("http://localhost/edge"));
     expect(edgeResponse).toBeInstanceOf(Response);
     expect(await (edgeResponse as Response).text()).toContain('id="runtime">edge');
+
+    const fakeEdgeResponse = await handler(new Request("http://localhost/fake-edge"));
+    expect(fakeEdgeResponse).toBeInstanceOf(Response);
+    expect(await (fakeEdgeResponse as Response).text()).toContain('id="runtime">nodejs');
+  });
+
+  it("keeps route handlers on node when only their layout is edge", async () => {
+    const response = await handler(new Request("http://localhost/edge-layout"));
+    expect(response).toBeInstanceOf(Response);
+    expect(await (response as Response).text()).toBe("nodejs");
+  });
+
+  it("keeps client modules on the browser runtime value", async () => {
+    const assets = await fs.readdir(clientOutDir, { recursive: true });
+    const scripts = await Promise.all(
+      assets
+        .filter((asset) => asset.endsWith(".js"))
+        .map((asset) => fs.readFile(path.join(clientOutDir, asset), "utf8")),
+    );
+    const clientBundle = scripts.join("\n");
+    expect(clientBundle).toContain("client-runtime:");
+    expect(clientBundle).not.toContain("client-runtime:edge");
+    expect(clientBundle).not.toContain("client-runtime:nodejs");
   });
 });

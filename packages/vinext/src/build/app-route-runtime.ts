@@ -1,10 +1,8 @@
 import fs from "node:fs";
 import type { AppRoute } from "../routing/app-router.js";
+import { extractExportConstString } from "./report.js";
 
 export type AppRouteRuntime = "edge" | "nodejs";
-
-const RUNTIME_EXPORT_RE =
-  /\bexport\s+const\s+runtime\s*=\s*(["'])(edge|experimental-edge|nodejs)\1/;
 
 function readSegmentRuntime(filePath: string): AppRouteRuntime | null {
   let source: string;
@@ -14,15 +12,19 @@ function readSegmentRuntime(filePath: string): AppRouteRuntime | null {
     return null;
   }
 
-  const runtime = RUNTIME_EXPORT_RE.exec(source)?.[2];
+  const runtime = extractExportConstString(source, "runtime");
   if (runtime === "edge" || runtime === "experimental-edge") return "edge";
   if (runtime === "nodejs") return "nodejs";
   return null;
 }
 
 export function resolveAppRouteBuildRuntime(route: AppRoute): AppRouteRuntime {
+  if (route.routePath) {
+    return readSegmentRuntime(route.routePath) ?? "nodejs";
+  }
+
   let runtime: AppRouteRuntime = "nodejs";
-  for (const filePath of [...route.layouts, route.pagePath, route.routePath]) {
+  for (const filePath of [...route.layouts, route.pagePath]) {
     if (!filePath) continue;
     runtime = readSegmentRuntime(filePath) ?? runtime;
   }

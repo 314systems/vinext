@@ -10,7 +10,7 @@ function hookHandler<T>(hook: T | { handler: T }): T {
 
 describe("App route runtime module graph", () => {
   it("propagates the edge runtime through server-side user imports", async () => {
-    const plugin = createAppRouteRuntimePlugin(() => "/app");
+    const plugin = createAppRouteRuntimePlugin();
     const resolve = vi.fn(async () => ({ id: "/app/shared.ts" }));
     const resolveId = hookHandler(plugin.resolveId!);
     const result = await resolveId.call(
@@ -25,11 +25,14 @@ describe("App route runtime module graph", () => {
       isEntry: false,
       skipSelf: true,
     });
-    expect(result).toEqual({ id: "/app/shared.ts?__vinext_app_runtime=edge" });
+    expect(result).toEqual({
+      id: "/app/shared.ts?__vinext_app_runtime=edge",
+      external: false,
+    });
   });
 
   it("replaces NEXT_RUNTIME only inside a runtime-qualified server module", () => {
-    const plugin = createAppRouteRuntimePlugin(() => "/app");
+    const plugin = createAppRouteRuntimePlugin();
     const code = `export const runtime = process.env.NEXT_RUNTIME`;
     const transform = hookHandler(plugin.transform!);
     const result = transform.call(
@@ -41,8 +44,8 @@ describe("App route runtime module graph", () => {
     expect(result).toEqual({ code: `export const runtime = "edge"`, map: null });
   });
 
-  it("does not propagate the runtime into dependencies", async () => {
-    const plugin = createAppRouteRuntimePlugin(() => "/app");
+  it("propagates the runtime into dependencies", async () => {
+    const plugin = createAppRouteRuntimePlugin();
     const resolve = vi.fn(async () => ({ id: "/app/node_modules/pkg/index.js" }));
     const resolveId = hookHandler(plugin.resolveId!);
     const result = await resolveId.call(
@@ -52,6 +55,38 @@ describe("App route runtime module graph", () => {
       { attributes: {}, isEntry: false },
     );
 
-    expect(result).toEqual({ id: "/app/node_modules/pkg/index.js" });
+    expect(result).toEqual({
+      id: "/app/node_modules/pkg/index.js?__vinext_app_runtime=edge",
+      external: false,
+    });
+  });
+
+  it("strips runtime qualification from client modules", async () => {
+    const plugin = createAppRouteRuntimePlugin();
+    const resolve = vi.fn(async () => ({ id: "/app/client.tsx" }));
+    const resolveId = hookHandler(plugin.resolveId!);
+    const result = await resolveId.call(
+      { environment: { name: "client" }, resolve } as unknown as ThisParameterType<
+        typeof resolveId
+      >,
+      withAppRouteRuntime("/app/client.tsx", "edge"),
+      undefined,
+      { attributes: {}, isEntry: false },
+    );
+
+    expect(result).toEqual({ id: "/app/client.tsx" });
+  });
+
+  it("does not replace NEXT_RUNTIME in client transforms", () => {
+    const plugin = createAppRouteRuntimePlugin();
+    const code = `export const runtime = process.env.NEXT_RUNTIME`;
+    const transform = hookHandler(plugin.transform!);
+    const result = transform.call(
+      { environment: { name: "client" } } as unknown as ThisParameterType<typeof transform>,
+      code,
+      withAppRouteRuntime("/app/client.tsx", "edge"),
+    );
+
+    expect(result).toBeNull();
   });
 });
