@@ -3115,7 +3115,10 @@ export const loadServerActionClient = ${
     createLayoutOwnedGlobalCssPlugin(
       () => appDir,
       () => (hasPagesDir ? pagesDir : null),
-      { getPageExtensions: () => nextConfig.pageExtensions },
+      {
+        getPageExtensions: () => nextConfig.pageExtensions,
+        getMdxOptions: () => nextConfig.mdx,
+      },
     ),
     // CSS url() asset parity with Next.js. Build-only: dev CSS is untouched.
     // Apply the transient marker in every environment so CSS Modules receives

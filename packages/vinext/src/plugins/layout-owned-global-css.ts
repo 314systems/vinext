@@ -13,6 +13,11 @@ const MAX_PAGES_GRAPH_MODULES = 10_000;
 
 type LayoutOwnedGlobalCssOptions = {
   getPageExtensions?: () => string[];
+  getMdxOptions?: () => {
+    remarkPlugins?: unknown[];
+    rehypePlugins?: unknown[];
+    recmaPlugins?: unknown[];
+  } | null;
   maxPagesGraphModules?: number;
 };
 
@@ -110,39 +115,90 @@ function extractModuleSources(
   return [...sources].map(([source, isDynamic]) => ({ source, isDynamic }));
 }
 
-function extractMdxModuleSources(source: string): Array<{ source: string; isDynamic: false }> {
-  const unfencedLines: string[] = [];
+function maskMdxHtmlComments(source: string): string {
+  const maskedLines: string[] = [];
   let fence: { marker: "`" | "~"; length: number } | null = null;
+  let inHtmlComment = false;
+
   for (const line of source.split(/\r?\n/)) {
     const fenceMatch = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
     if (fenceMatch) {
       const marker = fenceMatch[1][0] as "`" | "~";
       if (!fence) {
         fence = { marker, length: fenceMatch[1].length };
-        unfencedLines.push("");
-        continue;
-      }
-      if (
+      } else if (
         marker === fence.marker &&
         fenceMatch[1].length >= fence.length &&
         fenceMatch[2].trim() === ""
       ) {
         fence = null;
       }
-      unfencedLines.push("");
+      maskedLines.push(line);
       continue;
     }
-    unfencedLines.push(fence ? "" : line);
+
+    if (fence || /^ {4}/.test(line)) {
+      maskedLines.push(line);
+      continue;
+    }
+
+    let maskedLine = "";
+    let offset = 0;
+    while (offset < line.length) {
+      if (inHtmlComment) {
+        const commentEnd = line.indexOf("-->", offset);
+        if (commentEnd === -1) {
+          maskedLine += " ".repeat(line.length - offset);
+          offset = line.length;
+        } else {
+          maskedLine += " ".repeat(commentEnd + 3 - offset);
+          offset = commentEnd + 3;
+          inHtmlComment = false;
+        }
+        continue;
+      }
+
+      const commentStart = line.indexOf("<!--", offset);
+      if (commentStart === -1 || line.slice(0, commentStart).trim() !== "") {
+        maskedLine += line.slice(offset);
+        break;
+      }
+      maskedLine += line.slice(offset, commentStart) + " ".repeat(4);
+      offset = commentStart + 4;
+      inHtmlComment = true;
+    }
+    maskedLines.push(maskedLine);
   }
 
-  const unfencedSource = unfencedLines.join("\n");
-  const sources = new Set<string>();
-  const esmStatement = /^\s*(?:import|export)\s[\s\S]*?\sfrom\s*["']([^"']+)["']\s*;?\s*$/gm;
-  const sideEffectImport = /^\s*import\s*["']([^"']+)["']\s*;?\s*$/gm;
-  for (const matcher of [esmStatement, sideEffectImport]) {
-    for (const match of unfencedSource.matchAll(matcher)) sources.add(match[1]);
-  }
-  return [...sources].map((importSource) => ({ source: importSource, isDynamic: false }));
+  return maskedLines.join("\n");
+}
+
+async function extractMdxModuleSources(
+  modulePath: string,
+  source: string,
+  options: LayoutOwnedGlobalCssOptions,
+): Promise<Array<{ source: string; isDynamic: boolean }>> {
+  const mdxRollup = await import("@mdx-js/rollup");
+  const mdxFactory = mdxRollup.default as (options: Record<string, unknown>) => Plugin;
+  const transformPlugin = mdxFactory({
+    ...options.getMdxOptions?.(),
+    jsx: true,
+    outputFormat: "program",
+  });
+  const transformHook = transformPlugin.transform;
+  if (!transformHook) return [];
+  const transform = typeof transformHook === "function" ? transformHook : transformHook.handler;
+  const scanPath = `${modulePath}.mdx`;
+  const result = await transform.call(
+    {} as never,
+    maskMdxHtmlComments(source),
+    scanPath,
+    {} as never,
+  );
+  if (!result) return [];
+
+  const compiledSource = typeof result === "string" ? result : String(result.code ?? "");
+  return extractModuleSources(`${modulePath}.jsx`, compiledSource);
 }
 
 export function createLayoutOwnedGlobalCssPlugin(
@@ -419,7 +475,7 @@ export function createLayoutOwnedGlobalCssPlugin(
           imports = SOURCE_MODULE_RE.test(cleanPath)
             ? extractModuleSources(cleanPath, source)
             : configuredPageExtension(cleanPath) !== undefined
-              ? extractMdxModuleSources(source)
+              ? await extractMdxModuleSources(cleanPath, source, options)
               : [];
         } catch {
           pagesScanIsConservative = true;

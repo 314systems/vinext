@@ -899,7 +899,7 @@ describe("layout-owned global CSS", () => {
     await fs.rm(projectDir, { recursive: true, force: true });
   });
 
-  it("ignores fenced MDX imports while following top-level ESM", async () => {
+  it("follows MDX ESM while ignoring code blocks and comments", async () => {
     const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-layout-css-mdx-fences-"));
     const appDir = path.join(projectDir, "app");
     const pagesDir = path.join(projectDir, "pages");
@@ -912,14 +912,25 @@ describe("layout-owned global CSS", () => {
     const appHelper = path.join(appDir, "dashboard", "shared.tsx");
     const pagesRoute = path.join(pagesDir, "shared.mdx");
     const pagesHelper = path.join(sourceDir, "pages-helper.ts");
+    const namedExportHelper = path.join(sourceDir, "named-export-helper.ts");
+    const starExportHelper = path.join(sourceDir, "star-export-helper.ts");
     const fencedBacktickHelper = path.join(sourceDir, "fenced-backtick.ts");
     const fencedTildeHelper = path.join(sourceDir, "fenced-tilde.ts");
+    const indentedHelper = path.join(sourceDir, "indented.ts");
+    const htmlCommentHelper = path.join(sourceDir, "html-comment.ts");
+    const jsxCommentHelper = path.join(sourceDir, "jsx-comment.ts");
     const sharedClient = path.join(sourceDir, "shared-client.tsx");
     const stylesheet = path.join(sourceDir, "shared.css");
     await fs.writeFile(
       pagesRoute,
       [
-        'import "../src/pages-helper"',
+        "import {",
+        "  helper,",
+        '} from "../src/pages-helper"',
+        "export {",
+        "  value,",
+        '} from "../src/named-export-helper"',
+        'export * from "../src/star-export-helper"',
         "",
         "```tsx",
         'import "../src/fenced-backtick"',
@@ -929,23 +940,48 @@ describe("layout-owned global CSS", () => {
         'import "../src/fenced-tilde"',
         "~~~~",
         "",
+        '    import "../src/indented"',
+        "",
+        "<!--",
+        'import "../src/html-comment"',
+        "-->",
+        "",
+        "{/*",
+        'import "../src/jsx-comment"',
+        "*/}",
+        "",
         "# Shared",
       ].join("\n"),
     );
     await fs.writeFile(pagesHelper, `import "./shared-client";\n`);
+    await fs.writeFile(namedExportHelper, `export { default as value } from "./shared-client";\n`);
+    await fs.writeFile(starExportHelper, `export * from "./shared-client";\n`);
     await fs.writeFile(fencedBacktickHelper, `import "./shared-client";\n`);
     await fs.writeFile(fencedTildeHelper, `import "./shared-client";\n`);
+    await fs.writeFile(indentedHelper, `import "./shared-client";\n`);
+    await fs.writeFile(htmlCommentHelper, `import "./shared-client";\n`);
+    await fs.writeFile(jsxCommentHelper, `import "./shared-client";\n`);
     await fs.writeFile(sharedClient, `import "./shared.css";\n`);
     await fs.writeFile(stylesheet, `.shared { color: teal; }\n`);
 
     const resolvedSources: string[] = [];
     const resolutions = new Map([
       [`${pagesRoute}:../src/pages-helper`, pagesHelper],
+      [`${pagesRoute}:../src/named-export-helper`, namedExportHelper],
+      [`${pagesRoute}:../src/star-export-helper`, starExportHelper],
       [`${pagesRoute}:../src/fenced-backtick`, fencedBacktickHelper],
       [`${pagesRoute}:../src/fenced-tilde`, fencedTildeHelper],
+      [`${pagesRoute}:../src/indented`, indentedHelper],
+      [`${pagesRoute}:../src/html-comment`, htmlCommentHelper],
+      [`${pagesRoute}:../src/jsx-comment`, jsxCommentHelper],
       [`${pagesHelper}:./shared-client`, sharedClient],
+      [`${namedExportHelper}:./shared-client`, sharedClient],
+      [`${starExportHelper}:./shared-client`, sharedClient],
       [`${fencedBacktickHelper}:./shared-client`, sharedClient],
       [`${fencedTildeHelper}:./shared-client`, sharedClient],
+      [`${indentedHelper}:./shared-client`, sharedClient],
+      [`${htmlCommentHelper}:./shared-client`, sharedClient],
+      [`${jsxCommentHelper}:./shared-client`, sharedClient],
       [`${sharedClient}:./shared.css`, stylesheet],
     ]);
     const plugin = createLayoutOwnedGlobalCssPlugin(
@@ -989,8 +1025,13 @@ describe("layout-owned global CSS", () => {
       }),
     ).resolves.toBeNull();
     expect(resolvedSources).toContain(`${pagesRoute}:../src/pages-helper`);
+    expect(resolvedSources).toContain(`${pagesRoute}:../src/named-export-helper`);
+    expect(resolvedSources).toContain(`${pagesRoute}:../src/star-export-helper`);
     expect(resolvedSources).not.toContain(`${pagesRoute}:../src/fenced-backtick`);
     expect(resolvedSources).not.toContain(`${pagesRoute}:../src/fenced-tilde`);
+    expect(resolvedSources).not.toContain(`${pagesRoute}:../src/indented`);
+    expect(resolvedSources).not.toContain(`${pagesRoute}:../src/html-comment`);
+    expect(resolvedSources).not.toContain(`${pagesRoute}:../src/jsx-comment`);
 
     await fs.rm(projectDir, { recursive: true, force: true });
   });
