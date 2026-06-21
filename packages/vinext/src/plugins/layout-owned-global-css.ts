@@ -532,8 +532,6 @@ export function createLayoutOwnedGlobalCssPlugin(
     async resolveId(source, importer) {
       if (!importer || source.startsWith(EMPTY_LAYOUT_CSS_PREFIX)) return null;
 
-      const sourcePath = cleanModuleId(source);
-      const isGlobalStylesheet = STYLESHEET_RE.test(sourcePath) && !CSS_MODULE_RE.test(sourcePath);
       const importerPath = path.resolve(cleanModuleId(importer));
       const normalizedAppDir = path.resolve(getAppDir());
       const pagesDir = getPagesDir();
@@ -560,6 +558,8 @@ export function createLayoutOwnedGlobalCssPlugin(
 
         const resolvedPath = cleanModuleId(resolved.id);
         if (!path.isAbsolute(resolvedPath)) return null;
+        const isGlobalStylesheet =
+          STYLESHEET_RE.test(resolvedPath) && !CSS_MODULE_RE.test(resolvedPath);
         addImport(importer, resolved.id);
 
         if (isGlobalStylesheet && !hasNonStylesheetQuery(source)) {
@@ -572,11 +572,15 @@ export function createLayoutOwnedGlobalCssPlugin(
       }
 
       if (this.environment?.name !== "client") return null;
-      if (!isGlobalStylesheet || hasNonStylesheetQuery(source)) return null;
+      if (hasNonStylesheetQuery(source)) return null;
       await scanPagesConsumers(this);
 
       const resolved = await this.resolve(source, importer, { skipSelf: true });
       if (!resolved || resolved.external || resolved.id.startsWith("\0")) return null;
+      const resolvedPath = cleanModuleId(resolved.id);
+      const isGlobalStylesheet =
+        STYLESHEET_RE.test(resolvedPath) && !CSS_MODULE_RE.test(resolvedPath);
+      if (!isGlobalStylesheet) return null;
 
       const owners = ownerDirectories.get(resolved.id);
       const importerOwners = moduleOwners.get(graphModuleId(importer));

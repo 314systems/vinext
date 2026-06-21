@@ -571,6 +571,95 @@ describe("layout-owned global CSS", () => {
     }
   });
 
+  it("classifies extensionless aliases from their resolved CSS paths", async () => {
+    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-layout-css-alias-"));
+    try {
+      const appDir = path.join(fixtureRoot, "app");
+      const plugin = createLayoutOwnedGlobalCssPlugin(() => appDir);
+      const resolveId =
+        typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
+      expect(resolveId).toBeTypeOf("function");
+
+      const layout = path.join(appDir, "dashboard", "layout.tsx");
+      const client = path.join(appDir, "dashboard", "client.tsx");
+      const stylesheet = path.join(fixtureRoot, "src", "styles", "global.css");
+      await fs.mkdir(path.dirname(stylesheet), { recursive: true });
+      await fs.writeFile(stylesheet, ".alias { color: green; }\n");
+
+      await expect(
+        resolveId!.call(
+          createContext("rsc", { "@/styles/global": stylesheet }) as never,
+          "@/styles/global",
+          layout,
+          { isEntry: false },
+        ),
+      ).resolves.toEqual({ id: stylesheet });
+      await expect(
+        resolveId!.call(
+          createContext("client", { "@/styles/global": stylesheet }) as never,
+          "@/styles/global",
+          client,
+          { isEntry: false },
+        ),
+      ).resolves.toSatisfy((id: unknown) => typeof id === "string" && id.charCodeAt(0) === 0);
+
+      for (const query of ["?inline", "?raw", "?url"] as const) {
+        const source = `@/styles/global${query}`;
+        await expect(
+          resolveId!.call(
+            createContext("client", { [source]: stylesheet }) as never,
+            source,
+            client,
+            { isEntry: false },
+          ),
+        ).resolves.toBeNull();
+      }
+    } finally {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("classifies bare package exports from their resolved CSS paths", async () => {
+    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-layout-css-export-"));
+    try {
+      const appDir = path.join(fixtureRoot, "app");
+      const plugin = createLayoutOwnedGlobalCssPlugin(() => appDir);
+      const resolveId =
+        typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
+      expect(resolveId).toBeTypeOf("function");
+
+      const layout = path.join(appDir, "dashboard", "layout.tsx");
+      const client = path.join(appDir, "dashboard", "client.tsx");
+      const packageRoot = path.join(fixtureRoot, "node_modules", "theme-package");
+      const stylesheet = path.join(packageRoot, "dist", "global.css");
+      await fs.mkdir(path.dirname(stylesheet), { recursive: true });
+      await fs.writeFile(
+        path.join(packageRoot, "package.json"),
+        JSON.stringify({ name: "theme-package", exports: { "./styles": "./dist/global.css" } }),
+      );
+      await fs.writeFile(stylesheet, ".package-export { color: purple; }\n");
+
+      await expect(
+        resolveId!.call(
+          createContext("rsc", { "theme-package/styles": stylesheet }) as never,
+          "theme-package/styles",
+          layout,
+          { isEntry: false },
+        ),
+      ).resolves.toEqual({ id: stylesheet });
+      await expect(
+        resolveId!.call(
+          createContext("client", { "theme-package/styles": stylesheet }) as never,
+          "theme-package/styles",
+          client,
+          { isEntry: false },
+        ),
+      ).resolves.toSatisfy((id: unknown) => typeof id === "string" && id.charCodeAt(0) === 0);
+    } finally {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
   it("does not propagate layout ownership through dynamic imports", async () => {
     const appDir = path.resolve("/project/app");
     const plugin = createLayoutOwnedGlobalCssPlugin(() => appDir);
