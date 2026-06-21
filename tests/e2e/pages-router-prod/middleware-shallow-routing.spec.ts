@@ -3,9 +3,9 @@ import { waitForHydration } from "../helpers";
 
 const BASE = "http://localhost:4175";
 
-// Extends the shallow-routing scenario from Next.js with middleware-injected query state:
+// Ported from Next.js: test/e2e/middleware-general/test/index.test.ts
 // https://github.com/vercel/next.js/blob/canary/test/e2e/middleware-general/test/index.test.ts
-test("middleware alias supports deep then shallow navigation", async ({ page }) => {
+test("same-page middleware rewrite stays shallow", async ({ page }) => {
   await page.goto(`${BASE}/sha`);
   await expect(page.locator("h1")).toHaveText("Shallow Routing Test");
   await waitForHydration(page);
@@ -47,7 +47,7 @@ test("middleware alias supports deep then shallow navigation", async ({ page }) 
   expect(reloadCallId).not.toBe(deepCallId);
 });
 
-test("requested cross-path navigation stays shallow when middleware can rewrite it", async ({
+test("cross-page navigation is not shallow just because middleware is present", async ({
   page,
 }) => {
   await page.goto(`${BASE}/sha`);
@@ -63,9 +63,12 @@ test("requested cross-path navigation stays shallow when middleware can rewrite 
   );
 
   await expect(page).toHaveURL(`${BASE}/about`);
-  await expect(page.locator("h1")).toHaveText("Shallow Routing Test");
-  expect(await page.locator('[data-testid="gssp-call-id"]').textContent()).toBe(callId);
-  expect(requests.filter((pathname) => pathname === "/about")).toEqual([]);
+  await expect(page.locator("h1")).toHaveText("About");
+  expect(await page.locator('[data-testid="gssp-call-id"]').count()).toBe(0);
+  expect(
+    requests.some((pathname) => pathname === "/about" || pathname.includes("/_next/data/")),
+  ).toBe(true);
+  expect(callId).not.toBeNull();
 });
 
 test("Back and Forward stay shallow only between consecutive shallow entries", async ({ page }) => {

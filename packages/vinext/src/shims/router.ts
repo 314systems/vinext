@@ -2574,9 +2574,7 @@ async function performNavigation(
   const htmlFetchUrl =
     errorRouteHtmlFetchUrl ?? getPagesHtmlFetchUrl(fullRouteUrl, navigationLocale);
   const requestedShallow = options?.shallow === true;
-  const shallow =
-    requestedShallow &&
-    (hasVinextMiddleware(window.__NEXT_DATA__) || isSamePagesRoute(interpolatedRoute));
+  const shallow = requestedShallow && isSamePagesRoute(interpolatedRoute);
   const hashOnly = options?._h !== 1 && interpolatedRoute === resolved && isHashOnlyChange(full);
   const doScroll = options?.scroll ?? (hashOnly || !shallow);
   const hash = extractHash(resolved);

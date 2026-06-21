@@ -14888,6 +14888,10 @@ describe("Pages Router concurrent navigation", () => {
     const previousTrailingSlash = process.env.__VINEXT_TRAILING_SLASH;
     const originalFetch = globalThis.fetch;
     const { win } = createNavWindow();
+    const currentPathname = new URL(target, "http://localhost").pathname.replace(/\/$/, "") || "/";
+    win.location.pathname = currentPathname;
+    win.location.href = `http://localhost${currentPathname}`;
+    win.__NEXT_DATA__.page = currentPathname;
     (
       win.__NEXT_DATA__.__vinext as { pageModuleUrl: string; hasMiddleware?: boolean }
     ).hasMiddleware = true;
@@ -17226,26 +17230,25 @@ describe("Pages Router concurrent navigation", () => {
     }
   });
 
-  it("preserves requested cross-route shallow navigation when middleware makes route identity unknowable", async () => {
+  it("does not preserve cross-route shallow navigation when middleware is present", async () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
     const { win } = createNavWindow();
+    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
     (
       win.__NEXT_DATA__.__vinext as { pageModuleUrl: string; hasMiddleware?: boolean }
     ).hasMiddleware = true;
     (globalThis as any).window = win;
-    globalThis.fetch = vi.fn(async () => {
-      throw new Error("middleware-backed shallow navigation must not fetch page HTML");
-    });
+    globalThis.fetch = vi.fn(async () => new Response(buildNavHtml("/page-a", pageModuleUrl)));
 
     try {
       vi.resetModules();
       const { default: Router } = await import("../packages/vinext/src/shims/router.js");
 
       await expect(Router.push("/page-a", undefined, { shallow: true })).resolves.toBe(true);
-      expect(globalThis.fetch).not.toHaveBeenCalled();
+      expect(globalThis.fetch).toHaveBeenCalledOnce();
       expect((win.history as any).pushState).toHaveBeenLastCalledWith(
-        expect.objectContaining({ options: expect.objectContaining({ shallow: true }) }),
+        expect.objectContaining({ options: expect.objectContaining({ shallow: false }) }),
         "",
         "/page-a",
       );
@@ -17370,11 +17373,15 @@ describe("Pages Router concurrent navigation", () => {
       (win.history as any).scrollRestoration = "auto";
       (win.history as any).state = {
         __N: true,
-        url: "/current",
-        as: "/current",
+        url: "/",
+        as: "/?step=current",
         options: { shallow: true },
         key: "key-current",
+        __vinext_route: "/",
       };
+      win.location.pathname = "/";
+      win.location.search = "?step=current";
+      win.location.href = "http://localhost/?step=current";
       const sessionStore = new Map<string, string>([
         [`__next_scroll_${targetKey}`, JSON.stringify({ x: 40, y: 600 })],
       ]);
@@ -17411,43 +17418,44 @@ describe("Pages Router concurrent navigation", () => {
         installPagesRouterRuntime();
         Router.events.on("routeChangeComplete", onRouteChangeComplete);
 
-        await Router.replace("/current", undefined, { shallow: true });
+        await Router.replace("/?step=current", undefined, { shallow: true });
         completedUrls.length = 0;
 
         const popstateHandler = listeners.get("popstate");
         expect(popstateHandler).toBeDefined();
         (win.history as any).state = {
           __N: true,
-          url: "/target",
-          as: "/target",
+          url: "/?step=target",
+          as: "/?step=target",
           options: { shallow: true },
           key: targetKey,
           __vinext_route: "/",
         };
-        win.location.pathname = "/target";
-        win.location.href = "http://localhost/target";
+        win.location.pathname = "/";
+        win.location.search = "?step=target";
+        win.location.href = "http://localhost/?step=target";
         popstateHandler!({ state: (win.history as any).state });
 
         await vi.waitFor(() => expect(animationFrames).toHaveLength(1));
         expect(win.scrollTo).toHaveBeenCalledWith(40, 600);
 
-        const replacement = Router.replace("/replacement", undefined, {
+        const replacement = Router.replace("/?step=replacement", undefined, {
           shallow: replacementKind === "shallow",
         });
         await replacement;
         expect((win.history as any).replaceState).toHaveBeenLastCalledWith(
           expect.objectContaining({ key: targetKey }),
           "",
-          "/replacement",
+          "/?step=replacement",
         );
 
         animationFrames.shift()!(0);
         await Promise.resolve();
         await Promise.resolve();
 
-        expect(completedUrls).not.toContain("/target");
+        expect(completedUrls).not.toContain("/?step=target");
         if (replacementKind === "shallow") {
-          expect(completedUrls).toContain("/replacement");
+          expect(completedUrls).toContain("/?step=replacement");
         } else {
           expect(globalThis.fetch).toHaveBeenCalledTimes(1);
         }
