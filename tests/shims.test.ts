@@ -18185,7 +18185,7 @@ describe("Pages Router _next/data client navigation", () => {
       const secondPush = Router.push("/slow?value=one");
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(pushState).toHaveBeenCalledTimes(2);
+      expect(pushState).not.toHaveBeenCalled();
 
       resolveFetch(
         new Response(JSON.stringify({ pageProps: { hit: 1 } }), {
@@ -18198,6 +18198,7 @@ describe("Pages Router _next/data client navigation", () => {
       expect(routeChangeErrors).toHaveLength(1);
       expect(routeChangeErrors[0]).toMatchObject({ cancelled: true });
       expect(routeChangeComplete).toHaveBeenCalledTimes(1);
+      expect(pushState).toHaveBeenCalledTimes(1);
       expect(slowLoader).toHaveBeenCalledTimes(1);
       expect(render).toHaveBeenCalledTimes(1);
       expect(win.__NEXT_DATA__).toMatchObject({

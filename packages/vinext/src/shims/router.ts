@@ -1434,13 +1434,14 @@ function cancelPreviousRenderCommit(): void {
   routerRuntimeState.cancelPendingRenderCommit = null;
 }
 
-function cancelActiveNavigation(): void {
+function cancelActiveNavigation(options: { deferAbort?: boolean } = {}): void {
   const cancelledEventUrl = routerRuntimeState.activeNavigationEventUrl;
   const cancelledEventOptions = routerRuntimeState.activeNavigationEventOptions;
   const controller = routerRuntimeState.activeAbortController;
   if (!controller || !cancelledEventUrl || !cancelledEventOptions) return;
 
-  controller.abort();
+  if (options.deferAbort) queueMicrotask(() => controller.abort());
+  else controller.abort();
   cancelPreviousRenderCommit();
   routerRuntimeState.navigationId += 1;
   routerRuntimeState.activeAbortController = null;
@@ -2662,7 +2663,7 @@ async function performNavigation(
 
   if (mode === "push") saveScrollPosition();
   const isQueryUpdating = options?._h === 1;
-  cancelActiveNavigation();
+  cancelActiveNavigation({ deferAbort: true });
   if (!isQueryUpdating) {
     routerEvents.emit("routeChangeStart", full, { shallow });
   }
