@@ -6,7 +6,6 @@ import { fnv1a64 } from "../utils/hash.js";
 
 const STYLESHEET_RE = /\.(?:css|less|sass|scss|styl|stylus)$/i;
 const CSS_MODULE_RE = /\.module\.(?:css|less|sass|scss|styl|stylus)$/i;
-const APP_SHARED_OWNER_RE = /(?:^|\/)(?:layout|template)\.(?:[cm]?[jt]sx?)$/i;
 const EMPTY_LAYOUT_CSS_PREFIX = "\0vinext:layout-owned-global-css/";
 const SOURCE_MODULE_RE = /\.(?:[cm]?[jt]sx?)$/i;
 const MAX_EXTERNAL_GRAPH_MODULES_PER_ROOT = 10_000;
@@ -138,6 +137,19 @@ export function createLayoutOwnedGlobalCssPlugin(
   let pagesSsrResolve: ((source: string, importer?: string) => Promise<string | undefined>) | null =
     null;
 
+  function normalizedPageExtensions(): string[] {
+    return (options.getPageExtensions?.() ?? ["tsx", "ts", "jsx", "js", "mts", "cts", "mjs", "cjs"])
+      .map((extension) => extension.replace(/^\./, "").toLowerCase())
+      .filter(Boolean);
+  }
+
+  function isAppSharedOwner(modulePath: string): boolean {
+    const fileName = path.basename(cleanModuleId(modulePath)).toLowerCase();
+    return normalizedPageExtensions().some(
+      (extension) => fileName === `layout.${extension}` || fileName === `template.${extension}`,
+    );
+  }
+
   function addOwners(moduleId: string, owners: Iterable<string>): void {
     moduleId = graphModuleId(moduleId);
     let moduleOwnerDirectories = moduleOwners.get(moduleId);
@@ -219,7 +231,7 @@ export function createLayoutOwnedGlobalCssPlugin(
       if (pagesScanIsConservative) return false;
 
       const currentPath = path.resolve(cleanModuleId(currentId));
-      if (APP_SHARED_OWNER_RE.test(currentPath) && path.dirname(currentPath) === owner) return true;
+      if (isAppSharedOwner(currentPath) && path.dirname(currentPath) === owner) return true;
 
       const importers = moduleImporters.get(currentId);
       if (importers && importers.size > 0) {
@@ -338,13 +350,10 @@ export function createLayoutOwnedGlobalCssPlugin(
     if (pagesConsumerScan) return pagesConsumerScan;
 
     pagesConsumerScan = (async () => {
-      const pageExtensions = options.getPageExtensions?.() ?? ["tsx", "ts", "jsx", "js"];
-      const normalizedPageExtensions = pageExtensions.map((extension) =>
-        extension.replace(/^\./, "").toLowerCase(),
-      );
+      const configuredPageExtensions = normalizedPageExtensions();
       const configuredPageExtension = (modulePath: string) => {
         const lowerPath = modulePath.toLowerCase();
-        return normalizedPageExtensions.find((extension) => lowerPath.endsWith(`.${extension}`));
+        return configuredPageExtensions.find((extension) => lowerPath.endsWith(`.${extension}`));
       };
       const maxModules = options.maxPagesGraphModules ?? MAX_PAGES_GRAPH_MODULES;
       const isScannableModule = (modulePath: string) =>
@@ -458,10 +467,7 @@ export function createLayoutOwnedGlobalCssPlugin(
       }
 
       if (this.environment?.name === "rsc") {
-        if (
-          isDescendantPath(importerPath, normalizedAppDir) &&
-          APP_SHARED_OWNER_RE.test(importerPath)
-        ) {
+        if (isDescendantPath(importerPath, normalizedAppDir) && isAppSharedOwner(importerPath)) {
           addOwners(importer, [path.dirname(importerPath)]);
         }
 

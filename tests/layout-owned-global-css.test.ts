@@ -152,6 +152,81 @@ describe("layout-owned global CSS", () => {
     ).resolves.toBeNull();
   });
 
+  it("honors configured multi-dot and MDX extensions for App layout and template owners", async () => {
+    const appDir = path.resolve("/app");
+    const plugin = createLayoutOwnedGlobalCssPlugin(
+      () => appDir,
+      () => null,
+      { getPageExtensions: () => ["page.tsx", "mdx"] },
+    );
+    const resolveId =
+      typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
+    expect(resolveId).toBeTypeOf("function");
+
+    const layout = path.join(appDir, "dashboard", "layout.page.tsx");
+    const layoutHelper = path.join(appDir, "dashboard", "shared.tsx");
+    const layoutStylesheet = path.join(appDir, "dashboard", "global.css");
+    const template = path.join(appDir, "account", "template.mdx");
+    const templateStylesheet = path.join(appDir, "account", "template.css");
+
+    await resolveId!.call(
+      createContext("rsc", { "./global.css": layoutStylesheet }) as never,
+      "./global.css",
+      layoutHelper,
+      { isEntry: false },
+    );
+    await resolveId!.call(
+      createContext("rsc", { "./shared": layoutHelper }) as never,
+      "./shared",
+      layout,
+      { isEntry: false },
+    );
+    await resolveId!.call(
+      createContext("rsc", { "./template.css": templateStylesheet }) as never,
+      "./template.css",
+      template,
+      { isEntry: false },
+    );
+
+    await expect(
+      resolveId!.call(
+        createContext("client", layoutStylesheet) as never,
+        "./global.css",
+        path.join(appDir, "dashboard", "lazy.tsx"),
+        { isEntry: false },
+      ),
+    ).resolves.toSatisfy(
+      (id: unknown) => typeof id === "string" && id.startsWith("\0vinext:layout-owned-global-css/"),
+    );
+    await expect(
+      resolveId!.call(
+        createContext("client", templateStylesheet) as never,
+        "./template.css",
+        path.join(appDir, "account", "lazy.tsx"),
+        { isEntry: false },
+      ),
+    ).resolves.toSatisfy(
+      (id: unknown) => typeof id === "string" && id.startsWith("\0vinext:layout-owned-global-css/"),
+    );
+
+    const unconfiguredLayout = path.join(appDir, "legacy", "layout.tsx");
+    const unconfiguredStylesheet = path.join(appDir, "legacy", "global.css");
+    await resolveId!.call(
+      createContext("rsc", unconfiguredStylesheet) as never,
+      "./global.css",
+      unconfiguredLayout,
+      { isEntry: false },
+    );
+    await expect(
+      resolveId!.call(
+        createContext("client", unconfiguredStylesheet) as never,
+        "./global.css",
+        path.join(appDir, "legacy", "lazy.tsx"),
+        { isEntry: false },
+      ),
+    ).resolves.toBeNull();
+  });
+
   it("tracks shared modules outside app while preserving route ownership", async () => {
     const appDir = path.resolve("/project/app");
     const plugin = createLayoutOwnedGlobalCssPlugin(() => appDir);
