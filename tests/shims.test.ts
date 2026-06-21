@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { PAGES_FIXTURE_DIR } from "./helpers.js";
+import { APP_FIXTURE_DIR, PAGES_FIXTURE_DIR } from "./helpers.js";
 import { isExternalUrl, isHashOnlyChange } from "../packages/vinext/src/shims/router.js";
 import { extractVinextNextDataJson } from "../packages/vinext/src/client/vinext-next-data.js";
 import { isValidModulePath } from "../packages/vinext/src/client/validate-module-path.js";
@@ -21626,8 +21626,12 @@ describe("shim alias map .js variants", () => {
     ).toBe(expected);
   });
 
-  it("externalizes the styled-jsx React peer only for Node Pages SSR", async () => {
-    async function resolveStyledJsxReact(pluginNames: string[], environment = "ssr") {
+  it("externalizes the styled-jsx React peer only for the Pages server build", async () => {
+    async function resolveStyledJsxReact(
+      pluginNames: string[],
+      environment = "ssr",
+      input: string | Record<string, string> = "virtual:vinext-server-entry",
+    ) {
       const plugins = vinext() as Plugin[];
       const configPlugin = plugins.find((plugin) => plugin.name === "vinext:config");
       if (!configPlugin?.config || !configPlugin.resolveId) {
@@ -21654,12 +21658,26 @@ describe("shim alias map .js variants", () => {
         throw new Error("vinext:config filtered resolveId hook not found");
       }
       const resolveId = configPlugin.resolveId.handler as (
-        this: { environment?: { name?: string } },
+        this: {
+          environment?: {
+            name?: string;
+            config: {
+              build: {
+                rolldownOptions: { input: string | Record<string, string> };
+              };
+            };
+          };
+        },
         id: string,
         importer?: string,
       ) => { id: string; external: true } | undefined;
       return resolveId.call(
-        { environment: { name: environment } },
+        {
+          environment: {
+            name: environment,
+            config: { build: { rolldownOptions: { input } } },
+          },
+        },
         "react",
         "/project/node_modules/styled-jsx/dist/index/index.js",
       );
@@ -21672,8 +21690,50 @@ describe("shim alias map .js variants", () => {
     ).toBe(true);
 
     expect(await resolveStyledJsxReact([], "client")).toBeUndefined();
+    expect(
+      await resolveStyledJsxReact([], "ssr", { index: "virtual:vinext-app-ssr-entry" }),
+    ).toBeUndefined();
     expect(await resolveStyledJsxReact(["vite-plugin-cloudflare"])).toBeUndefined();
     expect(await resolveStyledJsxReact(["nitro"])).toBeUndefined();
+  });
+
+  it("uses distinct Pages and hybrid App SSR build entries", async () => {
+    async function getSsrBuildInput(root: string) {
+      const plugins = vinext() as Plugin[];
+      const configPlugin = plugins.find((plugin) => plugin.name === "vinext:config");
+      if (!configPlugin?.config) throw new Error("vinext:config hook not found");
+
+      const configHook = (
+        typeof configPlugin.config === "function"
+          ? configPlugin.config
+          : configPlugin.config.handler
+      ) as (
+        config: { root: string; plugins: Array<{ name: string }> },
+        env: { mode: string; command: string },
+      ) => Promise<{
+        environments?: {
+          ssr?: {
+            build?: {
+              rolldownOptions?: { input?: unknown };
+              rollupOptions?: { input?: unknown };
+            };
+          };
+        };
+      }>;
+      const resolved = await configHook(
+        { root, plugins: [] },
+        { mode: "production", command: "build" },
+      );
+      const build = resolved.environments?.ssr?.build;
+      return build?.rolldownOptions?.input ?? build?.rollupOptions?.input;
+    }
+
+    expect(await getSsrBuildInput(PAGES_FIXTURE_DIR)).toEqual({
+      index: "virtual:vinext-server-entry",
+    });
+    expect(await getSsrBuildInput(APP_FIXTURE_DIR)).toEqual({
+      index: "virtual:vinext-app-ssr-entry",
+    });
   });
 });
 

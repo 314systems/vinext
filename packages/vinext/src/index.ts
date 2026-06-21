@@ -543,6 +543,22 @@ const RESOLVED_SERVER_ENTRY = VIRTUAL_PREFIX + VIRTUAL_SERVER_ENTRY;
 const VIRTUAL_CLIENT_ENTRY = "virtual:vinext-client-entry";
 const RESOLVED_CLIENT_ENTRY = VIRTUAL_PREFIX + VIRTUAL_CLIENT_ENTRY;
 
+function hasPagesServerBuildInput(input: unknown): boolean {
+  if (typeof input === "string") {
+    const cleanInput = input.startsWith(VIRTUAL_PREFIX) ? input.slice(1) : input;
+    return (
+      cleanInput === VIRTUAL_SERVER_ENTRY ||
+      cleanInput.endsWith("/" + VIRTUAL_SERVER_ENTRY) ||
+      cleanInput.endsWith("\\" + VIRTUAL_SERVER_ENTRY)
+    );
+  }
+  if (Array.isArray(input)) return input.some(hasPagesServerBuildInput);
+  if (input && typeof input === "object") {
+    return Object.values(input).some(hasPagesServerBuildInput);
+  }
+  return false;
+}
+
 // Virtual module IDs for App Router entries
 const VIRTUAL_RSC_ENTRY = "virtual:vinext-rsc-entry";
 const RESOLVED_RSC_ENTRY = VIRTUAL_PREFIX + VIRTUAL_RSC_ENTRY;
@@ -2738,10 +2754,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           if (
             cleanId === "react" &&
             importer?.includes("/styled-jsx/") &&
-            hasPagesDir &&
             !hasCloudflarePlugin &&
             !hasNitroPlugin &&
-            this.environment?.name === "ssr"
+            this.environment?.name === "ssr" &&
+            hasPagesServerBuildInput(getBuildBundlerOptions(this.environment.config.build)?.input)
           ) {
             return {
               id: resolveOptionalDependency(earlyBaseDir, "react")!,
