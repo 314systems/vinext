@@ -8,11 +8,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import type { ViteDevServer } from "vite-plus";
 import { buildAppFixture, buildPagesFixture, fetchHtml, startFixtureServer } from "../helpers.js";
 
 const FIXTURE_DIR = path.resolve(import.meta.dirname, "../fixtures/custom-tsconfig");
-const CUSTOM_TSCONFIG_PATH = path.join(FIXTURE_DIR, "web.tsconfig.json");
+const CUSTOM_TSCONFIG_PATH = path.join(FIXTURE_DIR, "config/web.json");
 
 async function waitForHtml(baseUrl: string, expected: string[]): Promise<string> {
   const deadline = Date.now() + 10_000;
@@ -23,18 +24,6 @@ async function waitForHtml(baseUrl: string, expected: string[]): Promise<string>
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`Timed out waiting for ${JSON.stringify(expected)} in HTML: ${lastHtml}`);
-}
-
-async function readBuildOutput(root: string): Promise<string> {
-  const entries = await fs.readdir(root, { withFileTypes: true });
-  const contents = await Promise.all(
-    entries.map(async (entry) => {
-      const entryPath = path.join(root, entry.name);
-      if (entry.isDirectory()) return readBuildOutput(entryPath);
-      return fs.readFile(entryPath, "utf8").catch(() => "");
-    }),
-  );
-  return contents.join("\n");
 }
 
 describe("Next.js compat: typescript.tsconfigPath dev", () => {
@@ -74,8 +63,8 @@ describe("Next.js compat: typescript.tsconfigPath dev", () => {
     const originalConfig = await fs.readFile(CUSTOM_TSCONFIG_PATH, "utf8");
     const pagePath = path.join(FIXTURE_DIR, "app/page.tsx");
     const originalPage = await fs.readFile(pagePath, "utf8");
-    const editedBaseUrlDir = path.join(FIXTURE_DIR, "edited-src");
-    const editedPathFile = path.join(FIXTURE_DIR, "edited-bar.ts");
+    const editedBaseUrlDir = path.join(FIXTURE_DIR, "config/edited-src");
+    const editedPathFile = path.join(FIXTURE_DIR, "config/edited-bar.ts");
     await fs.mkdir(editedBaseUrlDir, { recursive: true });
     await fs.writeFile(
       path.join(editedBaseUrlDir, "base-value.ts"),
@@ -117,38 +106,62 @@ describe("Next.js compat: typescript.tsconfigPath dev", () => {
 });
 
 describe("Next.js compat: typescript.tsconfigPath production", () => {
-  let appOutput: string;
-  let pagesOutput: string;
+  let appHandler: (request: Request) => Promise<Response>;
+  let pagesEntry: {
+    renderPage(
+      request: Request,
+      url: string,
+      manifest: Record<string, string[]>,
+    ): Promise<Response>;
+    runMiddleware(request: Request): Promise<{
+      continue: boolean;
+      response?: Response;
+    }>;
+  };
 
   beforeAll(async () => {
     const appBundlePath = await buildAppFixture(FIXTURE_DIR);
     const pagesBundlePath = await buildPagesFixture(FIXTURE_DIR);
-    appOutput = await readBuildOutput(path.dirname(appBundlePath));
-    pagesOutput = await readBuildOutput(path.dirname(pagesBundlePath));
+    await Promise.all([
+      fs.symlink("index.mjs", appBundlePath),
+      fs.symlink("index.mjs", path.join(path.dirname(appBundlePath), "ssr/index.js")),
+    ]);
+    const appModule = await import(pathToFileURL(appBundlePath).href);
+    appHandler = appModule.default;
+
+    const pagesOutDir = path.dirname(path.dirname(pagesBundlePath));
+    await fs.symlink(
+      path.resolve(import.meta.dirname, "../node_modules"),
+      path.join(pagesOutDir, "node_modules"),
+    );
+    pagesEntry = await import(pathToFileURL(pagesBundlePath).href);
   }, 120_000);
 
-  it("builds App Router with the custom paths and baseUrl", () => {
-    expect(appOutput).toContain("app:");
-    expect(appOutput).toContain("bar123");
-    expect(appOutput).toContain("custom-base-url");
-    expect(appOutput).not.toContain("wrong-default");
+  it("serves App Router with the custom paths and baseUrl", async () => {
+    const res = await appHandler(new Request("http://localhost/"));
+    const html = await res.text();
+    expect(res.status).toBe(200);
+    expect(html).toContain("app:<!-- -->bar123<!-- -->:<!-- -->custom-base-url");
+    expect(html).not.toContain("wrong-default");
   });
 
-  it("builds Pages Router with the custom paths and baseUrl", () => {
-    expect(pagesOutput).toContain("pages:");
-    expect(pagesOutput).toContain("bar123");
-    expect(pagesOutput).toContain("custom-base-url");
-    expect(pagesOutput).not.toContain("wrong-default");
+  it("serves Pages Router with the custom paths and baseUrl", async () => {
+    const res = await pagesEntry.renderPage(new Request("http://localhost/page"), "/page", {});
+    const html = await res.text();
+    expect(res.status).toBe(200);
+    expect(html).toContain("pages:<!-- -->bar123<!-- -->:<!-- -->custom-base-url");
+    expect(html).not.toContain("wrong-default");
   });
 
-  it("builds middleware with the custom paths and baseUrl", () => {
-    expect(pagesOutput).toContain("middleware-result");
-    expect(pagesOutput).toContain("bar123");
-    expect(pagesOutput).toContain("custom-base-url");
-    expect(pagesOutput).not.toContain("wrong-default");
-  });
-
-  afterAll(async () => {
-    await fs.rm(path.join(FIXTURE_DIR, "dist"), { recursive: true, force: true });
+  it("runs middleware with the custom paths and baseUrl", async () => {
+    const result = await pagesEntry.runMiddleware(
+      new Request("http://localhost/middleware-result"),
+    );
+    expect(result.continue).toBe(false);
+    expect(result.response?.status).toBe(200);
+    await expect(result.response?.json()).resolves.toEqual({
+      value: "bar123",
+      baseValue: "custom-base-url",
+    });
   });
 });

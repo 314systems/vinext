@@ -129,17 +129,19 @@ describe("Vite tsconfig paths support", () => {
   it("uses typescript.tsconfigPath for App, Pages, and middleware resolution", async () => {
     const root = setupProject({ name: "vite", version: "8.0.0" });
     process.chdir(root);
+    fs.mkdirSync(path.join(root, "config"));
     fs.writeFileSync(
       path.join(root, "next.config.mjs"),
-      "export default { typescript: { tsconfigPath: 'web.tsconfig.json' } };\n",
+      "export default { typescript: { tsconfigPath: '/config/web.json' } };\n",
     );
     fs.writeFileSync(
-      path.join(root, "web.tsconfig.json"),
+      path.join(root, "config/web.json"),
       JSON.stringify(
         {
           compilerOptions: {
+            baseUrl: "./custom-src",
             paths: {
-              foo: ["./bar.ts"],
+              foo: ["../bar.ts"],
             },
           },
         },
@@ -198,6 +200,32 @@ describe("Vite tsconfig paths support", () => {
     expect(resolvedConfig?.resolve?.alias).not.toHaveProperty("right");
     expect(resolvedConfig?.resolve?.alias).not.toHaveProperty("wrong");
     expect(resolvedConfig?.resolve?.tsconfigPaths).toBe(false);
+  });
+
+  it("throws a TypeScript-style diagnostic when the configured path is a directory", async () => {
+    const root = setupProject({ name: "vite", version: "8.0.0" });
+    process.chdir(root);
+    fs.mkdirSync(path.join(root, "config"));
+    fs.writeFileSync(
+      path.join(root, "next.config.mjs"),
+      "export default { typescript: { tsconfigPath: 'config' } };\n",
+    );
+    fs.writeFileSync(
+      path.join(root, "jsconfig.json"),
+      JSON.stringify({ compilerOptions: { paths: { fallback: ["./fallback.ts"] } } }),
+    );
+
+    const plugins = vinext({ appDir: root });
+    const configPlugin = findNamedPlugin(plugins, "vinext:config") as {
+      config?: (
+        config: { root: string },
+        env: { command: "serve"; mode: string },
+      ) => Promise<unknown>;
+    };
+
+    await expect(
+      configPlugin.config?.({ root }, { command: "serve", mode: "development" }),
+    ).rejects.toThrow(`Cannot read file '${path.join(root, "config")}'.`);
   });
 
   it("throws for a malformed configured file", async () => {

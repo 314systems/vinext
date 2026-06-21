@@ -558,7 +558,10 @@ function selectTsconfig(projectRoot: string, configuredPath?: string): SelectedT
     // Match Next.js loadJsConfig(): leading slashes remain project-relative
     // because path.join(projectRoot, configuredPath) is used instead of resolve.
     const customPath = path.join(projectRoot, configuredPath);
-    if (fs.existsSync(customPath) && fs.statSync(customPath).isFile()) {
+    if (fs.existsSync(customPath)) {
+      if (!fs.statSync(customPath).isFile()) {
+        throw new Error(`Cannot read file '${customPath}'.`);
+      }
       return { path: customPath, custom: true };
     }
 
@@ -923,6 +926,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   let hasNitroPlugin = false;
   let rscCompatibilityId: string | undefined;
   let tsconfigPathsDelegate = viteMajorVersion >= 8 ? undefined : tsconfigPaths();
+  let customTsconfigScope: { projectRoot: string; configDir: string } | undefined;
   const draftModeSecret = randomUUID();
 
   // Per-plugin-instance binding of the Sass-aware CSS Modules Loader. The
@@ -1209,7 +1213,18 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         return tsconfigPathsDelegate?.buildStart.call(this);
       },
       resolveId(id, importer, resolveOptions) {
-        return tsconfigPathsDelegate?.resolveId.call(this, id, importer, resolveOptions);
+        let scopedImporter = importer;
+        if (importer && customTsconfigScope) {
+          const cleanImporter = importer.split("?", 1)[0];
+          const relativeImporter = relativeWithinRoot(
+            customTsconfigScope.projectRoot,
+            cleanImporter,
+          );
+          if (relativeImporter) {
+            scopedImporter = path.join(customTsconfigScope.configDir, relativeImporter);
+          }
+        }
+        return tsconfigPathsDelegate?.resolveId.call(this, id, scopedImporter, resolveOptions);
       },
     },
     // React Fast Refresh + JSX transform for client components.
@@ -1452,11 +1467,19 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         const selectedTsconfig = selectTsconfig(root, nextConfig.tsconfigPath);
         tsconfigPathsDelegate = selectedTsconfig.custom
           ? selectedTsconfig.path
-            ? tsconfigPaths({ projects: [selectedTsconfig.path] })
+            ? tsconfigPaths({
+                root,
+                projects: [path.relative(root, selectedTsconfig.path)],
+                loose: true,
+              })
             : undefined
           : viteMajorVersion >= 8
             ? undefined
             : tsconfigPaths();
+        customTsconfigScope =
+          selectedTsconfig.custom && selectedTsconfig.path
+            ? { projectRoot: root, configDir: path.dirname(selectedTsconfig.path) }
+            : undefined;
         const shouldEnableNativeTsconfigPaths =
           viteMajorVersion >= 8 &&
           !selectedTsconfig.custom &&

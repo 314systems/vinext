@@ -2,7 +2,7 @@ import type { NextConfig } from "next";
 
 const config: NextConfig = {
   typescript: {
-    tsconfigPath: "web.tsconfig.json",
+    tsconfigPath: "/config/web.json",
   },
 };
 
