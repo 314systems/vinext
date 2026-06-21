@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +7,10 @@ import { createBuilder } from "vite";
 import { createLayoutOwnedGlobalCssPlugin } from "../packages/vinext/src/plugins/layout-owned-global-css.js";
 
 const temporaryDirectories: string[] = [];
+const cloudflarePagesExample = path.resolve(
+  import.meta.dirname,
+  "../examples/pages-router-cloudflare",
+);
 
 async function writeFile(filePath: string, contents: string): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -78,5 +83,21 @@ describe("layout-owned global CSS production builds", () => {
     const projectDir = await createPagesFixture();
 
     await expect(buildPagesFixture(projectDir, "pages_router_cloudflare")).resolves.toBeUndefined();
+  });
+
+  it("completes the actual Cloudflare Pages Router production build", async () => {
+    await fs.rm(path.join(cloudflarePagesExample, "dist"), { recursive: true, force: true });
+
+    expect(() =>
+      execFileSync("vp", ["build"], {
+        cwd: cloudflarePagesExample,
+        stdio: "pipe",
+        timeout: 30_000,
+      }),
+    ).not.toThrow();
+
+    await expect(
+      fs.stat(path.join(cloudflarePagesExample, "dist", "client", ".vite", "manifest.json")),
+    ).resolves.toBeDefined();
   });
 });

@@ -539,6 +539,12 @@ export function createLayoutOwnedGlobalCssPlugin(
       }
     },
 
+    async buildStart() {
+      if (this.environment?.name === "client") {
+        await scanPagesConsumers(this);
+      }
+    },
+
     async resolveDynamicImport(source, importer) {
       if (typeof source !== "string" || !importer) return null;
       const resolved = await this.resolve(source, importer, { skipSelf: true });
@@ -603,6 +609,7 @@ export function createLayoutOwnedGlobalCssPlugin(
       }
 
       if (this.environment?.name !== "client") return null;
+      if (pagesConsumerScanState === "scanning") return null;
       await scanPagesConsumers(this);
 
       const resolved = await this.resolve(source, importer, { skipSelf: true });
