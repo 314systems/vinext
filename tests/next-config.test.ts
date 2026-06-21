@@ -1753,6 +1753,24 @@ describe("resolveNextConfig htmlLimitedBots", () => {
   });
 });
 
+describe("resolveNextConfig typescript.tsconfigPath", () => {
+  it("accepts a non-empty string", async () => {
+    const resolved = await resolveNextConfig({
+      typescript: { tsconfigPath: "config/web.tsconfig.json" },
+    });
+
+    expect(resolved.tsconfigPath).toBe("config/web.tsconfig.json");
+  });
+
+  it.each(["", 42, null])("rejects invalid values: %j", async (tsconfigPath) => {
+    await expect(
+      resolveNextConfig({
+        typescript: { tsconfigPath } as never,
+      }),
+    ).rejects.toThrow('Invalid next.config option "typescript.tsconfigPath"');
+  });
+});
+
 describe("resolveNextConfig expireTime", () => {
   it("defaults to the Next.js route expire fallback", async () => {
     const resolved = await resolveNextConfig(null);
@@ -1842,6 +1860,7 @@ describe("detectNextIntlConfig", () => {
       trailingSlash: false,
       output: "",
       pageExtensions: ["tsx", "ts", "jsx", "js"],
+      tsconfigPath: undefined,
       resolveExtensions: null,
       serverResolveExtensions: null,
       cacheComponents: false,

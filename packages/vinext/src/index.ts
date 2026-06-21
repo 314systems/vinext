@@ -451,6 +451,7 @@ function loadTsconfigPathAliases(
   configPath: string,
   projectRoot: string,
   seen = new Set<string>(),
+  throwOnParseError = false,
 ): Record<string, string> {
   const normalizedPath = tryRealpathSync(configPath) ?? configPath;
   if (seen.has(normalizedPath)) return {};
@@ -458,11 +459,20 @@ function loadTsconfigPathAliases(
 
   let parsed: Record<string, unknown> | null = null;
   try {
-    parsed = parseStaticObjectLiteral(fs.readFileSync(normalizedPath, "utf-8"));
-  } catch {
+    const contents = fs.readFileSync(normalizedPath, "utf-8");
+    parsed = contents.trim() === "" ? {} : parseStaticObjectLiteral(contents);
+  } catch (error) {
+    if (throwOnParseError) {
+      throw new Error(`Failed to parse "${normalizedPath}"`, { cause: error });
+    }
     return {};
   }
-  if (!parsed) return {};
+  if (!parsed) {
+    if (throwOnParseError) {
+      throw new Error(`Failed to parse "${normalizedPath}"`);
+    }
+    return {};
+  }
 
   let aliases: Record<string, string> = {};
   // `extends` may be a string or (TypeScript 5.0+) an array; iterate parents in
@@ -470,7 +480,10 @@ function loadTsconfigPathAliases(
   for (const extendsSpecifier of normalizeTsconfigExtends(parsed.extends)) {
     const extendedPath = resolveTsconfigExtends(normalizedPath, extendsSpecifier);
     if (extendedPath) {
-      aliases = { ...aliases, ...loadTsconfigPathAliases(extendedPath, projectRoot, seen) };
+      aliases = {
+        ...aliases,
+        ...loadTsconfigPathAliases(extendedPath, projectRoot, seen, throwOnParseError),
+      };
     }
   }
 
@@ -515,24 +528,55 @@ type UserResolveConfigWithTsconfigPaths = NonNullable<UserConfig["resolve"]> & {
   tsconfigPaths?: boolean;
 };
 
+type SelectedTsconfig = {
+  path: string | undefined;
+  custom: boolean;
+};
+
+function selectTsconfig(projectRoot: string, configuredPath?: string): SelectedTsconfig {
+  if (configuredPath !== undefined) {
+    const customPath = path.resolve(projectRoot, configuredPath);
+    if (fs.existsSync(customPath) && fs.statSync(customPath).isFile()) {
+      return { path: customPath, custom: true };
+    }
+
+    const jsconfigPath = path.join(projectRoot, "jsconfig.json");
+    return {
+      path:
+        fs.existsSync(jsconfigPath) && fs.statSync(jsconfigPath).isFile()
+          ? jsconfigPath
+          : undefined,
+      custom: true,
+    };
+  }
+
+  for (const name of TSCONFIG_FILES) {
+    const candidate = path.join(projectRoot, name);
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+      return { path: candidate, custom: false };
+    }
+  }
+  return { path: undefined, custom: false };
+}
+
 // Cache materialized tsconfig/jsconfig aliases so Vite's glob and dynamic-import
 // transforms can see them via resolve.alias without re-reading config files per env.
 const _tsconfigAliasCache = new Map<string, Record<string, string>>();
 
-function resolveTsconfigAliases(projectRoot: string): Record<string, string> {
-  if (_tsconfigAliasCache.has(projectRoot)) {
-    return _tsconfigAliasCache.get(projectRoot)!;
+function resolveTsconfigAliases(
+  projectRoot: string,
+  selectedPath?: string,
+): Record<string, string> {
+  const cacheKey = `${projectRoot}\0${selectedPath ?? ""}`;
+  if (_tsconfigAliasCache.has(cacheKey)) {
+    return _tsconfigAliasCache.get(cacheKey)!;
   }
 
-  let aliases: Record<string, string> = {};
-  for (const name of TSCONFIG_FILES) {
-    const candidate = path.join(projectRoot, name);
-    if (!fs.existsSync(candidate)) continue;
-    aliases = loadTsconfigPathAliases(candidate, projectRoot);
-    break;
-  }
+  const aliases = selectedPath
+    ? loadTsconfigPathAliases(selectedPath, projectRoot, new Set(), true)
+    : {};
 
-  _tsconfigAliasCache.set(projectRoot, aliases);
+  _tsconfigAliasCache.set(cacheKey, aliases);
   return aliases;
 }
 
@@ -856,6 +900,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   let warnedInlineNextConfigOverride = false;
   let hasNitroPlugin = false;
   let rscCompatibilityId: string | undefined;
+  let tsconfigPathsDelegate = viteMajorVersion >= 8 ? undefined : tsconfigPaths();
   const draftModeSecret = randomUUID();
 
   // Per-plugin-instance binding of the Sass-aware CSS Modules Loader. The
@@ -1126,8 +1171,25 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   const plugins: PluginOption[] = [
     // Resolve tsconfig paths/baseUrl aliases so real-world Next.js repos
     // that use @/*, #/*, or baseUrl imports work out of the box.
-    // Vite 8+ supports this natively via resolve.tsconfigPaths.
-    ...(viteMajorVersion >= 8 ? [] : [tsconfigPaths()]),
+    // Vite 8+ supports default discovery natively via resolve.tsconfigPaths.
+    // A configured custom file uses the plugin's explicit `projects` option
+    // so Vite does not also discover tsconfig.json/jsconfig.json.
+    {
+      name: viteMajorVersion >= 8 ? "vinext:tsconfig-paths" : "vite-tsconfig-paths",
+      enforce: "pre",
+      configResolved(config) {
+        tsconfigPathsDelegate?.configResolved(config);
+      },
+      configureServer(server) {
+        return tsconfigPathsDelegate?.configureServer(server);
+      },
+      buildStart() {
+        return tsconfigPathsDelegate?.buildStart.call(this);
+      },
+      resolveId(id, importer, resolveOptions) {
+        return tsconfigPathsDelegate?.resolveId.call(this, id, importer, resolveOptions);
+      },
+    },
     // React Fast Refresh + JSX transform for client components.
     reactPluginPromise,
     // Transform CJS require()/module.exports to ESM before other plugins
@@ -1234,9 +1296,6 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
       async config(config, env) {
         root = normalizePathSeparators(config.root ?? process.cwd());
         const userResolve = config.resolve as UserResolveConfigWithTsconfigPaths | undefined;
-        const shouldEnableNativeTsconfigPaths =
-          viteMajorVersion >= 8 && userResolve?.tsconfigPaths === undefined;
-        const tsconfigPathAliases = resolveTsconfigAliases(root);
 
         // Load .env files into process.env before anything else.
         // Next.js loads .env files before evaluating next.config.js, so
@@ -1368,6 +1427,19 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               : createRscCompatibilityId(nextConfig);
         }
         fileMatcher = createValidFileMatcher(nextConfig.pageExtensions);
+        const selectedTsconfig = selectTsconfig(root, nextConfig.tsconfigPath);
+        tsconfigPathsDelegate = selectedTsconfig.custom
+          ? selectedTsconfig.path
+            ? tsconfigPaths({ projects: [selectedTsconfig.path] })
+            : undefined
+          : viteMajorVersion >= 8
+            ? undefined
+            : tsconfigPaths();
+        const shouldEnableNativeTsconfigPaths =
+          viteMajorVersion >= 8 &&
+          !selectedTsconfig.custom &&
+          userResolve?.tsconfigPaths === undefined;
+        const tsconfigPathAliases = resolveTsconfigAliases(root, selectedTsconfig.path);
         instrumentationPath = findInstrumentationFile(root, fileMatcher);
         instrumentationClientPath = findInstrumentationClientFile(root, fileMatcher);
         const middlewareConventionDir =
@@ -2048,7 +2120,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             // causing cryptic "Invalid hook call" errors. This is a no-op
             // when only one copy exists.
             dedupe: ["react", "react-dom", "react/jsx-runtime", "react/jsx-dev-runtime"],
-            ...(shouldEnableNativeTsconfigPaths ? { tsconfigPaths: true } : {}),
+            ...(selectedTsconfig.custom
+              ? { tsconfigPaths: false }
+              : shouldEnableNativeTsconfigPaths
+                ? { tsconfigPaths: true }
+                : {}),
           },
           // NOTE: top-level optimizeDeps is now set below (after capturing
           // incoming values from earlier plugins) so both Pages Router and

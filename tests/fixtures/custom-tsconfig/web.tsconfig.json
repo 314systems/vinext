@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "baseUrl": "./custom-src",
+    "paths": {
+      "foo": ["../bar.ts"]
+    },
+    "jsx": "react-jsx"
+  },
+  "include": ["**/*.ts", "**/*.tsx"]
+}
