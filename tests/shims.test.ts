@@ -21743,7 +21743,7 @@ describe("shim alias map .js variants", () => {
     const styledJsxAlias = resolved.resolve?.alias?.find(
       ({ find }) => find instanceof RegExp && find.source === "^styled-jsx$",
     );
-    expect(styledJsxAlias?.replacement).toContain("styled-jsx/dist/index/index.js");
+    expect(styledJsxAlias?.replacement).toContain("styled-jsx-root");
   });
 
   it("uses distinct Pages and hybrid App SSR build entries", async () => {

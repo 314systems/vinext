@@ -2086,10 +2086,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 ? [
                     {
                       find: /^styled-jsx$/,
-                      replacement: resolveOptionalDependency(
-                        earlyBaseDir,
-                        "styled-jsx/dist/index/index.js",
-                      )!,
+                      replacement: resolveShimModulePath(shimsDir, "styled-jsx-root"),
                     },
                   ]
                 : []),
