@@ -23,6 +23,7 @@ import { fnv1a52 } from "../utils/hash.js";
 import { readStreamAsText } from "../utils/text-stream.js";
 import { callDocumentGetInitialProps } from "./document-initial-head.js";
 import { appendAssetDeploymentIdQuery } from "../utils/deployment-id.js";
+import { createPagesStyledJsxRegistry } from "./pages-styled-jsx.js";
 
 // ---------------------------------------------------------------------------
 // Bot / crawler detection for Pages Router edge-runtime SSR
@@ -490,6 +491,7 @@ export async function renderPagesPageResponse(
     vinext: options.vinext,
   });
   const bodyMarker = "<!--VINEXT_STREAM_BODY-->";
+  const styledJsx = createPagesStyledJsxRegistry();
 
   // Custom `_document.getInitialProps()` may opt in to wrapping the page tree
   // via `ctx.renderPage({ enhanceApp, enhanceComponent })` (e.g. for
@@ -502,7 +504,9 @@ export async function renderPagesPageResponse(
   // prod and dev stay in lockstep.
   const documentRenderPage = await runDocumentRenderPage({
     DocumentComponent: options.DocumentComponent,
-    enhancePageElement: options.enhancePageElement,
+    enhancePageElement: options.enhancePageElement
+      ? (renderPageOptions) => styledJsx.wrap(options.enhancePageElement!(renderPageOptions))
+      : undefined,
     renderToReadableStream: options.renderToReadableStream,
     // Render the collected `styles` fragment with the plain stream renderer
     // rather than the full `<Document>` shell renderer — the styles tree is a
@@ -538,7 +542,7 @@ export async function renderPagesPageResponse(
     // (`rendered`), this element is never used, so there's no point
     // constructing the tree on that path.
     const pageElement = withScriptNonce(
-      React.createElement(React.Fragment, null, options.createPageElement(renderProps)),
+      styledJsx.wrap(options.createPageElement(renderProps)),
       options.scriptNonce,
     );
     bodyStream = await options.renderToReadableStream(pageElement);
@@ -571,6 +575,8 @@ export async function renderPagesPageResponse(
   if (documentRenderPage.status === "rendered" && documentRenderPage.stylesHTML) {
     ssrHeadHTML += `\n  ${documentRenderPage.stylesHTML}`;
   }
+  const styledJsxHTML = styledJsx.stylesHTML({ nonce: options.scriptNonce });
+  if (styledJsxHTML) ssrHeadHTML += `\n  ${styledJsxHTML}`;
   const shellHtml = await buildPagesShellHtml(bodyMarker, fontHeadHTML, nextDataScript, {
     assetTags: options.assetTags,
     DocumentComponent: options.DocumentComponent,

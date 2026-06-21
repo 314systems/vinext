@@ -26,6 +26,7 @@ import {
   isOnDemandRevalidateRequest,
 } from "./isr-cache.js";
 import type { CachedPagesValue } from "vinext/shims/cache-handler";
+import { createPagesStyledJsxRegistry } from "./pages-styled-jsx.js";
 import { _runWithCacheState } from "vinext/shims/cache-request-state";
 import { runWithPrivateCache } from "vinext/shims/cache-runtime";
 import { ensureFetchPatch, runWithFetchCache } from "vinext/shims/fetch-cache";
@@ -227,6 +228,7 @@ async function streamPageToResponse(
     setDocumentInitialHead,
     bufferBodyBeforeHeaders = false,
   } = options;
+  const styledJsx = createPagesStyledJsxRegistry();
 
   // Custom `_document.getInitialProps()` may opt in to wrapping the page tree
   // via `ctx.renderPage({ enhanceApp, enhanceComponent })` (e.g. styled-
@@ -237,7 +239,10 @@ async function streamPageToResponse(
   // helper so dev and prod stay in lockstep.
   const documentRenderPage = await runDocumentRenderPage({
     DocumentComponent,
-    enhancePageElement,
+    enhancePageElement: enhancePageElement
+      ? (renderPageOptions) =>
+          styledJsx.wrap(enhancePageElement(renderPageOptions)) as React.ReactElement
+      : undefined,
     renderToReadableStream,
     renderStylesToString: renderToStringAsync,
     scriptNonce,
@@ -257,7 +262,7 @@ async function streamPageToResponse(
     // Start the React body stream FIRST — the promise resolves when the
     // shell is ready (synchronous content outside Suspense boundaries).
     // This triggers the render which populates <Head> tags.
-    bodyStream = await renderToReadableStream(element);
+    bodyStream = await renderToReadableStream(styledJsx.wrap(element) as React.ReactElement);
   }
 
   // Fold any head tags returned by `_document.getInitialProps()` into the same
@@ -282,6 +287,8 @@ async function streamPageToResponse(
   if (documentRenderPage.status === "rendered" && documentRenderPage.stylesHTML) {
     headHTML += `\n  ${documentRenderPage.stylesHTML}`;
   }
+  const styledJsxHTML = styledJsx.stylesHTML({ nonce: scriptNonce });
+  if (styledJsxHTML) headHTML += `\n  ${styledJsxHTML}`;
 
   // Build the document shell with a placeholder for the body
   let shellTemplate: string;

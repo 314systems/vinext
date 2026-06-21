@@ -205,6 +205,7 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import commonjs from "vite-plugin-commonjs";
+import { createStyledJsxPlugin } from "./plugins/styled-jsx.js";
 import { normalizePathSeparators, stripJsExtension, stripViteModuleQuery } from "./utils/path.js";
 import { escapeRegExp } from "./utils/regex.js";
 import {
@@ -1128,6 +1129,8 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     // that use @/*, #/*, or baseUrl imports work out of the box.
     // Vite 8+ supports this natively via resolve.tsconfigPaths.
     ...(viteMajorVersion >= 8 ? [] : [tsconfigPaths()]),
+    // styled-jsx must see source JSX before the React transform lowers it.
+    createStyledJsxPlugin(),
     // React Fast Refresh + JSX transform for client components.
     reactPluginPromise,
     // Transform CJS require()/module.exports to ESM before other plugins
@@ -2030,7 +2033,13 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               ? { ssr: { external: true as const } }
               : {
                   ssr: {
-                    external: ["react", "react-dom", "react-dom/server", "ipaddr.js"],
+                    external: [
+                      "react",
+                      "react-dom",
+                      "react-dom/server",
+                      "styled-jsx",
+                      "ipaddr.js",
+                    ],
                     noExternal: true,
                   },
                 }),
@@ -2041,6 +2050,8 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               ...tsconfigPathAliases,
               ...nextConfig.aliases,
               ...nextShimMap,
+              "styled-jsx/style": resolveShimModulePath(shimsDir, "styled-jsx-style"),
+              "styled-jsx/style.js": resolveShimModulePath(shimsDir, "styled-jsx-style"),
             },
             // Dedupe React packages to prevent dual-instance errors.
             // When vinext is linked (npm link / bun link) or any dependency
