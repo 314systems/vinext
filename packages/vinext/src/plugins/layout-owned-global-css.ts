@@ -180,15 +180,20 @@ async function extractMdxModuleSources(
 ): Promise<Array<{ source: string; isDynamic: boolean }>> {
   const mdxRollup = await import("@mdx-js/rollup");
   const mdxFactory = mdxRollup.default as (options: Record<string, unknown>) => Plugin;
+  const mdxOptions = options.getMdxOptions?.();
+  const extension = path.extname(modulePath).toLowerCase();
+  const scanPath = extension === ".md" || extension === ".mdx" ? modulePath : `${modulePath}.mdx`;
   const transformPlugin = mdxFactory({
-    ...options.getMdxOptions?.(),
+    ...mdxOptions,
+    include: scanPath,
+    format: "mdx",
+    mdxExtensions: [path.extname(scanPath)],
     jsx: true,
     outputFormat: "program",
   });
   const transformHook = transformPlugin.transform;
   if (!transformHook) return [];
   const transform = typeof transformHook === "function" ? transformHook : transformHook.handler;
-  const scanPath = `${modulePath}.mdx`;
   const result = await transform.call(
     {} as never,
     maskMdxHtmlComments(source),

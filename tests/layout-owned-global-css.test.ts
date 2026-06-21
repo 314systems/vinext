@@ -899,6 +899,97 @@ describe("layout-owned global CSS", () => {
     await fs.rm(projectDir, { recursive: true, force: true });
   });
 
+  it("preserves MDX filenames for remark and recma plugins", async () => {
+    const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-layout-css-mdx-paths-"));
+    const appDir = path.join(projectDir, "app");
+    const pagesDir = path.join(projectDir, "pages");
+    const sourceDir = path.join(projectDir, "src");
+    await fs.mkdir(path.join(appDir, "dashboard"), { recursive: true });
+    await fs.mkdir(pagesDir, { recursive: true });
+    await fs.mkdir(sourceDir, { recursive: true });
+
+    const layout = path.join(appDir, "dashboard", "layout.tsx");
+    const appHelper = path.join(appDir, "dashboard", "shared.tsx");
+    const pagesRoutes = [
+      path.join(pagesDir, "markdown.md"),
+      path.join(pagesDir, "content.mdx"),
+      path.join(pagesDir, "custom.article"),
+    ];
+    const pagesHelper = path.join(sourceDir, "pages-helper.ts");
+    const sharedClient = path.join(sourceDir, "shared-client.tsx");
+    const stylesheet = path.join(sourceDir, "shared.css");
+    for (const pagesRoute of pagesRoutes) {
+      await fs.writeFile(pagesRoute, `import "../src/pages-helper"\n\n# Shared\n`);
+    }
+    await fs.writeFile(pagesHelper, `import "./shared-client";\n`);
+    await fs.writeFile(sharedClient, `import "./shared.css";\n`);
+    await fs.writeFile(stylesheet, `.shared { color: teal; }\n`);
+
+    const remarkPaths: string[] = [];
+    const recmaPaths: string[] = [];
+    const captureRemarkPath = () => (_tree: unknown, file: { path?: string }) => {
+      remarkPaths.push(String(file.path));
+    };
+    const captureRecmaPath = () => (_tree: unknown, file: { path?: string }) => {
+      recmaPaths.push(String(file.path));
+    };
+    const resolutions = new Map([
+      ...pagesRoutes.map(
+        (pagesRoute) => [`${pagesRoute}:../src/pages-helper`, pagesHelper] as const,
+      ),
+      [`${pagesHelper}:./shared-client`, sharedClient],
+      [`${sharedClient}:./shared.css`, stylesheet],
+    ]);
+    const plugin = createLayoutOwnedGlobalCssPlugin(
+      () => appDir,
+      () => pagesDir,
+      {
+        getPageExtensions: () => ["md", "mdx", "article", "tsx"],
+        getMdxOptions: () => ({
+          remarkPlugins: [captureRemarkPath],
+          recmaPlugins: [captureRecmaPath],
+        }),
+      },
+    );
+    const resolveId =
+      typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
+    const configResolved =
+      typeof plugin.configResolved === "object"
+        ? plugin.configResolved.handler
+        : plugin.configResolved;
+    await configResolved?.call(
+      {} as never,
+      {
+        createResolver: () => async (source: string, importer?: string) =>
+          importer ? resolutions.get(`${importer}:${source}`) : undefined,
+      } as never,
+    );
+
+    for (const [source, importer, resolved] of [
+      ["./shared", layout, appHelper],
+      ["@shared/client", appHelper, sharedClient],
+      ["./shared.css", sharedClient, stylesheet],
+    ] as const) {
+      await resolveId!.call(
+        createContext("rsc", { [source]: resolved }) as never,
+        source,
+        importer,
+        { isEntry: false },
+      );
+    }
+
+    await expect(
+      resolveId!.call(createContext("client", stylesheet) as never, "./shared.css", sharedClient, {
+        isEntry: false,
+      }),
+    ).resolves.toBeNull();
+    const expectedPaths = [pagesRoutes[0], pagesRoutes[1], `${pagesRoutes[2]}.mdx`].sort();
+    expect(remarkPaths.sort()).toEqual(expectedPaths);
+    expect(recmaPaths.sort()).toEqual(expectedPaths);
+
+    await fs.rm(projectDir, { recursive: true, force: true });
+  });
+
   it("follows MDX ESM while ignoring code blocks and comments", async () => {
     const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-layout-css-mdx-fences-"));
     const appDir = path.join(projectDir, "app");
