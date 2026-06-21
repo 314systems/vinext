@@ -61,15 +61,39 @@ async function writeFixture(fixtureRoot: string): Promise<void> {
     path.join(fixtureRoot, "package.json"),
     `${JSON.stringify({ type: "module", dependencies: {} }, null, 2)}\n`,
   );
+  const externalPackageDir = path.join(fixtureRoot, "node_modules", "dynamic-css-package");
+  await fs.mkdir(externalPackageDir, { recursive: true });
+  await fs.writeFile(
+    path.join(externalPackageDir, "package.json"),
+    `${JSON.stringify({ name: "dynamic-css-package", type: "module", exports: "./index.jsx" })}\n`,
+  );
+  await fs.writeFile(
+    path.join(externalPackageDir, "index.jsx"),
+    `"use client";
+import "./styles.css";
+
+export default function ExternalPackageComponent() {
+  return <p id="dynamic-css-external-package" className="dynamic-css-external-package">External package</p>;
+}
+`,
+  );
+  await fs.writeFile(
+    path.join(externalPackageDir, "styles.css"),
+    `.dynamic-css-external-package { color: rgb(0, 0, 255); }\n`,
+  );
   await fs.writeFile(
     path.join(appDir, "layout.tsx"),
     `import type { ReactNode } from "react";
 import "./layout.css";
+import ExternalPackageComponent from "dynamic-css-package";
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html>
-      <body>{children}</body>
+      <body>
+        <ExternalPackageComponent />
+        {children}
+      </body>
     </html>
   );
 }
@@ -97,11 +121,38 @@ export default function SharedDynamicComponent() {
 `,
   );
   await fs.writeFile(
+    path.join(sharedDir, "cross-route-component.tsx"),
+    `"use client";
+
+import "./cross-route.css";
+
+export default function CrossRouteComponent() {
+  return <p id="dynamic-css-cross-route" className="dynamic-css-cross-route">Cross route</p>;
+}
+`,
+  );
+  await fs.writeFile(
+    path.join(sharedDir, "cross-route.css"),
+    `.dynamic-css-cross-route { color: rgb(128, 0, 128); }\n`,
+  );
+  const marketingDir = path.join(appDir, "marketing");
+  await fs.mkdir(marketingDir, { recursive: true });
+  await fs.writeFile(
+    path.join(marketingDir, "page.tsx"),
+    `import CrossRouteComponent from "../../src/components/cross-route-component";
+
+export default function MarketingPage() {
+  return <CrossRouteComponent />;
+}
+`,
+  );
+  await fs.writeFile(
     path.join(appDir, "page", "shared-layout-styles.tsx"),
     `import "../../src/components/shared-dynamic-component";
+import CrossRouteComponent from "../../src/components/cross-route-component";
 
 export default function SharedLayoutStyles() {
-  return null;
+  return <CrossRouteComponent />;
 }
 `,
   );
@@ -213,6 +264,19 @@ test("preserves CSS order across layouts, client components, and next/dynamic", 
     );
     await expect(page.locator("#dynamic-css-global")).toHaveCSS("color", "rgb(0, 0, 0)");
     await expect(page.locator("body")).toHaveCSS("background-color", "rgb(255, 255, 255)");
+    await expect(page.locator("#dynamic-css-external-package")).toHaveCSS(
+      "color",
+      "rgb(0, 0, 255)",
+    );
+    await expect(page.locator("#dynamic-css-cross-route")).toHaveCSS("color", "rgb(128, 0, 128)");
+
+    await page.goto(`${app.baseUrl}/marketing`, { waitUntil: "load" });
+    await expect(page.locator("#dynamic-css-cross-route")).toHaveText("Cross route");
+    await expect(page.locator("#dynamic-css-cross-route")).toHaveCSS("color", "rgb(128, 0, 128)");
+    await expect(page.locator("#dynamic-css-external-package")).toHaveCSS(
+      "color",
+      "rgb(0, 0, 255)",
+    );
   } finally {
     await closeServer(app.server);
     await fs.rm(app.fixtureRoot, { recursive: true, force: true });

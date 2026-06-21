@@ -2,11 +2,15 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createLayoutOwnedGlobalCssPlugin } from "../packages/vinext/src/plugins/layout-owned-global-css.js";
 
-function createContext(environmentName: string, resolvedIds: Record<string, string> | string) {
+function createContext(
+  environmentName: string,
+  resolvedIds: Record<string, string | { id: string; external?: boolean }> | string,
+) {
   return {
     environment: { name: environmentName },
     async resolve(source: string) {
-      return { id: typeof resolvedIds === "string" ? resolvedIds : resolvedIds[source] };
+      const resolved = typeof resolvedIds === "string" ? resolvedIds : resolvedIds[source];
+      return typeof resolved === "string" ? { id: resolved } : resolved;
     },
   };
 }
@@ -183,6 +187,127 @@ describe("layout-owned global CSS", () => {
         { isEntry: false },
       ),
     ).resolves.toBeNull();
+  });
+
+  it("keeps CSS when the same shared module is consumed outside the owning layout", async () => {
+    const appDir = path.resolve("/project/app");
+    const plugin = createLayoutOwnedGlobalCssPlugin(() => appDir);
+    const resolveId =
+      typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
+    expect(resolveId).toBeTypeOf("function");
+
+    const dashboardLayout = path.join(appDir, "dashboard", "layout.tsx");
+    const marketingPage = path.join(appDir, "marketing", "page.tsx");
+    const sharedClient = path.resolve("/project/src/components/shared-client.tsx");
+    const sharedStyles = path.resolve("/project/src/components/shared.css");
+
+    for (const importer of [dashboardLayout, marketingPage]) {
+      await resolveId!.call(
+        createContext("rsc", { "@shared/client": sharedClient }) as never,
+        "@shared/client",
+        importer,
+        { isEntry: false },
+      );
+    }
+    await resolveId!.call(
+      createContext("rsc", { "./shared.css": sharedStyles }) as never,
+      "./shared.css",
+      sharedClient,
+      { isEntry: false },
+    );
+
+    await expect(
+      resolveId!.call(
+        createContext("client", { "./shared.css": sharedStyles }) as never,
+        "./shared.css",
+        sharedClient,
+        { isEntry: false },
+      ),
+    ).resolves.toBeNull();
+  });
+
+  it("deduplicates when every shared-module consumer inherits the same layout", async () => {
+    const appDir = path.resolve("/project/app");
+    const plugin = createLayoutOwnedGlobalCssPlugin(() => appDir);
+    const resolveId =
+      typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
+    expect(resolveId).toBeTypeOf("function");
+
+    const layout = path.join(appDir, "page", "layout.tsx");
+    const helper = path.join(appDir, "page", "shared-layout-styles.tsx");
+    const inner = path.join(appDir, "page", "inner.tsx");
+    const sharedClient = path.resolve("/project/src/components/shared-client.tsx");
+    const sharedStyles = path.resolve("/project/src/components/shared.css");
+
+    for (const [source, importer, resolved] of [
+      ["./shared-layout-styles", layout, helper],
+      ["./inner", layout, inner],
+      ["@shared/client", helper, sharedClient],
+      ["@shared/client", inner, sharedClient],
+      ["./shared.css", sharedClient, sharedStyles],
+    ] as const) {
+      await resolveId!.call(
+        createContext("rsc", { [source]: resolved }) as never,
+        source,
+        importer,
+        { isEntry: false },
+      );
+    }
+
+    await expect(
+      resolveId!.call(
+        createContext("client", { "./shared.css": sharedStyles }) as never,
+        "./shared.css",
+        `${sharedClient}?v=client`,
+        { isEntry: false },
+      ),
+    ).resolves.toSatisfy((id: unknown) => typeof id === "string" && id.charCodeAt(0) === 0);
+  });
+
+  it("traverses bounded external source packages for layout-owned CSS", async () => {
+    const fixtureRoot = await import("node:fs/promises").then((fs) =>
+      fs.mkdtemp(path.join(process.env.TMPDIR ?? "/tmp", "vinext-layout-css-")),
+    );
+    const fs = await import("node:fs/promises");
+    try {
+      const appDir = path.join(fixtureRoot, "app");
+      const layout = path.join(appDir, "dashboard", "layout.tsx");
+      const packageEntry = path.join(fixtureRoot, "node_modules", "design-system", "index.js");
+      const packageHelper = path.join(fixtureRoot, "node_modules", "design-system", "helper.js");
+      const packageStyles = path.join(fixtureRoot, "node_modules", "design-system", "styles.css");
+      await fs.mkdir(path.dirname(packageEntry), { recursive: true });
+      await fs.writeFile(packageEntry, `export { default } from "./helper.js";\n`);
+      await fs.writeFile(
+        packageHelper,
+        `import "./styles.css";\nexport default function Widget() {}\n`,
+      );
+      await fs.writeFile(packageStyles, `.external-layout-style { color: green; }\n`);
+
+      const plugin = createLayoutOwnedGlobalCssPlugin(() => appDir);
+      const resolveId =
+        typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
+      expect(resolveId).toBeTypeOf("function");
+
+      await resolveId!.call(
+        createContext("rsc", {
+          "design-system": { id: packageEntry, external: true },
+        }) as never,
+        "design-system",
+        layout,
+        { isEntry: false },
+      );
+
+      await expect(
+        resolveId!.call(
+          createContext("client", { "./styles.css": packageStyles }) as never,
+          "./styles.css",
+          packageHelper,
+          { isEntry: false },
+        ),
+      ).resolves.toSatisfy((id: unknown) => typeof id === "string" && id.charCodeAt(0) === 0);
+    } finally {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
   });
 
   it("only excludes Vite queries that return CSS as a value", async () => {
