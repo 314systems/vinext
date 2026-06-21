@@ -929,7 +929,7 @@ type SelectedTsconfig = {
 
 function hasProjectTypeScript(projectRoot: string): boolean {
   try {
-    createRequire(path.join(projectRoot, "package.json")).resolve("typescript/package.json");
+    createRequire(path.join(projectRoot, "package.json")).resolve("typescript/lib/typescript.js");
     return true;
   } catch {
     return false;

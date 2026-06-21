@@ -25,11 +25,12 @@ function setupProject(
     JSON.stringify(vitePackageJson, null, 2),
   );
   if (options.typescript !== false) {
-    fs.mkdirSync(path.join(root, "node_modules", "typescript"), { recursive: true });
+    fs.mkdirSync(path.join(root, "node_modules", "typescript", "lib"), { recursive: true });
     fs.writeFileSync(
       path.join(root, "node_modules", "typescript", "package.json"),
       JSON.stringify({ name: "typescript", version: "5.9.3" }),
     );
+    fs.writeFileSync(path.join(root, "node_modules", "typescript", "lib", "typescript.js"), "");
   }
   fs.writeFileSync(
     path.join(root, "pages", "index.tsx"),
@@ -194,6 +195,41 @@ describe("Vite tsconfig paths support", () => {
     expect(resolvedConfig?.resolve?.alias).toEqual(expect.objectContaining({ "#": "/legacy" }));
     expect(resolvedConfig?.resolve?.alias).not.toHaveProperty("@");
     expect(resolvedConfig?.resolve?.alias).not.toHaveProperty("$");
+  });
+
+  it("uses jsconfig when the app has TypeScript metadata without its compiler", async () => {
+    const root = setupProject({ name: "vite", version: "8.0.0" }, { typescript: false });
+    process.chdir(root);
+    fs.mkdirSync(path.join(root, "node_modules", "typescript"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "node_modules", "typescript", "package.json"),
+      JSON.stringify({ name: "typescript", version: "5.9.3" }),
+    );
+    fs.writeFileSync(
+      path.join(root, "next.config.mjs"),
+      "export default { typescript: { tsconfigPath: 'web.tsconfig.json' } };\n",
+    );
+    fs.writeFileSync(
+      path.join(root, "web.tsconfig.json"),
+      JSON.stringify({ compilerOptions: { paths: { "@/*": ["./src/*"] } } }),
+    );
+    fs.writeFileSync(
+      path.join(root, "jsconfig.json"),
+      JSON.stringify({ compilerOptions: { paths: { "#/*": ["./legacy/*"] } } }),
+    );
+
+    const plugins = vinext({ appDir: root });
+    const configPlugin = findNamedPlugin(plugins, "vinext:config") as Plugin;
+    const configHook =
+      typeof configPlugin.config === "object" ? configPlugin.config.handler : configPlugin.config;
+    const resolvedConfig = await configHook?.call(
+      {} as never,
+      { root },
+      { command: "serve", mode: "development" },
+    );
+
+    expect(resolvedConfig?.resolve?.alias).toEqual(expect.objectContaining({ "#": "/legacy" }));
+    expect(resolvedConfig?.resolve?.alias).not.toHaveProperty("@");
   });
 
   it("materializes simple tsconfig path aliases into resolve.alias on Vite 8", async () => {
