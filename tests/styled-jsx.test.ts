@@ -43,22 +43,25 @@ describe("styled-jsx transform", () => {
     // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/use-server-inserted-html/app/css-in-js/styled-jsx.js
     const source = `
       import css from "styled-jsx/css";
+      const accent: string = "hotpink";
       export const elementStyles = css\`
         .external-element { background: yellow; }
       \`;
       export const externalStyles = css.resolve\`
-        .external { color: hotpink; }
+        .external { color: \${accent}; }
       \`;
     `;
 
-    const result = await getTransform().call({} as never, source, "/app/styles.tsx", {
+    const result = await getTransform().call({} as never, source, "/app/styles.ts", {
       moduleType: "js",
     });
 
     expect(result).toBeTruthy();
-    expect(typeof result === "object" && result ? result.code : "").toMatch(
-      /color:(?:hotpink|#ff69b4)/,
+    expect(typeof result === "object" && result ? result.code : "").toContain(
+      'const accent = "hotpink"',
     );
+    expect(typeof result === "object" && result ? result.code : "").toContain("color:${accent}");
+    expect(typeof result === "object" && result ? result.code : "").not.toContain("<_JSXStyle");
     expect(typeof result === "object" && result ? result.code : "").toMatch(
       /background:(?:yellow|#ff0)/,
     );

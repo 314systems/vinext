@@ -1,5 +1,7 @@
 import css from "styled-jsx/css";
 
+const accent: string = "hotpink";
+
 export const externalElementStyles = css`
   .external-element {
     background: yellow;
@@ -8,6 +10,6 @@ export const externalElementStyles = css`
 
 export const externalStyles = css.resolve`
   .external {
-    color: hotpink;
+    color: ${accent};
   }
 `;
