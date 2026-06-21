@@ -2491,7 +2491,7 @@ describe("window.next debug global", () => {
       // Shallow push avoids the HTML fetch + render path so this unit test
       // does not need a navigateClient stub. The boolean-return contract
       // applies equally to shallow and non-shallow navigations.
-      const result = await win.next.router.push("/foo", undefined, { shallow: true });
+      const result = await win.next.router.push("/?foo=1", undefined, { shallow: true });
       expect(result).toBe(true);
     } finally {
       (globalThis as any).window = previousWindow;
@@ -2520,7 +2520,7 @@ describe("window.next debug global", () => {
       vi.resetModules();
       await import("../packages/vinext/src/shims/router.js");
 
-      const result = await win.next.router.replace("/foo", undefined, { shallow: true });
+      const result = await win.next.router.replace("/?foo=1", undefined, { shallow: true });
       expect(result).toBe(true);
     } finally {
       (globalThis as any).window = previousWindow;
@@ -2528,12 +2528,7 @@ describe("window.next debug global", () => {
     }
   });
 
-  // Shallow navigations skip the render-commit path, so the scroll reset is
-  // applied synchronously in performNavigation — before routeChangeComplete.
-  // This matches the non-shallow path, where the x/y reset runs inside the
-  // render-commit callback (also ahead of routeChangeComplete). Pins the
-  // ordering so listeners observe the final scroll position.
-  it("shallow push applies the scroll reset before routeChangeComplete", async () => {
+  it("valid shallow push defaults scroll to false", async () => {
     const previousWindow = (globalThis as any).window;
     const order: string[] = [];
     const win: any = {
@@ -2547,9 +2542,9 @@ describe("window.next debug global", () => {
       history: { state: null, pushState() {}, replaceState() {} },
       addEventListener() {},
       dispatchEvent() {},
-      scrollTo(x: number, y: number) {
+      scrollTo: vi.fn((x: number, y: number) => {
         order.push(`scrollTo:${x},${y}`);
-      },
+      }),
     };
     (globalThis as any).window = win;
 
@@ -2560,9 +2555,10 @@ describe("window.next debug global", () => {
       win.next.router.events.on("routeChangeComplete", () => {
         order.push("routeChangeComplete");
       });
-      const result = await win.next.router.push("/foo", undefined, { shallow: true });
+      const result = await win.next.router.push("/?step=one", undefined, { shallow: true });
       expect(result).toBe(true);
-      expect(order).toEqual(["scrollTo:0,0", "routeChangeComplete"]);
+      expect(order).toEqual(["routeChangeComplete"]);
+      expect(win.scrollTo).not.toHaveBeenCalled();
     } finally {
       (globalThis as any).window = previousWindow;
       vi.resetModules();
@@ -16116,6 +16112,54 @@ describe("Pages Router concurrent navigation", () => {
     }
   });
 
+  it("hash-only popstate events carry the effective shallow value", async () => {
+    const previousWindow = (globalThis as any).window;
+    const previousDocument = (globalThis as any).document;
+    const listeners = new Map<string, (event: any) => void>();
+    const { win } = createNavWindow();
+    win.addEventListener = vi.fn((type: string, handler: (event: any) => void) => {
+      listeners.set(type, handler);
+    });
+    (globalThis as any).window = win;
+    (globalThis as any).document = {
+      getElementById: vi.fn(() => null),
+      getElementsByName: vi.fn(() => []),
+    };
+
+    try {
+      vi.resetModules();
+      const { default: Router } = await import("../packages/vinext/src/shims/router.js");
+      await Router.push("/#one", undefined, { shallow: true });
+      const payloads: Array<{ shallow: boolean }> = [];
+      Router.events.on("hashChangeStart", (_url, options) =>
+        payloads.push(options as { shallow: boolean }),
+      );
+      Router.events.on("hashChangeComplete", (_url, options) =>
+        payloads.push(options as { shallow: boolean }),
+      );
+
+      win.location.hash = "#two";
+      win.location.href = "http://localhost/#two";
+      listeners.get("popstate")!({
+        state: {
+          __N: true,
+          url: "/",
+          as: "/",
+          options: { shallow: true },
+          key: "key-two",
+          __vinext_route: "/",
+        },
+      });
+      expect(payloads).toEqual([{ shallow: true }, { shallow: true }]);
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      if (previousDocument === undefined) delete (globalThis as any).document;
+      else (globalThis as any).document = previousDocument;
+    }
+  });
+
   // A hash-only push must snapshot the outgoing entry's scroll under its key
   // before updateHistory mints the new entry's key — otherwise a later
   // back-popstate to the departed entry restores {x: 0, y: 0} instead of the
@@ -17053,14 +17097,12 @@ describe("Pages Router concurrent navigation", () => {
       const deepNavigation = Router.push("/page-a");
       await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
 
-      await expect(Router.replace("/page-b?shallow=1", undefined, { shallow: true })).resolves.toBe(
-        true,
-      );
+      await expect(Router.replace("/?shallow=1", undefined, { shallow: true })).resolves.toBe(true);
       deepResponse.resolve(new Response(buildNavHtml("/page-a", "/@fs/pages/page-a.js")));
       await deepNavigation;
 
       expect(render).not.toHaveBeenCalled();
-      expect(completedUrls).toEqual(["/page-b?shallow=1"]);
+      expect(completedUrls).toEqual(["/?shallow=1"]);
       expect(errors).toContainEqual({
         err: expect.objectContaining({ cancelled: true }),
         url: "/page-a",
@@ -17075,6 +17117,121 @@ describe("Pages Router concurrent navigation", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it("cross-route shallow navigation falls back to a deep navigation", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const { win } = createNavWindow();
+    (globalThis as any).window = win;
+    const deepResponse = createDeferred<Response>();
+    globalThis.fetch = vi.fn(() => deepResponse.promise);
+
+    try {
+      vi.resetModules();
+      const { default: Router } = await import("../packages/vinext/src/shims/router.js");
+      const navigation = Router.push("/page-a", undefined, { shallow: true });
+      await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+      expect((win.history as any).pushState).toHaveBeenLastCalledWith(
+        expect.objectContaining({ options: expect.objectContaining({ shallow: false }) }),
+        "",
+        "/page-a",
+      );
+      deepResponse.resolve(new Response(buildNavHtml("/page-a", "/@fs/pages/page-a.js")));
+      await navigation;
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it.each(["shallow", "hash", "popstate"] as const)(
+    "emits deferred deep cancellation before replacement %s events",
+    async (replacementKind) => {
+      const previousWindow = (globalThis as any).window;
+      const previousDocument = (globalThis as any).document;
+      const originalFetch = globalThis.fetch;
+      const listeners = new Map<string, (event: any) => void>();
+      const { win } = createNavWindow();
+      (win as any).__VINEXT_PAGE_LOADERS__ = { "/": async () => ({ default: () => null }) };
+      win.addEventListener = vi.fn((type: string, handler: (event: any) => void) => {
+        listeners.set(type, handler);
+      });
+      (globalThis as any).window = win;
+      (globalThis as any).document = {
+        getElementById: vi.fn(() => null),
+        getElementsByName: vi.fn(() => []),
+      };
+      const deepResponse = createDeferred<Response>();
+      globalThis.fetch = vi
+        .fn()
+        .mockImplementationOnce(() => deepResponse.promise)
+        .mockImplementation(
+          async () => new Response(buildNavHtml("/", "/@fs/pages/index.js", { step: "pop" })),
+        );
+      const order: string[] = [];
+
+      try {
+        vi.resetModules();
+        const { default: Router } = await import("../packages/vinext/src/shims/router.js");
+        const { installPagesRouterRuntime } =
+          await import("../packages/vinext/src/shims/pages-router-runtime.js");
+        installPagesRouterRuntime();
+        Router.events.on("routeChangeError", (_error, url) => order.push(`error:${String(url)}`));
+        Router.events.on("routeChangeStart", (url) => order.push(`routeStart:${String(url)}`));
+        Router.events.on("routeChangeComplete", (url) =>
+          order.push(`routeComplete:${String(url)}`),
+        );
+        Router.events.on("hashChangeStart", (url) => order.push(`hashStart:${String(url)}`));
+        Router.events.on("hashChangeComplete", (url) => order.push(`hashComplete:${String(url)}`));
+
+        const deepNavigation = Router.push("/page-a");
+        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+        order.length = 0;
+
+        if (replacementKind === "shallow") {
+          await Router.replace("/?step=shallow", undefined, { shallow: true });
+        } else if (replacementKind === "hash") {
+          await Router.replace("/page-a#hash");
+        } else {
+          win.location.pathname = "/";
+          win.location.search = "?step=pop";
+          win.location.href = "http://localhost/?step=pop";
+          listeners.get("popstate")!({
+            state: {
+              __N: true,
+              url: "/",
+              as: "/?step=pop",
+              options: { shallow: true },
+              key: "key-pop",
+              __vinext_route: "/",
+            },
+          });
+          await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(2));
+        }
+
+        expect(order[0]).toBe("error:/page-a");
+        expect(order.slice(1)).toEqual(
+          replacementKind === "hash"
+            ? ["hashStart:/page-a#hash", "hashComplete:/page-a#hash"]
+            : replacementKind === "shallow"
+              ? ["routeStart:/?step=shallow", "routeComplete:/?step=shallow"]
+              : ["routeStart:/?step=pop", "routeComplete:/?step=pop"],
+        );
+        deepResponse.resolve(new Response(buildNavHtml("/page-a", "/@fs/pages/page-a.js")));
+        await deepNavigation;
+        expect(order.filter((event) => event === "error:/page-a")).toHaveLength(1);
+      } finally {
+        vi.resetModules();
+        if (previousWindow === undefined) delete (globalThis as any).window;
+        else (globalThis as any).window = previousWindow;
+        if (previousDocument === undefined) delete (globalThis as any).document;
+        else (globalThis as any).document = previousDocument;
+        globalThis.fetch = originalFetch;
+      }
+    },
+  );
 
   it.each(["shallow", "deep"] as const)(
     "same-key %s replace supersedes pending shallow popstate scroll restoration",
