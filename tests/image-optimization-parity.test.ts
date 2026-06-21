@@ -513,7 +513,7 @@ describe("remote next/image endpoint security", () => {
       remoteHandlers(async (input) => {
         const url = requestInputUrl(input);
         redirectedUrls.push(url);
-        return url.includes("images.example.com")
+        return new URL(url).hostname === "images.example.com"
           ? Response.redirect("https://cdn.example.net/test.png", 302)
           : new Response(PNG_1X1, { headers: { "Content-Type": "image/png" } });
       }),

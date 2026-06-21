@@ -36,8 +36,6 @@ export const IMAGE_OPTIMIZATION_PATH = "/_next/image";
  * vinext-prefixed path continue to work; emit IMAGE_OPTIMIZATION_PATH
  * for any newly generated URLs.
  */
-export const VINEXT_IMAGE_OPTIMIZATION_PATH = "/_vinext/image";
-
 /** Returns true when `pathname` matches the configured image optimization endpoint. */
 export function isImageOptimizationPath(
   pathname: string,
