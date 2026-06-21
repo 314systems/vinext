@@ -35,13 +35,15 @@ afterAll(() => {
 });
 
 describe("styled-jsx public types", () => {
-  it("ships the registry type and hooks through the built package", () => {
-    const consumerPath = path.join(tempDir, "consumer.ts");
+  it("ships the documented public type surface through the built package", () => {
+    const consumerPath = path.join(tempDir, "consumer.tsx");
     fs.writeFileSync(
       consumerPath,
       `import "vinext";
 import { createStyleRegistry, useStyleRegistry } from "styled-jsx";
 import type { StyledJsxStyleRegistry } from "styled-jsx";
+import JSXStyle from "styled-jsx/style";
+import css from "styled-jsx/macro";
 
 const registry: StyledJsxStyleRegistry = createStyleRegistry();
 registry.add({ id: "consumer-style", children: "p { color: red }" });
@@ -50,6 +52,18 @@ registry.remove({ id: "consumer-style", children: "p { color: red }" });
 const hookRegistry: StyledJsxStyleRegistry = useStyleRegistry();
 hookRegistry.add(null);
 hookRegistry.remove(null);
+
+const resolved = css.resolve\`p { color: red }\`;
+
+export function Consumer() {
+  return (
+    <>
+      <style jsx global>{\`p { color: red }\`}</style>
+      <JSXStyle id="consumer-style">{resolved.styles}</JSXStyle>
+      <p className={resolved.className}>styled-jsx consumer</p>
+    </>
+  );
+}
 `,
     );
 
@@ -57,6 +71,7 @@ hookRegistry.remove(null);
       target: ts.ScriptTarget.ES2022,
       module: ts.ModuleKind.ESNext,
       moduleResolution: ts.ModuleResolutionKind.Bundler,
+      jsx: ts.JsxEmit.Preserve,
       strict: true,
       noEmit: true,
       skipLibCheck: true,
