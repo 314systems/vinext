@@ -593,7 +593,7 @@ These are intentional exclusions. For things that are missing today but on the r
 
 These are gaps we'd like to close — distinct from the [intentional exclusions](#whats-not-supported-and-wont-be) above.
 
-- **Image optimization doesn't happen at build time.** Remote images work via `@unpic/react` (auto-detects 28 CDN providers). Local images are routed through a `/_next/image` endpoint that can resize and transcode on Cloudflare Workers (via the Images binding) in production, but no build-time optimization or static resizing occurs.
+- **Image optimization doesn't happen at build time.** Local, public, and static images are routed through a `/_next/image` endpoint that can resize and transcode on Cloudflare Workers (via the Images binding) in production. Configured remote images are optimized by Node runtimes, but Worker deployments redirect them to the original unoptimized URL because Workers cannot bind DNS validation to the outbound fetch safely. As in Next.js, `remotePatterns` validates the initial source URL; redirects from an allowed source are not re-matched against those patterns.
 - **Google Fonts are loaded from the CDN, not self-hosted.** No `size-adjust` fallback font metrics. Local fonts work but `@font-face` CSS is injected at runtime, not extracted at build time.
 - **Route segment config** — `runtime` and `preferredRegion` are ignored (everything runs in the same environment).
 - **Node.js production server (`vinext start`)** works for testing but is less complete than Workers deployment. Cloudflare Workers is the primary target.
