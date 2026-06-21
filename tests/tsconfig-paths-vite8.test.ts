@@ -317,6 +317,70 @@ describe("Vite tsconfig paths support", () => {
     ).resolves.toHaveProperty("id", path.join(path.dirname(expectedConfigFile), "inherited.ts"));
   });
 
+  it("prefers a types JSON target in conditional package exports", async () => {
+    const root = setupProject({ name: "vite", version: "8.0.0" });
+    process.chdir(root);
+    const packageRoot = path.join(root, "node_modules/preset");
+    fs.mkdirSync(packageRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "preset",
+        exports: {
+          "./base": {
+            types: "./base.json",
+            default: "./index.js",
+          },
+        },
+      }),
+    );
+    fs.writeFileSync(path.join(packageRoot, "index.js"), "export default {};");
+    fs.writeFileSync(
+      path.join(packageRoot, "base.json"),
+      JSON.stringify({ compilerOptions: { paths: { inherited: ["./inherited.ts"] } } }),
+    );
+
+    const plugin = await configureCustomTsconfig(root, { extends: "preset/base" });
+    await expect(
+      resolveWithCustomTsconfig(
+        plugin,
+        "inherited",
+        path.join(root, "pages/index.tsx"),
+        (candidate) => candidate,
+      ),
+    ).resolves.toHaveProperty("id", path.join(fs.realpathSync(packageRoot), "inherited.ts"));
+  });
+
+  it("tries later package export array targets when an earlier target is missing", async () => {
+    const root = setupProject({ name: "vite", version: "8.0.0" });
+    process.chdir(root);
+    const packageRoot = path.join(root, "node_modules/preset");
+    fs.mkdirSync(packageRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "preset",
+        exports: {
+          "./base": ["./missing.json", "./base.json"],
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(packageRoot, "base.json"),
+      JSON.stringify({ compilerOptions: { paths: { inherited: ["./inherited.ts"] } } }),
+    );
+
+    const plugin = await configureCustomTsconfig(root, { extends: "preset/base" });
+    await expect(
+      resolveWithCustomTsconfig(
+        plugin,
+        "inherited",
+        path.join(root, "pages/index.tsx"),
+        (candidate) => candidate,
+      ),
+    ).resolves.toHaveProperty("id", path.join(fs.realpathSync(packageRoot), "inherited.ts"));
+  });
+
   it("rebases inherited paths against a child baseUrl", async () => {
     const root = setupProject({ name: "vite", version: "8.0.0" });
     process.chdir(root);

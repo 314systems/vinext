@@ -371,6 +371,84 @@ function normalizeTsconfigExtends(extendsField: unknown): string[] {
   return [];
 }
 
+const TSCONFIG_EXPORT_CONDITIONS = new Set(["types", "require", "node"]);
+
+function resolveTsconfigExportTarget(
+  packageRoot: string,
+  target: unknown,
+  replacement = "",
+): string | null {
+  if (typeof target === "string") {
+    if (!target.startsWith("./")) return null;
+    const resolvedTarget = path.resolve(packageRoot, target.replaceAll("*", replacement));
+    if (path.extname(resolvedTarget) !== ".json") return null;
+    return resolveTsconfigPathCandidate(resolvedTarget);
+  }
+
+  if (Array.isArray(target)) {
+    for (const candidate of target) {
+      const resolved = resolveTsconfigExportTarget(packageRoot, candidate, replacement);
+      if (resolved) return resolved;
+    }
+    return null;
+  }
+
+  if (target && typeof target === "object") {
+    for (const [condition, candidate] of Object.entries(target)) {
+      if (condition !== "default" && !TSCONFIG_EXPORT_CONDITIONS.has(condition)) continue;
+      const resolved = resolveTsconfigExportTarget(packageRoot, candidate, replacement);
+      if (resolved) return resolved;
+    }
+  }
+
+  return null;
+}
+
+function resolveTsconfigPackageExport(
+  packageRoot: string,
+  exportsField: unknown,
+  packageSubpath: string,
+): string | null {
+  const exportKey = packageSubpath ? `./${packageSubpath}` : ".";
+  if (!exportsField || typeof exportsField !== "object") {
+    return packageSubpath ? null : resolveTsconfigExportTarget(packageRoot, exportsField);
+  }
+
+  if (!Array.isArray(exportsField)) {
+    const exportsMap = exportsField as Record<string, unknown>;
+    const subpathKeys = Object.keys(exportsMap).filter((key) => key.startsWith("."));
+    if (subpathKeys.length === 0) {
+      return packageSubpath ? null : resolveTsconfigExportTarget(packageRoot, exportsField);
+    }
+
+    if (Object.hasOwn(exportsMap, exportKey)) {
+      return resolveTsconfigExportTarget(packageRoot, exportsMap[exportKey]);
+    }
+
+    const matchingPattern = subpathKeys
+      .filter((key) => {
+        const starIndex = key.indexOf("*");
+        return (
+          starIndex !== -1 &&
+          exportKey.startsWith(key.slice(0, starIndex)) &&
+          exportKey.endsWith(key.slice(starIndex + 1))
+        );
+      })
+      .sort((left, right) => right.indexOf("*") - left.indexOf("*"))[0];
+    if (matchingPattern) {
+      const starIndex = matchingPattern.indexOf("*");
+      const replacement = exportKey.slice(
+        starIndex,
+        exportKey.length - (matchingPattern.length - starIndex - 1),
+      );
+      return resolveTsconfigExportTarget(packageRoot, exportsMap[matchingPattern], replacement);
+    }
+    return null;
+  }
+
+  return packageSubpath ? null : resolveTsconfigExportTarget(packageRoot, exportsField);
+}
+
 function resolveTsconfigExtends(configPath: string, specifier: string): string | null {
   const fromDir = path.dirname(configPath);
   if (specifier.startsWith(".") || specifier.startsWith("/") || specifier.startsWith("\\")) {
@@ -383,16 +461,6 @@ function resolveTsconfigExtends(configPath: string, specifier: string): string |
     ? packageParts.slice(0, 2).join("/")
     : packageParts[0];
   const packageSubpath = packageParts.slice(packageName.startsWith("@") ? 2 : 1).join("/");
-
-  if (packageSubpath) {
-    for (const item of [specifier, `${specifier}.json`]) {
-      try {
-        const resolved = requireFromConfig.resolve(item);
-        if (resolved.endsWith(".json")) return resolved;
-      } catch {}
-    }
-    return null;
-  }
 
   let packageRoot: string | null = null;
   let searchDirectory = fromDir;
@@ -427,6 +495,12 @@ function resolveTsconfigExtends(configPath: string, specifier: string): string |
   const packageJsonPath = path.join(packageRoot, "package.json");
   try {
     const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8"));
+    if (packageJson.exports !== undefined) {
+      return resolveTsconfigPackageExport(packageRoot, packageJson.exports, packageSubpath);
+    }
+    if (packageSubpath) {
+      return resolveTsconfigPathCandidate(path.join(packageRoot, packageSubpath));
+    }
     if (typeof packageJson.tsconfig === "string") {
       const resolved = resolveTsconfigPathCandidate(
         path.resolve(packageRoot, packageJson.tsconfig),
