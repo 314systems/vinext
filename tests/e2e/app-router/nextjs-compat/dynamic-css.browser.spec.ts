@@ -139,6 +139,7 @@ test("preserves CSS order across layouts, client components, and next/dynamic", 
     await expect(component).toHaveText("Hello Component");
     await expect(component).toHaveCSS("background-color", "rgb(0, 128, 0)");
     await expect(component).toHaveCSS("color", "rgb(0, 0, 0)");
+    await expect(component).toHaveCSS("border-top-color", "rgb(255, 0, 0)");
 
     await expect(page.locator("#dynamic-css-global")).toHaveCSS(
       "background-color",
