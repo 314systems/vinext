@@ -17028,6 +17028,180 @@ describe("Pages Router concurrent navigation", () => {
     }
   });
 
+  it("shallow replace supersedes pending deep navigation", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const { win, render } = createNavWindow();
+    (globalThis as any).window = win;
+
+    const deepResponse = createDeferred<Response>();
+    globalThis.fetch = vi.fn(() => deepResponse.promise);
+
+    const completedUrls: string[] = [];
+    const errors: Array<{ err: unknown; url: string }> = [];
+    const onRouteChangeComplete = (...args: unknown[]) => completedUrls.push(String(args[0]));
+    const onRouteChangeError = (...args: unknown[]) => {
+      errors.push({ err: args[0], url: String(args[1]) });
+    };
+
+    try {
+      vi.resetModules();
+      const { default: Router } = await import("../packages/vinext/src/shims/router.js");
+      Router.events.on("routeChangeComplete", onRouteChangeComplete);
+      Router.events.on("routeChangeError", onRouteChangeError);
+
+      const deepNavigation = Router.push("/page-a");
+      await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+
+      await expect(Router.replace("/page-b?shallow=1", undefined, { shallow: true })).resolves.toBe(
+        true,
+      );
+      deepResponse.resolve(new Response(buildNavHtml("/page-a", "/@fs/pages/page-a.js")));
+      await deepNavigation;
+
+      expect(render).not.toHaveBeenCalled();
+      expect(completedUrls).toEqual(["/page-b?shallow=1"]);
+      expect(errors).toContainEqual({
+        err: expect.objectContaining({ cancelled: true }),
+        url: "/page-a",
+      });
+    } finally {
+      const { default: Router } = await import("../packages/vinext/src/shims/router.js");
+      Router.events.off("routeChangeComplete", onRouteChangeComplete);
+      Router.events.off("routeChangeError", onRouteChangeError);
+      vi.resetModules();
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it.each(["shallow", "deep"] as const)(
+    "same-key %s replace supersedes pending shallow popstate scroll restoration",
+    async (replacementKind) => {
+      const previousWindow = (globalThis as any).window;
+      const previousDocument = (globalThis as any).document;
+      const originalFetch = globalThis.fetch;
+      const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
+      const originalScrollRestorationEnv = process.env.__NEXT_SCROLL_RESTORATION;
+      const listeners = new Map<string, (event: any) => void>();
+      const animationFrames: FrameRequestCallback[] = [];
+      const { win } = createNavWindow();
+      const targetKey = "key-target";
+
+      win.scrollTo = vi.fn((x: number, y: number) => {
+        if (x === 0 && y === 0) {
+          win.scrollX = x;
+          win.scrollY = y;
+        }
+      });
+
+      win.addEventListener = vi.fn((type: string, handler: (event: any) => void) => {
+        listeners.set(type, handler);
+      });
+      (win.history as any).scrollRestoration = "auto";
+      (win.history as any).state = {
+        __N: true,
+        url: "/current",
+        as: "/current",
+        options: { shallow: true },
+        key: "key-current",
+      };
+      const sessionStore = new Map<string, string>([
+        [`__next_scroll_${targetKey}`, JSON.stringify({ x: 40, y: 600 })],
+      ]);
+      (win as any).sessionStorage = {
+        getItem: (key: string) => sessionStore.get(key) ?? null,
+        setItem: (key: string, value: string) => void sessionStore.set(key, value),
+        removeItem: (key: string) => void sessionStore.delete(key),
+      };
+      (globalThis as any).window = win;
+      (globalThis as any).document = {
+        documentElement: {
+          dataset: {},
+          style: { scrollBehavior: "" },
+          getClientRects: vi.fn(),
+        },
+      };
+      globalThis.requestAnimationFrame = vi.fn((callback: FrameRequestCallback) => {
+        animationFrames.push(callback);
+        return animationFrames.length;
+      });
+      process.env.__NEXT_SCROLL_RESTORATION = "true";
+      globalThis.fetch = vi.fn(
+        async () => new Response(buildNavHtml("/replacement", "/@fs/pages/replacement.js")),
+      );
+
+      const completedUrls: string[] = [];
+      const onRouteChangeComplete = (...args: unknown[]) => completedUrls.push(String(args[0]));
+
+      try {
+        vi.resetModules();
+        const { default: Router } = await import("../packages/vinext/src/shims/router.js");
+        const { installPagesRouterRuntime } =
+          await import("../packages/vinext/src/shims/pages-router-runtime.js");
+        installPagesRouterRuntime();
+        Router.events.on("routeChangeComplete", onRouteChangeComplete);
+
+        await Router.replace("/current", undefined, { shallow: true });
+        completedUrls.length = 0;
+
+        const popstateHandler = listeners.get("popstate");
+        expect(popstateHandler).toBeDefined();
+        (win.history as any).state = {
+          __N: true,
+          url: "/target",
+          as: "/target",
+          options: { shallow: true },
+          key: targetKey,
+          __vinext_route: "/",
+        };
+        win.location.pathname = "/target";
+        win.location.href = "http://localhost/target";
+        popstateHandler!({ state: (win.history as any).state });
+
+        await vi.waitFor(() => expect(animationFrames).toHaveLength(1));
+        expect(win.scrollTo).toHaveBeenCalledWith(40, 600);
+
+        const replacement = Router.replace("/replacement", undefined, {
+          shallow: replacementKind === "shallow",
+        });
+        await replacement;
+        expect((win.history as any).replaceState).toHaveBeenLastCalledWith(
+          expect.objectContaining({ key: targetKey }),
+          "",
+          "/replacement",
+        );
+
+        animationFrames.shift()!(0);
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(completedUrls).not.toContain("/target");
+        if (replacementKind === "shallow") {
+          expect(completedUrls).toContain("/replacement");
+        } else {
+          expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+        }
+      } finally {
+        const { default: Router } = await import("../packages/vinext/src/shims/router.js");
+        Router.events.off("routeChangeComplete", onRouteChangeComplete);
+        vi.resetModules();
+        if (previousWindow === undefined) delete (globalThis as any).window;
+        else (globalThis as any).window = previousWindow;
+        if (previousDocument === undefined) delete (globalThis as any).document;
+        else (globalThis as any).document = previousDocument;
+        globalThis.fetch = originalFetch;
+        globalThis.requestAnimationFrame = originalRequestAnimationFrame;
+        if (originalScrollRestorationEnv === undefined) {
+          delete process.env.__NEXT_SCROLL_RESTORATION;
+        } else {
+          process.env.__NEXT_SCROLL_RESTORATION = originalScrollRestorationEnv;
+        }
+      }
+    },
+  );
+
   it("abort signal fires when navigation is superseded — AbortError becomes NavigationCancelledError", async () => {
     // Verify that the AbortController signal passed to fetch actually fires when a
     // newer navigation starts, and that the resulting AbortError is converted into

@@ -1435,6 +1435,14 @@ function cancelPreviousRenderCommit(): void {
   routerRuntimeState.cancelPendingRenderCommit = null;
 }
 
+function supersedePendingNavigation(): number {
+  const previousAbortController = routerRuntimeState.activeAbortController;
+  if (previousAbortController) queueMicrotask(() => previousAbortController.abort());
+  cancelPreviousRenderCommit();
+  routerRuntimeState.activeAbortController = null;
+  return ++routerRuntimeState.navigationId;
+}
+
 function scheduleHardNavigationAndThrow(url: string, message: string): never {
   if (typeof window === "undefined") {
     throw new HardNavigationScheduledError(message);
@@ -2062,17 +2070,9 @@ async function navigateClient(
 ): Promise<void> {
   if (typeof window === "undefined") return;
 
-  // Supersede the prior navigation immediately via navigationId below, but
-  // defer its AbortSignal by one microtask. A synchronous identical push can
-  // then join the shared _next/data fetch before the prior waiter releases;
-  // different destinations still abort the abandoned request in this turn.
-  const previousAbortController = routerRuntimeState.activeAbortController;
-  if (previousAbortController) queueMicrotask(() => previousAbortController.abort());
-  cancelPreviousRenderCommit();
   const controller = new AbortController();
+  const navId = supersedePendingNavigation();
   routerRuntimeState.activeAbortController = controller;
-
-  const navId = ++routerRuntimeState.navigationId;
 
   /** Check if this navigation is still the active one. If not, throw. */
   function assertStillCurrent(): void {
@@ -2304,6 +2304,9 @@ function updateHistory(
     __N: true,
     key,
   };
+  if (navState.options.shallow === true && window.__NEXT_DATA__?.page) {
+    state.__vinext_route = window.__NEXT_DATA__.page;
+  }
   if (mode === "push") window.history.pushState(state, "", fullUrl);
   else window.history.replaceState(state, "", fullUrl);
   routerRuntimeState.currentShallow = navState.options.shallow === true;
@@ -2322,6 +2325,7 @@ type VinextHistoryState = {
   options: { locale?: string; shallow?: boolean };
   __N: true;
   key: string;
+  __vinext_route?: string;
 };
 
 function createHistoryKey(): string {
@@ -2591,6 +2595,7 @@ async function performNavigation(
     const eventUrl = resolveHashUrl(full);
     routerEvents.emit("hashChangeStart", eventUrl, { shallow });
     updateHistory(mode, resolved.startsWith("#") ? resolved : full, navState);
+    supersedePendingNavigation();
     if (doScroll) scrollToHashTarget(extractHash(resolved));
     onStateUpdate?.();
     routerEvents.emit("hashChangeComplete", eventUrl, { shallow });
@@ -2648,6 +2653,7 @@ async function performNavigation(
     if (result === "cancelled") return true;
     if (result === "failed") return false;
   } else {
+    supersedePendingNavigation();
     // Shallow navigations skip the render-commit path, so apply the scroll
     // reset synchronously here — before routeChangeComplete. This matches the
     // non-shallow path, where the x/y reset runs inside the render-commit
@@ -2844,6 +2850,7 @@ function isNextRouterState(state: unknown): state is {
   options: TransitionOptions;
   __N: true;
   key?: string;
+  __vinext_route?: string;
 } {
   return (
     typeof state === "object" &&
@@ -2970,6 +2977,7 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
   const shallow =
     isNextRouterState(state) &&
     state.options?.shallow === true &&
+    state.__vinext_route === window.__NEXT_DATA__?.page &&
     routerRuntimeState.currentShallow;
   routerRuntimeState.currentShallow = shallow;
 
@@ -2984,6 +2992,7 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
   routerRuntimeState.lastPathnameAndSearch = browserUrl;
 
   if (isHashOnly) {
+    supersedePendingNavigation();
     // Hash-only back/forward — no page fetch needed.
     //
     // `forcedScroll` is intentionally discarded here: only the hash anchor is
@@ -3018,14 +3027,14 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
   // compatibility.
   routerEvents.emit("beforeHistoryChange", fullAppUrl, { shallow });
   if (shallow) {
+    const navigationId = supersedePendingNavigation();
     if (forcedScroll === undefined) {
       routerEvents.emit("routeChangeComplete", fullAppUrl, { shallow: true });
       dispatchNavigateEvent();
       return;
     }
     void (async () => {
-      const isCurrent = () =>
-        targetKey === undefined || routerRuntimeState.currentHistoryKey === targetKey;
+      const isCurrent = () => navigationId === routerRuntimeState.navigationId;
       await restorePagesRouterScrollPosition(forcedScroll, isCurrent);
       if (!isCurrent()) return;
       routerEvents.emit("routeChangeComplete", fullAppUrl, { shallow: true });
