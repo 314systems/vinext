@@ -474,17 +474,37 @@ function loadTsconfigPathAliases(
     return {};
   }
 
+  if (
+    parsed.extends !== undefined &&
+    typeof parsed.extends !== "string" &&
+    (!Array.isArray(parsed.extends) || parsed.extends.some((value) => typeof value !== "string"))
+  ) {
+    if (throwOnParseError) {
+      throw new Error("Compiler option 'extends' requires a value of type string or Array.");
+    }
+  }
+
   let aliases: Record<string, string> = {};
   // `extends` may be a string or (TypeScript 5.0+) an array; iterate parents in
   // order so later entries override earlier ones (matching Next.js).
   for (const extendsSpecifier of normalizeTsconfigExtends(parsed.extends)) {
     const extendedPath = resolveTsconfigExtends(normalizedPath, extendsSpecifier);
-    if (extendedPath) {
-      aliases = {
-        ...aliases,
-        ...loadTsconfigPathAliases(extendedPath, projectRoot, seen, throwOnParseError),
-      };
+    if (!extendedPath) {
+      if (throwOnParseError) {
+        const diagnosticPath =
+          extendsSpecifier.startsWith(".") ||
+          extendsSpecifier.startsWith("/") ||
+          extendsSpecifier.startsWith("\\")
+            ? path.resolve(path.dirname(normalizedPath), extendsSpecifier)
+            : extendsSpecifier;
+        throw new Error(`Cannot read file '${diagnosticPath}'.`);
+      }
+      continue;
     }
+    aliases = {
+      ...aliases,
+      ...loadTsconfigPathAliases(extendedPath, projectRoot, seen, throwOnParseError),
+    };
   }
 
   const compilerOptions = isRecord(parsed.compilerOptions) ? parsed.compilerOptions : null;
@@ -535,7 +555,9 @@ type SelectedTsconfig = {
 
 function selectTsconfig(projectRoot: string, configuredPath?: string): SelectedTsconfig {
   if (configuredPath !== undefined) {
-    const customPath = path.resolve(projectRoot, configuredPath);
+    // Match Next.js loadJsConfig(): leading slashes remain project-relative
+    // because path.join(projectRoot, configuredPath) is used instead of resolve.
+    const customPath = path.join(projectRoot, configuredPath);
     if (fs.existsSync(customPath) && fs.statSync(customPath).isFile()) {
       return { path: customPath, custom: true };
     }
@@ -1439,7 +1461,15 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           viteMajorVersion >= 8 &&
           !selectedTsconfig.custom &&
           userResolve?.tsconfigPaths === undefined;
-        const tsconfigPathAliases = resolveTsconfigAliases(root, selectedTsconfig.path);
+        // Custom configs are owned by vite-tsconfig-paths, including its dev
+        // watcher. Do not materialize duplicate aliases that would become stale
+        // after paths/baseUrl edits and override the plugin's refreshed resolver.
+        if (selectedTsconfig.custom && selectedTsconfig.path) {
+          loadTsconfigPathAliases(selectedTsconfig.path, root, new Set(), true);
+        }
+        const tsconfigPathAliases = selectedTsconfig.custom
+          ? {}
+          : resolveTsconfigAliases(root, selectedTsconfig.path);
         instrumentationPath = findInstrumentationFile(root, fileMatcher);
         instrumentationClientPath = findInstrumentationClientFile(root, fileMatcher);
         const middlewareConventionDir =

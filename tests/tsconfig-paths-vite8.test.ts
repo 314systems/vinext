@@ -163,11 +163,8 @@ describe("Vite tsconfig paths support", () => {
       { command: "serve", mode: "development" },
     );
 
-    expect(resolvedConfig?.resolve?.alias).toEqual(
-      expect.objectContaining({
-        foo: "/bar.ts",
-      }),
-    );
+    expect(resolvedConfig?.resolve?.alias).not.toHaveProperty("foo");
+    expect(resolvedConfig?.resolve?.tsconfigPaths).toBe(false);
   });
 
   it("falls back only to jsconfig when the configured file is missing", async () => {
@@ -198,7 +195,7 @@ describe("Vite tsconfig paths support", () => {
       { command: "serve", mode: "development" },
     );
 
-    expect(resolvedConfig?.resolve?.alias).toEqual(expect.objectContaining({ right: "/right.ts" }));
+    expect(resolvedConfig?.resolve?.alias).not.toHaveProperty("right");
     expect(resolvedConfig?.resolve?.alias).not.toHaveProperty("wrong");
     expect(resolvedConfig?.resolve?.tsconfigPaths).toBe(false);
   });
@@ -225,14 +222,66 @@ describe("Vite tsconfig paths support", () => {
     ).rejects.toThrow('Failed to parse "');
   });
 
+  it("throws a TypeScript-style diagnostic for a missing extends file", async () => {
+    const root = setupProject({ name: "vite", version: "8.0.0" });
+    process.chdir(root);
+    fs.writeFileSync(
+      path.join(root, "next.config.mjs"),
+      "export default { typescript: { tsconfigPath: 'web.tsconfig.json' } };\n",
+    );
+    fs.writeFileSync(
+      path.join(root, "web.tsconfig.json"),
+      JSON.stringify({ extends: "./missing.base.json" }),
+    );
+
+    const plugins = vinext({ appDir: root });
+    const configPlugin = findNamedPlugin(plugins, "vinext:config") as {
+      config?: (
+        config: { root: string },
+        env: { command: "serve"; mode: string },
+      ) => Promise<unknown>;
+    };
+
+    await expect(
+      configPlugin.config?.({ root }, { command: "serve", mode: "development" }),
+    ).rejects.toThrow(
+      `Cannot read file '${path.join(fs.realpathSync(root), "missing.base.json")}'.`,
+    );
+  });
+
+  it("throws a TypeScript-style diagnostic for an invalid extends value", async () => {
+    const root = setupProject({ name: "vite", version: "8.0.0" });
+    process.chdir(root);
+    fs.writeFileSync(
+      path.join(root, "next.config.mjs"),
+      "export default { typescript: { tsconfigPath: 'web.tsconfig.json' } };\n",
+    );
+    fs.writeFileSync(
+      path.join(root, "web.tsconfig.json"),
+      JSON.stringify({ extends: { invalid: true } }),
+    );
+
+    const plugins = vinext({ appDir: root });
+    const configPlugin = findNamedPlugin(plugins, "vinext:config") as {
+      config?: (
+        config: { root: string },
+        env: { command: "serve"; mode: string },
+      ) => Promise<unknown>;
+    };
+
+    await expect(
+      configPlugin.config?.({ root }, { command: "serve", mode: "development" }),
+    ).rejects.toThrow("Compiler option 'extends' requires a value of type string or Array.");
+  });
+
   it.each([
-    ["absolute", (root: string) => path.join(root, "config", "absolute.json")],
+    ["leading-slash", () => "/config/leading.json"],
     ["parent-relative", () => "../shared-tsconfig.json"],
   ])("supports %s configured paths", async (_label, configPathForRoot) => {
     const root = setupProject({ name: "vite", version: "8.0.0" });
     process.chdir(root);
-    const configuredPath = configPathForRoot(root);
-    const absoluteConfigPath = path.resolve(root, configuredPath);
+    const configuredPath = configPathForRoot();
+    const absoluteConfigPath = path.join(root, configuredPath);
     fs.mkdirSync(path.dirname(absoluteConfigPath), { recursive: true });
     fs.writeFileSync(
       absoluteConfigPath,
@@ -255,45 +304,41 @@ describe("Vite tsconfig paths support", () => {
       { command: "serve", mode: "development" },
     );
 
-    expect(resolvedConfig?.resolve?.alias).toHaveProperty("selected");
+    expect(resolvedConfig?.resolve?.alias).not.toHaveProperty("selected");
     expect(resolvedConfig?.resolve?.tsconfigPaths).toBe(false);
   });
 
   it.each([
-    ["serve", "development", "/dev.ts"],
-    ["build", "production", "/build.ts"],
-  ] as const)(
-    "uses function-form phase-specific config during %s",
-    async (command, mode, expectedAlias) => {
-      const root = setupProject({ name: "vite", version: "8.0.0" });
-      process.chdir(root);
-      fs.writeFileSync(
-        path.join(root, "next.config.mjs"),
-        `export default (phase) => ({ typescript: { tsconfigPath: phase.includes('development') ? 'dev.json' : 'build.json' } });\n`,
-      );
-      fs.writeFileSync(
-        path.join(root, "dev.json"),
-        JSON.stringify({ compilerOptions: { paths: { selected: ["./dev.ts"] } } }),
-      );
-      fs.writeFileSync(
-        path.join(root, "build.json"),
-        JSON.stringify({ compilerOptions: { paths: { selected: ["./build.ts"] } } }),
-      );
+    ["serve", "development"],
+    ["build", "production"],
+  ] as const)("uses function-form phase-specific config during %s", async (command, mode) => {
+    const root = setupProject({ name: "vite", version: "8.0.0" });
+    process.chdir(root);
+    fs.writeFileSync(
+      path.join(root, "next.config.mjs"),
+      `export default (phase) => ({ typescript: { tsconfigPath: phase.includes('development') ? 'dev.json' : 'build.json' } });\n`,
+    );
+    fs.writeFileSync(
+      path.join(root, "dev.json"),
+      JSON.stringify({ compilerOptions: { paths: { selected: ["./dev.ts"] } } }),
+    );
+    fs.writeFileSync(
+      path.join(root, "build.json"),
+      JSON.stringify({ compilerOptions: { paths: { selected: ["./build.ts"] } } }),
+    );
 
-      const plugins = vinext({ appDir: root });
-      const configPlugin = findNamedPlugin(plugins, "vinext:config") as {
-        config?: (
-          config: { root: string },
-          env: { command: "serve" | "build"; mode: string },
-        ) => Promise<{ resolve?: Record<string, unknown> }>;
-      };
-      const resolvedConfig = await configPlugin.config?.({ root }, { command, mode });
+    const plugins = vinext({ appDir: root });
+    const configPlugin = findNamedPlugin(plugins, "vinext:config") as {
+      config?: (
+        config: { root: string },
+        env: { command: "serve" | "build"; mode: string },
+      ) => Promise<{ resolve?: Record<string, unknown> }>;
+    };
+    const resolvedConfig = await configPlugin.config?.({ root }, { command, mode });
 
-      expect(resolvedConfig?.resolve?.alias).toEqual(
-        expect.objectContaining({ selected: expectedAlias }),
-      );
-    },
-  );
+    expect(resolvedConfig?.resolve?.alias).not.toHaveProperty("selected");
+    expect(resolvedConfig?.resolve?.tsconfigPaths).toBe(false);
+  });
 
   it("materializes path aliases inherited via tsconfig extends on Vite 8", async () => {
     const root = setupProject({ name: "vite", version: "8.0.0" });

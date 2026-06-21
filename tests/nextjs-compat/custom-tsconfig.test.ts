@@ -12,6 +12,18 @@ import type { ViteDevServer } from "vite-plus";
 import { buildAppFixture, buildPagesFixture, fetchHtml, startFixtureServer } from "../helpers.js";
 
 const FIXTURE_DIR = path.resolve(import.meta.dirname, "../fixtures/custom-tsconfig");
+const CUSTOM_TSCONFIG_PATH = path.join(FIXTURE_DIR, "web.tsconfig.json");
+
+async function waitForHtml(baseUrl: string, expected: string[]): Promise<string> {
+  const deadline = Date.now() + 10_000;
+  let lastHtml = "";
+  while (Date.now() < deadline) {
+    ({ html: lastHtml } = await fetchHtml(baseUrl, `/?t=${Date.now()}`));
+    if (expected.every((marker) => lastHtml.includes(marker))) return lastHtml;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`Timed out waiting for ${JSON.stringify(expected)} in HTML: ${lastHtml}`);
+}
 
 async function readBuildOutput(root: string): Promise<string> {
   const entries = await fs.readdir(root, { withFileTypes: true });
@@ -56,6 +68,51 @@ describe("Next.js compat: typescript.tsconfigPath dev", () => {
       value: "bar123",
       baseValue: "custom-base-url",
     });
+  });
+
+  it("applies custom paths and baseUrl edits without restarting dev", async () => {
+    const originalConfig = await fs.readFile(CUSTOM_TSCONFIG_PATH, "utf8");
+    const pagePath = path.join(FIXTURE_DIR, "app/page.tsx");
+    const originalPage = await fs.readFile(pagePath, "utf8");
+    const editedBaseUrlDir = path.join(FIXTURE_DIR, "edited-src");
+    const editedPathFile = path.join(FIXTURE_DIR, "edited-bar.ts");
+    await fs.mkdir(editedBaseUrlDir, { recursive: true });
+    await fs.writeFile(
+      path.join(editedBaseUrlDir, "base-value.ts"),
+      'export default "edited-base";\n',
+    );
+    await fs.writeFile(editedPathFile, 'export default "edited-path";\n');
+
+    try {
+      await fs.writeFile(
+        CUSTOM_TSCONFIG_PATH,
+        JSON.stringify(
+          {
+            compilerOptions: {
+              baseUrl: "./edited-src",
+              paths: { foo: ["../edited-bar.ts"] },
+              jsx: "react-jsx",
+            },
+            include: ["**/*.ts", "**/*.tsx"],
+          },
+          null,
+          2,
+        ) + "\n",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await fs.writeFile(pagePath, originalPage + "\n");
+
+      const html = await waitForHtml(baseUrl, ["app:", "edited-path", "edited-base"]);
+      expect(html).not.toContain("bar123");
+      expect(html).not.toContain("custom-base-url");
+    } finally {
+      await fs.writeFile(CUSTOM_TSCONFIG_PATH, originalConfig);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await fs.writeFile(pagePath, originalPage);
+      await waitForHtml(baseUrl, ["app:", "bar123", "custom-base-url"]);
+      await fs.rm(editedBaseUrlDir, { recursive: true, force: true });
+      await fs.rm(editedPathFile, { force: true });
+    }
   });
 });
 
