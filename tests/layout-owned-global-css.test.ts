@@ -26,6 +26,16 @@ function createContext(
   };
 }
 
+async function runPagesServerDiscovery(
+  plugin: ReturnType<typeof createLayoutOwnedGlobalCssPlugin>,
+  resolvedIds: Parameters<typeof createContext>[1],
+  environmentName = "ssr",
+): Promise<void> {
+  const buildStart =
+    typeof plugin.buildStart === "object" ? plugin.buildStart.handler : plugin.buildStart;
+  await buildStart?.call(createContext(environmentName, resolvedIds) as never, {} as never);
+}
+
 describe("layout-owned global CSS", () => {
   it("deduplicates descendant client imports without affecting siblings or CSS Modules", async () => {
     const appDir = path.resolve("/app");
@@ -845,6 +855,8 @@ describe("layout-owned global CSS", () => {
       );
     }
 
+    await runPagesServerDiscovery(appBuildPlugin, resolvedIds);
+
     await expect(
       appResolveId!.call(
         createContext("client", resolvedIds) as never,
@@ -921,6 +933,13 @@ describe("layout-owned global CSS", () => {
       } as never,
     );
 
+    await runPagesServerDiscovery(plugin, (source, importer) => {
+      if (!importer) return null;
+      if (source === "../src/shared-client") return sharedClient;
+      if (source === "./shared.css") return stylesheet;
+      return null;
+    });
+
     for (const [source, importer, resolved] of [
       ["./shared", layout, appHelper],
       ["@shared/client", appHelper, sharedClient],
@@ -985,6 +1004,10 @@ describe("layout-owned global CSS", () => {
         createResolver: () => async (source: string, importer?: string) =>
           importer ? resolutions.get(`${importer}:${source}`) : undefined,
       } as never,
+    );
+
+    await runPagesServerDiscovery(plugin, (source, importer) =>
+      importer ? (resolutions.get(`${importer}:${source}`) ?? null) : null,
     );
 
     for (const [source, importer, resolved] of [
@@ -1064,6 +1087,12 @@ describe("layout-owned global CSS", () => {
         },
       } as never,
     );
+
+    await runPagesServerDiscovery(plugin, (source, importer) => {
+      if (!importer) return null;
+      resolvedSources.push(`${importer}:${source}`);
+      return resolutions.get(`${importer}:${source}`) ?? null;
+    });
 
     for (const [source, importer, resolved] of [
       ["./shared", layout, appHelper],
@@ -1145,6 +1174,12 @@ describe("layout-owned global CSS", () => {
       "../src/first-helper",
       firstPage,
       { isEntry: false },
+    );
+
+    await runPagesServerDiscovery(
+      plugin,
+      (source, importer) => (importer ? (resolutions.get(`${importer}:${source}`) ?? null) : null),
+      "pages_router_cloudflare",
     );
 
     await expect(
@@ -1302,6 +1337,10 @@ describe("layout-owned global CSS", () => {
       } as never,
     );
 
+    await runPagesServerDiscovery(plugin, (source, importer) =>
+      importer ? (resolutions.get(`${importer}:${source}`) ?? null) : null,
+    );
+
     for (const [source, importer, resolved] of [
       ["./shared", layout, appHelper],
       ["@shared/client", appHelper, sharedClient],
@@ -1440,6 +1479,12 @@ describe("layout-owned global CSS", () => {
       } as never,
     );
 
+    await runPagesServerDiscovery(plugin, (source, importer) => {
+      if (!importer) return null;
+      resolvedSources.push(`${importer}:${source}`);
+      return resolutions.get(`${importer}:${source}`) ?? null;
+    });
+
     for (const [source, importer, resolved] of [
       ["./shared", layout, appHelper],
       ["@shared/client", appHelper, sharedClient],
@@ -1523,6 +1568,13 @@ describe("layout-owned global CSS", () => {
       } as never,
     );
 
+    await runPagesServerDiscovery(plugin, (source) => {
+      if (source === "conditional-package") return serverEntry;
+      if (source === "./shared-client") return sharedClient;
+      if (source === "./shared.css") return stylesheet;
+      return null;
+    });
+
     for (const [source, importer, resolved] of [
       ["./shared", layout, appHelper],
       ["@shared/client", appHelper, sharedClient],
@@ -1541,8 +1593,7 @@ describe("layout-owned global CSS", () => {
         isEntry: false,
       }),
     ).resolves.toBeNull();
-    expect(ssrFlags.length).toBeGreaterThan(0);
-    expect(ssrFlags.every(Boolean)).toBe(true);
+    expect(ssrFlags).toEqual([]);
 
     await fs.rm(projectDir, { recursive: true, force: true });
   });
@@ -1592,6 +1643,10 @@ describe("layout-owned global CSS", () => {
         createResolver: () => async (source: string, importer?: string) =>
           importer ? resolutions.get(`${importer}:${source}`) : undefined,
       } as never,
+    );
+
+    await runPagesServerDiscovery(plugin, (source, importer) =>
+      importer ? (resolutions.get(`${importer}:${source}`) ?? null) : null,
     );
 
     for (const [source, importer, resolved] of [

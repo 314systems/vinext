@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { parseSync, type ESTree, type Plugin } from "vite";
+import { createIdResolver, parseSync, type ESTree, type Plugin } from "vite";
 import { fnv1a64 } from "../utils/hash.js";
 
 const STYLESHEET_RE = /\.(?:css|less|sass|scss|styl|stylus)$/i;
@@ -223,9 +223,6 @@ export function createLayoutOwnedGlobalCssPlugin(
   let pagesConsumerScan: Promise<void> | null = null;
   let pagesConsumerScanState: "idle" | "scanning" | "complete" = "idle";
   let pagesScanIsConservative = false;
-  let pagesFallbackResolve:
-    | ((source: string, importer?: string) => Promise<string | undefined>)
-    | null = null;
 
   function isPagesServerEnvironment(environment: { name: string } | undefined): boolean {
     return environment !== undefined && environment.name !== "client" && environment.name !== "rsc";
@@ -380,12 +377,6 @@ export function createLayoutOwnedGlobalCssPlugin(
     source: string,
     importer: string,
   ): Promise<string | null> {
-    if (pagesFallbackResolve) {
-      const resolved = await pagesFallbackResolve(source, cleanModuleId(importer));
-      if (resolved && !resolved.startsWith("\0") && path.isAbsolute(cleanModuleId(resolved))) {
-        return resolved;
-      }
-    }
     return resolveExternalImport(context, source, importer);
   }
 
@@ -532,16 +523,22 @@ export function createLayoutOwnedGlobalCssPlugin(
     enforce: "pre",
     apply: "build",
 
-    configResolved(config) {
-      if (!config.environments || config.environments.ssr) {
-        const resolver = config.createResolver();
-        pagesFallbackResolve = (source, importer) => resolver(source, importer, false, true);
-      }
-    },
-
     async buildStart() {
-      if (this.environment?.name === "client") {
-        await scanPagesConsumers(this);
+      if (isPagesServerEnvironment(this.environment)) {
+        const environment = this.environment;
+        if (environment.config) {
+          const resolveId = createIdResolver(environment.config);
+          await scanPagesConsumers({
+            async resolve(source, importer) {
+              const id = await resolveId(environment, source, importer);
+              return id ? { id } : null;
+            },
+          });
+        } else {
+          await scanPagesConsumers(this);
+        }
+      } else if (this.environment?.name === "client" && pagesConsumerScanState !== "complete") {
+        pagesScanIsConservative = true;
       }
     },
 
@@ -610,7 +607,6 @@ export function createLayoutOwnedGlobalCssPlugin(
 
       if (this.environment?.name !== "client") return null;
       if (pagesConsumerScanState === "scanning") return null;
-      await scanPagesConsumers(this);
 
       const resolved = await this.resolve(source, importer, { skipSelf: true });
       if (!resolved || resolved.external || resolved.id.startsWith("\0")) return null;

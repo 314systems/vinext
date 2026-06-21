@@ -64,6 +64,95 @@ async function buildPagesFixture(projectDir: string, serverEnvironmentName: stri
   await builder.build(builder.environments.client);
 }
 
+async function createConditionalExportFixture(): Promise<string> {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-layout-css-conditions-"));
+  temporaryDirectories.push(projectDir);
+  await writeFile(
+    path.join(projectDir, "app", "layout.js"),
+    `import Shared from "../src/shared.js";\nexport default function Layout() { return Shared(); }\n`,
+  );
+  await writeFile(
+    path.join(projectDir, "pages", "index.js"),
+    `import "conditional-package";\nexport default function Home() {}\n`,
+  );
+  await writeFile(
+    path.join(projectDir, "src", "shared.js"),
+    `import "./global.css";\nexport default function Shared() {}\n`,
+  );
+  await writeFile(
+    path.join(projectDir, "src", "global.css"),
+    `.conditional-export-owner { color: teal; }\n`,
+  );
+  await writeFile(
+    path.join(projectDir, "node_modules", "conditional-package", "package.json"),
+    JSON.stringify({
+      name: "conditional-package",
+      type: "module",
+      exports: { ".": { workerd: "./worker.js", default: "./default.js" } },
+    }),
+  );
+  await writeFile(
+    path.join(projectDir, "node_modules", "conditional-package", "worker.js"),
+    `import "../../src/shared.js";\n`,
+  );
+  await writeFile(
+    path.join(projectDir, "node_modules", "conditional-package", "default.js"),
+    `export {};\n`,
+  );
+  return projectDir;
+}
+
+async function buildConditionalExportFixture(projectDir: string): Promise<string> {
+  const appDir = path.join(projectDir, "app");
+  const pagesDir = path.join(projectDir, "pages");
+  const plugin = createLayoutOwnedGlobalCssPlugin(
+    () => appDir,
+    () => pagesDir,
+  );
+  const builder = await createBuilder({
+    root: projectDir,
+    configFile: false,
+    logLevel: "error",
+    plugins: [plugin],
+    environments: {
+      rsc: {
+        consumer: "server",
+        build: {
+          ssr: true,
+          outDir: "dist/rsc",
+          rolldownOptions: { input: path.join(appDir, "layout.js") },
+        },
+      },
+      pages_router_cloudflare: {
+        consumer: "server",
+        resolve: { conditions: ["workerd", "worker", "module", "browser"] },
+        build: {
+          ssr: true,
+          outDir: "dist/pages",
+          rolldownOptions: { input: path.join(pagesDir, "index.js") },
+        },
+      },
+      client: {
+        consumer: "client",
+        build: {
+          outDir: "dist/client",
+          cssCodeSplit: false,
+          rolldownOptions: { input: path.join(projectDir, "src", "shared.js") },
+        },
+      },
+    },
+  });
+
+  await builder.build(builder.environments.rsc);
+  await builder.build(builder.environments.pages_router_cloudflare);
+  await builder.build(builder.environments.client);
+
+  const assets = await fs.readdir(path.join(projectDir, "dist", "client", "assets"));
+  const cssFile = assets.find((file) => file.endsWith(".css"));
+  if (!cssFile) throw new Error("Expected the client build to emit CSS");
+  return fs.readFile(path.join(projectDir, "dist", "client", "assets", cssFile), "utf8");
+}
+
 afterEach(async () => {
   await Promise.all(
     temporaryDirectories
@@ -83,6 +172,14 @@ describe("layout-owned global CSS production builds", () => {
     const projectDir = await createPagesFixture();
 
     await expect(buildPagesFixture(projectDir, "pages_router_cloudflare")).resolves.toBeUndefined();
+  });
+
+  it("uses Cloudflare server conditions when scanning Pages consumers", async () => {
+    const projectDir = await createConditionalExportFixture();
+
+    await expect(buildConditionalExportFixture(projectDir)).resolves.toContain(
+      ".conditional-export-owner",
+    );
   });
 
   it("completes the actual Cloudflare Pages Router production build", async () => {
