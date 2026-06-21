@@ -31,43 +31,28 @@ declare module "styled-jsx/babel" {
 }
 
 declare module "styled-jsx/css" {
-  import type { ReactElement } from "react";
+  import type { JSX } from "react";
 
-  type ResolvedStyle = {
-    className: string;
-    styles: ReactElement;
-  };
-
-  type CssTag = {
-    (strings: TemplateStringsArray, ...values: unknown[]): string;
-    global(strings: TemplateStringsArray, ...values: unknown[]): string;
-    resolve(strings: TemplateStringsArray, ...values: unknown[]): ResolvedStyle;
-  };
-
-  const css: CssTag;
-  export default css;
+  // oxlint-disable-next-line typescript/no-explicit-any
+  function css(chunks: TemplateStringsArray, ...args: any[]): JSX.Element;
+  namespace css {
+    export function global(
+      chunks: TemplateStringsArray,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      ...args: any[]
+    ): JSX.Element;
+    export function resolve(
+      chunks: TemplateStringsArray,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      ...args: any[]
+    ): { className: string; styles: JSX.Element };
+  }
+  export = css;
 }
 
 declare module "styled-jsx/style" {
   // oxlint-disable-next-line typescript/no-explicit-any
   export default function JSXStyle(props: any): null;
-}
-
-declare module "styled-jsx/macro" {
-  import type { JSX } from "react";
-
-  namespace macro {
-    function resolve(
-      chunks: TemplateStringsArray,
-      // oxlint-disable-next-line typescript/no-explicit-any
-      ...args: any[]
-    ): {
-      className: string;
-      styles: JSX.Element;
-    };
-  }
-
-  export = macro;
 }
 
 declare module "@babel/core" {

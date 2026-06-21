@@ -28,7 +28,13 @@ beforeAll(() => {
     path.join(packageDir, "node_modules"),
     "dir",
   );
-});
+  fs.mkdirSync(path.join(tempDir, "node_modules/@types"), { recursive: true });
+  fs.symlinkSync(
+    path.join(repoRoot, "node_modules/@types/react"),
+    path.join(tempDir, "node_modules/@types/react"),
+    "dir",
+  );
+}, 60_000);
 
 afterAll(() => {
   fs.rmSync(tempDir, { recursive: true, force: true });
@@ -43,7 +49,14 @@ describe("styled-jsx public types", () => {
 import { createStyleRegistry, useStyleRegistry } from "styled-jsx";
 import type { StyledJsxStyleRegistry } from "styled-jsx";
 import JSXStyle from "styled-jsx/style";
-import css from "styled-jsx/macro";
+import css from "styled-jsx/css";
+import type { JSX } from "react";
+
+type Equal<Left, Right> =
+  (<Value>() => Value extends Left ? 1 : 2) extends
+  (<Value>() => Value extends Right ? 1 : 2) ? true : false;
+type Assert<Value extends true> = Value;
+type CssExport = Assert<Equal<typeof import("styled-jsx/css"), typeof css>>;
 
 const registry: StyledJsxStyleRegistry = createStyleRegistry();
 registry.add({ id: "consumer-style", children: "p { color: red }" });
@@ -53,7 +66,16 @@ const hookRegistry: StyledJsxStyleRegistry = useStyleRegistry();
 hookRegistry.add(null);
 hookRegistry.remove(null);
 
+const styles = css\`p { color: red }\`;
+const globalStyles = css.global\`body { margin: 0 }\`;
 const resolved = css.resolve\`p { color: red }\`;
+type CssReturn = Assert<Equal<typeof styles, JSX.Element>>;
+type GlobalReturn = Assert<Equal<typeof globalStyles, JSX.Element>>;
+type ResolveReturn = Assert<
+  Equal<typeof resolved, { className: string; styles: JSX.Element }>
+>;
+
+export type StyledJsxCssAssertions = CssExport | CssReturn | GlobalReturn | ResolveReturn;
 
 export function Consumer() {
   return (

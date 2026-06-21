@@ -30,14 +30,10 @@ describe("styled-jsx production build", () => {
           path.join(fixtureRoot, "package.json"),
           `${JSON.stringify({ type: "module", dependencies: {} }, null, 2)}\n`,
         );
-        await writeFile(
-          path.join(fixtureRoot, "styled-jsx-macro.ts"),
-          `export const macroSource = "app-local-styled-jsx-macro";\n`,
-        );
-
         const fixtureRequire = createRequire(path.join(fixtureRoot, "package.json"));
         expect(() => fixtureRequire.resolve("styled-jsx")).toThrow();
         expect(() => fixtureRequire.resolve("styled-jsx/css")).toThrow();
+        expect(() => fixtureRequire.resolve("styled-jsx/macro")).toThrow();
 
         await writeFile(
           path.join(fixtureRoot, "app", "layout.tsx"),
@@ -52,7 +48,6 @@ describe("styled-jsx production build", () => {
 
 import { createStyleRegistry } from "styled-jsx";
 import css from "styled-jsx/css";
-import { macroSource } from "styled-jsx/macro";
 
 const registry = createStyleRegistry();
 const externalStyles = css\`button { color: hotpink; }\`;
@@ -62,7 +57,7 @@ export function Styled() {
     <>
       <style jsx>{\`h1 { color: purple; }\`}</style>
       <style jsx>{externalStyles}</style>
-      <h1 data-registry={typeof registry.styles} data-macro={macroSource}>styled-jsx</h1>
+      <h1 data-registry={typeof registry.styles}>styled-jsx</h1>
     </>
   );
 }
@@ -82,11 +77,6 @@ export default function Page() {
           root: fixtureRoot,
           configFile: false,
           plugins: [...plugins, vinext({ appDir: fixtureRoot })],
-          resolve: {
-            alias: {
-              "styled-jsx/macro": path.join(fixtureRoot, "styled-jsx-macro.ts"),
-            },
-          },
           logLevel: "silent",
         });
         await builder.buildApp();
@@ -104,7 +94,6 @@ export default function Page() {
 
         expect(output).toContain("hotpink");
         expect(output).toContain("purple");
-        expect(output).toContain("app-local-styled-jsx-macro");
       } finally {
         await fsp.rm(fixtureRoot, { recursive: true, force: true }).catch(() => {});
       }
