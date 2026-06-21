@@ -719,6 +719,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
               renderToReadableStream: options.renderToReadableStream,
               rootParams: options.rootParams,
               route: revalidationTarget.route,
+              isStaticGeneration: true,
               waitForAllReady: true,
             });
             options.clearRequestContext();

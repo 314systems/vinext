@@ -1383,6 +1383,76 @@ describe("app page dispatch", () => {
     }
   });
 
+  it("caches the nearest search params Suspense fallback on an ordinary production miss", async () => {
+    let currentNavigationContext: NavigationContext | null = null;
+    let capturedNavigationContext: NavigationContext | null = null;
+    let capturedWaitForAllReady: boolean | undefined;
+    const waitUntilPromises: Promise<unknown>[] = [];
+    const executionContext = {
+      waitUntil(promise) {
+        waitUntilPromises.push(promise);
+      },
+    } satisfies ExecutionContextLike;
+    const isrSet = vi.fn<DispatchOptions["isrSet"]>(async () => {});
+    const { options } = createDispatchOptions({
+      getNavigationContext: () => currentNavigationContext,
+      isProduction: true,
+      isrGet: vi.fn(async () => null),
+      isrSet,
+      loadSsrHandler: async () => ({
+        async handleSsr(_rscStream, navigationContext, _fontData, captureOptions) {
+          capturedNavigationContext = navigationContext;
+          capturedWaitForAllReady = captureOptions?.waitForAllReady;
+          if (captureOptions?.capturedRscDataRef) {
+            captureOptions.capturedRscDataRef.value = Promise.resolve(
+              new TextEncoder().encode("fallback-flight").buffer,
+            );
+          }
+          void captureOptions?.sideStream?.cancel().catch(() => {});
+          return createStream([
+            navigationContext?.isStaticGeneration === true &&
+            navigationContext.isForceStatic !== true
+              ? "<html>nearest search params fallback</html>"
+              : "<html>search params content</html>",
+          ]);
+        },
+      }),
+      revalidateSeconds: 60,
+      renderToReadableStream() {
+        return createStream(["flight"]);
+      },
+      setNavigationContext(context) {
+        currentNavigationContext = context;
+      },
+    });
+
+    const response = await runWithExecutionContext(executionContext, () =>
+      dispatchAppPage(options),
+    );
+
+    expect(response.headers.get("x-vinext-cache")).toBe("MISS");
+    await expect(response.text()).resolves.toBe("<html>nearest search params fallback</html>");
+    await Promise.all(waitUntilPromises);
+    expect(capturedWaitForAllReady).toBe(false);
+    expect(capturedNavigationContext).toEqual({
+      pathname: "/posts/hello",
+      searchParams: new URLSearchParams(),
+      params: { slug: "hello" },
+      isStaticGeneration: true,
+      isForceStatic: false,
+    });
+    expect(isrSet).toHaveBeenCalledWith(
+      "html:/posts/hello",
+      expect.objectContaining({
+        html: "<html>nearest search params fallback</html>",
+        kind: "APP_PAGE",
+      }),
+      60,
+      expect.any(Array),
+      undefined,
+    );
+  });
+
   it("does not write query-invariant cache entries when loading-boundary render awaits searchParams", async () => {
     async function Page(props: Record<string, unknown>): Promise<React.ReactNode> {
       const query = isPromiseLike(props.searchParams) ? await props.searchParams : {};

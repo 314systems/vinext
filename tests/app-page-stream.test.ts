@@ -93,7 +93,7 @@ describe("app page stream helpers", () => {
     );
   });
 
-  it("marks the SSR navigation context as static when waiting for all content", async () => {
+  it("marks the SSR navigation context as static from the explicit generation signal", async () => {
     const ssrHandler = vi.fn(async () => createStream(["<html>static</html>"]));
 
     const { htmlStream } = await renderAppPageHtmlStream({
@@ -108,7 +108,7 @@ describe("app page stream helpers", () => {
         params: {},
       },
       rscStream: createStream(["flight"]),
-      waitForAllReady: true,
+      isStaticGeneration: true,
       ssrHandler: { handleSsr: ssrHandler },
     });
 
@@ -117,7 +117,7 @@ describe("app page stream helpers", () => {
       expect.anything(),
       expect.objectContaining({ isStaticGeneration: true }),
       expect.anything(),
-      expect.objectContaining({ waitForAllReady: true }),
+      expect.anything(),
     );
   });
 

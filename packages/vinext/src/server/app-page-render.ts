@@ -900,6 +900,7 @@ export async function renderAppPageLifecycle(
         scriptNonce: options.scriptNonce,
         sideStream: rscCapture.sideStream,
         ssrHandler,
+        isStaticGeneration: shouldCaptureRscForCacheMetadata,
         waitForAllReady: options.isPrerender === true,
       });
     },

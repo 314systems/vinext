@@ -178,6 +178,8 @@ type RenderAppPageHtmlStreamOptions = {
   pprFallbackShellSignal?: AbortSignal;
   /** When true, wait for the full React tree before emitting bytes. */
   waitForAllReady?: boolean;
+  /** When true, client navigation hooks use static-generation semantics. */
+  isStaticGeneration?: boolean;
   /** Dev-only: original server error to surface in the browser overlay. */
   initialDevServerError?: unknown;
   /** True when the app supplies a custom global-error.tsx. Disables the
@@ -254,7 +256,7 @@ export async function renderAppPageHtmlStream(
   };
 
   const navigationContext =
-    options.navigationContext === null || options.waitForAllReady !== true
+    options.navigationContext === null || options.isStaticGeneration !== true
       ? options.navigationContext
       : { ...options.navigationContext, isStaticGeneration: true };
   const rawResult = await options.ssrHandler.handleSsr(
