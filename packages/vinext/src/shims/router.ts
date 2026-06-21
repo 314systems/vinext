@@ -2663,6 +2663,13 @@ async function performNavigation(
 
   if (mode === "push") saveScrollPosition();
   const isQueryUpdating = options?._h === 1;
+  if (!isQueryUpdating) {
+    // Match Next.js's early `isSsr = false` transition: once a client
+    // navigation starts, the first-popstate Safari replay guard must no longer
+    // suppress a real back/forward event, even while the navigation is still
+    // loading. History itself remains deferred until the render commit.
+    routerRuntimeState.routerDidNavigate = true;
+  }
   cancelActiveNavigation({ deferAbort: true });
   if (!isQueryUpdating) {
     routerEvents.emit("routeChangeStart", full, { shallow });

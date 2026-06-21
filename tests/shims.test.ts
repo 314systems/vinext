@@ -17354,9 +17354,10 @@ describe("Pages Router concurrent navigation", () => {
       const { installPagesRouterRuntime } =
         await import("../packages/vinext/src/shims/pages-router-runtime.js");
       installPagesRouterRuntime();
-      Router.events.on("routeChangeError", (error: unknown, url: unknown) =>
-        events.push(`error:${String(url)}:${(error as Error).message}`),
-      );
+      Router.events.on("routeChangeError", (...args: unknown[]) => {
+        const [error, url, options] = args as [Error, unknown, { shallow?: boolean }];
+        events.push(`error:${String(url)}:${error.message}:shallow=${String(options.shallow)}`);
+      });
       Router.events.on("routeChangeStart", (url: unknown) => events.push(`start:${String(url)}`));
       Router.events.on("beforeHistoryChange", (url: unknown) =>
         events.push(`before:${String(url)}`),
@@ -17370,19 +17371,25 @@ describe("Pages Router concurrent navigation", () => {
       win.location.pathname = "/docs/next";
       win.location.href = "http://localhost/docs/next";
       listeners.get("popstate")!({
-        state: { __N: true, as: "/next", url: "/next", key: "next-key" },
+        state: {
+          __N: true,
+          as: "/next",
+          url: "/next",
+          options: { shallow: false },
+          key: "next-key",
+        },
       });
 
       expect(events).toEqual([
         "start:/docs/slow-route",
-        "error:/docs/slow-route:Route Cancelled",
+        "error:/docs/slow-route:Route Cancelled:shallow=false",
         "start:/docs/next",
       ]);
       popResponse.resolve(new Response(buildNavHtml("/next", pageModuleUrl)));
       await vi.waitFor(() => expect(events).toContain("complete:/docs/next"));
       expect(events).toEqual([
         "start:/docs/slow-route",
-        "error:/docs/slow-route:Route Cancelled",
+        "error:/docs/slow-route:Route Cancelled:shallow=false",
         "start:/docs/next",
         "before:/docs/next",
         "complete:/docs/next",
@@ -17437,7 +17444,13 @@ describe("Pages Router concurrent navigation", () => {
       win.location.pathname = "/docs/failing";
       win.location.href = "http://localhost/docs/failing";
       listeners.get("popstate")!({
-        state: { __N: true, as: "/failing", url: "/failing", key: "fail-key" },
+        state: {
+          __N: true,
+          as: "/failing",
+          url: "/failing",
+          options: { shallow: false },
+          key: "fail-key",
+        },
       });
       await vi.waitFor(() => expect(events).toContain("routeChangeError:/docs/failing"));
 
@@ -17478,11 +17491,15 @@ describe("Pages Router concurrent navigation", () => {
 
       win.location.pathname = "/first";
       win.location.href = "http://localhost/first";
-      listeners.get("popstate")!({ state: { __N: true, as: "/first", url: "/first" } });
+      listeners.get("popstate")!({
+        state: { __N: true, as: "/first", url: "/first", options: { shallow: false } },
+      });
       await Promise.resolve();
       win.location.pathname = "/second";
       win.location.href = "http://localhost/second";
-      listeners.get("popstate")!({ state: { __N: true, as: "/second", url: "/second" } });
+      listeners.get("popstate")!({
+        state: { __N: true, as: "/second", url: "/second", options: { shallow: false } },
+      });
 
       secondResponse.resolve(new Response(buildNavHtml("/second", pageModuleUrl)));
       await vi.waitFor(() => expect(win.__NEXT_DATA__.page).toBe("/second"));
