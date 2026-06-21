@@ -724,6 +724,7 @@ export function createPagesPageHandler(
             const el = createPageElement(PageComponent, AppComponent, currentProps);
             return typeof wrapWithRouterContext === "function" ? wrapWithRouterContext(el) : el;
           },
+          disableOptimizedLoading: vinextConfig.disableOptimizedLoading,
           enhancePageElement(renderPageOpts) {
             const el = enhancePageElement(PageComponent, AppComponent, renderProps, renderPageOpts);
             return typeof wrapWithRouterContext === "function" ? wrapWithRouterContext(el) : el;

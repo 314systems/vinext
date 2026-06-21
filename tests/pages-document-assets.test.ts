@@ -19,20 +19,32 @@ function assertDocumentAssetProps(html: string, requireHeadAssets: boolean): voi
     expect(tag).toContain('crossorigin="anonymous"');
   }
 
-  const generatedHeadAssets = (html.match(/<(?:script|link)\b[^>]*>/gi) ?? []).filter(
+  const headHtml = html.slice(html.indexOf("<head"), html.indexOf("</head>"));
+  const bodyHtml = html.slice(html.indexOf("<body"));
+  const generatedHeadAssets = (headHtml.match(/<link\b[^>]*>/gi) ?? []).filter(
     (tag) =>
       !tag.includes('id="user-') &&
       !tag.includes("/@vite/") &&
       (tag.includes('rel="stylesheet"') ||
         tag.includes('rel="preload"') ||
-        tag.includes('rel="modulepreload"') ||
-        (tag.includes("<script") && tag.includes("src="))),
+        tag.includes('rel="modulepreload"')),
   );
   if (requireHeadAssets) {
     expect(generatedHeadAssets.length).toBeGreaterThan(0);
     for (const tag of generatedHeadAssets) {
       expect(tag).toContain('nonce="head-nonce"');
       expect(tag).toContain('crossorigin="use-credentials"');
+    }
+
+    const generatedRuntimeScripts = (bodyHtml.match(/<script\b[^>]*src=[^>]*>/gi) ?? []).filter(
+      (tag) => !tag.includes('id="user-script"'),
+    );
+    expect(generatedRuntimeScripts.length).toBeGreaterThan(0);
+    for (const tag of generatedRuntimeScripts) {
+      expect(tag).toContain('nonce="script-nonce"');
+      expect(tag).toContain('crossorigin="anonymous"');
+      expect(tag).not.toContain('nonce="head-nonce"');
+      expect(tag).not.toContain('crossorigin="use-credentials"');
     }
   }
 
@@ -66,7 +78,7 @@ describe("Pages _document script and preload props", () => {
     await fsp.writeFile(path.join(root, "package.json"), JSON.stringify({ type: "module" }));
     await fsp.writeFile(
       path.join(root, "next.config.mjs"),
-      'export default { crossOrigin: "anonymous" };\n',
+      'export default { crossOrigin: "anonymous", experimental: { disableOptimizedLoading: true } };\n',
     );
     await fsp.writeFile(
       path.join(root, "pages", "index.tsx"),

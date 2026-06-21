@@ -79,6 +79,7 @@ function createCommonOptions() {
       DocumentComponent: function TestDocument() {
         return null;
       },
+      disableOptimizedLoading: false,
       flushPreloads: vi.fn(async () => {}),
       fontLinkHeader: "</font.woff2>; rel=preload; as=font; type=font/woff2; crossorigin",
       fontPreloads: [{ href: "/font.woff2", type: "font/woff2" }],
@@ -411,6 +412,37 @@ describe("pages page response", () => {
       expect(tag).toContain('nonce="test-nonce"');
       expect(tag).toContain('crossorigin="anonymous"');
     }
+  });
+
+  it("uses NextScript props for runtime scripts when optimized loading is disabled", async () => {
+    const common = createCommonOptions();
+    common.renderDocumentToString.mockResolvedValue(
+      '<!DOCTYPE html><html><head data-vinext-head-nonce="head-nonce" data-vinext-head-cross-origin="use-credentials"></head><body><div id="__next">__NEXT_MAIN__</div><span data-vinext-script-nonce="script-nonce" data-vinext-script-cross-origin="anonymous"><!-- __NEXT_SCRIPTS__ --></span></body></html>',
+    );
+
+    const response = await renderPagesPageResponse({
+      ...common.options,
+      assetTags:
+        '<link rel="stylesheet" href="/style.css" />\n' +
+        '<link rel="modulepreload" href="/entry.js" />\n' +
+        '<script type="module" src="/entry.js"></script>',
+      disableOptimizedLoading: true,
+    });
+
+    const html = await response.text();
+    const head = html.slice(html.indexOf("<head"), html.indexOf("</head>"));
+    const body = html.slice(html.indexOf("<body"));
+
+    expect(head).toMatch(
+      /<link[^>]*rel="stylesheet"[^>]*href="\/style\.css"[^>]*nonce="head-nonce"[^>]*crossorigin="use-credentials"/,
+    );
+    expect(head).toMatch(
+      /<link[^>]*rel="modulepreload"[^>]*href="\/entry\.js"[^>]*nonce="head-nonce"[^>]*crossorigin="use-credentials"/,
+    );
+    expect(head).not.toContain('<script type="module" src="/entry.js"');
+    expect(body).toContain(
+      '<script type="module" src="/entry.js" nonce="script-nonce" crossorigin="anonymous">',
+    );
   });
 
   it("renders page before collecting SSR head HTML to prevent style race conditions", async () => {

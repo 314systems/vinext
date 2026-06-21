@@ -199,6 +199,7 @@ type RenderPagesPageResponseOptions = {
   safeJsonStringify: (value: unknown) => string;
   scriptNonce?: string;
   crossOrigin?: string;
+  disableOptimizedLoading: boolean;
   statusCode?: number;
   vinext?: VinextNextData["__vinext"];
   nextData?: PagesNextDataExtras;
@@ -225,6 +226,22 @@ type RenderPagesPageResponseOptions = {
    */
   requestCacheControl?: string;
 };
+
+function splitPagesAssetTags(assetTags: string): {
+  headAssetTags: string;
+  runtimeScriptTags: string;
+} {
+  const runtimeScriptTags: string[] = [];
+  const headAssetTags = assetTags.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, (tag) => {
+    runtimeScriptTags.push(tag);
+    return "";
+  });
+
+  return {
+    headAssetTags: headAssetTags.replace(/\n{2,}/g, "\n").trim(),
+    runtimeScriptTags: runtimeScriptTags.join("\n"),
+  };
+}
 
 function buildPagesFontHeadHtml(
   fontLinks: string[],
@@ -317,9 +334,14 @@ async function buildPagesShellHtml(
      */
     resolvedDocProps?: Record<string, unknown> | null;
     crossOrigin?: string;
+    disableOptimizedLoading: boolean;
     documentStylesHTML?: string;
   },
 ): Promise<string> {
+  const { headAssetTags, runtimeScriptTags } = options.disableOptimizedLoading
+    ? splitPagesAssetTags(options.assetTags)
+    : { headAssetTags: options.assetTags, runtimeScriptTags: "" };
+
   if (options.DocumentComponent) {
     const docProps =
       options.resolvedDocProps ?? (await loadUserDocumentInitialProps(options.DocumentComponent));
@@ -336,14 +358,20 @@ async function buildPagesShellHtml(
       renderedDocument.props.headCrossOrigin ?? options.crossOrigin,
       "head",
     );
-    const generatedAssetTags = applyDocumentAssetProps(
-      options.assetTags,
+    const generatedHeadAssetTags = applyDocumentAssetProps(
+      headAssetTags,
       renderedDocument.props,
       options.crossOrigin,
       "head",
     );
+    const generatedRuntimeScriptTags = applyDocumentAssetProps(
+      runtimeScriptTags,
+      renderedDocument.props,
+      options.crossOrigin,
+      "script",
+    );
     const generatedNextDataScript = applyDocumentAssetProps(
-      nextDataScript,
+      [nextDataScript, generatedRuntimeScriptTags].filter(Boolean).join("\n"),
       renderedDocument.props,
       options.crossOrigin,
       "script",
@@ -352,10 +380,10 @@ async function buildPagesShellHtml(
     if (options.ssrHeadHTML) {
       html = prependToHtmlHead(html, `\n  ${options.ssrHeadHTML}\n`);
     }
-    if (generatedAssetTags || generatedFontHeadHTML || options.documentStylesHTML) {
+    if (generatedHeadAssetTags || generatedFontHeadHTML || options.documentStylesHTML) {
       html = html.replace(
         "</head>",
-        `  ${generatedFontHeadHTML}${generatedAssetTags}\n  ${options.documentStylesHTML ?? ""}\n</head>`,
+        `  ${generatedFontHeadHTML}${generatedHeadAssetTags}\n  ${options.documentStylesHTML ?? ""}\n</head>`,
       );
     }
     html = html.replace("<!-- __NEXT_SCRIPTS__ -->", generatedNextDataScript);
@@ -371,10 +399,11 @@ async function buildPagesShellHtml(
   return applyDocumentAssetProps(
     "<!DOCTYPE html>\n<html>\n<head>\n" +
       `  ${fontHeadHTML}${options.ssrHeadHTML}\n` +
-      `  ${options.assetTags}\n` +
+      `  ${headAssetTags}\n` +
       "</head>\n<body>\n" +
       `  <div id="__next">${bodyMarker}</div>\n` +
       `  ${nextDataScript}\n` +
+      `  ${runtimeScriptTags}\n` +
       "</body>\n</html>",
     {},
     options.crossOrigin,
@@ -610,6 +639,7 @@ export async function renderPagesPageResponse(
     // `skipped` means it was never invoked → fall through to the fast path.
     resolvedDocProps: documentRenderPage.status === "skipped" ? null : documentRenderPage.docProps,
     crossOrigin: options.crossOrigin,
+    disableOptimizedLoading: options.disableOptimizedLoading,
     documentStylesHTML,
   });
 
