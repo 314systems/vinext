@@ -97,10 +97,6 @@ export async function generateClientEntry(
 import "vinext/instrumentation-client";
 import React from "react";
 import { hydrateRoot } from "react-dom/client";
-import Router, {
-  wrapWithRouterContext,
-  _initializePagesRouterReadyFromNextData,
-} from "next/router";
 
 const pageLoaders = {
 ${loaderEntries.join(",\n")}
@@ -159,6 +155,12 @@ if (nextDataElement?.textContent) {
   window.__VINEXT_LOCALES__ = window.__NEXT_DATA__.locales;
   window.__VINEXT_DEFAULT_LOCALE__ = window.__NEXT_DATA__.defaultLocale;
 }
+
+const {
+  default: Router,
+  wrapWithRouterContext,
+  _initializePagesRouterReadyFromNextData,
+} = await import("next/router");
 
 async function hydrate() {
   const nextData = window.__NEXT_DATA__;

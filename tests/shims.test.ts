@@ -14438,6 +14438,12 @@ describe("Pages Router concurrent navigation", () => {
       analyticsEntry: "landing",
       nested: { retained: true },
     } as any;
+    win.__NEXT_DATA__ = {
+      ...win.__NEXT_DATA__,
+      locale: "fr",
+      locales: ["en", "fr"],
+      defaultLocale: "en",
+    } as any;
     win.addEventListener = vi.fn((type: string, handler: (event: any) => void) => {
       listeners.set(type, handler);
     });
@@ -14458,7 +14464,7 @@ describe("Pages Router concurrent navigation", () => {
           __vinext_queryOwner: "server",
           url: "/",
           as: "/",
-          options: {},
+          options: { locale: "fr" },
           key: expect.any(String),
         }),
       );
@@ -14473,7 +14479,7 @@ describe("Pages Router concurrent navigation", () => {
         expect.objectContaining({
           url: "/",
           as: "/",
-          options: {},
+          options: { locale: "fr" },
         }),
       );
     } finally {
@@ -14483,6 +14489,115 @@ describe("Pages Router concurrent navigation", () => {
       } else {
         (globalThis as any).window = previousWindow;
       }
+    }
+  });
+
+  it("restores the serialized initial locale after cross-locale navigation", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const originalCustomEvent = globalThis.CustomEvent;
+    const listeners = new Map<string, (event: any) => void>();
+    const { win, pushState, replaceState } = createNavWindow();
+    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    win.location.pathname = "/fr/about";
+    win.location.href = "http://localhost/fr/about";
+    win.__NEXT_DATA__ = {
+      ...win.__NEXT_DATA__,
+      page: "/about",
+      locale: "fr",
+      locales: ["en", "fr"],
+      defaultLocale: "en",
+    } as any;
+    win.addEventListener = vi.fn((type: string, handler: (event: any) => void) => {
+      listeners.set(type, handler);
+    });
+    replaceState.mockImplementation((state: unknown, _title: string, url?: string) => {
+      win.history.state = state as any;
+      if (url) {
+        const parsed = new URL(url, "http://localhost");
+        win.location.pathname = parsed.pathname;
+        win.location.search = parsed.search;
+        win.location.href = parsed.href;
+      }
+    });
+    pushState.mockImplementation((state: unknown, _title: string, url: string) => {
+      win.history.state = state as any;
+      const parsed = new URL(url, "http://localhost");
+      win.location.pathname = parsed.pathname;
+      win.location.search = parsed.search;
+      win.location.href = parsed.href;
+    });
+    (globalThis as any).window = win;
+    (globalThis as any).CustomEvent = class CustomEventMock {
+      constructor(public type: string) {}
+    } as any;
+
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          buildNavHtml(
+            "/about",
+            pageModuleUrl,
+            {},
+            {
+              locale: "en",
+              locales: ["en", "fr"],
+              defaultLocale: "en",
+            },
+          ),
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          buildNavHtml(
+            "/about",
+            pageModuleUrl,
+            {},
+            {
+              locale: "fr",
+              locales: ["en", "fr"],
+              defaultLocale: "en",
+            },
+          ),
+        ),
+      );
+    globalThis.fetch = fetch;
+
+    try {
+      vi.resetModules();
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      const initialState = win.history.state;
+
+      expect(initialState).toEqual(
+        expect.objectContaining({
+          url: "/fr/about",
+          as: "/fr/about",
+          options: { locale: "fr" },
+        }),
+      );
+
+      win.__VINEXT_LOCALE__ = "fr";
+      win.__VINEXT_LOCALES__ = ["en", "fr"];
+      win.__VINEXT_DEFAULT_LOCALE__ = "en";
+      await routerModule.default.push("/about", undefined, { locale: "en" });
+
+      expect(win.__VINEXT_LOCALE__).toBe("en");
+      expect(win.location.pathname).toBe("/about");
+
+      win.location.pathname = "/fr/about";
+      win.location.href = "http://localhost/fr/about";
+      listeners.get("popstate")!({ state: initialState });
+      await vi.waitFor(() => expect(win.__VINEXT_LOCALE__).toBe("fr"));
+
+      expect(fetch).toHaveBeenNthCalledWith(2, "/fr/about", expect.any(Object));
+      expect(win.location.pathname).toBe("/fr/about");
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+      (globalThis as any).CustomEvent = originalCustomEvent;
     }
   });
 

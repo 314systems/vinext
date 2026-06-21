@@ -786,7 +786,7 @@ export function isHashOnlyChange(href: string): boolean {
 
 /**
  * Build router-shaped state for the initial document entry. Captures the
- * active locale (from `window.__VINEXT_LOCALE__`) so a back-navigation
+ * active locale (from the serialized document state) so a back-navigation
  * popstate to this entry can recover its locale instead of falling back to
  * the live window global — the locale may have changed by the time the user
  * navigates back.
@@ -794,7 +794,8 @@ export function isHashOnlyChange(href: string): boolean {
 function buildInitialRouterState(): VinextHistoryState {
   const appPath = stripBasePath(window.location.pathname, __basePath) + window.location.search;
   const options: { locale?: string; shallow?: boolean } = {};
-  if (window.__VINEXT_LOCALE__ !== undefined) options.locale = window.__VINEXT_LOCALE__;
+  const initialLocale = window.__VINEXT_LOCALE__ ?? window.__NEXT_DATA__?.locale;
+  if (initialLocale !== undefined) options.locale = initialLocale;
   return {
     url: appPath,
     as: appPath,
