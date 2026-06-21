@@ -31,7 +31,9 @@ export function middleware(request: NextRequest) {
   }
 
   if (url.pathname === "/sha") {
-    return NextResponse.rewrite(new URL(`/shallow-test${url.search}`, request.url));
+    const target = new URL(`/shallow-test${url.search}`, request.url);
+    target.searchParams.set("from", "middleware");
+    return NextResponse.rewrite(target);
   }
 
   // Rewrite /mw-rewrite-query to /ssr-query — preserves the original

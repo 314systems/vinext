@@ -1263,7 +1263,7 @@ function getPathnameAndQuery(): {
   for (const [key, value] of params) {
     addQueryParam(searchQuery, key, value);
   }
-  const query = { ...routeQuery, ...searchQuery };
+  const query = { ...searchQuery };
   for (const routeParamName of extractRouteParamNames(nextData?.page ?? "")) {
     const routeParam = routeQuery[routeParamName];
     if (routeParam !== undefined) query[routeParamName] = routeParam;

@@ -14,6 +14,9 @@ test("middleware alias supports deep then shallow navigation", async ({ page }) 
   await page.evaluate(() => (window as any).next.router.push("/sha?hello=goodbye"));
   await expect(page).toHaveURL(`${BASE}/sha?hello=goodbye`);
   await expect(page.locator('[data-testid="router-query"]')).toHaveText('{"hello":"goodbye"}');
+  await expect
+    .poll(() => page.evaluate(() => (window as any).__NEXT_DATA__.query))
+    .toEqual({ hello: "goodbye", from: "middleware" });
   const deepCallId = await page.locator('[data-testid="gssp-call-id"]').textContent();
   expect(deepCallId).not.toBe(initialCallId);
 

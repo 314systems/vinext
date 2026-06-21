@@ -13939,7 +13939,7 @@ describe("next/compat/router shim", () => {
       },
       __NEXT_DATA__: {
         page: "/shallow-test",
-        query: { hello: "goodbye" },
+        query: { hello: "goodbye", from: "middleware" },
         isFallback: false,
       },
       __VINEXT_LOCALE__: undefined,
