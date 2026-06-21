@@ -12,8 +12,14 @@ function cleanModuleId(id: string): string {
   return suffixIndex === -1 ? id : id.slice(0, suffixIndex);
 }
 
-function hasLoadingModifier(id: string): boolean {
-  return id.includes("?") || id.includes("#");
+function hasNonStylesheetQuery(id: string): boolean {
+  const queryIndex = id.indexOf("?");
+  if (queryIndex === -1) return false;
+
+  const hashIndex = id.indexOf("#", queryIndex);
+  const query = id.slice(queryIndex + 1, hashIndex === -1 ? undefined : hashIndex);
+  const params = new URLSearchParams(query);
+  return params.has("inline") || params.has("raw") || params.has("url");
 }
 
 function isDescendantPath(filePath: string, directory: string): boolean {
@@ -76,10 +82,12 @@ export function createLayoutOwnedGlobalCssPlugin(getAppDir: () => string): Plugi
       const isGlobalStylesheet = STYLESHEET_RE.test(sourcePath) && !CSS_MODULE_RE.test(sourcePath);
       const importerPath = path.resolve(cleanModuleId(importer));
       const normalizedAppDir = path.resolve(getAppDir());
-      if (!isDescendantPath(importerPath, normalizedAppDir)) return null;
 
       if (this.environment?.name === "rsc") {
-        if (APP_SHARED_OWNER_RE.test(importerPath)) {
+        if (
+          isDescendantPath(importerPath, normalizedAppDir) &&
+          APP_SHARED_OWNER_RE.test(importerPath)
+        ) {
           addOwners(importer, [path.dirname(importerPath)]);
         }
 
@@ -87,25 +95,31 @@ export function createLayoutOwnedGlobalCssPlugin(getAppDir: () => string): Plugi
         if (!resolved || resolved.external || resolved.id.startsWith("\0")) return null;
 
         const resolvedPath = cleanModuleId(resolved.id);
-        if (!isDescendantPath(path.resolve(resolvedPath), normalizedAppDir)) return null;
+        if (!path.isAbsolute(resolvedPath)) return null;
         addImport(importer, resolved.id);
 
-        if (isGlobalStylesheet && !hasLoadingModifier(source)) {
+        if (isGlobalStylesheet && !hasNonStylesheetQuery(source)) {
           globalStylesheets.add(resolved.id);
         }
         addOwners(resolved.id, moduleOwners.get(importer) ?? []);
 
-        return isGlobalStylesheet && !hasLoadingModifier(source) ? resolved : null;
+        return isGlobalStylesheet && !hasNonStylesheetQuery(source) ? resolved : null;
       }
 
       if (this.environment?.name !== "client") return null;
-      if (!isGlobalStylesheet || hasLoadingModifier(source)) return null;
+      if (!isGlobalStylesheet || hasNonStylesheetQuery(source)) return null;
 
       const resolved = await this.resolve(source, importer, { skipSelf: true });
       if (!resolved || resolved.external || resolved.id.startsWith("\0")) return null;
 
       const owners = ownerDirectories.get(resolved.id);
-      if (!owners || ![...owners].some((owner) => isDescendantPath(importerPath, owner))) {
+      const importerOwners = moduleOwners.get(importer);
+      const isOwnedImport =
+        owners &&
+        [...owners].some(
+          (owner) => isDescendantPath(importerPath, owner) || importerOwners?.has(owner) === true,
+        );
+      if (!isOwnedImport) {
         return null;
       }
 

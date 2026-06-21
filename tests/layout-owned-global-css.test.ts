@@ -136,4 +136,89 @@ describe("layout-owned global CSS", () => {
       ),
     ).resolves.toBeNull();
   });
+
+  it("tracks shared modules outside app while preserving route ownership", async () => {
+    const appDir = path.resolve("/project/app");
+    const plugin = createLayoutOwnedGlobalCssPlugin(() => appDir);
+    const resolveId =
+      typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
+    expect(resolveId).toBeTypeOf("function");
+
+    const dashboardLayout = path.join(appDir, "dashboard", "layout.tsx");
+    const dashboardClient = path.resolve("/project/src/components/dashboard-client.tsx");
+    const marketingClient = path.resolve("/project/src/components/marketing-client.tsx");
+    const sharedStyles = path.resolve("/project/packages/design-system/global.css");
+
+    await resolveId!.call(
+      createContext("rsc", { "@shared/dashboard-client": dashboardClient }) as never,
+      "@shared/dashboard-client",
+      dashboardLayout,
+      { isEntry: false },
+    );
+    await resolveId!.call(
+      createContext("rsc", { "@design/global.css": sharedStyles }) as never,
+      "@design/global.css",
+      dashboardClient,
+      { isEntry: false },
+    );
+
+    await expect(
+      resolveId!.call(
+        createContext("client", { "@design/global.css": sharedStyles }) as never,
+        "@design/global.css",
+        dashboardClient,
+        { isEntry: false },
+      ),
+    ).resolves.toSatisfy(
+      (id: unknown) =>
+        typeof id === "string" &&
+        id.charCodeAt(0) === 0 &&
+        /^vinext:layout-owned-global-css\/[a-f0-9]{16}\.css$/.test(id.slice(1)),
+    );
+    await expect(
+      resolveId!.call(
+        createContext("client", { "@design/global.css": sharedStyles }) as never,
+        "@design/global.css",
+        marketingClient,
+        { isEntry: false },
+      ),
+    ).resolves.toBeNull();
+  });
+
+  it("only excludes Vite queries that return CSS as a value", async () => {
+    const appDir = path.resolve("/app");
+    const plugin = createLayoutOwnedGlobalCssPlugin(() => appDir);
+    const resolveId =
+      typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
+    expect(resolveId).toBeTypeOf("function");
+
+    const layout = path.join(appDir, "dashboard", "layout.tsx");
+    const client = path.join(appDir, "dashboard", "client.tsx");
+    const stylesheet = path.join(appDir, "dashboard", "global.css");
+
+    for (const query of ["?cache=1", "?theme=dark#fragment"]) {
+      const source = `./global.css${query}`;
+      const resolved = `${stylesheet}${query}`;
+      await resolveId!.call(createContext("rsc", { [source]: resolved }) as never, source, layout, {
+        isEntry: false,
+      });
+      await expect(
+        resolveId!.call(createContext("client", { [source]: resolved }) as never, source, client, {
+          isEntry: false,
+        }),
+      ).resolves.toSatisfy((id: unknown) => typeof id === "string" && id.charCodeAt(0) === 0);
+    }
+
+    for (const query of ["?inline", "?raw", "?url", "?cache=1&inline"] as const) {
+      const source = `./global.css${query}`;
+      await expect(
+        resolveId!.call(
+          createContext("client", { [source]: `${stylesheet}${query}` }) as never,
+          source,
+          client,
+          { isEntry: false },
+        ),
+      ).resolves.toBeNull();
+    }
+  });
 });

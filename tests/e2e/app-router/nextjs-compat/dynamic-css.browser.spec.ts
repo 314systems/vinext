@@ -19,17 +19,27 @@ async function closeServer(server: Server): Promise<void> {
 }
 
 async function linkFixtureNodeModules(fixtureRoot: string): Promise<void> {
-  const sourceNodeModules = path.resolve(process.cwd(), "node_modules");
   const targetNodeModules = path.join(fixtureRoot, "node_modules");
   await fs.mkdir(targetNodeModules, { recursive: true });
 
-  for (const entry of await fs.readdir(sourceNodeModules, { withFileTypes: true })) {
-    if (entry.name === ".vite" || entry.name === ".vite-temp" || entry.name === "vinext") continue;
-    await fs.symlink(
-      path.join(sourceNodeModules, entry.name),
-      path.join(targetNodeModules, entry.name),
-      entry.isDirectory() ? "junction" : "file",
-    );
+  for (const sourceNodeModules of [
+    path.resolve(process.cwd(), "node_modules"),
+    path.resolve(process.cwd(), "node_modules/.pnpm/node_modules"),
+  ]) {
+    for (const entry of await fs.readdir(sourceNodeModules, { withFileTypes: true })) {
+      if (entry.name === ".vite" || entry.name === ".vite-temp" || entry.name === "vinext")
+        continue;
+      const target = path.join(targetNodeModules, entry.name);
+      try {
+        await fs.symlink(
+          path.join(sourceNodeModules, entry.name),
+          target,
+          entry.isDirectory() ? "junction" : "file",
+        );
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+    }
   }
 
   await fs.symlink(
@@ -61,6 +71,56 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html>
       <body>{children}</body>
     </html>
+  );
+}
+`,
+  );
+  const sharedDir = path.join(fixtureRoot, "src", "components");
+  await fs.mkdir(sharedDir, { recursive: true });
+  await fs.writeFile(
+    path.join(sharedDir, "shared-dynamic-component.tsx"),
+    `import "../../app/page/global.css";
+import "../../app/page/query.css?cache=shared";
+import base from "../../app/page/base.module.css";
+import styles from "../../app/page/component.module.css";
+
+export default function SharedDynamicComponent() {
+  return (
+    <p
+      id="dynamic-css-shared-component"
+      className={\`dynamic-css-global dynamic-css-query \${base.class} \${styles.class}\`}
+    >
+      Hello Shared Component
+    </p>
+  );
+}
+`,
+  );
+  await fs.writeFile(
+    path.join(appDir, "page", "shared-layout-styles.tsx"),
+    `import "../../src/components/shared-dynamic-component";
+
+export default function SharedLayoutStyles() {
+  return null;
+}
+`,
+  );
+  await fs.writeFile(
+    path.join(appDir, "page", "inner.tsx"),
+    `"use client";
+
+import dynamic from "next/dynamic";
+import { Suspense } from "react";
+
+const Component = dynamic(() => import("./component"));
+const SharedComponent = dynamic(() => import("../../src/components/shared-dynamic-component"));
+
+export default function Inner() {
+  return (
+    <Suspense>
+      <Component />
+      <SharedComponent />
+    </Suspense>
   );
 }
 `,
@@ -140,6 +200,12 @@ test("preserves CSS order across layouts, client components, and next/dynamic", 
     await expect(component).toHaveCSS("background-color", "rgb(0, 128, 0)");
     await expect(component).toHaveCSS("color", "rgb(0, 0, 0)");
     await expect(component).toHaveCSS("border-top-color", "rgb(255, 0, 0)");
+
+    const sharedComponent = page.locator("#dynamic-css-shared-component");
+    await expect(sharedComponent).toHaveText("Hello Shared Component");
+    await expect(sharedComponent).toHaveCSS("background-color", "rgb(0, 128, 0)");
+    await expect(sharedComponent).toHaveCSS("color", "rgb(0, 0, 0)");
+    await expect(sharedComponent).toHaveCSS("border-top-color", "rgb(255, 0, 0)");
 
     await expect(page.locator("#dynamic-css-global")).toHaveCSS(
       "background-color",
