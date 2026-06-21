@@ -325,26 +325,31 @@ describe("resolveHybridClientRouteOwner", () => {
 });
 
 describe("resolvePagesClientRoute", () => {
-  it("returns the rewritten href and destination params", () => {
+  it("returns the rewritten href, query, and destination params", () => {
     installWindow({
       app: [],
-      pages: [pagesRoute(["catalog", ":category", ":slug", ":locale"])],
+      pages: [pagesRoute(["catalog", ":slug"])],
       rewrites: {
         afterFiles: [],
         beforeFiles: [
           {
-            source: "/store/:slug/:section",
-            destination: "/catalog/:section/:slug/en",
+            source: "/store/:slug",
+            destination: "/catalog/:slug?view=grid&slug=destination",
           },
         ],
         fallback: [],
       },
     });
 
-    expect(resolvePagesClientRoute("/store/guide/books?preview=1", "")).toEqual({
-      href: "/catalog/books/guide/en?preview=1",
-      params: { category: "books", locale: "en", slug: "guide" },
-      pattern: "/catalog/:category/:slug/:locale",
+    expect(resolvePagesClientRoute("/store/guide?preview=1&view=list&slug=visible", "")).toEqual({
+      href: "/catalog/guide?preview=1&view=grid&slug=destination",
+      params: { slug: "guide" },
+      pattern: "/catalog/:slug",
+      query: {
+        preview: "1",
+        slug: "guide",
+        view: "grid",
+      },
     });
   });
 });

@@ -25,7 +25,11 @@ import {
 import type { NextRewrite } from "../../config/next-config.js";
 import { stripBasePath } from "../../utils/base-path.js";
 import { getLocalePathPrefix } from "../../utils/domain-locale.js";
-import { mergeRewriteQuery } from "../../utils/query.js";
+import {
+  mergeRewriteQuery,
+  mergeRouteParamsIntoQuery,
+  parseQueryString,
+} from "../../utils/query.js";
 import type {
   VinextLinkPrefetchRoute,
   VinextPagesLinkPrefetchRoute,
@@ -37,6 +41,7 @@ export type PagesClientRouteResolution = {
   href: string;
   params: Record<string, string | string[]>;
   pattern: string;
+  query: Record<string, string | string[]>;
 };
 
 declare global {
@@ -194,6 +199,7 @@ export function resolvePagesClientRoute(
         href,
         params: pagesMatch.params,
         pattern: patternFromParts(pagesMatch.route.patternParts),
+        query: mergeRouteParamsIntoQuery(parseQueryString(href), pagesMatch.params),
       }
     : null;
 }

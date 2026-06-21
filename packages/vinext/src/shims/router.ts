@@ -426,7 +426,7 @@ type PagesRouterRuntimeState = {
   isFirstPopStateEvent: boolean;
   routerDidNavigate: boolean;
   currentShallow: boolean;
-  currentShallowRouteParams: Record<string, string | string[]> | null;
+  currentShallowQuery: Record<string, string | string[]> | null;
   deprecatedEventBridgeInstalled: boolean;
   pagesRouterReady: boolean;
   publicRouter?: Record<string, unknown>;
@@ -462,7 +462,7 @@ function createPagesRouterRuntimeState(): PagesRouterRuntimeState {
     isFirstPopStateEvent: true,
     routerDidNavigate: false,
     currentShallow: false,
-    currentShallowRouteParams: null,
+    currentShallowQuery: null,
     deprecatedEventBridgeInstalled: false,
     pagesRouterReady: typeof window === "undefined" || !shouldDeferInitialPagesRouterReady(),
   };
@@ -661,7 +661,14 @@ function resolveSamePagesRoute(destinationUrl: string): PagesClientRouteResoluti
       pathname === currentPathname
         ? (extractRouteParamsFromPath(currentRoute, pathname) ?? {})
         : extractRouteParamsFromPath(currentRoute, pathname);
-    return params === null ? null : { href: destinationUrl, params, pattern: currentRoute };
+    return params === null
+      ? null
+      : {
+          href: destinationUrl,
+          params,
+          pattern: currentRoute,
+          query: mergeRouteParamsIntoQuery(parseQueryString(destinationUrl), params),
+        };
   }
   const destinationRoute = resolvePagesClientRoute(destinationUrl, __basePath);
   const currentPatternParts = routePatternParts(currentRoute);
@@ -860,7 +867,7 @@ function stampInitialHistoryState(): void {
   const existingKey = getRouterStateKey(existingState);
   if (existingKey !== undefined) initialState.key = existingKey;
   routerRuntimeState.currentShallow = false;
-  routerRuntimeState.currentShallowRouteParams = null;
+  routerRuntimeState.currentShallowQuery = null;
   routerRuntimeState.currentHistoryKey = initialState.key;
   window.history.replaceState(initialState, "");
 }
@@ -1306,12 +1313,12 @@ function getPathnameAndQuery(): {
     addQueryParam(searchQuery, key, value);
   }
   const isShallowNavigation = routerRuntimeState.currentShallow;
-  const query = isShallowNavigation ? { ...searchQuery } : { ...searchQuery, ...routeQuery };
+  const query = isShallowNavigation
+    ? { ...searchQuery, ...routerRuntimeState.currentShallowQuery }
+    : { ...searchQuery, ...routeQuery };
   if (isShallowNavigation) {
     for (const routeParamName of extractRouteParamNames(nextData?.page ?? "")) {
-      const routeParam =
-        routerRuntimeState.currentShallowRouteParams?.[routeParamName] ??
-        routeQuery[routeParamName];
+      const routeParam = query[routeParamName] ?? routeQuery[routeParamName];
       if (routeParam !== undefined) query[routeParamName] = routeParam;
     }
   }
@@ -2375,7 +2382,7 @@ function updateHistory(
     url: string;
     as: string;
     options: { locale?: string; shallow?: boolean };
-    routeParams?: Record<string, string | string[]>;
+    query?: Record<string, string | string[]>;
   },
 ): void {
   const previousKey = getRouterStateKey(window.history.state);
@@ -2392,7 +2399,7 @@ function updateHistory(
   };
   if (navState.options.shallow === true && window.__NEXT_DATA__?.page) {
     state.__vinext_route = window.__NEXT_DATA__.page;
-    state.__vinext_params = navState.routeParams;
+    state.__vinext_query = navState.query;
   }
   if (mode === "push") window.history.pushState(state, "", fullUrl);
   else window.history.replaceState(state, "", fullUrl);
@@ -2412,7 +2419,7 @@ type VinextHistoryState = {
   options: { locale?: string; shallow?: boolean };
   __N: true;
   key: string;
-  __vinext_params?: Record<string, string | string[]>;
+  __vinext_query?: Record<string, string | string[]>;
   __vinext_route?: string;
 };
 
@@ -2669,7 +2676,7 @@ async function performNavigation(
     url: resolvedRouteNoHash,
     as: resolvedNoHash,
     options: navStateOptions,
-    routeParams: shallowRoute?.params,
+    query: shallowRoute?.query,
   };
 
   // Hash-only change — no page fetch needed.
@@ -2731,7 +2738,7 @@ async function performNavigation(
   const pendingNavigation = shallow
     ? (supersedePendingNavigation({ shallow }), undefined)
     : beginPendingNavigation(resolved, { shallow });
-  routerRuntimeState.currentShallowRouteParams = shallowRoute?.params ?? null;
+  routerRuntimeState.currentShallowQuery = shallowRoute?.query ?? null;
   if (!isQueryUpdating) {
     routerEvents.emit("routeChangeStart", resolved, { shallow });
   }
@@ -2949,7 +2956,7 @@ function isNextRouterState(state: unknown): state is {
   options: TransitionOptions;
   __N: true;
   key?: string;
-  __vinext_params?: Record<string, string | string[]>;
+  __vinext_query?: Record<string, string | string[]>;
   __vinext_route?: string;
 } {
   return (
@@ -3080,8 +3087,8 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
     state.__vinext_route === window.__NEXT_DATA__?.page &&
     routerRuntimeState.currentShallow;
   routerRuntimeState.currentShallow = shallow;
-  routerRuntimeState.currentShallowRouteParams =
-    shallow && isNextRouterState(state) ? (state.__vinext_params ?? null) : null;
+  routerRuntimeState.currentShallowQuery =
+    shallow && isNextRouterState(state) ? (state.__vinext_query ?? null) : null;
 
   // Update trackers only after beforePopState confirms navigation proceeds.
   // If beforePopState cancels, the app stays on the previous history entry,

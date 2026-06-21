@@ -14729,7 +14729,7 @@ describe("Pages Router concurrent navigation", () => {
     }
   });
 
-  it("uses rewritten destination params for shallow query refreshes", async () => {
+  it("uses rewritten destination query and renamed params for shallow query refreshes", async () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
     const { win } = createNavWindow();
@@ -14750,7 +14750,7 @@ describe("Pages Router concurrent navigation", () => {
         beforeFiles: [
           {
             source: "/store/:slug/:section",
-            destination: "/catalog/:section/:slug/en",
+            destination: "/catalog/:section/:slug/en?view=grid&slug=destination",
           },
         ],
         afterFiles: [],
@@ -14772,7 +14772,9 @@ describe("Pages Router concurrent navigation", () => {
       const { default: Router } = await import("../packages/vinext/src/shims/router.js");
 
       await expect(
-        Router.push("/store/guide/books?preview=1", undefined, { shallow: true }),
+        Router.push("/store/guide/books?preview=1&view=list&slug=visible", undefined, {
+          shallow: true,
+        }),
       ).resolves.toBe(true);
 
       expect(globalThis.fetch).not.toHaveBeenCalled();
@@ -14781,13 +14783,20 @@ describe("Pages Router concurrent navigation", () => {
         locale: "en",
         preview: "1",
         slug: "guide",
+        view: "grid",
       });
       expect(win.history.pushState).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          __vinext_params: { category: "books", locale: "en", slug: "guide" },
+          __vinext_query: {
+            category: "books",
+            locale: "en",
+            preview: "1",
+            slug: "guide",
+            view: "grid",
+          },
         }),
         "",
-        "/store/guide/books?preview=1",
+        "/store/guide/books?preview=1&view=list&slug=visible",
       );
     } finally {
       vi.resetModules();
