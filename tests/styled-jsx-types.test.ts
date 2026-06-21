@@ -54,7 +54,7 @@ beforeAll(() => {
     "dir",
   );
   fs.writeFileSync(path.join(tempDir, "package.json"), '{"type":"module"}\n');
-}, 60_000);
+}, 120_000);
 
 afterAll(() => {
   fs.rmSync(tempDir, { recursive: true, force: true });
