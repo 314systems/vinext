@@ -543,6 +543,32 @@ describe("Image srcSet generation", () => {
     expect(html).toContain(`${optUrlHtml("/bg.png", 640)} 640w`);
     expect(html).toContain(`${optUrlHtml("/bg.png", 3840)} 3840w`);
   });
+
+  it("sorts configured widths for widthless and fill images", async () => {
+    process.env.__VINEXT_IMAGE_DEVICE_SIZES = JSON.stringify([1080, 640, 828]);
+    process.env.__VINEXT_IMAGE_SIZES = JSON.stringify([384, 32, 256]);
+    vi.resetModules();
+
+    try {
+      const { getImageProps: getConfiguredImageProps } =
+        await import("../packages/vinext/src/shims/image.js");
+      const widthless = getConfiguredImageProps({ alt: "widthless", src: "/widthless.png" });
+      const fill = getConfiguredImageProps({ alt: "fill", src: "/fill.png", fill: true });
+      const expected = [640, 828, 1080]
+        .map((width) => `${optUrl("/widthless.png", width)} ${width}w`)
+        .join(", ");
+      const expectedFill = [640, 828, 1080]
+        .map((width) => `${optUrl("/fill.png", width)} ${width}w`)
+        .join(", ");
+
+      expect(widthless.props.srcSet).toBe(expected);
+      expect(fill.props.srcSet).toBe(expectedFill);
+    } finally {
+      delete process.env.__VINEXT_IMAGE_DEVICE_SIZES;
+      delete process.env.__VINEXT_IMAGE_SIZES;
+      vi.resetModules();
+    }
+  });
 });
 
 // ─── getImageProps ──────────────────────────────────────────────────────

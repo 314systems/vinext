@@ -1602,6 +1602,24 @@ export async function resolveNextConfig(
 
   validateImageConfig(config.images);
 
+  config = {
+    ...config,
+    images: config.images
+      ? {
+          ...config.images,
+          localPatterns: config.images.localPatterns?.map((pattern) => ({ ...pattern })),
+          remotePatterns: config.images.remotePatterns?.map((pattern) =>
+            pattern instanceof URL ? new URL(pattern) : { ...pattern },
+          ),
+          domains: config.images.domains ? [...config.images.domains] : undefined,
+          deviceSizes: config.images.deviceSizes ? [...config.images.deviceSizes] : undefined,
+          imageSizes: config.images.imageSizes ? [...config.images.imageSizes] : undefined,
+          qualities: config.images.qualities ? [...config.images.qualities] : undefined,
+          formats: config.images.formats ? [...config.images.formats] : undefined,
+        }
+      : undefined,
+  };
+
   const normalizedAssetPrefix = normalizeAssetPrefix(config.assetPrefix);
   if (
     config.images ||

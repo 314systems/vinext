@@ -318,8 +318,9 @@ function resolveImageSource(v: {
  * These are the breakpoints used for srcSet generation.
  * Configurable via `images.deviceSizes` in next.config.js.
  */
-const RESPONSIVE_WIDTHS = __imageDeviceSizes;
-const ALL_IMAGE_WIDTHS = [...__imageDeviceSizes, ...__imageSizes].sort((a, b) => a - b);
+const RESPONSIVE_WIDTHS = [...__imageDeviceSizes].sort((a, b) => a - b);
+const FIXED_IMAGE_WIDTHS = [...__imageSizes].sort((a, b) => a - b);
+const ALL_IMAGE_WIDTHS = [...RESPONSIVE_WIDTHS, ...FIXED_IMAGE_WIDTHS].sort((a, b) => a - b);
 
 function extractLocalDeploymentId(src: string): { src: string; deploymentId?: string } {
   let deploymentId = getDeploymentId();

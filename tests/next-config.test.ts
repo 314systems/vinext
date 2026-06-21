@@ -1335,6 +1335,52 @@ describe("parseBodySizeLimit", () => {
 });
 
 describe("resolveNextConfig image localPatterns", () => {
+  it("does not mutate shared image config across resolutions", async () => {
+    const firstRoot = makeTempDir();
+    const secondRoot = makeTempDir();
+    const sharedImages = {
+      loader: "custom" as const,
+      loaderFile: "./image-loader.js",
+      remotePatterns: [{ protocol: "https", hostname: "images.example.com" }],
+    };
+    fs.writeFileSync(path.join(firstRoot, "image-loader.js"), "export default () => '';");
+    fs.writeFileSync(path.join(secondRoot, "image-loader.js"), "export default () => '';");
+
+    try {
+      const first = await resolveNextConfig(
+        {
+          basePath: "/docs",
+          trailingSlash: true,
+          assetPrefix: "https://cdn.example.com/assets",
+          images: sharedImages,
+        },
+        firstRoot,
+      );
+      const second = await resolveNextConfig({ images: sharedImages }, secondRoot);
+
+      expect(first.images?.path).toBe("/docs/_next/image/");
+      expect(first.images?.loaderFile).toBe(path.join(firstRoot, "image-loader.js"));
+      expect(first.images?.remotePatterns).toContainEqual({
+        protocol: "https",
+        hostname: "cdn.example.com",
+        port: "",
+      });
+      expect(second.images?.path).toBe("/_next/image/");
+      expect(second.images?.loaderFile).toBe(path.join(secondRoot, "image-loader.js"));
+      expect(second.images?.remotePatterns).toEqual([
+        { protocol: "https", hostname: "images.example.com" },
+      ]);
+      expect(sharedImages).toEqual({
+        loader: "custom",
+        loaderFile: "./image-loader.js",
+        remotePatterns: [{ protocol: "https", hostname: "images.example.com" }],
+      });
+    } finally {
+      fs.rmSync(firstRoot, { recursive: true, force: true });
+      fs.rmSync(secondRoot, { recursive: true, force: true });
+    }
+  });
+
   it("normalizes the default optimizer path when images is omitted", async () => {
     const withBasePath = await resolveNextConfig({ basePath: "/docs" });
     expect(withBasePath.images?.path).toBe("/docs/_next/image");
