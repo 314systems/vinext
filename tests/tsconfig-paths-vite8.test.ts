@@ -262,6 +262,12 @@ describe("Vite tsconfig paths support", () => {
     const importer = path.join(root, "pages/index.tsx");
     const realRoot = fs.realpathSync(root);
     const packageId = path.join(root, "node_modules/package-name/index.js");
+    fs.mkdirSync(path.dirname(packageId), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "node_modules/package-name/package.json"),
+      JSON.stringify({ name: "package-name", main: "index.js" }),
+    );
+    fs.writeFileSync(packageId, "export default 'package';\n");
     const resolver = (candidate: string) => {
       if (candidate === "package-name") return packageId;
       if (candidate === path.join(realRoot, "package-name")) return candidate;
@@ -275,6 +281,22 @@ describe("Vite tsconfig paths support", () => {
     await expect(
       resolveWithCustomTsconfig(plugin, "explicit", importer, resolver),
     ).resolves.toHaveProperty("id", path.join(realRoot, "explicit.ts"));
+  });
+
+  it("uses baseUrl for bare project files that are not installed packages", async () => {
+    const root = setupProject({ name: "vite", version: "8.0.0" });
+    process.chdir(root);
+    const plugin = await configureCustomTsconfig(root, {
+      compilerOptions: { baseUrl: "." },
+    });
+    const importer = path.join(root, "pages/index.tsx");
+    const candidate = path.join(fs.realpathSync(root), "base-value");
+
+    await expect(
+      resolveWithCustomTsconfig(plugin, "base-value", importer, (id) =>
+        id === candidate ? id : null,
+      ),
+    ).resolves.toHaveProperty("id", candidate);
   });
 
   it.each([
@@ -379,6 +401,61 @@ describe("Vite tsconfig paths support", () => {
         (candidate) => candidate,
       ),
     ).resolves.toHaveProperty("id", path.join(fs.realpathSync(packageRoot), "inherited.ts"));
+  });
+
+  it("rejects package export targets that escape the package root", async () => {
+    const root = setupProject({ name: "vite", version: "8.0.0" });
+    process.chdir(root);
+    const packageRoot = path.join(root, "node_modules/preset");
+    fs.mkdirSync(packageRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "preset", exports: { "./base": "./../outside.json" } }),
+    );
+    fs.writeFileSync(path.join(root, "node_modules/outside.json"), JSON.stringify({}));
+
+    await expect(configureCustomTsconfig(root, { extends: "preset/base" })).rejects.toThrow(
+      "Cannot read file 'preset/base'.",
+    );
+  });
+
+  it("prefers the most specific matching package export pattern", async () => {
+    const root = setupProject({ name: "vite", version: "8.0.0" });
+    process.chdir(root);
+    const packageRoot = path.join(root, "node_modules/preset");
+    fs.mkdirSync(path.join(packageRoot, "generic"), { recursive: true });
+    fs.mkdirSync(path.join(packageRoot, "specific"), { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "preset",
+        exports: {
+          "./foo/*": "./generic/*.json",
+          "./foo/*.json": "./specific/*.json",
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(packageRoot, "generic/base.json.json"),
+      JSON.stringify({ compilerOptions: { paths: { selected: ["./generic.ts"] } } }),
+    );
+    fs.writeFileSync(
+      path.join(packageRoot, "specific/base.json"),
+      JSON.stringify({ compilerOptions: { paths: { selected: ["./specific.ts"] } } }),
+    );
+
+    const plugin = await configureCustomTsconfig(root, { extends: "preset/foo/base.json" });
+    await expect(
+      resolveWithCustomTsconfig(
+        plugin,
+        "selected",
+        path.join(root, "pages/index.tsx"),
+        (candidate) => candidate,
+      ),
+    ).resolves.toHaveProperty(
+      "id",
+      path.join(fs.realpathSync(packageRoot), "specific/specific.ts"),
+    );
   });
 
   it("rebases inherited paths against a child baseUrl", async () => {

@@ -381,6 +381,8 @@ function resolveTsconfigExportTarget(
   if (typeof target === "string") {
     if (!target.startsWith("./")) return null;
     const resolvedTarget = path.resolve(packageRoot, target.replaceAll("*", replacement));
+    const relativeTarget = path.relative(packageRoot, resolvedTarget);
+    if (relativeTarget === ".." || relativeTarget.startsWith(`..${path.sep}`)) return null;
     if (path.extname(resolvedTarget) !== ".json") return null;
     return resolveTsconfigPathCandidate(resolvedTarget);
   }
@@ -434,7 +436,12 @@ function resolveTsconfigPackageExport(
           exportKey.endsWith(key.slice(starIndex + 1))
         );
       })
-      .sort((left, right) => right.indexOf("*") - left.indexOf("*"))[0];
+      .sort((left, right) => {
+        const leftStarIndex = left.indexOf("*");
+        const rightStarIndex = right.indexOf("*");
+        if (leftStarIndex !== rightStarIndex) return rightStarIndex - leftStarIndex;
+        return right.length - left.length;
+      })[0];
     if (matchingPattern) {
       const starIndex = matchingPattern.indexOf("*");
       const replacement = exportKey.slice(
@@ -1549,7 +1556,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           const pathMatch = matchCustomTsconfigPath(customTsconfigResolution.paths ?? [], id);
           if (pathMatch) {
             for (const target of pathMatch.mapping.targets) {
-              const candidate = target.replace("*", pathMatch.star);
+              const candidate = target.replaceAll("*", pathMatch.star);
               const resolved = await this.resolve(candidate, importer, {
                 ...resolveOptions,
                 skipSelf: true,
@@ -1558,11 +1565,18 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             }
           }
           if (customTsconfigResolution.baseUrl) {
-            const packageResolved = await this.resolve(id, importer, {
-              ...resolveOptions,
-              skipSelf: true,
-            });
-            if (packageResolved) return packageResolved;
+            try {
+              createRequire(importerFile).resolve(id);
+              const packageResolved = await this.resolve(id, importer, {
+                ...resolveOptions,
+                skipSelf: true,
+              });
+              if (packageResolved) return packageResolved;
+            } catch {
+              // A project-root source file with the same bare name is a
+              // baseUrl candidate, not an installed package. Resolve it via
+              // the explicit baseUrl path below.
+            }
             const resolved = await this.resolve(
               path.join(customTsconfigResolution.baseUrl, id),
               importer,
