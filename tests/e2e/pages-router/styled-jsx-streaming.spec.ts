@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../fixtures";
 
 test("renders late and external styled-jsx CSS in streamed Pages SSR", async ({
   request,
@@ -16,4 +16,19 @@ test("renders late and external styled-jsx CSS in streamed Pages SSR", async ({
   expect(html).toContain('id="late-styled-content"');
   expect(html).toMatch(/class="[^"]*jsx-[^"]+ external[^"]*"/);
   expect(html).not.toContain("<style jsx");
+  const lateStyleIndex = html.lastIndexOf("<style");
+  expect(html.lastIndexOf("</div>")).toBeLessThan(lateStyleIndex);
+  expect(html.indexOf("<script", lateStyleIndex)).toBeGreaterThan(lateStyleIndex);
+});
+
+test("hydrates streamed styled-jsx outside the React root without warnings", async ({
+  page,
+  baseURL,
+  consoleErrors,
+}) => {
+  await page.goto(`${baseURL}/styled-jsx-streaming`);
+  await expect(page.locator("#late-styled-content")).toBeVisible();
+  await expect(page.locator("#__next > style")).toHaveCount(0);
+  await expect(page.locator("body > style")).not.toHaveCount(0);
+  void consoleErrors;
 });

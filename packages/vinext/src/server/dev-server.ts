@@ -27,6 +27,7 @@ import {
 } from "./isr-cache.js";
 import type { CachedPagesValue } from "vinext/shims/cache-handler";
 import { createPagesStyledJsxRegistry } from "./pages-styled-jsx.js";
+import { insertHtmlAfterPagesRoot } from "./pages-stream-html.js";
 import { _runWithCacheState } from "vinext/shims/cache-request-state";
 import { runWithPrivateCache } from "vinext/shims/cache-runtime";
 import { ensureFetchPatch, runWithFetchCache } from "vinext/shims/fetch-cache";
@@ -367,7 +368,9 @@ async function streamPageToResponse(
   res.write(prefix);
 
   if (bufferedBody !== null) {
-    res.end(bufferedBody + styledJsx.stylesHTML({ nonce: scriptNonce }) + suffix);
+    res.end(
+      bufferedBody + insertHtmlAfterPagesRoot(suffix, styledJsx.stylesHTML({ nonce: scriptNonce })),
+    );
     return;
   }
 
@@ -384,7 +387,7 @@ async function streamPageToResponse(
   }
 
   // Write the document suffix (closing tags, scripts)
-  res.end(styledJsx.stylesHTML({ nonce: scriptNonce }) + suffix);
+  res.end(insertHtmlAfterPagesRoot(suffix, styledJsx.stylesHTML({ nonce: scriptNonce })));
 }
 
 /**

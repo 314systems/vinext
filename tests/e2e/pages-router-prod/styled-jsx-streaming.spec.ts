@@ -11,4 +11,7 @@ test("renders late and external styled-jsx CSS in production Pages SSR", async (
   expect(html).toContain('id="late-styled-content"');
   expect(html).toMatch(/class="[^"]*jsx-[^"]+ external[^"]*"/);
   expect(html).not.toContain("<style jsx");
+  const lateStyleIndex = html.lastIndexOf("<style");
+  expect(html.lastIndexOf("</div>")).toBeLessThan(lateStyleIndex);
+  expect(html.indexOf("<script", lateStyleIndex)).toBeGreaterThan(lateStyleIndex);
 });

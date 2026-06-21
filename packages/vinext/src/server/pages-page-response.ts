@@ -24,6 +24,7 @@ import { readStreamAsText } from "../utils/text-stream.js";
 import { callDocumentGetInitialProps } from "./document-initial-head.js";
 import { appendAssetDeploymentIdQuery } from "../utils/deployment-id.js";
 import { createPagesStyledJsxRegistry } from "./pages-styled-jsx.js";
+import { insertHtmlAfterPagesRoot } from "./pages-stream-html.js";
 
 // ---------------------------------------------------------------------------
 // Bot / crawler detection for Pages Router edge-runtime SSR
@@ -355,6 +356,7 @@ async function buildPagesCompositeStream(
   bodyStream: ReadableStream<Uint8Array>,
   shellPrefix: string,
   shellSuffix: string,
+  getPostRootHTML: () => string,
 ): Promise<ReadableStream<Uint8Array>> {
   const encoder = new TextEncoder();
 
@@ -373,32 +375,7 @@ async function buildPagesCompositeStream(
       } finally {
         reader.releaseLock();
       }
-      controller.enqueue(encoder.encode(shellSuffix));
-      controller.close();
-    },
-  });
-}
-
-function appendPagesStreamHTML(
-  bodyStream: ReadableStream<Uint8Array>,
-  getTrailingHTML: () => string,
-): ReadableStream<Uint8Array> {
-  const encoder = new TextEncoder();
-
-  return new ReadableStream({
-    async start(controller) {
-      const reader = bodyStream.getReader();
-      try {
-        for (;;) {
-          const chunk = await reader.read();
-          if (chunk.done) break;
-          controller.enqueue(chunk.value);
-        }
-      } finally {
-        reader.releaseLock();
-      }
-      const trailingHTML = getTrailingHTML();
-      if (trailingHTML) controller.enqueue(encoder.encode(trailingHTML));
+      controller.enqueue(encoder.encode(insertHtmlAfterPagesRoot(shellSuffix, getPostRootHTML())));
       controller.close();
     },
   });
@@ -433,6 +410,7 @@ function schedulePagesIsrCacheWrite(options: {
   routePattern: string;
   shellPrefix: string;
   shellSuffix: string;
+  getPostRootHTML: () => string;
   status: number;
   stream: ReadableStream<Uint8Array>;
   setCache: RenderPagesPageResponseOptions["isrSet"];
@@ -443,7 +421,10 @@ function schedulePagesIsrCacheWrite(options: {
         options.cacheKey,
         {
           kind: "PAGES",
-          html: options.shellPrefix + bodyHtml + options.shellSuffix,
+          html:
+            options.shellPrefix +
+            bodyHtml +
+            insertHtmlAfterPagesRoot(options.shellSuffix, options.getPostRootHTML()),
           pageData: options.pageData,
           headers: undefined,
           status: options.status,
@@ -622,10 +603,11 @@ export async function renderPagesPageResponse(
   const shellSuffix = shellHtml.slice(markerIndex + bodyMarker.length);
   const responseHeaders = new Headers({ "Content-Type": "text/html" });
   const finalStatus = applyGsspHeaders(responseHeaders, options.gsspRes, options.statusCode);
+  let postRootHTML: string | undefined;
+  const getPostRootHTML = () =>
+    (postRootHTML ??= styledJsx.stylesHTML({ nonce: options.scriptNonce }));
 
-  let responseBodyStream = appendPagesStreamHTML(bodyStream, () =>
-    styledJsx.stylesHTML({ nonce: options.scriptNonce }),
-  );
+  let responseBodyStream = bodyStream;
   if (
     // Keep nonce-bearing pages out of ISR writes: rewritePagesCachedHtml()
     // later matches the cached __NEXT_DATA__ block via a bare <script> marker.
@@ -648,6 +630,7 @@ export async function renderPagesPageResponse(
       setCache: options.isrSet,
       shellPrefix,
       shellSuffix,
+      getPostRootHTML,
       status: finalStatus,
       stream: cacheBodyStream,
     });
@@ -657,6 +640,7 @@ export async function renderPagesPageResponse(
     responseBodyStream,
     shellPrefix,
     shellSuffix,
+    getPostRootHTML,
   );
 
   // Capture user-set Cache-Control (from getServerSideProps's res.setHeader)
