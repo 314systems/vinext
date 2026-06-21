@@ -19,6 +19,7 @@ export type NavigationContext = {
   pathname: string;
   searchParams: URLSearchParams;
   params: Record<string, string | string[]>;
+  isStaticGeneration?: boolean;
 };
 
 type NavigationContextsGlobal = typeof globalThis & {

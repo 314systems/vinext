@@ -253,9 +253,13 @@ export async function renderAppPageHtmlStream(
       options.waitForAllReady !== true && options.hasCustomGlobalError === false,
   };
 
+  const navigationContext =
+    options.navigationContext === null || options.waitForAllReady !== true
+      ? options.navigationContext
+      : { ...options.navigationContext, isStaticGeneration: true };
   const rawResult = await options.ssrHandler.handleSsr(
     options.rscStream,
-    options.navigationContext,
+    navigationContext,
     options.fontData,
     ssrOptions,
   );

@@ -19799,6 +19799,33 @@ describe("next/navigation enhancements", () => {
     }
   });
 
+  it("useSearchParams bails out to the nearest Suspense boundary during static generation", async () => {
+    const { isBailoutToCSRError, setNavigationContext, useSearchParams } =
+      await import("../packages/vinext/src/shims/navigation.js");
+
+    setNavigationContext({
+      pathname: "/static",
+      searchParams: new URLSearchParams(),
+      params: {},
+      isStaticGeneration: true,
+    });
+
+    try {
+      expect(() => useSearchParams()).toThrowError(
+        expect.objectContaining({
+          message: "Bail out to client-side rendering: useSearchParams()",
+        }),
+      );
+      try {
+        useSearchParams();
+      } catch (error) {
+        expect(isBailoutToCSRError(error)).toBe(true);
+      }
+    } finally {
+      setNavigationContext(null);
+    }
+  });
+
   it("useSearchParams reuses the same readonly wrapper for the same server context", async () => {
     const { setNavigationContext, useSearchParams } =
       await import("../packages/vinext/src/shims/navigation.js");

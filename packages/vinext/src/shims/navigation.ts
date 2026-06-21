@@ -56,6 +56,7 @@ import { AppRouterContext, type AppRouterInstance } from "./internal/app-router-
 import { getPagesNavigationContext as _getPagesNavigationContext } from "./internal/pages-router-accessor.js";
 import { resolveHybridClientRouteOwner } from "./internal/hybrid-client-route-owner.js";
 import { retryScrollTo, scrollToHashTarget } from "./hash-scroll.js";
+import { BailoutToCSRError } from "./navigation-errors.js";
 import {
   beginAppRouterScrollIntent,
   clearAppRouterScrollIntent,
@@ -1325,6 +1326,9 @@ export function usePathname(): string | null {
 export function useSearchParams(): ReadonlyURLSearchParams {
   if (isServer) {
     markPprFallbackShellDynamicBoundary();
+    if (getNavigationContext()?.isStaticGeneration === true) {
+      throw new BailoutToCSRError("useSearchParams()");
+    }
     // During SSR for "use client" components, the navigation context may not be set.
     // getServerSearchParamsSnapshot also covers the Pages Router compat shim.
     return getServerSearchParamsSnapshot();
