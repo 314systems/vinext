@@ -21625,6 +21625,56 @@ describe("shim alias map .js variants", () => {
       hook.handler.call({ environment: { name: "ssr", config: { command: "serve" } } }, id),
     ).toBe(expected);
   });
+
+  it("externalizes the styled-jsx React peer only for Node Pages SSR", async () => {
+    async function resolveStyledJsxReact(pluginNames: string[], environment = "ssr") {
+      const plugins = vinext() as Plugin[];
+      const configPlugin = plugins.find((plugin) => plugin.name === "vinext:config");
+      if (!configPlugin?.config || !configPlugin.resolveId) {
+        throw new Error("vinext:config hooks not found");
+      }
+
+      const configHook = (
+        typeof configPlugin.config === "function"
+          ? configPlugin.config
+          : configPlugin.config.handler
+      ) as (
+        config: { root: string; plugins: Array<{ name: string }> },
+        env: { mode: string; command: string },
+      ) => Promise<unknown>;
+      await configHook(
+        {
+          root: PAGES_FIXTURE_DIR,
+          plugins: pluginNames.map((name) => ({ name })),
+        },
+        { mode: "production", command: "build" },
+      );
+
+      if (typeof configPlugin.resolveId === "function") {
+        throw new Error("vinext:config filtered resolveId hook not found");
+      }
+      const resolveId = configPlugin.resolveId.handler as (
+        this: { environment?: { name?: string } },
+        id: string,
+        importer?: string,
+      ) => { id: string; external: true } | undefined;
+      return resolveId.call(
+        { environment: { name: environment } },
+        "react",
+        "/project/node_modules/styled-jsx/dist/index/index.js",
+      );
+    }
+
+    const nodeResult = await resolveStyledJsxReact([]);
+    expect(nodeResult).toMatchObject({ external: true });
+    expect(
+      typeof nodeResult === "object" && nodeResult ? path.isAbsolute(nodeResult.id) : false,
+    ).toBe(true);
+
+    expect(await resolveStyledJsxReact([], "client")).toBeUndefined();
+    expect(await resolveStyledJsxReact(["vite-plugin-cloudflare"])).toBeUndefined();
+    expect(await resolveStyledJsxReact(["nitro"])).toBeUndefined();
+  });
 });
 
 describe("@vercel/og compatibility resolution", () => {

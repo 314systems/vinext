@@ -2735,7 +2735,14 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             return resolveShimModulePath(_shimsDir, "og");
           }
 
-          if (cleanId === "react" && importer?.includes("/styled-jsx/")) {
+          if (
+            cleanId === "react" &&
+            importer?.includes("/styled-jsx/") &&
+            hasPagesDir &&
+            !hasCloudflarePlugin &&
+            !hasNitroPlugin &&
+            this.environment?.name === "ssr"
+          ) {
             return {
               id: resolveOptionalDependency(earlyBaseDir, "react")!,
               external: true,
