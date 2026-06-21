@@ -14560,6 +14560,48 @@ describe("Pages Router concurrent navigation", () => {
     return { win, pushState, replaceState, render };
   }
 
+  it("matches localized dynamic paths before validating shallow route identity", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const { win } = createNavWindow();
+    Object.assign(win.location, {
+      pathname: "/en/posts/42",
+      href: "http://localhost/en/posts/42",
+    });
+    Object.assign(win, {
+      __VINEXT_LOCALE__: "en",
+      __VINEXT_LOCALES__: ["en", "fr"],
+      __VINEXT_DEFAULT_LOCALE__: "en",
+      __NEXT_DATA__: {
+        ...win.__NEXT_DATA__,
+        page: "/posts/[id]",
+        query: { id: "42" },
+      },
+    });
+    (globalThis as any).window = win;
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error("localized same-route shallow navigation must not fetch page HTML");
+    });
+
+    try {
+      vi.resetModules();
+      const { default: Router } = await import("../packages/vinext/src/shims/router.js");
+
+      await expect(Router.push("/en/posts/43", undefined, { shallow: true })).resolves.toBe(true);
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+      expect(win.history.pushState).toHaveBeenLastCalledWith(
+        expect.objectContaining({ options: expect.objectContaining({ shallow: true }) }),
+        "",
+        "/en/posts/43",
+      );
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   /**
    * Build a minimal HTML response that navigateClient can parse.
    * Includes __NEXT_DATA__ with a pageModuleUrl pointing to the given path.
@@ -14846,6 +14888,9 @@ describe("Pages Router concurrent navigation", () => {
     const previousTrailingSlash = process.env.__VINEXT_TRAILING_SLASH;
     const originalFetch = globalThis.fetch;
     const { win } = createNavWindow();
+    (
+      win.__NEXT_DATA__.__vinext as { pageModuleUrl: string; hasMiddleware?: boolean }
+    ).hasMiddleware = true;
     (globalThis as any).window = win;
     process.env.__VINEXT_TRAILING_SLASH = "true";
     vi.resetModules();
@@ -16908,6 +16953,41 @@ describe("Pages Router concurrent navigation", () => {
     }
   });
 
+  it.each(["push", "replace"] as const)(
+    "defaults hash-only shallow %s navigation to scroll=true",
+    async (mode) => {
+      const previousWindow = (globalThis as any).window;
+      const previousDocument = (globalThis as any).document;
+      const originalFetch = globalThis.fetch;
+      const { win } = createNavWindow();
+      (globalThis as any).window = win;
+
+      const target = { scrollIntoView: vi.fn() };
+      (globalThis as any).document = {
+        getElementById: vi.fn((id: string) => (id === "target" ? target : null)),
+        getElementsByName: vi.fn(() => []),
+      };
+      globalThis.fetch = vi.fn(async () => {
+        throw new Error("hash-only navigations must not fetch page HTML");
+      });
+      vi.resetModules();
+
+      try {
+        const { default: Router } = await import("../packages/vinext/src/shims/router.js");
+
+        await expect(Router[mode]("#target", undefined, { shallow: true })).resolves.toBe(true);
+        expect(target.scrollIntoView).toHaveBeenCalledWith({ behavior: "auto" });
+      } finally {
+        vi.resetModules();
+        if (previousWindow === undefined) delete (globalThis as any).window;
+        else (globalThis as any).window = previousWindow;
+        if (previousDocument === undefined) delete (globalThis as any).document;
+        else (globalThis as any).document = previousDocument;
+        globalThis.fetch = originalFetch;
+      }
+    },
+  );
+
   it("does not scroll hash-only pushes when scroll is false", async () => {
     const previousWindow = (globalThis as any).window;
     const previousDocument = (globalThis as any).document;
@@ -17138,6 +17218,37 @@ describe("Pages Router concurrent navigation", () => {
       );
       deepResponse.resolve(new Response(buildNavHtml("/page-a", "/@fs/pages/page-a.js")));
       await navigation;
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("preserves requested cross-route shallow navigation when middleware makes route identity unknowable", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const { win } = createNavWindow();
+    (
+      win.__NEXT_DATA__.__vinext as { pageModuleUrl: string; hasMiddleware?: boolean }
+    ).hasMiddleware = true;
+    (globalThis as any).window = win;
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error("middleware-backed shallow navigation must not fetch page HTML");
+    });
+
+    try {
+      vi.resetModules();
+      const { default: Router } = await import("../packages/vinext/src/shims/router.js");
+
+      await expect(Router.push("/page-a", undefined, { shallow: true })).resolves.toBe(true);
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+      expect((win.history as any).pushState).toHaveBeenLastCalledWith(
+        expect.objectContaining({ options: expect.objectContaining({ shallow: true }) }),
+        "",
+        "/page-a",
+      );
     } finally {
       vi.resetModules();
       if (previousWindow === undefined) delete (globalThis as any).window;

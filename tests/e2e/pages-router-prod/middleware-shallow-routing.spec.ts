@@ -47,6 +47,27 @@ test("middleware alias supports deep then shallow navigation", async ({ page }) 
   expect(reloadCallId).not.toBe(deepCallId);
 });
 
+test("requested cross-path navigation stays shallow when middleware can rewrite it", async ({
+  page,
+}) => {
+  await page.goto(`${BASE}/sha`);
+  await expect(page.locator("h1")).toHaveText("Shallow Routing Test");
+  await waitForHydration(page);
+
+  const callId = await page.locator('[data-testid="gssp-call-id"]').textContent();
+  const requests: string[] = [];
+  page.on("request", (request) => requests.push(new URL(request.url()).pathname));
+
+  await page.evaluate(() =>
+    (window as any).next.router.push("/about", undefined, { shallow: true }),
+  );
+
+  await expect(page).toHaveURL(`${BASE}/about`);
+  await expect(page.locator("h1")).toHaveText("Shallow Routing Test");
+  expect(await page.locator('[data-testid="gssp-call-id"]').textContent()).toBe(callId);
+  expect(requests.filter((pathname) => pathname === "/about")).toEqual([]);
+});
+
 test("Back and Forward stay shallow only between consecutive shallow entries", async ({ page }) => {
   await page.goto(`${BASE}/sha?hello=initial`);
   await expect(page.locator("h1")).toHaveText("Shallow Routing Test");

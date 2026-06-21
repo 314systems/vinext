@@ -639,9 +639,16 @@ function isSamePagesRoute(destinationUrl: string): boolean {
   const currentRoute = window.__NEXT_DATA__?.page;
   if (!destinationPathname || !currentRoute) return false;
 
-  const currentPathname = stripBasePath(window.location.pathname, __basePath);
-  if (destinationPathname === currentPathname) return true;
-  return extractRouteParamsFromPath(currentRoute, destinationPathname) !== null;
+  const locales = window.__VINEXT_LOCALES__;
+  const stripLocale = (pathname: string): string => {
+    const locale = getLocalePathPrefix(pathname, locales);
+    if (!locale) return pathname;
+    return pathname.slice(locale.length + 1) || "/";
+  };
+  const normalizedDestinationPathname = stripLocale(destinationPathname);
+  const currentPathname = stripLocale(stripBasePath(window.location.pathname, __basePath));
+  if (normalizedDestinationPathname === currentPathname) return true;
+  return extractRouteParamsFromPath(currentRoute, normalizedDestinationPathname) !== null;
 }
 
 function resolvePagesErrorHtmlFetchUrl(
@@ -2566,8 +2573,12 @@ async function performNavigation(
   const errorRouteHtmlFetchUrl = resolvePagesErrorHtmlFetchUrl(url, navigationLocale);
   const htmlFetchUrl =
     errorRouteHtmlFetchUrl ?? getPagesHtmlFetchUrl(fullRouteUrl, navigationLocale);
-  const shallow = options?.shallow === true && isSamePagesRoute(interpolatedRoute);
-  const doScroll = options?.scroll ?? !shallow;
+  const requestedShallow = options?.shallow === true;
+  const shallow =
+    requestedShallow &&
+    (hasVinextMiddleware(window.__NEXT_DATA__) || isSamePagesRoute(interpolatedRoute));
+  const hashOnly = options?._h !== 1 && interpolatedRoute === resolved && isHashOnlyChange(full);
+  const doScroll = options?.scroll ?? (hashOnly || !shallow);
   const hash = extractHash(resolved);
   // Only pass {x, y} restoration through renderPagesRouterElement's commit
   // callback. Hash scrolling is deferred until after routeChangeComplete so
@@ -2627,7 +2638,7 @@ async function performNavigation(
   // disagree), the underlying page module changes even if the address bar
   // didn't — so the hash-only shortcut MUST NOT skip the fetch. Mirrors
   // Next.js where `onlyAHashChange` runs only after the route is unchanged.
-  if (options?._h !== 1 && interpolatedRoute === resolved && isHashOnlyChange(full)) {
+  if (hashOnly) {
     // Snapshot the outgoing entry's scroll before updateHistory mints a new
     // key, so a later back-popstate restores the position the user had
     // reached here rather than {x: 0, y: 0}. Upstream snapshots inside
