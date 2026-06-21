@@ -391,6 +391,7 @@ function resolveTsconfigExtends(configPath: string, specifier: string): string |
         if (resolved.endsWith(".json")) return resolved;
       } catch {}
     }
+    return null;
   }
 
   let packageRoot: string | null = null;
@@ -423,10 +424,6 @@ function resolveTsconfigExtends(configPath: string, specifier: string): string |
   }
 
   if (!packageRoot) return null;
-  if (packageSubpath) {
-    return resolveTsconfigPathCandidate(path.join(packageRoot, packageSubpath));
-  }
-
   const packageJsonPath = path.join(packageRoot, "package.json");
   try {
     const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8"));
@@ -588,33 +585,93 @@ type CustomTsconfigResolution = {
   watchedFiles: Set<string>;
 };
 
+type LoadedCustomTsconfig = {
+  baseUrl?: string;
+  paths?: Record<string, unknown>;
+  pathsBasePath?: string;
+  watchedFiles: Set<string>;
+};
+
 function loadCustomTsconfigResolution(
   configPath: string,
-  completed = new Set<string>(),
+  completed = new Map<string, LoadedCustomTsconfig>(),
   active: string[] = [],
 ): CustomTsconfigResolution {
+  const loaded = loadCustomTsconfig(configPath, completed, active);
+  const pathsRoot = loaded.baseUrl ?? loaded.pathsBasePath;
+  return {
+    baseUrl: loaded.baseUrl,
+    paths:
+      loaded.paths && pathsRoot
+        ? Object.entries(loaded.paths).flatMap(([find, rawTargets]) => {
+            if (!Array.isArray(rawTargets)) return [];
+            const targets = rawTargets
+              .filter((target): target is string => typeof target === "string")
+              .map((target) => path.resolve(pathsRoot, target));
+            if (targets.length === 0) return [];
+            const starIndex = find.indexOf("*");
+            if (starIndex === -1) return [{ key: find, targets }];
+            if (starIndex !== find.lastIndexOf("*")) return [];
+            return [
+              {
+                key: find,
+                prefix: find.slice(0, starIndex),
+                suffix: find.slice(starIndex + 1),
+                targets,
+              },
+            ];
+          })
+        : undefined,
+    watchedFiles: loaded.watchedFiles,
+  };
+}
+
+function loadCustomTsconfig(
+  configPath: string,
+  completed: Map<string, LoadedCustomTsconfig>,
+  active: string[],
+): LoadedCustomTsconfig {
   const normalizedPath = tryRealpathSync(configPath) ?? configPath;
   if (active.includes(normalizedPath)) {
     throw new Error(
       `Circularity detected while resolving configuration: ${[...active, normalizedPath].join(" -> ")}`,
     );
   }
-  if (completed.has(normalizedPath)) return { watchedFiles: new Set() };
+  const completedResolution = completed.get(normalizedPath);
+  if (completedResolution) {
+    return { ...completedResolution, watchedFiles: new Set(completedResolution.watchedFiles) };
+  }
   active.push(normalizedPath);
 
   const contents = fs.readFileSync(normalizedPath, "utf-8");
   const parsed = contents.trim() === "" ? {} : parseStaticObjectLiteral(contents);
   if (!parsed) throw new Error(`Failed to parse "${normalizedPath}"`);
+  if (
+    parsed.extends !== undefined &&
+    typeof parsed.extends !== "string" &&
+    (!Array.isArray(parsed.extends) || parsed.extends.some((value) => typeof value !== "string"))
+  ) {
+    throw new Error("Compiler option 'extends' requires a value of type string or Array.");
+  }
 
   const watchedFiles = new Set<string>([normalizedPath]);
-  let resolution: Omit<CustomTsconfigResolution, "watchedFiles"> = {};
+  let resolution: Omit<LoadedCustomTsconfig, "watchedFiles"> = {};
   for (const extendsSpecifier of normalizeTsconfigExtends(parsed.extends)) {
     const extendedPath = resolveTsconfigExtends(normalizedPath, extendsSpecifier);
-    if (!extendedPath) continue;
-    const parent = loadCustomTsconfigResolution(extendedPath, completed, active);
+    if (!extendedPath) {
+      const diagnosticPath =
+        extendsSpecifier.startsWith(".") ||
+        extendsSpecifier.startsWith("/") ||
+        extendsSpecifier.startsWith("\\")
+          ? path.resolve(path.dirname(normalizedPath), extendsSpecifier)
+          : extendsSpecifier;
+      throw new Error(`Cannot read file '${diagnosticPath}'.`);
+    }
+    const parent = loadCustomTsconfig(extendedPath, completed, active);
     parent.watchedFiles.forEach((file) => watchedFiles.add(file));
     if (parent.baseUrl !== undefined) resolution.baseUrl = parent.baseUrl;
-    if (parent.paths !== undefined) resolution.paths = [...parent.paths];
+    if (parent.paths !== undefined) resolution.paths = parent.paths;
+    if (parent.pathsBasePath !== undefined) resolution.pathsBasePath = parent.pathsBasePath;
   }
 
   const compilerOptions = isRecord(parsed.compilerOptions) ? parsed.compilerOptions : null;
@@ -622,30 +679,14 @@ function loadCustomTsconfigResolution(
     resolution.baseUrl = path.resolve(path.dirname(normalizedPath), compilerOptions.baseUrl);
   }
   if (compilerOptions && isRecord(compilerOptions.paths)) {
-    const pathsRoot = resolution.baseUrl ?? path.dirname(normalizedPath);
-    resolution.paths = Object.entries(compilerOptions.paths).flatMap(([find, rawTargets]) => {
-      if (!Array.isArray(rawTargets)) return [];
-      const targets = rawTargets
-        .filter((target): target is string => typeof target === "string")
-        .map((target) => path.resolve(pathsRoot, target));
-      if (targets.length === 0) return [];
-      const starIndex = find.indexOf("*");
-      if (starIndex === -1) return [{ key: find, targets }];
-      if (starIndex !== find.lastIndexOf("*")) return [];
-      return [
-        {
-          key: find,
-          prefix: find.slice(0, starIndex),
-          suffix: find.slice(starIndex + 1),
-          targets,
-        },
-      ];
-    });
+    resolution.paths = compilerOptions.paths;
+    resolution.pathsBasePath = path.dirname(normalizedPath);
   }
 
   active.pop();
-  completed.add(normalizedPath);
-  return { ...resolution, watchedFiles };
+  const loaded = { ...resolution, watchedFiles };
+  completed.set(normalizedPath, loaded);
+  return { ...loaded, watchedFiles: new Set(watchedFiles) };
 }
 
 function matchCustomTsconfigPath(

@@ -317,6 +317,76 @@ describe("Vite tsconfig paths support", () => {
     ).resolves.toHaveProperty("id", path.join(path.dirname(expectedConfigFile), "inherited.ts"));
   });
 
+  it("rebases inherited paths against a child baseUrl", async () => {
+    const root = setupProject({ name: "vite", version: "8.0.0" });
+    process.chdir(root);
+    fs.writeFileSync(
+      path.join(root, "base.json"),
+      JSON.stringify({
+        compilerOptions: {
+          baseUrl: "./parent",
+          paths: { "@/*": ["src/*"] },
+        },
+      }),
+    );
+    const plugin = await configureCustomTsconfig(root, {
+      extends: "./base.json",
+      compilerOptions: { baseUrl: "./child" },
+    });
+
+    await expect(
+      resolveWithCustomTsconfig(
+        plugin,
+        "@/page",
+        path.join(root, "pages/index.tsx"),
+        (candidate) => candidate,
+      ),
+    ).resolves.toHaveProperty("id", path.join(fs.realpathSync(root), "child/src/page"));
+  });
+
+  it("reuses shared ancestors when applying later extends precedence", async () => {
+    const root = setupProject({ name: "vite", version: "8.0.0" });
+    process.chdir(root);
+    fs.writeFileSync(
+      path.join(root, "base.json"),
+      JSON.stringify({ compilerOptions: { paths: { selected: ["./base.ts"] } } }),
+    );
+    fs.writeFileSync(
+      path.join(root, "a.json"),
+      JSON.stringify({
+        extends: "./base.json",
+        compilerOptions: { paths: { selected: ["./a.ts"] } },
+      }),
+    );
+    fs.writeFileSync(path.join(root, "b.json"), JSON.stringify({ extends: "./base.json" }));
+    const plugin = await configureCustomTsconfig(root, { extends: ["./a.json", "./b.json"] });
+
+    await expect(
+      resolveWithCustomTsconfig(
+        plugin,
+        "selected",
+        path.join(root, "pages/index.tsx"),
+        (candidate) => candidate,
+      ),
+    ).resolves.toHaveProperty("id", path.join(fs.realpathSync(root), "base.ts"));
+  });
+
+  it("rejects package config subpaths that are not exported", async () => {
+    const root = setupProject({ name: "vite", version: "8.0.0" });
+    process.chdir(root);
+    const packageRoot = path.join(root, "node_modules/preset");
+    fs.mkdirSync(packageRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "preset", exports: { ".": "./index.js" } }),
+    );
+    fs.writeFileSync(path.join(packageRoot, "private.json"), JSON.stringify({}));
+
+    await expect(configureCustomTsconfig(root, { extends: "preset/private" })).rejects.toThrow(
+      "Cannot read file 'preset/private'.",
+    );
+  });
+
   it("throws a TypeScript-style diagnostic for direct and package extends cycles", async () => {
     const root = setupProject({ name: "vite", version: "8.0.0" });
     process.chdir(root);
@@ -341,6 +411,52 @@ describe("Vite tsconfig paths support", () => {
     await expect(configureCustomTsconfig(root, { extends: "cycle-preset" })).rejects.toThrow(
       "Circularity detected while resolving configuration:",
     );
+  });
+
+  it("keeps the last valid resolution when an extended config becomes invalid", async () => {
+    const root = setupProject({ name: "vite", version: "8.0.0" });
+    process.chdir(root);
+    const parentPath = path.join(root, "base.json");
+    fs.writeFileSync(
+      parentPath,
+      JSON.stringify({ compilerOptions: { paths: { selected: ["./valid.ts"] } } }),
+    );
+    const plugin = await configureCustomTsconfig(root, { extends: "./base.json" });
+    let watcherCallback: ((event: string, file: string) => void) | undefined;
+    const logger = { error: vi.fn() };
+    const configureServer =
+      typeof plugin.configureServer === "object"
+        ? plugin.configureServer.handler
+        : plugin.configureServer;
+    await configureServer?.call(
+      {} as never,
+      {
+        watcher: {
+          add: vi.fn(),
+          on: vi.fn((_event, callback) => {
+            watcherCallback = callback;
+          }),
+        },
+        moduleGraph: { invalidateAll: vi.fn() },
+        ws: { send: vi.fn() },
+        config: { logger },
+      } as never,
+    );
+    fs.writeFileSync(parentPath, JSON.stringify({ extends: "./missing.json" }));
+    watcherCallback?.("change", parentPath);
+
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to reload custom tsconfig"),
+      expect.objectContaining({ error: expect.any(Error) }),
+    );
+    await expect(
+      resolveWithCustomTsconfig(
+        plugin,
+        "selected",
+        path.join(root, "pages/index.tsx"),
+        (candidate) => candidate,
+      ),
+    ).resolves.toHaveProperty("id", path.join(fs.realpathSync(root), "valid.ts"));
   });
 
   it("falls back only to jsconfig when the configured file is missing", async () => {
