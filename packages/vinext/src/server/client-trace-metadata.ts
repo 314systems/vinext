@@ -10,10 +10,10 @@
  *  - packages/next/src/server/lib/trace/utils.ts (getTracedMetadata)
  *  - packages/next/src/server/app-render/make-get-server-inserted-html.tsx (traceMetaTags)
  *
- * OpenTelemetry is an optional peer — we resolve `@opentelemetry/api` at
- * runtime and silently no-op when it is not installed. This matches user
- * expectations: apps that don't configure OTel get no meta tags, and apps
- * that do get the filtered subset they asked for in `clientTraceMetadata`.
+ * OpenTelemetry is optional. We read the API's registered global delegates
+ * directly and silently no-op when no context manager or propagator has been
+ * registered. This avoids requiring the optional package from ESM runtimes
+ * while still observing the same globals as the user's `@opentelemetry/api`.
  */
 import { escapeHtmlAttr } from "./html.js";
 
@@ -35,8 +35,8 @@ const carrierSetter: TextMapSetter = {
 
 /**
  * Pull entries off the active OpenTelemetry context via the registered
- * propagator. Returns an empty array when `@opentelemetry/api` is not
- * installed or when no propagator has been registered.
+ * propagator. Returns an empty array when no OpenTelemetry context manager or
+ * propagator has been registered.
  *
  * The implementation mirrors Next.js's `NextTracerImpl.getTracePropagationData`:
  * we call `propagation.inject(activeContext, entries, setter)` and let the
@@ -49,20 +49,19 @@ type OpenTelemetryApi = {
   };
 };
 
-function getOpenTelemetryTraceData(): ClientTraceDataEntry[] {
-  let api: OpenTelemetryApi | undefined;
-  try {
-    // Use require() at runtime so `@opentelemetry/api` is an optional peer.
-    // Bundlers (Vite/esbuild) leave the `require` reference alone, so apps
-    // that don't install the package never hit this branch.
-    const req = (globalThis as { require?: (id: string) => unknown }).require;
-    if (typeof req === "function") {
-      api = req("@opentelemetry/api") as OpenTelemetryApi;
-    }
-  } catch {
-    return [];
-  }
+const OPEN_TELEMETRY_API_GLOBAL = Symbol.for("opentelemetry.js.api.1");
 
+function getOpenTelemetryApi(): OpenTelemetryApi | undefined {
+  const api = Reflect.get(globalThis, OPEN_TELEMETRY_API_GLOBAL) as
+    | Partial<OpenTelemetryApi>
+    | undefined;
+  if (typeof api?.context?.active !== "function") return undefined;
+  if (typeof api.propagation?.inject !== "function") return undefined;
+  return api as OpenTelemetryApi;
+}
+
+function getOpenTelemetryTraceData(): ClientTraceDataEntry[] {
+  const api = getOpenTelemetryApi();
   if (!api) return [];
 
   try {

@@ -79,12 +79,10 @@ describe("client trace metadata: renderClientTraceMetadataTags", () => {
 });
 
 describe("client trace metadata: getClientTraceMetadataHTML", () => {
-  // The default global has no `require`, so any optional OTel resolution
-  // returns no entries.
-  type WithRequire = { require?: (id: string) => unknown };
+  const otelGlobal = Symbol.for("opentelemetry.js.api.1");
 
   afterEach(() => {
-    delete (globalThis as WithRequire).require;
+    Reflect.deleteProperty(globalThis, otelGlobal);
   });
 
   it("returns empty string when the allow-list is unset", () => {
@@ -92,12 +90,7 @@ describe("client trace metadata: getClientTraceMetadataHTML", () => {
     expect(getClientTraceMetadataHTML([])).toBe("");
   });
 
-  it("returns empty string when @opentelemetry/api is not installed", () => {
-    (globalThis as WithRequire).require = (id: string) => {
-      const err = new Error(`Cannot find module '${id}'`) as Error & { code?: string };
-      err.code = "MODULE_NOT_FOUND";
-      throw err;
-    };
+  it("returns empty string when OpenTelemetry globals are not registered", () => {
     expect(getClientTraceMetadataHTML(["my-test-key-1"])).toBe("");
   });
 
@@ -115,15 +108,11 @@ describe("client trace metadata: getClientTraceMetadataHTML", () => {
       },
     };
 
-    const fakeApi = {
+    Reflect.set(globalThis, otelGlobal, {
+      version: "1.9.0",
       context: { active: () => ({}) },
       propagation: propagator,
-    };
-
-    (globalThis as WithRequire).require = (id: string) => {
-      if (id === "@opentelemetry/api") return fakeApi;
-      throw new Error(`Cannot find module '${id}'`);
-    };
+    });
 
     const html = getClientTraceMetadataHTML([
       "my-test-key-1",
