@@ -1451,13 +1451,18 @@ export function createSSRHandler(
           }
           const dataHeaders: Record<string, string | string[] | number> = {
             "Content-Type": "application/json",
-            "x-vinext-resolved-query": JSON.stringify(query),
           };
           if (gsspExtraHeaders) {
             for (const [k, v] of Object.entries(gsspExtraHeaders)) {
               dataHeaders[k] = v;
             }
           }
+          for (const headerName of Object.keys(dataHeaders)) {
+            if (headerName.toLowerCase() === "x-vinext-resolved-query") {
+              delete dataHeaders[headerName];
+            }
+          }
+          dataHeaders["x-vinext-resolved-query"] = JSON.stringify(query);
           // Mirror Next.js pages-handler.ts: set x-nextjs-deployment-id on
           // every _next/data response so the client router can detect a new
           // deployment and trigger a hard navigation (deployment-skew

@@ -63,6 +63,7 @@ import {
   appendSearchParamsToUrl,
   mergeRouteParamsIntoQuery,
   parseQueryString,
+  setOwnQueryValue,
   type UrlQuery,
   urlQueryToSearchParams,
 } from "../utils/query.js";
@@ -1247,7 +1248,11 @@ function navigationRequiresServerQueryOwnership(nextData: VinextNextData): boole
     addQueryParam(browserQuery, key, value);
   }
   const routeParams = extractRouteParamsFromPath(nextData.page, resolvedPath);
-  if (routeParams) Object.assign(browserQuery, routeParams);
+  if (routeParams) {
+    for (const [key, value] of Object.entries(routeParams)) {
+      setOwnQueryValue(browserQuery, key, Array.isArray(value) ? [...value] : value);
+    }
+  }
 
   return !queryValuesEqual(browserQuery, serverQuery);
 }
@@ -1293,11 +1298,11 @@ function getPathnameAndQuery(): {
       let query: Record<string, string | string[]> = {};
       if (isReady) {
         for (const [key, value] of Object.entries(_ssrCtx.query)) {
-          query[key] = Array.isArray(value) ? [...value] : value;
+          setOwnQueryValue(query, key, Array.isArray(value) ? [...value] : value);
         }
       } else {
         for (const [key, value] of Object.entries(_ssrCtx.initialQuery ?? {})) {
-          query[key] = Array.isArray(value) ? [...value] : value;
+          setOwnQueryValue(query, key, Array.isArray(value) ? [...value] : value);
         }
       }
       return { pathname: _ssrCtx.pathname, query, asPath: _ssrCtx.asPath };
@@ -1317,17 +1322,21 @@ function getPathnameAndQuery(): {
     const initialResolvedQuery = nextData?.__vinext?.initialResolvedQuery;
     if (usesServerResolvedQuery && initialResolvedQuery) {
       for (const [key, value] of Object.entries(initialResolvedQuery)) {
-        routeQuery[key] = Array.isArray(value) ? [...value] : value;
+        setOwnQueryValue(routeQuery, key, Array.isArray(value) ? [...value] : value);
       }
     } else {
-      Object.assign(routeQuery, getRouteQueryFromNextData(nextData, resolvedPath));
+      for (const [key, value] of Object.entries(
+        getRouteQueryFromNextData(nextData, resolvedPath),
+      )) {
+        setOwnQueryValue(routeQuery, key, Array.isArray(value) ? [...value] : value);
+      }
     }
   } else {
     for (const [key, value] of Object.entries(nextData?.query ?? {})) {
       if (typeof value === "string") {
-        routeQuery[key] = value;
+        setOwnQueryValue(routeQuery, key, value);
       } else if (Array.isArray(value)) {
-        routeQuery[key] = [...value];
+        setOwnQueryValue(routeQuery, key, [...value]);
       }
     }
   }
@@ -1341,7 +1350,12 @@ function getPathnameAndQuery(): {
       addQueryParam(searchQuery, key, value);
     }
   }
-  const query = { ...searchQuery, ...routeQuery };
+  const query: Record<string, string | string[]> = {};
+  for (const source of [searchQuery, routeQuery]) {
+    for (const [key, value] of Object.entries(source)) {
+      setOwnQueryValue(query, key, Array.isArray(value) ? [...value] : value);
+    }
+  }
   // asPath uses the resolved browser path, not the route pattern
   const asPath =
     getCurrentHistoryAsPath() ?? resolvedPath + window.location.search + window.location.hash;
@@ -1908,9 +1922,9 @@ async function navigateClientData(
       if (isUnknownRecord(parsed)) {
         resolvedQuery = {};
         for (const [key, value] of Object.entries(parsed)) {
-          if (typeof value === "string") resolvedQuery[key] = value;
+          if (typeof value === "string") setOwnQueryValue(resolvedQuery, key, value);
           else if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
-            resolvedQuery[key] = [...value];
+            setOwnQueryValue(resolvedQuery, key, [...value]);
           }
         }
       }

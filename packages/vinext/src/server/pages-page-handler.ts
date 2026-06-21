@@ -668,7 +668,6 @@ export function createPagesPageHandler(
         // props like __N_SSP, __N_SSG) as JSON instead of the full HTML page.
         if (isDataReq) {
           const init: ResponseInit & { headers: Record<string, string> } = { headers: {} };
-          init.headers["x-vinext-resolved-query"] = safeJsonStringify(query);
           if (gsspRes && typeof gsspRes.getHeaders === "function") {
             const gsspHeaders = gsspRes.getHeaders();
             for (const k of Object.keys(gsspHeaders)) {
@@ -677,6 +676,12 @@ export function createPagesPageHandler(
               init.headers[k] = Array.isArray(v) ? v.join(", ") : String(v);
             }
           }
+          for (const headerName of Object.keys(init.headers)) {
+            if (headerName.toLowerCase() === "x-vinext-resolved-query") {
+              delete init.headers[headerName];
+            }
+          }
+          init.headers["x-vinext-resolved-query"] = safeJsonStringify(query);
           if (gsspRes) {
             // Default Cache-Control for gSSP-driven _next/data responses —
             // skip when gSSP already set one via res.setHeader. Fixes #1461.

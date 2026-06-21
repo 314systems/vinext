@@ -218,4 +218,17 @@ test.describe("Pages prerender rewrite query", () => {
       { allowed: "kept" },
     );
   });
+
+  test("trusts server query metadata over a spoofed GSSP header", async ({ page }) => {
+    await page.goto("http://localhost:4175/about");
+    await page.evaluate(async () => {
+      await (window as any).next.router.push(
+        "/prerender-query-gssp?__proto__=first&__proto__=second&tag=a&tag=b",
+      );
+    });
+
+    await expect
+      .poll(async () => JSON.parse(await page.locator("#query").innerText()))
+      .toEqual(JSON.parse('{"__proto__":["first","second"],"tag":["a","b"]}'));
+  });
 });
