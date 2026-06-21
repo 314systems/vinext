@@ -403,7 +403,7 @@ describe("pages page response", () => {
     const html = await response.text();
     expect(html).not.toContain("data-vinext-head-nonce");
     expect(html).not.toContain("data-vinext-script-nonce");
-    for (const tag of html.match(/<script\b[^>]*>/g) ?? []) {
+    for (const tag of html.match(/<script\b[^>]*>/gi) ?? []) {
       expect(tag).toContain('nonce="test-nonce"');
       expect(tag).toContain('crossorigin="anonymous"');
     }

@@ -11,7 +11,7 @@ function assertDocumentAssetProps(html: string, requireHeadAssets: boolean): voi
   expect(html).not.toContain("data-vinext-head-nonce");
   expect(html).not.toContain("data-vinext-script-nonce");
 
-  const documentScripts = (html.match(/<script\b[^>]*>/g) ?? []).filter((tag) =>
+  const documentScripts = (html.match(/<script\b[^>]*>/gi) ?? []).filter((tag) =>
     tag.includes('nonce="script-nonce"'),
   );
   expect(documentScripts.length).toBeGreaterThan(0);
@@ -19,7 +19,7 @@ function assertDocumentAssetProps(html: string, requireHeadAssets: boolean): voi
     expect(tag).toContain('crossorigin="anonymous"');
   }
 
-  const generatedHeadAssets = (html.match(/<(?:script|link)\b[^>]*>/g) ?? []).filter(
+  const generatedHeadAssets = (html.match(/<(?:script|link)\b[^>]*>/gi) ?? []).filter(
     (tag) =>
       !tag.includes('id="user-') &&
       !tag.includes("/@vite/") &&
@@ -146,7 +146,7 @@ Document.getInitialProps = async (ctx) => {
     expect(html.indexOf('id="custom-document-style"')).toBeLessThan(
       html.indexOf('id="collected-document-style"'),
     );
-    const viteScripts = (html.match(/<script\b[^>]*>/g) ?? []).filter(
+    const viteScripts = (html.match(/<script\b[^>]*>/gi) ?? []).filter(
       (tag) => !tag.includes('id="user-script"') && !tag.includes('nonce="script-nonce"'),
     );
     expect(viteScripts.length).toBeGreaterThan(0);
