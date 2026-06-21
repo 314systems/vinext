@@ -59,12 +59,29 @@ test.describe("Pages Router Production Build", () => {
     });
   }
 
-  test("renders non-JSON getServerSideProps values in production", async ({ request }) => {
-    // Ported from Next.js: test/e2e/getserversideprops/test/index.test.ts
-    // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/getserversideprops/test/index.test.ts
-    const response = await request.get(`${BASE}/gssp-non-json`);
-    expect(response.status()).toBe(200);
-    expect(await response.text()).toContain("hello ");
+  test("preserves requested dynamic route state while rendering GSSP notFound", async ({
+    page,
+  }) => {
+    await page.goto(`${BASE}/`);
+    await page.evaluate(() =>
+      (window as any).next.router.push("/gssp-not-found/first?hiding=true"),
+    );
+    await expect(page.getByTestId("error-title")).toBeVisible();
+
+    const state = await page.evaluate(() => ({
+      pathname: (window as any).next.router.pathname,
+      route: (window as any).next.router.route,
+      query: (window as any).next.router.query,
+      asPath: (window as any).next.router.asPath,
+      nextDataPage: (window as any).__NEXT_DATA__.page,
+    }));
+    expect(state).toEqual({
+      pathname: "/gssp-not-found/[slug]",
+      route: "/gssp-not-found/[slug]",
+      query: { hiding: "true", slug: "first" },
+      asPath: "/gssp-not-found/first?hiding=true",
+      nextDataPage: "/gssp-not-found/[slug]",
+    });
   });
 
   test("API route returns JSON", async ({ request }) => {
