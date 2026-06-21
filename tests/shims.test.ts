@@ -14433,10 +14433,14 @@ describe("Pages Router concurrent navigation", () => {
   it("stamps initial router state without dropping third-party history fields", async () => {
     const previousWindow = (globalThis as any).window;
     const { win, replaceState } = createNavWindow();
+    const listeners = new Map<string, (event: any) => void>();
     win.history.state = {
       analyticsEntry: "landing",
       nested: { retained: true },
     } as any;
+    win.addEventListener = vi.fn((type: string, handler: (event: any) => void) => {
+      listeners.set(type, handler);
+    });
     replaceState.mockImplementation((state: unknown) => {
       win.history.state = state as any;
     });
@@ -14454,9 +14458,24 @@ describe("Pages Router concurrent navigation", () => {
           __vinext_queryOwner: "server",
           url: "/",
           as: "/",
+          options: {},
+          key: expect.any(String),
         }),
       );
-      expect(replaceState).toHaveBeenCalledWith(expect.any(Object), "");
+      expect(replaceState).toHaveBeenCalledWith(win.history.state, "");
+
+      const beforePopState = vi.fn(() => false);
+      (win as any).next.router.beforePopState(beforePopState);
+      win.__VINEXT_LOCALE__ = "en";
+      listeners.get("popstate")!({ state: win.history.state });
+
+      expect(beforePopState).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "/",
+          as: "/",
+          options: {},
+        }),
+      );
     } finally {
       vi.resetModules();
       if (previousWindow === undefined) {

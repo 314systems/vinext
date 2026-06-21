@@ -816,15 +816,12 @@ function stampInitialHistoryState(): void {
   if (!window.history) return;
 
   const existingState = window.history.state;
-  if (existingState !== null && existingState !== undefined) {
-    routerRuntimeState.currentHistoryKey =
-      getRouterStateKey(existingState) ?? routerRuntimeState.currentHistoryKey;
-    return;
-  }
-
   const initialState = buildInitialRouterState();
   routerRuntimeState.currentHistoryKey = initialState.key;
-  window.history.replaceState(initialState, "");
+  window.history.replaceState(
+    isUnknownRecord(existingState) ? { ...existingState, ...initialState } : initialState,
+    "",
+  );
 }
 
 setStampInitialHistoryState(stampInitialHistoryState);
