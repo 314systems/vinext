@@ -36,6 +36,37 @@ function findNamedPlugin(plugins: ReturnType<typeof vinext>, name: string) {
   return plugins.find((plugin): plugin is Plugin => isPlugin(plugin) && plugin.name === name);
 }
 
+async function configureCustomTsconfig(root: string, tsconfig: Record<string, unknown>) {
+  fs.writeFileSync(
+    path.join(root, "next.config.mjs"),
+    "export default { typescript: { tsconfigPath: 'web.tsconfig.json' } };\n",
+  );
+  fs.writeFileSync(path.join(root, "web.tsconfig.json"), JSON.stringify(tsconfig, null, 2));
+  const plugins = vinext({ appDir: root });
+  const configPlugin = findNamedPlugin(plugins, "vinext:config") as Plugin;
+  const configHook =
+    typeof configPlugin.config === "object" ? configPlugin.config.handler : configPlugin.config;
+  await configHook?.call({} as never, { root }, { command: "serve", mode: "development" });
+  return findNamedPlugin(plugins, "vinext:tsconfig-paths") as Plugin;
+}
+
+async function resolveWithCustomTsconfig(
+  plugin: Plugin,
+  id: string,
+  importer: string,
+  resolver: (id: string) => string | null,
+) {
+  const resolveId =
+    typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
+  const context = {
+    resolve: async (candidate: string) => {
+      const resolved = resolver(candidate);
+      return resolved ? { id: resolved } : null;
+    },
+  } as unknown as ThisParameterType<NonNullable<typeof resolveId>>;
+  return resolveId?.call(context, id, importer, { isEntry: false });
+}
+
 afterEach(() => {
   // Restore the cwd before removing the temp dir: each test chdir's into
   // `root`, and Windows refuses to delete a directory that is a process's
@@ -169,6 +200,147 @@ describe("Vite tsconfig paths support", () => {
 
     expect(resolvedConfig?.resolve?.alias).not.toHaveProperty("foo");
     expect(resolvedConfig?.resolve?.tsconfigPaths).toBe(false);
+  });
+
+  it("prefers exact paths and then the wildcard with the longest prefix", async () => {
+    const root = setupProject({ name: "vite", version: "8.0.0" });
+    process.chdir(root);
+    const plugin = await configureCustomTsconfig(root, {
+      compilerOptions: {
+        paths: {
+          "@/*": ["./broad/*"],
+          "@/components/*": ["./components/*"],
+          "@/components/button": ["./exact.ts"],
+        },
+      },
+    });
+    const importer = path.join(root, "pages/index.tsx");
+    const resolver = (candidate: string) => candidate;
+    const realRoot = fs.realpathSync(root);
+
+    await expect(
+      resolveWithCustomTsconfig(plugin, "@/components/button", importer, resolver),
+    ).resolves.toHaveProperty("id", path.join(realRoot, "exact.ts"));
+    await expect(
+      resolveWithCustomTsconfig(plugin, "@/components/card", importer, resolver),
+    ).resolves.toHaveProperty("id", path.join(realRoot, "components/card"));
+  });
+
+  it("does not apply custom paths to direct or symlinked dependency importers", async () => {
+    const root = setupProject({ name: "vite", version: "8.0.0" });
+    process.chdir(root);
+    const plugin = await configureCustomTsconfig(root, {
+      compilerOptions: { paths: { internal: ["./app-internal.ts"] } },
+    });
+    const directImporter = path.join(root, "node_modules/direct/index.js");
+    fs.mkdirSync(path.dirname(directImporter), { recursive: true });
+    fs.writeFileSync(directImporter, "");
+    const linkedPackage = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-linked-dependency-"));
+    fs.writeFileSync(path.join(linkedPackage, "index.js"), "");
+    fs.symlinkSync(linkedPackage, path.join(root, "node_modules/linked"), "dir");
+    const resolver = (candidate: string) =>
+      candidate === path.join(root, "app-internal.ts") ? candidate : null;
+
+    await expect(
+      resolveWithCustomTsconfig(plugin, "internal", directImporter, resolver),
+    ).resolves.toBeUndefined();
+    await expect(
+      resolveWithCustomTsconfig(plugin, "internal", path.join(linkedPackage, "index.js"), resolver),
+    ).resolves.toBeUndefined();
+    fs.rmSync(linkedPackage, { recursive: true, force: true });
+  });
+
+  it("keeps explicit paths above packages and baseUrl behind packages", async () => {
+    const root = setupProject({ name: "vite", version: "8.0.0" });
+    process.chdir(root);
+    const plugin = await configureCustomTsconfig(root, {
+      compilerOptions: {
+        baseUrl: ".",
+        paths: { explicit: ["./explicit.ts"] },
+      },
+    });
+    const importer = path.join(root, "pages/index.tsx");
+    const realRoot = fs.realpathSync(root);
+    const packageId = path.join(root, "node_modules/package-name/index.js");
+    const resolver = (candidate: string) => {
+      if (candidate === "package-name") return packageId;
+      if (candidate === path.join(realRoot, "package-name")) return candidate;
+      if (candidate === path.join(realRoot, "explicit.ts")) return candidate;
+      return null;
+    };
+
+    await expect(
+      resolveWithCustomTsconfig(plugin, "package-name", importer, resolver),
+    ).resolves.toHaveProperty("id", packageId);
+    await expect(
+      resolveWithCustomTsconfig(plugin, "explicit", importer, resolver),
+    ).resolves.toHaveProperty("id", path.join(realRoot, "explicit.ts"));
+  });
+
+  it.each([
+    ["package tsconfig field", "config-preset", { tsconfig: "config/base.json" }],
+    ["exported JSON subpath", "preset/base", { exports: { "./base": "./base.json" } }],
+    ["scoped package", "@scope/preset", { tsconfig: "base.json" }],
+  ])("resolves extends from a %s", async (_label, extendsSpecifier, packageJson) => {
+    const root = setupProject({ name: "vite", version: "8.0.0" });
+    process.chdir(root);
+    const packageName = extendsSpecifier.startsWith("@")
+      ? extendsSpecifier.split("/").slice(0, 2).join("/")
+      : extendsSpecifier.split("/")[0];
+    const packageRoot = path.join(root, "node_modules", packageName);
+    fs.mkdirSync(path.join(packageRoot, "config"), { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: packageName, ...packageJson }),
+    );
+    const configFile =
+      extendsSpecifier === "preset/base"
+        ? path.join(packageRoot, "base.json")
+        : path.join(
+            packageRoot,
+            "tsconfig" in packageJson ? packageJson.tsconfig : "tsconfig.json",
+          );
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({ compilerOptions: { paths: { inherited: ["./inherited.ts"] } } }),
+    );
+
+    const plugin = await configureCustomTsconfig(root, { extends: extendsSpecifier });
+    const expectedConfigFile = fs.realpathSync(configFile);
+    await expect(
+      resolveWithCustomTsconfig(
+        plugin,
+        "inherited",
+        path.join(root, "pages/index.tsx"),
+        (candidate) => candidate,
+      ),
+    ).resolves.toHaveProperty("id", path.join(path.dirname(expectedConfigFile), "inherited.ts"));
+  });
+
+  it("throws a TypeScript-style diagnostic for direct and package extends cycles", async () => {
+    const root = setupProject({ name: "vite", version: "8.0.0" });
+    process.chdir(root);
+    fs.writeFileSync(
+      path.join(root, "cycle.json"),
+      JSON.stringify({ extends: "./web.tsconfig.json" }),
+    );
+    await expect(configureCustomTsconfig(root, { extends: "./cycle.json" })).rejects.toThrow(
+      "Circularity detected while resolving configuration:",
+    );
+
+    const packageRoot = path.join(root, "node_modules/cycle-preset");
+    fs.mkdirSync(packageRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "cycle-preset", tsconfig: "base.json" }),
+    );
+    fs.writeFileSync(
+      path.join(packageRoot, "base.json"),
+      JSON.stringify({ extends: path.join(root, "web.tsconfig.json") }),
+    );
+    await expect(configureCustomTsconfig(root, { extends: "cycle-preset" })).rejects.toThrow(
+      "Circularity detected while resolving configuration:",
+    );
   });
 
   it("falls back only to jsconfig when the configured file is missing", async () => {

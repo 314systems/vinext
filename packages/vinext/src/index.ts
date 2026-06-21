@@ -378,15 +378,67 @@ function resolveTsconfigExtends(configPath: string, specifier: string): string |
   }
 
   const requireFromConfig = createRequire(configPath);
-  const candidates = [specifier, `${specifier}.json`, path.join(specifier, "tsconfig.json")];
+  const packageParts = specifier.split("/");
+  const packageName = specifier.startsWith("@")
+    ? packageParts.slice(0, 2).join("/")
+    : packageParts[0];
+  const packageSubpath = packageParts.slice(packageName.startsWith("@") ? 2 : 1).join("/");
 
-  for (const item of candidates) {
+  if (packageSubpath) {
+    for (const item of [specifier, `${specifier}.json`]) {
+      try {
+        const resolved = requireFromConfig.resolve(item);
+        if (resolved.endsWith(".json")) return resolved;
+      } catch {}
+    }
+  }
+
+  let packageRoot: string | null = null;
+  let searchDirectory = fromDir;
+  while (searchDirectory !== path.dirname(searchDirectory)) {
+    const candidate = path.join(searchDirectory, "node_modules", packageName);
+    if (fs.existsSync(path.join(candidate, "package.json"))) {
+      packageRoot = candidate;
+      break;
+    }
+    searchDirectory = path.dirname(searchDirectory);
+  }
+  try {
+    packageRoot ??= path.dirname(requireFromConfig.resolve(`${packageName}/package.json`));
+  } catch {
     try {
-      return requireFromConfig.resolve(item);
+      let current = path.dirname(requireFromConfig.resolve(packageName));
+      while (current !== path.dirname(current)) {
+        const packageJsonPath = path.join(current, "package.json");
+        if (fs.existsSync(packageJsonPath)) {
+          const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8"));
+          if (packageJson.name === packageName) {
+            packageRoot = current;
+            break;
+          }
+        }
+        current = path.dirname(current);
+      }
     } catch {}
   }
 
-  return null;
+  if (!packageRoot) return null;
+  if (packageSubpath) {
+    return resolveTsconfigPathCandidate(path.join(packageRoot, packageSubpath));
+  }
+
+  const packageJsonPath = path.join(packageRoot, "package.json");
+  try {
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8"));
+    if (typeof packageJson.tsconfig === "string") {
+      const resolved = resolveTsconfigPathCandidate(
+        path.resolve(packageRoot, packageJson.tsconfig),
+      );
+      if (resolved) return resolved;
+    }
+  } catch {}
+
+  return resolveTsconfigPathCandidate(path.join(packageRoot, "tsconfig.json"));
 }
 
 function materializeTsconfigPathAliases(
@@ -450,12 +502,18 @@ function toViteAliasReplacement(absolutePath: string, projectRoot: string): stri
 function loadTsconfigPathAliases(
   configPath: string,
   projectRoot: string,
-  seen = new Set<string>(),
+  completed = new Set<string>(),
   throwOnParseError = false,
+  active: string[] = [],
 ): Record<string, string> {
   const normalizedPath = tryRealpathSync(configPath) ?? configPath;
-  if (seen.has(normalizedPath)) return {};
-  seen.add(normalizedPath);
+  if (active.includes(normalizedPath)) {
+    throw new Error(
+      `Circularity detected while resolving configuration: ${[...active, normalizedPath].join(" -> ")}`,
+    );
+  }
+  if (completed.has(normalizedPath)) return {};
+  active.push(normalizedPath);
 
   let parsed: Record<string, unknown> | null = null;
   try {
@@ -503,13 +561,15 @@ function loadTsconfigPathAliases(
     }
     aliases = {
       ...aliases,
-      ...loadTsconfigPathAliases(extendedPath, projectRoot, seen, throwOnParseError),
+      ...loadTsconfigPathAliases(extendedPath, projectRoot, completed, throwOnParseError, active),
     };
   }
 
   const compilerOptions = isRecord(parsed.compilerOptions) ? parsed.compilerOptions : null;
   const pathsConfig =
     compilerOptions && isRecord(compilerOptions.paths) ? compilerOptions.paths : null;
+  active.pop();
+  completed.add(normalizedPath);
   if (!pathsConfig) return aliases;
 
   const baseUrl =
@@ -524,17 +584,23 @@ function loadTsconfigPathAliases(
 
 type CustomTsconfigResolution = {
   baseUrl?: string;
-  paths?: Array<{ pattern: RegExp; targets: string[] }>;
+  paths?: Array<{ key: string; prefix?: string; suffix?: string; targets: string[] }>;
   watchedFiles: Set<string>;
 };
 
 function loadCustomTsconfigResolution(
   configPath: string,
-  seen = new Set<string>(),
+  completed = new Set<string>(),
+  active: string[] = [],
 ): CustomTsconfigResolution {
   const normalizedPath = tryRealpathSync(configPath) ?? configPath;
-  if (seen.has(normalizedPath)) return { watchedFiles: new Set() };
-  seen.add(normalizedPath);
+  if (active.includes(normalizedPath)) {
+    throw new Error(
+      `Circularity detected while resolving configuration: ${[...active, normalizedPath].join(" -> ")}`,
+    );
+  }
+  if (completed.has(normalizedPath)) return { watchedFiles: new Set() };
+  active.push(normalizedPath);
 
   const contents = fs.readFileSync(normalizedPath, "utf-8");
   const parsed = contents.trim() === "" ? {} : parseStaticObjectLiteral(contents);
@@ -545,7 +611,7 @@ function loadCustomTsconfigResolution(
   for (const extendsSpecifier of normalizeTsconfigExtends(parsed.extends)) {
     const extendedPath = resolveTsconfigExtends(normalizedPath, extendsSpecifier);
     if (!extendedPath) continue;
-    const parent = loadCustomTsconfigResolution(extendedPath, seen);
+    const parent = loadCustomTsconfigResolution(extendedPath, completed, active);
     parent.watchedFiles.forEach((file) => watchedFiles.add(file));
     if (parent.baseUrl !== undefined) resolution.baseUrl = parent.baseUrl;
     if (parent.paths !== undefined) resolution.paths = [...parent.paths];
@@ -563,12 +629,77 @@ function loadCustomTsconfigResolution(
         .filter((target): target is string => typeof target === "string")
         .map((target) => path.resolve(pathsRoot, target));
       if (targets.length === 0) return [];
-      const escaped = find.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      return [{ pattern: new RegExp(`^${escaped.replace(/\\\*/g, "(.*)")}$`), targets }];
+      const starIndex = find.indexOf("*");
+      if (starIndex === -1) return [{ key: find, targets }];
+      if (starIndex !== find.lastIndexOf("*")) return [];
+      return [
+        {
+          key: find,
+          prefix: find.slice(0, starIndex),
+          suffix: find.slice(starIndex + 1),
+          targets,
+        },
+      ];
     });
   }
 
+  active.pop();
+  completed.add(normalizedPath);
   return { ...resolution, watchedFiles };
+}
+
+function matchCustomTsconfigPath(
+  mappings: NonNullable<CustomTsconfigResolution["paths"]>,
+  id: string,
+): { mapping: (typeof mappings)[number]; star: string } | null {
+  const exact = mappings.find((mapping) => mapping.prefix === undefined && mapping.key === id);
+  if (exact) return { mapping: exact, star: "" };
+
+  let best: { mapping: (typeof mappings)[number]; star: string } | null = null;
+  for (const mapping of mappings) {
+    if (mapping.prefix === undefined || mapping.suffix === undefined) continue;
+    if (!id.startsWith(mapping.prefix) || !id.endsWith(mapping.suffix)) continue;
+    if (id.length < mapping.prefix.length + mapping.suffix.length) continue;
+    if (best && best.mapping.prefix!.length >= mapping.prefix.length) continue;
+    best = {
+      mapping,
+      star: id.slice(mapping.prefix.length, id.length - mapping.suffix.length),
+    };
+  }
+  return best;
+}
+
+const dependencyRealRootsByProject = new Map<string, string[]>();
+
+function isDependencyImporter(importer: string, projectRoot: string): boolean {
+  const normalizedImporter = importer.replace(/\\/g, "/");
+  if (normalizedImporter.includes("/node_modules/")) return true;
+
+  const realImporter = tryRealpathSync(importer);
+  const nodeModulesDir = path.join(projectRoot, "node_modules");
+  if (!realImporter || !fs.existsSync(nodeModulesDir)) return false;
+
+  let dependencyRealRoots = dependencyRealRootsByProject.get(projectRoot);
+  if (!dependencyRealRoots) {
+    dependencyRealRoots = [];
+    for (const entry of fs.readdirSync(nodeModulesDir, { withFileTypes: true })) {
+      const entryPath = path.join(nodeModulesDir, entry.name);
+      const dependencyPaths =
+        entry.name.startsWith("@") && entry.isDirectory()
+          ? fs.readdirSync(entryPath).map((name) => path.join(entryPath, name))
+          : [entryPath];
+      for (const dependencyPath of dependencyPaths) {
+        const realDependencyPath = tryRealpathSync(dependencyPath);
+        if (realDependencyPath) dependencyRealRoots.push(realDependencyPath);
+      }
+    }
+    dependencyRealRootsByProject.set(projectRoot, dependencyRealRoots);
+  }
+
+  return dependencyRealRoots.some(
+    (dependencyRoot) =>
+      realImporter === dependencyRoot || relativeWithinRoot(dependencyRoot, realImporter),
+  );
 }
 
 /**
@@ -1294,17 +1425,16 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           importerFile &&
           customTsconfigProjectRoot &&
           relativeWithinRoot(customTsconfigProjectRoot, importerFile) &&
+          !isDependencyImporter(importerFile, customTsconfigProjectRoot) &&
           customTsconfigResolution &&
           !id.startsWith(".") &&
           !id.startsWith("/") &&
           !id.includes("\0")
         ) {
-          for (const mapping of customTsconfigResolution.paths ?? []) {
-            const match = id.match(mapping.pattern);
-            if (!match) continue;
-            for (const target of mapping.targets) {
-              let starIndex = 0;
-              const candidate = target.replace(/\*/g, () => match[++starIndex] ?? "");
+          const pathMatch = matchCustomTsconfigPath(customTsconfigResolution.paths ?? [], id);
+          if (pathMatch) {
+            for (const target of pathMatch.mapping.targets) {
+              const candidate = target.replace("*", pathMatch.star);
               const resolved = await this.resolve(candidate, importer, {
                 ...resolveOptions,
                 skipSelf: true,
@@ -1313,6 +1443,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             }
           }
           if (customTsconfigResolution.baseUrl) {
+            const packageResolved = await this.resolve(id, importer, {
+              ...resolveOptions,
+              skipSelf: true,
+            });
+            if (packageResolved) return packageResolved;
             const resolved = await this.resolve(
               path.join(customTsconfigResolution.baseUrl, id),
               importer,
