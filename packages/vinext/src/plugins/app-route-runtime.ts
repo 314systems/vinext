@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import MagicString from "magic-string";
 import { parseAst, type Plugin } from "vite";
@@ -33,12 +32,6 @@ function isScriptModule(id: string): boolean {
 
 type AstNode = Record<string, unknown> & { end?: number; start?: number; type?: string };
 
-function isRelativeScriptSpecifier(specifier: string): boolean {
-  if (!specifier.startsWith(".") && !specifier.startsWith("/")) return false;
-  const extension = path.extname(splitId(specifier).pathname);
-  return extension === "" || SCRIPT_EXTENSION_RE.test(extension);
-}
-
 function walkAst(value: unknown, visitor: (node: AstNode) => void): void {
   if (Array.isArray(value)) {
     for (const item of value) walkAst(item, visitor);
@@ -52,40 +45,55 @@ function walkAst(value: unknown, visitor: (node: AstNode) => void): void {
   }
 }
 
-function rewriteRelativeImports(code: string, id: string, runtime: AppRouteRuntime): string {
-  const pathname = splitId(id).pathname;
-  const extension = path.extname(pathname).slice(1);
+function replaceNextRuntime(code: string, id: string, runtime: AppRouteRuntime) {
+  const extension = path.extname(splitId(id).pathname).slice(1);
   const lang =
     extension === "tsx" || extension === "ts" ? extension : extension === "jsx" ? "jsx" : "js";
   let ast: ReturnType<typeof parseAst>;
   try {
     ast = parseAst(code, { lang });
   } catch {
-    return code;
+    return null;
   }
 
   const output = new MagicString(code);
   let changed = false;
   walkAst(ast.body, (node) => {
-    const source = node.source;
-    if (!source || typeof source !== "object") return;
-    const sourceNode = source as AstNode & { value?: unknown };
+    if (node.type !== "MemberExpression" || node.computed !== false) return;
+    const property = node.property as AstNode & { name?: unknown };
+    const object = node.object as AstNode & {
+      computed?: unknown;
+      object?: unknown;
+      property?: unknown;
+    };
     if (
-      typeof sourceNode.value !== "string" ||
-      typeof sourceNode.start !== "number" ||
-      typeof sourceNode.end !== "number" ||
-      !isRelativeScriptSpecifier(sourceNode.value)
+      property?.type !== "Identifier" ||
+      property.name !== "NEXT_RUNTIME" ||
+      object?.type !== "MemberExpression" ||
+      object.computed !== false
     ) {
       return;
     }
-    output.overwrite(
-      sourceNode.start,
-      sourceNode.end,
-      JSON.stringify(withAppRouteRuntime(sourceNode.value, runtime)),
-    );
+    const envProperty = object.property as AstNode & { name?: unknown };
+    const processObject = object.object as AstNode & { name?: unknown };
+    if (
+      envProperty?.type !== "Identifier" ||
+      envProperty.name !== "env" ||
+      processObject?.type !== "Identifier" ||
+      processObject.name !== "process" ||
+      typeof node.start !== "number" ||
+      typeof node.end !== "number"
+    ) {
+      return;
+    }
+    output.overwrite(node.start, node.end, JSON.stringify(runtime));
     changed = true;
   });
-  return changed ? output.toString() : code;
+  if (!changed) return null;
+  return {
+    code: output.toString(),
+    map: output.generateMap({ hires: "boundary", includeContent: true, source: id }),
+  };
 }
 
 export function createAppRouteRuntimePlugin(): Plugin {
@@ -118,27 +126,13 @@ export function createAppRouteRuntimePlugin(): Plugin {
         external: false,
       };
     },
-    load: {
-      filter: { id: /[?&]__vinext_app_runtime=(?:edge|nodejs)(?:&|$)/ },
-      async handler(id) {
-        if (this.environment?.name === "client") return null;
-        const runtime = runtimeFromId(id);
-        let code = await fs.readFile(splitId(id).pathname, "utf8");
-        if (!runtime) return code;
-        code = rewriteRelativeImports(code, id, runtime);
-        return code.replaceAll("process.env.NEXT_RUNTIME", JSON.stringify(runtime));
-      },
-    },
     transform: {
       filter: { id: /[?&]__vinext_app_runtime=(?:edge|nodejs)(?:&|$)/ },
       handler(code, id) {
         if (this.environment?.name === "client") return null;
         const runtime = runtimeFromId(id);
         if (!runtime || !code.includes("process.env.NEXT_RUNTIME")) return null;
-        return {
-          code: code.replaceAll("process.env.NEXT_RUNTIME", JSON.stringify(runtime)),
-          map: null,
-        };
+        return replaceNextRuntime(code, id, runtime);
       },
     },
   };
