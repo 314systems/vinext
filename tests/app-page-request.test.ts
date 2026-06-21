@@ -197,6 +197,7 @@ describe("app page request helpers", () => {
       currentRoute,
       findIntercept() {
         return {
+          interceptionId: null,
           matchedParams: { id: "123" },
           page: { default: "modal-page" },
           slotKey: "modal@app/feed/@modal",
@@ -257,6 +258,7 @@ describe("app page request helpers", () => {
       currentRoute,
       findIntercept() {
         return {
+          interceptionId: null,
           matchedParams: { id: "123" },
           page: { default: "modal-page" },
           slotKey: "modal@app/feed/@modal",
@@ -419,6 +421,7 @@ describe("resolveAppPageInterceptMatch", () => {
       cleanPathname: "/photos/123",
       currentRoute,
       findIntercept: () => ({
+        interceptionId: null,
         matchedParams: { id: "123" },
         page: { default: "modal-page" },
         slotKey: "modal@app/photos/@modal",
@@ -436,6 +439,7 @@ describe("resolveAppPageInterceptMatch", () => {
   it("returns sourceRoute, sourceParams, matchedParams, and interceptOpts when an intercept applies", async () => {
     const matchedParams = { id: "123" };
     const intercept = {
+      interceptionId: null,
       matchedParams,
       page: { default: "modal-page" },
       slotKey: "modal@app/feed/@modal",
@@ -472,6 +476,7 @@ describe("resolveAppPageInterceptMatch", () => {
       interceptLayoutsLoading: null as Promise<readonly unknown[]> | null,
     };
     const intercept = {
+      interceptionId: null,
       interceptLayouts: [null],
       __loadInterceptLayouts: [__loadInterceptLayout],
       matchedParams: { id: "123" },
@@ -510,6 +515,7 @@ describe("resolveAppPageInterceptMatch", () => {
       cleanPathname: "/photos/123",
       currentRoute,
       findIntercept: () => ({
+        interceptionId: null,
         matchedParams,
         page: { default: "modal-page" },
         slotKey: "modal@app/feed/[category]/@modal",
@@ -584,6 +590,7 @@ describe("resolveAppPageActionRerenderTarget", () => {
 
   it("looks up the intercept once when the source route is the current route", async () => {
     const findIntercept = vi.fn(() => ({
+      interceptionId: null,
       matchedParams: { id: "123" },
       page: { default: "modal-page" },
       slotKey: "modal@app/feed/@modal",
@@ -620,6 +627,7 @@ describe("resolveAppPageActionRerenderTarget", () => {
       currentParams: { id: "123" },
       currentRoute,
       findIntercept: () => ({
+        interceptionId: null,
         matchedParams: { id: "123" },
         page: { default: "modal-page" },
         slotKey: "modal@app/feed/@modal",
@@ -649,6 +657,7 @@ describe("resolveAppPageActionRerenderTarget", () => {
       currentParams: { id: "123" },
       currentRoute,
       findIntercept: () => ({
+        interceptionId: null,
         matchedParams: { id: "123" },
         page: { default: "modal-page" },
         slotKey: "modal@app/feed/@modal",

@@ -1127,6 +1127,7 @@ describe("app page dispatch", () => {
       ...options,
       findIntercept() {
         return {
+          interceptionId: null,
           matchedParams: { id: "123" },
           page: { default: "modal-page" },
           slotKey: "modal@app/feed/@modal",
@@ -1185,6 +1186,7 @@ describe("app page dispatch", () => {
       buildPageElement,
       cleanPathname: "/photos/123",
       findIntercept: () => ({
+        interceptionId: null,
         matchedParams: { id: "123" },
         page: { default: "modal-page" },
         slotId: "slot:modal:/feed",
@@ -1295,6 +1297,7 @@ describe("app page dispatch", () => {
       ...options,
       findIntercept() {
         return {
+          interceptionId: null,
           matchedParams: { id: "123" },
           page: { default: "modal-page" },
           slotKey: "modal@app/feed/@modal",
@@ -1344,6 +1347,7 @@ describe("app page dispatch", () => {
       ...options,
       findIntercept() {
         return {
+          interceptionId: null,
           matchedParams: { id: "123" },
           page: { default: "modal-page" },
           slotKey: "modal@app/feed/@modal",
@@ -1513,6 +1517,7 @@ describe("app page dispatch", () => {
       cleanPathname: "/photos/123",
       findIntercept() {
         return {
+          interceptionId: null,
           matchedParams: { id: "123" },
           page: { default: "modal-page" },
           slotKey: "modal@app/feed/@modal",
@@ -1613,6 +1618,7 @@ describe("app page dispatch", () => {
       dynamicConfig: "force-dynamic",
       findIntercept() {
         return {
+          interceptionId: null,
           matchedParams: { id: "123" },
           page: { default: "modal-page" },
           slotKey: "modal@app/feed/@modal",
