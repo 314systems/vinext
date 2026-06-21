@@ -193,6 +193,51 @@ describe("resolveAppPageSegmentConfig", () => {
     });
   });
 
+  it("allows an ungenerated dynamic child below an ancestor dynamicParams=false segment", () => {
+    expect(
+      resolveAppPageSegmentConfig({
+        layouts: [{ dynamicParams: false, generateStaticParams() {} }, {}],
+        layoutTreePositions: [1, 2],
+        page: {},
+        routeSegments: ["[locale]", "no-gsp", "stories", "[slug]"],
+      }).dynamicParamsConfig,
+    ).toBeUndefined();
+  });
+
+  it("enforces ancestor dynamicParams=false when the dynamic child generates params", () => {
+    expect(
+      resolveAppPageSegmentConfig({
+        layouts: [{ dynamicParams: false, generateStaticParams() {} }, {}],
+        layoutTreePositions: [1, 2],
+        page: { generateStaticParams() {} },
+        routeSegments: ["[locale]", "gsp", "stories", "[slug]"],
+      }).dynamicParamsConfig,
+    ).toBe(false);
+  });
+
+  it("enforces ancestor dynamicParams=false when a parallel child generates params", () => {
+    expect(
+      resolveAppPageSegmentConfig({
+        layouts: [{ dynamicParams: false, generateStaticParams() {} }, {}],
+        layoutTreePositions: [1, 2],
+        page: {},
+        parallelPages: [{ generateStaticParams() {} }],
+        routeSegments: ["[locale]", "gsp", "stories", "[slug]"],
+      }).dynamicParamsConfig,
+    ).toBe(false);
+  });
+
+  it("enforces dynamicParams=false on the final dynamic segment without generated params", () => {
+    expect(
+      resolveAppPageSegmentConfig({
+        layouts: [{ dynamicParams: false }],
+        layoutTreePositions: [1],
+        page: {},
+        routeSegments: ["[id]"],
+      }).dynamicParamsConfig,
+    ).toBe(false);
+  });
+
   it("resolves revalidate = false as Infinity (cache indefinitely)", () => {
     expect(
       resolveAppPageSegmentConfig({

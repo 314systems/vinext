@@ -109,6 +109,121 @@ describe("app page request helpers", () => {
     expect(itemGenerateStaticParams).toHaveBeenCalledWith({ params: { category: "docs" } });
   });
 
+  it("includes generateStaticParams sources from parallel pages", async () => {
+    const parallelGenerateStaticParams = vi.fn(() => [{ slug: "intro" }]);
+
+    const response = await validateAppPageDynamicParams({
+      clearRequestContext() {},
+      enforceStaticParamsOnly: true,
+      generateStaticParams: resolveAppPageGenerateStaticParamsSources({
+        parallelPages: [{ page: { generateStaticParams: parallelGenerateStaticParams } }],
+        routeSegments: ["stories", "[slug]"],
+      }),
+      isDynamicRoute: true,
+      params: { slug: "missing" },
+    });
+
+    expect(response?.status).toBe(404);
+    expect(parallelGenerateStaticParams).toHaveBeenCalledWith({ params: {} });
+  });
+
+  it("validates parallel static params using slot-specific parameter names", async () => {
+    const parallelGenerateStaticParams = vi.fn(() => [{ name: "intro" }]);
+
+    const response = await validateAppPageDynamicParams({
+      clearRequestContext() {},
+      enforceStaticParamsOnly: true,
+      generateStaticParams: resolveAppPageGenerateStaticParamsSources({
+        parallelPages: [
+          {
+            page: { generateStaticParams: parallelGenerateStaticParams },
+            paramNames: ["name"],
+          },
+        ],
+        routeSegments: ["stories", "[id]"],
+      }),
+      isDynamicRoute: true,
+      params: { id: "missing" },
+    });
+
+    expect(response?.status).toBe(404);
+    expect(parallelGenerateStaticParams).toHaveBeenCalledWith({ params: {} });
+  });
+
+  it("validates parallel catch-all params from the matched slot pattern", async () => {
+    const parallelGenerateStaticParams = vi.fn(() => [{ slug: ["docs", "intro"] }]);
+
+    const response = await validateAppPageDynamicParams({
+      clearRequestContext() {},
+      enforceStaticParamsOnly: true,
+      generateStaticParams: resolveAppPageGenerateStaticParamsSources({
+        parallelPages: [
+          {
+            page: { generateStaticParams: parallelGenerateStaticParams },
+            paramNames: ["slug"],
+            patternParts: [":slug+"],
+          },
+        ],
+        routePatternParts: [":id", ":subid"],
+        routeSegments: ["[id]", "[subid]"],
+      }),
+      isDynamicRoute: true,
+      params: { id: "docs", subid: "intro" },
+    });
+
+    expect(response).toBeNull();
+    expect(parallelGenerateStaticParams).toHaveBeenCalledWith({ params: {} });
+  });
+
+  it("preserves encoded parallel params while rematching the slot pattern", async () => {
+    const parallelGenerateStaticParams = vi.fn(() => [{ name: "%2F" }]);
+
+    const response = await validateAppPageDynamicParams({
+      clearRequestContext() {},
+      enforceStaticParamsOnly: true,
+      generateStaticParams: resolveAppPageGenerateStaticParamsSources({
+        parallelPages: [
+          {
+            page: { generateStaticParams: parallelGenerateStaticParams },
+            paramNames: ["name"],
+            patternParts: [":name"],
+          },
+        ],
+        routePatternParts: [":id"],
+        routeSegments: ["[id]"],
+      }),
+      isDynamicRoute: true,
+      params: { id: "%2F" },
+    });
+
+    expect(response).toBeNull();
+  });
+
+  it("passes all parallel params to generateStaticParams for a static leaf", async () => {
+    const parallelGenerateStaticParams = vi.fn(() => [{ locale: "en" }]);
+
+    const response = await validateAppPageDynamicParams({
+      clearRequestContext() {},
+      enforceStaticParamsOnly: true,
+      generateStaticParams: resolveAppPageGenerateStaticParamsSources({
+        parallelPages: [
+          {
+            page: { generateStaticParams: parallelGenerateStaticParams },
+            paramNames: ["locale"],
+            patternParts: [":locale", "about"],
+          },
+        ],
+        routePatternParts: [":locale", "about"],
+        routeSegments: ["[locale]", "about"],
+      }),
+      isDynamicRoute: true,
+      params: { locale: "en" },
+    });
+
+    expect(response).toBeNull();
+    expect(parallelGenerateStaticParams).toHaveBeenCalledWith({ params: { locale: "en" } });
+  });
+
   // Ported from Next.js: packages/next/src/build/static-paths/app.test.ts
   // https://github.com/vercel/next.js/blob/canary/packages/next/src/build/static-paths/app.test.ts
   it("throws when generateStaticParams throws", async () => {

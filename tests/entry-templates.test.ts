@@ -914,10 +914,20 @@ describe("App Router entry templates", () => {
   it("generateRscEntry passes page-slot dynamic stale time config into App page dispatch", () => {
     // Ported from Next.js: test/e2e/app-dir/segment-cache/staleness/segment-cache-per-page-dynamic-stale-time.test.ts
     const code = generateRscEntry("/tmp/test/app", minimalAppRoutes, null, [], null, "", false);
+    const segmentConfigCall = code.match(
+      /const __segmentConfig = __resolveAppPageSegmentConfig\(\{([\s\S]*?)\n    \}\);/,
+    )?.[1];
+    const staticParamsCall = code.match(
+      /const __generateStaticParams = __resolveAppPageGenerateStaticParamsSources\(\{([\s\S]*?)\n    \}\);/,
+    )?.[1];
 
-    expect(code).toContain(
+    expect(segmentConfigCall).toContain(
       "parallelPages: Object.values(route.slots ?? {}).map((slot) => slot.page)",
     );
+    expect(staticParamsCall).toContain(
+      "parallelPages: Object.values(route.slots ?? {}).map((slot) => ({\n        page: slot.page,\n        paramNames: slot.slotParamNames,\n        patternParts: slot.slotPatternParts,\n      }))",
+    );
+    expect(staticParamsCall).toContain("routePatternParts: route.patternParts");
     expect(code).toContain("dynamicStaleTimeSeconds: __segmentConfig.dynamicStaleTimeSeconds");
   });
 
