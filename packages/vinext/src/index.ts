@@ -2047,7 +2047,15 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           // This also resolves extensionless-import issues in packages like
           // `validator` (see #189) by routing them through Vite's resolver.
           ...(hasCloudflarePlugin || hasNitroPlugin
-            ? {}
+            ? {
+                ssr: {
+                  // styled-jsx only publishes CommonJS. Keep the bare package
+                  // specifier so Vite can detect and transform it, and force it
+                  // into Worker bundles instead of leaving require() calls for
+                  // the runtime module runner.
+                  noExternal: ["styled-jsx"],
+                },
+              }
             : config.ssr?.external === true
               ? { ssr: { external: true as const } }
               : {
@@ -2065,27 +2073,14 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           resolve: {
             // Materialize simple tsconfig/jsconfig path aliases into resolve.alias
             // so Vite can transform import.meta.glob("@/...") and import(`@/...`).
-            alias: [
-              ...Object.entries({
-                ...tsconfigPathAliases,
-                ...nextConfig.aliases,
-                ...nextShimMap,
-                "styled-jsx/css": resolveOptionalDependency(earlyBaseDir, "styled-jsx/css")!,
-                "styled-jsx/style": resolveShimModulePath(shimsDir, "styled-jsx-style"),
-                "styled-jsx/style.js": resolveShimModulePath(shimsDir, "styled-jsx-style"),
-              }).map(([find, replacement]) => ({ find, replacement })),
-              ...(env?.command === "serve" && !hasCloudflarePlugin && !hasNitroPlugin
-                ? []
-                : [
-                    {
-                      find: /^styled-jsx$/,
-                      replacement: resolveOptionalDependency(
-                        earlyBaseDir,
-                        "styled-jsx/dist/index",
-                      )!,
-                    },
-                  ]),
-            ],
+            alias: Object.entries({
+              ...tsconfigPathAliases,
+              ...nextConfig.aliases,
+              ...nextShimMap,
+              "styled-jsx/css": resolveOptionalDependency(earlyBaseDir, "styled-jsx/css")!,
+              "styled-jsx/style": resolveShimModulePath(shimsDir, "styled-jsx-style"),
+              "styled-jsx/style.js": resolveShimModulePath(shimsDir, "styled-jsx-style"),
+            }).map(([find, replacement]) => ({ find, replacement })),
             // Dedupe React packages to prevent dual-instance errors.
             // When vinext is linked (npm link / bun link) or any dependency
             // brings its own React copy, multiple React instances can load,

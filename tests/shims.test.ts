@@ -21708,6 +21708,36 @@ describe("shim alias map .js variants", () => {
     ).toBeUndefined();
   });
 
+  it("bundles the styled-jsx package for Cloudflare without aliasing its CommonJS entry", async () => {
+    const plugins = vinext() as Plugin[];
+    const configPlugin = plugins.find((plugin) => plugin.name === "vinext:config");
+    if (!configPlugin?.config) throw new Error("vinext:config hook not found");
+
+    const configHook = (
+      typeof configPlugin.config === "function" ? configPlugin.config : configPlugin.config.handler
+    ) as (
+      config: { root: string; plugins: Array<{ name: string }> },
+      env: { mode: string; command: string },
+    ) => Promise<{
+      ssr?: { noExternal?: string[] | true };
+      resolve?: { alias?: Array<{ find: string | RegExp; replacement: string }> };
+    }>;
+    const resolved = await configHook(
+      {
+        root: PAGES_FIXTURE_DIR,
+        plugins: [{ name: "vite-plugin-cloudflare" }],
+      },
+      { mode: "development", command: "serve" },
+    );
+
+    expect(resolved.ssr?.noExternal).toContain("styled-jsx");
+    expect(
+      resolved.resolve?.alias?.some(
+        ({ find }) => find === "styled-jsx" || (find instanceof RegExp && find.test("styled-jsx")),
+      ),
+    ).toBe(false);
+  });
+
   it("uses distinct Pages and hybrid App SSR build entries", async () => {
     async function getSsrBuildInput(root: string) {
       const plugins = vinext() as Plugin[];
