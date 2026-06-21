@@ -240,11 +240,20 @@ export default function Inner() {
   const pagesDir = path.join(fixtureRoot, "pages");
   await fs.mkdir(pagesDir, { recursive: true });
   await fs.writeFile(
+    path.join(sharedDir, "hybrid-pages-helper.tsx"),
+    `import HybridSharedComponent from "./hybrid-shared-component";
+
+export default function HybridPagesHelper() {
+  return <HybridSharedComponent />;
+}
+`,
+  );
+  await fs.writeFile(
     path.join(pagesDir, "shared.tsx"),
-    `import HybridSharedComponent from "../src/components/hybrid-shared-component";
+    `import HybridPagesHelper from "../src/components/hybrid-pages-helper";
 
 export default function SharedPage() {
-  return <HybridSharedComponent />;
+  return <HybridPagesHelper />;
 }
 `,
   );

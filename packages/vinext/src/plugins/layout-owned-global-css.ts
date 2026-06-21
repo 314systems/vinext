@@ -114,6 +114,8 @@ export function createLayoutOwnedGlobalCssPlugin(
   const moduleImports = new Map<string, Set<string>>();
   const moduleImporters = new Map<string, Set<string>>();
   const globalStylesheets = new Set<string>();
+  const pagesConsumers = new Set<string>();
+  const pagesImports = new Map<string, Set<string>>();
 
   function addOwners(moduleId: string, owners: Iterable<string>): void {
     moduleId = graphModuleId(moduleId);
@@ -162,6 +164,28 @@ export function createLayoutOwnedGlobalCssPlugin(
     importers.add(importer);
   }
 
+  function markPagesConsumer(moduleId: string): void {
+    moduleId = graphModuleId(moduleId);
+    if (pagesConsumers.has(moduleId)) return;
+    pagesConsumers.add(moduleId);
+    for (const importedId of pagesImports.get(moduleId) ?? []) {
+      markPagesConsumer(importedId);
+    }
+  }
+
+  function addPagesImport(importer: string, importedId: string): void {
+    importer = graphModuleId(importer);
+    importedId = graphModuleId(importedId);
+    let imports = pagesImports.get(importer);
+    if (!imports) {
+      imports = new Set();
+      pagesImports.set(importer, imports);
+    }
+    imports.add(importedId);
+    addImport(importer, importedId, false);
+    if (pagesConsumers.has(importer)) markPagesConsumer(importedId);
+  }
+
   function allConsumersInheritOwner(moduleId: string, owner: string, appDir: string): boolean {
     const visited = new Set<string>();
 
@@ -169,6 +193,8 @@ export function createLayoutOwnedGlobalCssPlugin(
       currentId = graphModuleId(currentId);
       if (visited.has(currentId)) return true;
       visited.add(currentId);
+
+      if (pagesConsumers.has(currentId)) return false;
 
       const currentPath = path.resolve(cleanModuleId(currentId));
       if (APP_SHARED_OWNER_RE.test(currentPath) && path.dirname(currentPath) === owner) return true;
@@ -276,10 +302,21 @@ export function createLayoutOwnedGlobalCssPlugin(
     apply: "build",
 
     async resolveDynamicImport(source, importer) {
-      if (this.environment?.name !== "rsc" || typeof source !== "string" || !importer) return null;
+      if (typeof source !== "string" || !importer) return null;
       const resolved = await this.resolve(source, importer, { skipSelf: true });
       if (!resolved || resolved.id.startsWith("\0")) return null;
-      addImport(importer, resolved.id, false);
+      if (this.environment?.name === "rsc") {
+        addImport(importer, resolved.id, false);
+      } else if (this.environment?.name === "ssr") {
+        const pagesDir = getPagesDir();
+        if (!pagesDir) return resolved;
+        const normalizedPagesDir = path.resolve(pagesDir);
+        const importerId = graphModuleId(importer);
+        if (isDescendantPath(path.resolve(cleanModuleId(importer)), normalizedPagesDir)) {
+          markPagesConsumer(importer);
+        }
+        if (pagesConsumers.has(importerId)) addPagesImport(importer, resolved.id);
+      }
       return resolved;
     },
 
@@ -293,14 +330,14 @@ export function createLayoutOwnedGlobalCssPlugin(
       const pagesDir = getPagesDir();
       const normalizedPagesDir = pagesDir ? path.resolve(pagesDir) : null;
 
-      if (
-        this.environment?.name === "ssr" &&
-        normalizedPagesDir &&
-        isDescendantPath(importerPath, normalizedPagesDir)
-      ) {
+      if (this.environment?.name === "ssr" && normalizedPagesDir) {
+        const importerId = graphModuleId(importer);
+        const isPagesRoute = isDescendantPath(importerPath, normalizedPagesDir);
+        if (!isPagesRoute && !pagesConsumers.has(importerId)) return null;
         const resolved = await this.resolve(source, importer, { skipSelf: true });
         if (!resolved || resolved.id.startsWith("\0")) return null;
-        addImport(importer, resolved.id, false);
+        if (isPagesRoute) markPagesConsumer(importer);
+        addPagesImport(importer, resolved.id);
         return null;
       }
 

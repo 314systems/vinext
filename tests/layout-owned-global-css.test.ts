@@ -536,7 +536,7 @@ describe("layout-owned global CSS", () => {
     ).resolves.toBeNull();
   });
 
-  it("keeps shared CSS when a Pages route also consumes the module", async () => {
+  it("keeps shared CSS when a transitive Pages route also consumes the module", async () => {
     const appDir = path.resolve("/project/app");
     const pagesDir = path.resolve("/project/pages");
     const plugin = createLayoutOwnedGlobalCssPlugin(
@@ -550,6 +550,7 @@ describe("layout-owned global CSS", () => {
     const layout = path.join(appDir, "dashboard", "layout.tsx");
     const appHelper = path.join(appDir, "dashboard", "shared.tsx");
     const pagesRoute = path.join(pagesDir, "shared.tsx");
+    const pagesHelper = path.resolve("/project/src/pages-shared-helper.tsx");
     const sharedClient = path.resolve("/project/src/components/shared-client.tsx");
     const stylesheet = path.resolve("/project/src/components/shared.css");
 
@@ -566,9 +567,15 @@ describe("layout-owned global CSS", () => {
       );
     }
     await resolveId!.call(
+      createContext("ssr", { "@shared/helper": pagesHelper }) as never,
+      "@shared/helper",
+      pagesRoute,
+      { isEntry: false },
+    );
+    await resolveId!.call(
       createContext("ssr", { "@shared/client": sharedClient }) as never,
       "@shared/client",
-      pagesRoute,
+      pagesHelper,
       { isEntry: false },
     );
 
