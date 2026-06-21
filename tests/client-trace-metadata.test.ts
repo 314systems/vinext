@@ -102,6 +102,26 @@ describe("client trace metadata: getClientTraceMetadataHTML", () => {
     expect(getClientTraceMetadataHTML(["my-test-key-1"])).toBe("");
   });
 
+  it("injects with a root context when only an OTel propagator is registered", () => {
+    const propagator: TextMapPropagator = {
+      inject(activeContext, carrier, setter) {
+        expect(activeContext.getValue(Symbol("missing"))).toBeUndefined();
+        setter.set(carrier, "my-test-key-1", "my-test-value-1");
+      },
+      extract(activeContext) {
+        return activeContext;
+      },
+      fields() {
+        return ["my-test-key-1"];
+      },
+    };
+
+    expect(propagation.setGlobalPropagator(propagator)).toBe(true);
+    expect(getClientTraceMetadataHTML(["my-test-key-1"])).toBe(
+      '<meta name="my-test-key-1" content="my-test-value-1"/>',
+    );
+  });
+
   it("renders <meta> tags for keys in the allow-list when an OTel propagator is registered", () => {
     const activeContext = trace.setSpanContext(ROOT_CONTEXT, {
       traceId: "1234567890abcdef1234567890abcdef",

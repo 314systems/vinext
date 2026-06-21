@@ -12,11 +12,27 @@ import {
   type TextMapPropagator,
 } from "@opentelemetry/api";
 
-class RequestContextManager implements ContextManager {
-  readonly #storage = new AsyncLocalStorage<Context>();
+type TestOpenTelemetryState = {
+  registrationCount: number;
+  storage: AsyncLocalStorage<Context>;
+};
 
+const TEST_OTEL_STATE = Symbol.for("vinext.test.clientTraceMetadata.otel");
+
+function getTestOpenTelemetryState(): TestOpenTelemetryState {
+  const existing = Reflect.get(globalThis, TEST_OTEL_STATE) as TestOpenTelemetryState | undefined;
+  if (existing) return existing;
+  const state: TestOpenTelemetryState = {
+    registrationCount: 0,
+    storage: new AsyncLocalStorage<Context>(),
+  };
+  Reflect.set(globalThis, TEST_OTEL_STATE, state);
+  return state;
+}
+
+class RequestContextManager implements ContextManager {
   active(): Context {
-    return this.#storage.getStore() ?? ROOT_CONTEXT;
+    return getTestOpenTelemetryState().storage.getStore() ?? ROOT_CONTEXT;
   }
 
   with<T, A extends unknown[]>(
@@ -25,7 +41,7 @@ class RequestContextManager implements ContextManager {
     thisArg?: ThisParameterType<(...args: A) => T>,
     ...args: A
   ): T {
-    return this.#storage.run(activeContext, () => fn.apply(thisArg, args));
+    return getTestOpenTelemetryState().storage.run(activeContext, () => fn.apply(thisArg, args));
   }
 
   bind<T>(activeContext: Context, target: T): T {
@@ -41,7 +57,7 @@ class RequestContextManager implements ContextManager {
   }
 
   disable(): this {
-    this.#storage.disable();
+    getTestOpenTelemetryState().storage.disable();
     return this;
   }
 }
@@ -69,19 +85,17 @@ const propagator: TextMapPropagator = {
   },
 };
 
-const TEST_OTEL_REGISTRATION = Symbol.for("vinext.test.clientTraceMetadata.otel");
-
 export function registerTestOpenTelemetry(): void {
-  if (Reflect.get(globalThis, TEST_OTEL_REGISTRATION)) return;
+  const state = getTestOpenTelemetryState();
+  if (state.registrationCount > 0) return;
   context.disable();
   propagation.disable();
   context.setGlobalContextManager(new RequestContextManager());
   propagation.setGlobalPropagator(propagator);
-  Reflect.set(globalThis, TEST_OTEL_REGISTRATION, true);
+  state.registrationCount += 1;
 }
 
 export function instrumentTestServerRequests(server: ViteDevServer): void {
-  registerTestOpenTelemetry();
   const httpServer = server.httpServer;
   if (!httpServer) throw new Error("Expected fixture server to expose an HTTP server");
 
@@ -91,14 +105,19 @@ export function instrumentTestServerRequests(server: ViteDevServer): void {
 
   httpServer.on("request", (request: IncomingMessage, response: ServerResponse) => {
     const requestContext = createRequestSpanContext();
-    context.with(requestContext, () => {
+    getTestOpenTelemetryState().storage.run(requestContext, () => {
       for (const listener of listeners) listener.call(httpServer, request, response);
     });
   });
 }
 
+export function getTestOpenTelemetryRegistrationCount(): number {
+  return getTestOpenTelemetryState().registrationCount;
+}
+
 export function resetTestOpenTelemetry(): void {
   context.disable();
   propagation.disable();
-  Reflect.deleteProperty(globalThis, TEST_OTEL_REGISTRATION);
+  getTestOpenTelemetryState().storage.disable();
+  Reflect.deleteProperty(globalThis, TEST_OTEL_STATE);
 }

@@ -52,6 +52,17 @@ type OpenTelemetryGlobalRegistry = {
 
 const OPEN_TELEMETRY_API_GLOBAL = Symbol.for("opentelemetry.js.api.1");
 const OPEN_TELEMETRY_API_VERSION = /^1\.\d+\.\d+$/;
+const ROOT_NOOP_CONTEXT = {
+  getValue(): undefined {
+    return undefined;
+  },
+  setValue() {
+    return this;
+  },
+  deleteValue() {
+    return this;
+  },
+};
 
 function getOpenTelemetryRegistry(): OpenTelemetryGlobalRegistry | undefined {
   const registry = Reflect.get(globalThis, OPEN_TELEMETRY_API_GLOBAL) as
@@ -59,17 +70,16 @@ function getOpenTelemetryRegistry(): OpenTelemetryGlobalRegistry | undefined {
     | undefined;
   if (typeof registry?.version !== "string") return undefined;
   if (!OPEN_TELEMETRY_API_VERSION.test(registry.version)) return undefined;
-  if (typeof registry.context?.active !== "function") return undefined;
   if (typeof registry.propagation?.inject !== "function") return undefined;
   return registry as OpenTelemetryGlobalRegistry;
 }
 
 function getOpenTelemetryTraceData(): ClientTraceDataEntry[] {
   const registry = getOpenTelemetryRegistry();
-  if (!registry?.context || !registry.propagation) return [];
+  if (!registry?.propagation) return [];
 
   try {
-    const activeContext = registry.context.active();
+    const activeContext = registry.context?.active() ?? ROOT_NOOP_CONTEXT;
     const entries: ClientTraceDataEntry[] = [];
     registry.propagation.inject(activeContext, entries, carrierSetter);
     return entries;

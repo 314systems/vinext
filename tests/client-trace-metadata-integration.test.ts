@@ -7,6 +7,7 @@ import { isValidSpanId } from "@opentelemetry/api";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import type { ViteDevServer } from "vite";
 import {
+  getTestOpenTelemetryRegistrationCount,
   instrumentTestServerRequests,
   resetTestOpenTelemetry,
 } from "./fixtures/client-trace-metadata-otel.js";
@@ -36,6 +37,7 @@ async function expectDistinctRequestSpanIds(baseUrl: string): Promise<void> {
   const first = getTraceSpanId((await fetchHtml(baseUrl, "/")).html);
   const second = getTraceSpanId((await fetchHtml(baseUrl, "/")).html);
   expect(second).not.toBe(first);
+  expect(getTestOpenTelemetryRegistrationCount()).toBe(1);
 }
 
 describe("clientTraceMetadata SSR", () => {
