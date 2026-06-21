@@ -39,7 +39,8 @@ import {
 } from "./internal/app-route-detection.js";
 import {
   resolveHybridClientRouteOwner,
-  resolvePagesClientRoutePattern,
+  resolvePagesClientRoute,
+  type PagesClientRouteResolution,
 } from "./internal/hybrid-client-route-owner.js";
 import { dedupedPagesDataFetch } from "./internal/pages-data-fetch-dedup.js";
 import { installWindowNext, type PagesRouterPublicInstance } from "../client/window-next.js";
@@ -425,6 +426,7 @@ type PagesRouterRuntimeState = {
   isFirstPopStateEvent: boolean;
   routerDidNavigate: boolean;
   currentShallow: boolean;
+  currentShallowRouteParams: Record<string, string | string[]> | null;
   deprecatedEventBridgeInstalled: boolean;
   pagesRouterReady: boolean;
   publicRouter?: Record<string, unknown>;
@@ -460,6 +462,7 @@ function createPagesRouterRuntimeState(): PagesRouterRuntimeState {
     isFirstPopStateEvent: true,
     routerDidNavigate: false,
     currentShallow: false,
+    currentShallowRouteParams: null,
     deprecatedEventBridgeInstalled: false,
     pagesRouterReady: typeof window === "undefined" || !shouldDeferInitialPagesRouterReady(),
   };
@@ -642,25 +645,28 @@ function getLocalPathname(url: string): string | null {
   }
 }
 
-function isSamePagesRoute(destinationUrl: string): boolean {
+function resolveSamePagesRoute(destinationUrl: string): PagesClientRouteResolution | null {
   const currentRoute = window.__NEXT_DATA__?.page;
-  if (!currentRoute) return false;
+  if (!currentRoute) return null;
   if (!window.__VINEXT_PAGES_LINK_PREFETCH_ROUTES__) {
     const destinationPathname = getLocalPathname(destinationUrl);
-    if (!destinationPathname) return false;
+    if (!destinationPathname) return null;
     const stripLocale = (pathname: string): string => {
       const locale = getLocalePathPrefix(pathname, window.__VINEXT_LOCALES__);
       return locale ? pathname.slice(locale.length + 1) || "/" : pathname;
     };
     const pathname = stripLocale(destinationPathname);
     const currentPathname = stripLocale(stripBasePath(window.location.pathname, __basePath));
-    if (pathname === currentPathname) return true;
-    return extractRouteParamsFromPath(currentRoute, pathname) !== null;
+    const params =
+      pathname === currentPathname
+        ? (extractRouteParamsFromPath(currentRoute, pathname) ?? {})
+        : extractRouteParamsFromPath(currentRoute, pathname);
+    return params === null ? null : { href: destinationUrl, params, pattern: currentRoute };
   }
-  const destinationRoute = resolvePagesClientRoutePattern(destinationUrl, __basePath);
+  const destinationRoute = resolvePagesClientRoute(destinationUrl, __basePath);
   const currentPatternParts = routePatternParts(currentRoute);
   const currentRoutePattern = `/${currentPatternParts.join("/")}`;
-  return destinationRoute === currentRoutePattern;
+  return destinationRoute?.pattern === currentRoutePattern ? destinationRoute : null;
 }
 
 function resolvePagesErrorHtmlFetchUrl(
@@ -854,6 +860,7 @@ function stampInitialHistoryState(): void {
   const existingKey = getRouterStateKey(existingState);
   if (existingKey !== undefined) initialState.key = existingKey;
   routerRuntimeState.currentShallow = false;
+  routerRuntimeState.currentShallowRouteParams = null;
   routerRuntimeState.currentHistoryKey = initialState.key;
   window.history.replaceState(initialState, "");
 }
@@ -1302,7 +1309,9 @@ function getPathnameAndQuery(): {
   const query = isShallowNavigation ? { ...searchQuery } : { ...searchQuery, ...routeQuery };
   if (isShallowNavigation) {
     for (const routeParamName of extractRouteParamNames(nextData?.page ?? "")) {
-      const routeParam = routeQuery[routeParamName];
+      const routeParam =
+        routerRuntimeState.currentShallowRouteParams?.[routeParamName] ??
+        routeQuery[routeParamName];
       if (routeParam !== undefined) query[routeParamName] = routeParam;
     }
   }
@@ -2362,7 +2371,12 @@ function dispatchNavigateEvent(): void {
 function updateHistory(
   mode: "push" | "replace",
   fullUrl: string,
-  navState: { url: string; as: string; options: { locale?: string; shallow?: boolean } },
+  navState: {
+    url: string;
+    as: string;
+    options: { locale?: string; shallow?: boolean };
+    routeParams?: Record<string, string | string[]>;
+  },
 ): void {
   const previousKey = getRouterStateKey(window.history.state);
   const key =
@@ -2378,6 +2392,7 @@ function updateHistory(
   };
   if (navState.options.shallow === true && window.__NEXT_DATA__?.page) {
     state.__vinext_route = window.__NEXT_DATA__.page;
+    state.__vinext_params = navState.routeParams;
   }
   if (mode === "push") window.history.pushState(state, "", fullUrl);
   else window.history.replaceState(state, "", fullUrl);
@@ -2397,6 +2412,7 @@ type VinextHistoryState = {
   options: { locale?: string; shallow?: boolean };
   __N: true;
   key: string;
+  __vinext_params?: Record<string, string | string[]>;
   __vinext_route?: string;
 };
 
@@ -2507,6 +2523,7 @@ async function performNavigation(
   if (isExternalUrl(resolved)) {
     const localPath = toSameOriginAppPath(resolved, __basePath);
     if (localPath == null) {
+      supersedePendingNavigation({ shallow: false });
       if (mode === "push") window.location.assign(resolved);
       else window.location.replace(resolved);
       return true;
@@ -2596,7 +2613,8 @@ async function performNavigation(
     errorRouteHtmlFetchUrl ?? getPagesHtmlFetchUrl(fullRouteUrl, navigationLocale);
   const requestedShallow = options?.shallow === true;
   const routeIdentityUrl = withBasePath(interpolatedRoute, __basePath);
-  const shallow = requestedShallow && isSamePagesRoute(routeIdentityUrl);
+  const shallowRoute = requestedShallow ? resolveSamePagesRoute(routeIdentityUrl) : null;
+  const shallow = shallowRoute !== null;
   const hashOnly = options?._h !== 1 && interpolatedRoute === resolved && isHashOnlyChange(full);
   const doScroll = options?.scroll ?? (hashOnly || !shallow);
   const hash = extractHash(resolved);
@@ -2651,6 +2669,7 @@ async function performNavigation(
     url: resolvedRouteNoHash,
     as: resolvedNoHash,
     options: navStateOptions,
+    routeParams: shallowRoute?.params,
   };
 
   // Hash-only change — no page fetch needed.
@@ -2701,6 +2720,7 @@ async function performNavigation(
     (appPathEntry !== undefined && "__appRouter" in appPathEntry && appPathEntry.__appRouter) ||
     ["app", "document"].includes(resolveHybridClientRouteOwner(resolved, __basePath) ?? "");
   if (appRouteDetected) {
+    supersedePendingNavigation({ shallow: false });
     if (mode === "push") window.location.assign(full);
     else window.location.replace(full);
     return new Promise<boolean>(() => {});
@@ -2711,6 +2731,7 @@ async function performNavigation(
   const pendingNavigation = shallow
     ? (supersedePendingNavigation({ shallow }), undefined)
     : beginPendingNavigation(resolved, { shallow });
+  routerRuntimeState.currentShallowRouteParams = shallowRoute?.params ?? null;
   if (!isQueryUpdating) {
     routerEvents.emit("routeChangeStart", resolved, { shallow });
   }
@@ -2928,6 +2949,7 @@ function isNextRouterState(state: unknown): state is {
   options: TransitionOptions;
   __N: true;
   key?: string;
+  __vinext_params?: Record<string, string | string[]>;
   __vinext_route?: string;
 } {
   return (
@@ -3058,6 +3080,8 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
     state.__vinext_route === window.__NEXT_DATA__?.page &&
     routerRuntimeState.currentShallow;
   routerRuntimeState.currentShallow = shallow;
+  routerRuntimeState.currentShallowRouteParams =
+    shallow && isNextRouterState(state) ? (state.__vinext_params ?? null) : null;
 
   // Update trackers only after beforePopState confirms navigation proceeds.
   // If beforePopState cancels, the app stays on the previous history entry,

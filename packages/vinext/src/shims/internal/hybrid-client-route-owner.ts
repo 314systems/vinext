@@ -33,6 +33,12 @@ import type {
 
 export type HybridClientOwner = "app" | "document" | "pages";
 
+export type PagesClientRouteResolution = {
+  href: string;
+  params: Record<string, string | string[]>;
+  pattern: string;
+};
+
 declare global {
   // oxlint-disable-next-line typescript-eslint/consistent-type-definitions
   interface Window {
@@ -133,16 +139,20 @@ function matchPagesRoute(
   href: string,
   basePath: string,
   routes: readonly VinextPagesLinkPrefetchRoute[],
-): VinextPagesLinkPrefetchRoute | null {
+): { params: Record<string, string | string[]>; route: VinextPagesLinkPrefetchRoute } | null {
   const pathname = resolveSameOriginPathname(href, basePath);
   if (pathname === null) return null;
-  return (
-    matchRouteWithTrie(pathname, routes as VinextPagesLinkPrefetchRoute[], pagesRouteTrieCache)
-      ?.route ?? null
+  return matchRouteWithTrie(
+    pathname,
+    routes as VinextPagesLinkPrefetchRoute[],
+    pagesRouteTrieCache,
   );
 }
 
-export function resolvePagesClientRoutePattern(href: string, basePath: string): string | null {
+export function resolvePagesClientRoute(
+  href: string,
+  basePath: string,
+): PagesClientRouteResolution | null {
   if (typeof window === "undefined") return null;
 
   const pagesRoutes = window.__VINEXT_PAGES_LINK_PREFETCH_ROUTES__;
@@ -157,7 +167,7 @@ export function resolvePagesClientRoutePattern(href: string, basePath: string): 
 
   let pagesMatch = matchPagesRoute(href, basePath, pagesRoutes);
 
-  if (rewrites && (pagesMatch === null || pagesMatch.isDynamic)) {
+  if (rewrites && (pagesMatch === null || pagesMatch.route.isDynamic)) {
     for (const rewrite of rewrites.afterFiles) {
       const afterFilesRewrite = resolveClientRewrite(href, basePath, [rewrite]);
       if (afterFilesRewrite?.kind === "document") return null;
@@ -179,7 +189,13 @@ export function resolvePagesClientRoutePattern(href: string, basePath: string): 
     }
   }
 
-  return pagesMatch ? patternFromParts(pagesMatch.patternParts) : null;
+  return pagesMatch
+    ? {
+        href,
+        params: pagesMatch.params,
+        pattern: patternFromParts(pagesMatch.route.patternParts),
+      }
+    : null;
 }
 
 /**
@@ -211,7 +227,9 @@ export function resolveHybridClientRouteOwner(
   }
 
   let appMatch = appRoutes ? matchAppRoute(href, basePath, appRoutes) : null;
-  let pagesMatch = pagesRoutes ? matchPagesRoute(href, basePath, pagesRoutes) : null;
+  let pagesMatch = pagesRoutes
+    ? (matchPagesRoute(href, basePath, pagesRoutes)?.route ?? null)
+    : null;
 
   if (
     rewrites &&
@@ -224,7 +242,9 @@ export function resolveHybridClientRouteOwner(
       if (afterFilesRewrite?.kind !== "rewrite") continue;
       href = afterFilesRewrite.href;
       appMatch = appRoutes ? matchAppRoute(href, basePath, appRoutes) : null;
-      pagesMatch = pagesRoutes ? matchPagesRoute(href, basePath, pagesRoutes) : null;
+      pagesMatch = pagesRoutes
+        ? (matchPagesRoute(href, basePath, pagesRoutes)?.route ?? null)
+        : null;
       if (appMatch || pagesMatch) break;
     }
   }
@@ -236,7 +256,9 @@ export function resolveHybridClientRouteOwner(
       if (fallbackRewrite?.kind !== "rewrite") continue;
       href = fallbackRewrite.href;
       appMatch = appRoutes ? matchAppRoute(href, basePath, appRoutes) : null;
-      pagesMatch = pagesRoutes ? matchPagesRoute(href, basePath, pagesRoutes) : null;
+      pagesMatch = pagesRoutes
+        ? (matchPagesRoute(href, basePath, pagesRoutes)?.route ?? null)
+        : null;
       if (appMatch || pagesMatch) break;
     }
   }

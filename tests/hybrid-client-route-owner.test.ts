@@ -23,7 +23,10 @@ import type {
   VinextPagesLinkPrefetchRoute,
 } from "../packages/vinext/src/client/vinext-next-data.js";
 import type { NextRewrite } from "../packages/vinext/src/config/next-config.js";
-import { resolveHybridClientRouteOwner } from "../packages/vinext/src/shims/internal/hybrid-client-route-owner.js";
+import {
+  resolveHybridClientRouteOwner,
+  resolvePagesClientRoute,
+} from "../packages/vinext/src/shims/internal/hybrid-client-route-owner.js";
 
 const APP_BASE = "http://localhost/";
 
@@ -318,5 +321,30 @@ describe("resolveHybridClientRouteOwner", () => {
     // matching the server's normalisation.
     expect(resolveHybridClientRouteOwner("/base/pages-dir/foobar", "/base")).toBe("pages");
     expect(resolveHybridClientRouteOwner("/base/a", "/base")).toBe("app");
+  });
+});
+
+describe("resolvePagesClientRoute", () => {
+  it("returns the rewritten href and destination params", () => {
+    installWindow({
+      app: [],
+      pages: [pagesRoute(["catalog", ":category", ":slug", ":locale"])],
+      rewrites: {
+        afterFiles: [],
+        beforeFiles: [
+          {
+            source: "/store/:slug/:section",
+            destination: "/catalog/:section/:slug/en",
+          },
+        ],
+        fallback: [],
+      },
+    });
+
+    expect(resolvePagesClientRoute("/store/guide/books?preview=1", "")).toEqual({
+      href: "/catalog/books/guide/en?preview=1",
+      params: { category: "books", locale: "en", slug: "guide" },
+      pattern: "/catalog/:category/:slug/:locale",
+    });
   });
 });

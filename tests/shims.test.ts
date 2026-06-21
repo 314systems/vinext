@@ -14729,6 +14729,74 @@ describe("Pages Router concurrent navigation", () => {
     }
   });
 
+  it("uses rewritten destination params for shallow query refreshes", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const { win } = createNavWindow();
+    Object.assign(win.location, {
+      pathname: "/catalog/old/entry/fr",
+      href: "http://localhost/catalog/old/entry/fr",
+      origin: "http://localhost",
+    });
+    Object.assign(win, {
+      __VINEXT_PAGES_LINK_PREFETCH_ROUTES__: [
+        {
+          canPrefetchLoadingShell: false,
+          isDynamic: true,
+          patternParts: ["catalog", ":category", ":slug", ":locale"],
+        },
+      ],
+      __VINEXT_CLIENT_REWRITES__: {
+        beforeFiles: [
+          {
+            source: "/store/:slug/:section",
+            destination: "/catalog/:section/:slug/en",
+          },
+        ],
+        afterFiles: [],
+        fallback: [],
+      },
+      __NEXT_DATA__: {
+        ...win.__NEXT_DATA__,
+        page: "/catalog/[category]/[slug]/[locale]",
+        query: { category: "old", locale: "fr", slug: "entry" },
+      },
+    });
+    (globalThis as any).window = win;
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error("same-page rewrite alias must not fetch page HTML");
+    });
+
+    try {
+      vi.resetModules();
+      const { default: Router } = await import("../packages/vinext/src/shims/router.js");
+
+      await expect(
+        Router.push("/store/guide/books?preview=1", undefined, { shallow: true }),
+      ).resolves.toBe(true);
+
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+      expect(Router.query).toEqual({
+        category: "books",
+        locale: "en",
+        preview: "1",
+        slug: "guide",
+      });
+      expect(win.history.pushState).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          __vinext_params: { category: "books", locale: "en", slug: "guide" },
+        }),
+        "",
+        "/store/guide/books?preview=1",
+      );
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("keeps a basePath-qualified rewrite alias to the same page shallow", async () => {
     const previousWindow = (globalThis as any).window;
     const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
@@ -18380,6 +18448,65 @@ describe("Pages Router _next/data client navigation", () => {
       vi.resetModules();
     }
   });
+
+  it.each(["push", "replace"] as const)(
+    "cancels a deferred Pages navigation before hard App handoff via %s",
+    async (mode) => {
+      const previousWindow = (globalThis as any).window;
+      const originalFetch = globalThis.fetch;
+      const slowLoader = vi.fn(async () => makePageModule("slow"));
+      const { win, render } = createDataNavWindow({
+        loaders: { "/": vi.fn(async () => makePageModule("home")), "/slow": slowLoader },
+      });
+      Object.assign(win, {
+        __VINEXT_LINK_PREFETCH_ROUTES__: [
+          { canPrefetchLoadingShell: false, isDynamic: false, patternParts: ["app-page"] },
+        ],
+        __VINEXT_PAGES_LINK_PREFETCH_ROUTES__: [
+          { canPrefetchLoadingShell: false, isDynamic: true, patternParts: [":slug"] },
+        ],
+      });
+      (globalThis as any).window = win;
+      vi.resetModules();
+
+      let resolveFetch: (response: Response) => void = () => {};
+      const deferredFetch = new Promise<Response>((resolve) => {
+        resolveFetch = resolve;
+      });
+      globalThis.fetch = vi.fn(() => deferredFetch) as any;
+
+      try {
+        const { default: Router } = await import("../packages/vinext/src/shims/router.js");
+        const errors: Array<{ cancelled?: boolean }> = [];
+        Router.events.on("routeChangeError", (error) => errors.push(error as any));
+
+        const pagesNavigation = Router.push("/slow");
+        const hardNavigation = Router[mode]("/app-page");
+
+        expect(errors).toEqual([expect.objectContaining({ cancelled: true })]);
+        expect(win.location[mode === "push" ? "assign" : "replace"]).toHaveBeenCalledWith(
+          "/app-page",
+        );
+
+        resolveFetch(
+          new Response(JSON.stringify({ pageProps: { stale: true } }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+
+        await expect(pagesNavigation).resolves.toBe(false);
+        expect(render).not.toHaveBeenCalled();
+        expect(slowLoader).not.toHaveBeenCalled();
+        void hardNavigation;
+      } finally {
+        if (previousWindow === undefined) delete (globalThis as any).window;
+        else (globalThis as any).window = previousWindow;
+        globalThis.fetch = originalFetch;
+        vi.resetModules();
+      }
+    },
+  );
 
   it("threads full Pages props through _app during data navigation", async () => {
     const previousWindow = (globalThis as any).window;
