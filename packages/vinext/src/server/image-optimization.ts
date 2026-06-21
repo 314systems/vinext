@@ -30,12 +30,6 @@ import { isIP } from "node:net";
 /** The pathname that triggers image optimization (matches Next.js). */
 export const IMAGE_OPTIMIZATION_PATH = "/_next/image";
 
-/**
- * Vinext-prefixed alias for the image optimization endpoint. Accepted
- * alongside IMAGE_OPTIMIZATION_PATH so apps that wire image URLs to the
- * vinext-prefixed path continue to work; emit IMAGE_OPTIMIZATION_PATH
- * for any newly generated URLs.
- */
 /** Returns true when `pathname` matches the configured image optimization endpoint. */
 export function isImageOptimizationPath(
   pathname: string,
