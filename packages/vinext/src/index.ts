@@ -383,8 +383,24 @@ function resolveTsconfigExportTarget(
     const resolvedTarget = path.resolve(packageRoot, target.replaceAll("*", replacement));
     const relativeTarget = path.relative(packageRoot, resolvedTarget);
     if (relativeTarget === ".." || relativeTarget.startsWith(`..${path.sep}`)) return null;
+    if (relativeTarget.split(path.sep).includes("node_modules")) return null;
     if (path.extname(resolvedTarget) !== ".json") return null;
-    return resolveTsconfigPathCandidate(resolvedTarget);
+    const candidate = resolveTsconfigPathCandidate(resolvedTarget);
+    if (!candidate) return null;
+
+    try {
+      const realPackageRoot = fs.realpathSync(packageRoot);
+      const realCandidate = fs.realpathSync(candidate);
+      const relativeRealCandidate = path.relative(realPackageRoot, realCandidate);
+      if (relativeRealCandidate === ".." || relativeRealCandidate.startsWith(`..${path.sep}`)) {
+        return null;
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+
+    return candidate;
   }
 
   if (Array.isArray(target)) {

@@ -419,6 +419,43 @@ describe("Vite tsconfig paths support", () => {
     );
   });
 
+  it("rejects package export targets containing a node_modules segment", async () => {
+    const root = setupProject({ name: "vite", version: "8.0.0" });
+    process.chdir(root);
+    const packageRoot = path.join(root, "node_modules/preset");
+    fs.mkdirSync(path.join(packageRoot, "node_modules"), { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "preset",
+        exports: { "./base": "./node_modules/base.json" },
+      }),
+    );
+    fs.writeFileSync(path.join(packageRoot, "node_modules/base.json"), JSON.stringify({}));
+
+    await expect(configureCustomTsconfig(root, { extends: "preset/base" })).rejects.toThrow(
+      "Cannot read file 'preset/base'.",
+    );
+  });
+
+  it("rejects package export symlinks that escape the package root", async () => {
+    const root = setupProject({ name: "vite", version: "8.0.0" });
+    process.chdir(root);
+    const packageRoot = path.join(root, "node_modules/preset");
+    fs.mkdirSync(packageRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "preset", exports: { "./base": "./base.json" } }),
+    );
+    const outsideConfig = path.join(root, "outside.json");
+    fs.writeFileSync(outsideConfig, JSON.stringify({}));
+    fs.symlinkSync(outsideConfig, path.join(packageRoot, "base.json"));
+
+    await expect(configureCustomTsconfig(root, { extends: "preset/base" })).rejects.toThrow(
+      "Cannot read file 'preset/base'.",
+    );
+  });
+
   it("prefers the most specific matching package export pattern", async () => {
     const root = setupProject({ name: "vite", version: "8.0.0" });
     process.chdir(root);
