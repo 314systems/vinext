@@ -1146,7 +1146,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     // Vite 8+ supports this natively via resolve.tsconfigPaths.
     ...(viteMajorVersion >= 8 ? [] : [tsconfigPaths()]),
     // styled-jsx must see source JSX before the React transform lowers it.
-    createStyledJsxPlugin(),
+    createStyledJsxPlugin({
+      getTranspilePackages: () => nextConfig?.transpilePackages,
+    }),
     // React Fast Refresh + JSX transform for client components.
     reactPluginPromise,
     // Transform CJS require()/module.exports to ESM before other plugins

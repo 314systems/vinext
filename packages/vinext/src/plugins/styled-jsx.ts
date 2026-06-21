@@ -1,5 +1,6 @@
 import { extname } from "node:path";
 import { transformWithOxc, type Plugin } from "vite";
+import { extractPackageName } from "./client-reference-dedup.js";
 
 const STYLE_JSX_RE = /<style\s+[^>]*\bjsx(?:\s|=|>)/;
 const STYLE_JSX_CSS_RE = /["']styled-jsx\/css["']/;
@@ -27,6 +28,10 @@ let compilerPromise: Promise<{
   styledJsxPlugin: unknown;
 }> | null = null;
 
+type StyledJsxPluginOptions = {
+  getTranspilePackages?: () => readonly string[] | undefined;
+};
+
 async function loadCompiler() {
   if (!compilerPromise) {
     compilerPromise = Promise.all([import("@babel/core"), import("styled-jsx/babel")]).then(
@@ -39,14 +44,24 @@ async function loadCompiler() {
   return compilerPromise;
 }
 
-export function createStyledJsxPlugin(): Plugin {
+export function createStyledJsxPlugin(options: StyledJsxPluginOptions = {}): Plugin {
   return {
     name: "vinext:styled-jsx",
     enforce: "pre",
     transform: {
       filter: { id: /\.(?:[cm]?[jt]sx?)(?:\?.*)?$/ },
       async handler(code, id) {
-        if (id.includes("/node_modules/") || id.includes("?")) return;
+        if (id.includes("?")) return;
+        if (id.includes("/node_modules/")) {
+          const packageName = extractPackageName(id);
+          if (
+            packageName === null ||
+            packageName === "styled-jsx" ||
+            !options.getTranspilePackages?.()?.includes(packageName)
+          ) {
+            return;
+          }
+        }
         if (!STYLE_JSX_RE.test(code) && !STYLE_JSX_CSS_RE.test(code)) return;
 
         const { babel, styledJsxPlugin } = await loadCompiler();
