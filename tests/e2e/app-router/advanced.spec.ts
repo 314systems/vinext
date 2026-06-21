@@ -356,6 +356,161 @@ test.describe("Intercepting Routes", () => {
     await expect(page.locator('[data-testid="photo-modal"]')).not.toBeVisible();
   });
 
+  test("router.refresh refreshes every active intercepted parallel branch", async ({ page }) => {
+    // Ported from Next.js:
+    // test/e2e/app-dir/parallel-routes-revalidation/parallel-routes-revalidation.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/parallel-routes-revalidation/parallel-routes-revalidation.test.ts
+    await page.goto(`${BASE}/feed`);
+    await waitForAppRouterHydration(page);
+    await fillFeedSourceState(page);
+
+    await page.click("#feed-photo-42-link");
+    await expect(page.locator('[data-testid="photo-modal"]')).toBeVisible();
+    await expectFeedSourceState(page);
+
+    const feedRenderToken = await page.getByTestId("feed-render-token").textContent();
+    const modalRenderToken = await page.getByTestId("photo-modal-render-token").textContent();
+
+    await page.click('[data-testid="photo-modal-refresh"]');
+
+    await expect(page.getByTestId("feed-render-token")).not.toHaveText(feedRenderToken ?? "");
+    await expect(page.getByTestId("photo-modal-render-token")).not.toHaveText(
+      modalRenderToken ?? "",
+    );
+    await expect(page.locator('[data-testid="photo-modal"]')).toBeVisible();
+    await expect(page.locator('[data-testid="feed-page"]')).toBeVisible();
+    await expectFeedSourceState(page);
+    await expect(page.locator('[data-testid="photo-page"]')).not.toBeVisible();
+  });
+
+  test("router.refresh refreshes a persisted modal and the active children slot", async ({
+    page,
+  }) => {
+    // Ported from Next.js:
+    // test/e2e/app-dir/parallel-routes-revalidation/parallel-routes-revalidation.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/parallel-routes-revalidation/parallel-routes-revalidation.test.ts
+    await page.goto(`${BASE}/parallel-refresh`);
+    await waitForAppRouterHydration(page);
+
+    const initialPageToken = await page.getByTestId("parallel-refresh-page-token").textContent();
+    await page.getByRole("link", { name: "Open login" }).click();
+    await expect(page.getByTestId("parallel-refresh-login-modal")).toBeVisible();
+    const initialModalToken = await page.getByTestId("parallel-refresh-modal-token").textContent();
+
+    await page
+      .getByTestId("parallel-refresh-login-modal")
+      .getByTestId("parallel-refresh-button")
+      .click();
+
+    await expect(page.getByTestId("parallel-refresh-page-token")).not.toHaveText(
+      initialPageToken ?? "",
+    );
+    await expect(page.getByTestId("parallel-refresh-modal-token")).not.toHaveText(
+      initialModalToken ?? "",
+    );
+
+    await page.getByRole("link", { name: "Other page" }).click();
+    await expect(page.getByTestId("parallel-refresh-other-page")).toBeVisible();
+    await expect(page.getByTestId("parallel-refresh-login-modal")).toBeVisible();
+    const persistedModalToken = await page
+      .getByTestId("parallel-refresh-modal-token")
+      .textContent();
+    const initialOtherToken = await page.getByTestId("parallel-refresh-other-token").textContent();
+
+    await page
+      .getByTestId("parallel-refresh-other-page")
+      .getByTestId("parallel-refresh-button")
+      .click();
+
+    await expect(page.getByTestId("parallel-refresh-modal-token")).not.toHaveText(
+      persistedModalToken ?? "",
+    );
+    await expect(page.getByTestId("parallel-refresh-other-token")).not.toHaveText(
+      initialOtherToken ?? "",
+    );
+  });
+
+  test("router.refresh refreshes a persisted dynamic modal with current search params", async ({
+    page,
+  }) => {
+    // Ported from Next.js:
+    // test/e2e/app-dir/parallel-routes-revalidation/parallel-routes-revalidation.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/parallel-routes-revalidation/parallel-routes-revalidation.test.ts
+    await page.goto(`${BASE}/parallel-refresh-dynamic/foo`);
+    await waitForAppRouterHydration(page);
+
+    await page.getByRole("link", { name: "Open dynamic login" }).click();
+    await expect(page.getByTestId("parallel-refresh-dynamic-login-modal")).toBeVisible();
+    await expect(page.getByTestId("parallel-refresh-dynamic-modal-slug")).toHaveText("foo");
+    await expect(page.getByTestId("parallel-refresh-dynamic-modal-search")).toHaveText("modal");
+
+    await page.getByRole("link", { name: "Other dynamic page" }).click();
+    await expect(page.getByTestId("parallel-refresh-dynamic-other-page")).toBeVisible();
+    await expect(page.getByTestId("parallel-refresh-dynamic-login-modal")).toBeVisible();
+    const initialModalToken = await page
+      .getByTestId("parallel-refresh-dynamic-modal-token")
+      .textContent();
+    const initialOtherToken = await page
+      .getByTestId("parallel-refresh-dynamic-other-token")
+      .textContent();
+
+    await page
+      .getByTestId("parallel-refresh-dynamic-other-page")
+      .getByTestId("parallel-refresh-button")
+      .click();
+
+    await expect(page.getByTestId("parallel-refresh-dynamic-modal-token")).not.toHaveText(
+      initialModalToken ?? "",
+    );
+    await expect(page.getByTestId("parallel-refresh-dynamic-other-token")).not.toHaveText(
+      initialOtherToken ?? "",
+    );
+    await expect(page.getByTestId("parallel-refresh-dynamic-modal-search")).toHaveText("other");
+  });
+
+  test("router.refresh refreshes multiple persisted intercepted slots", async ({ page }) => {
+    // Ported from Next.js:
+    // test/e2e/app-dir/parallel-routes-revalidation/parallel-routes-revalidation.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/parallel-routes-revalidation/parallel-routes-revalidation.test.ts
+    await page.goto(`${BASE}/parallel-refresh-multiple`);
+    await waitForAppRouterHydration(page);
+
+    await page.getByRole("link", { name: "Open drawer" }).click();
+    await expect(page.getByTestId("parallel-refresh-multiple-drawer")).toBeVisible();
+    await page.getByRole("link", { name: "Open modal" }).click();
+    await expect(page.getByTestId("parallel-refresh-multiple-modal")).toBeVisible();
+    await expect(page.getByTestId("parallel-refresh-multiple-drawer")).toBeVisible();
+    await page.getByRole("link", { name: "Multiple other page" }).click();
+    await expect(page.getByTestId("parallel-refresh-multiple-other-page")).toBeVisible();
+    await expect(page.getByTestId("parallel-refresh-multiple-modal")).toBeVisible();
+    await expect(page.getByTestId("parallel-refresh-multiple-drawer")).toBeVisible();
+
+    const initialDrawerToken = await page
+      .getByTestId("parallel-refresh-multiple-drawer-token")
+      .textContent();
+    const initialModalToken = await page
+      .getByTestId("parallel-refresh-multiple-modal-token")
+      .textContent();
+    const initialOtherToken = await page
+      .getByTestId("parallel-refresh-multiple-other-token")
+      .textContent();
+
+    await page
+      .getByTestId("parallel-refresh-multiple-other-page")
+      .getByTestId("parallel-refresh-button")
+      .click();
+
+    await expect(page.getByTestId("parallel-refresh-multiple-drawer-token")).not.toHaveText(
+      initialDrawerToken ?? "",
+    );
+    await expect(page.getByTestId("parallel-refresh-multiple-modal-token")).not.toHaveText(
+      initialModalToken ?? "",
+    );
+    await expect(page.getByTestId("parallel-refresh-multiple-other-token")).not.toHaveText(
+      initialOtherToken ?? "",
+    );
+  });
+
   test("sibling (..) intercepted navigation mounts the modal slot", async ({ page }) => {
     // Ported from the sibling-interception behavior covered by Next.js:
     // test/e2e/app-dir/parallel-routes-and-interception/parallel-routes-and-interception.test.ts

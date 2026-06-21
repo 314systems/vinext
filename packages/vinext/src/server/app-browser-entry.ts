@@ -104,10 +104,12 @@ import {
   hydrateRootInTransition,
 } from "./app-browser-hydration.js";
 import {
+  APP_SLOT_BINDINGS_KEY,
   AppElementsWire,
   getMountedSlotIdsHeader,
   resolveVisitedResponseInterceptionContext,
   type AppElements,
+  type AppElementsSlotBinding,
   type AppWireElements,
 } from "./app-elements.js";
 import {
@@ -142,7 +144,10 @@ import {
 import DefaultGlobalError from "vinext/shims/default-global-error";
 import { AppRouterContext } from "vinext/shims/internal/app-router-context";
 import { BfcacheStateKeyMapContext, ElementsContext, Slot } from "vinext/shims/slot";
-import type { RouteManifest } from "../routing/app-route-graph.js";
+import type { RouteManifest, RouteManifestInterception } from "../routing/app-route-graph.js";
+import { matchRoutePattern } from "../routing/route-pattern.js";
+import { splitPathnameForRouteMatch } from "../routing/utils.js";
+import { addBasePathToPathname, stripBasePath } from "../utils/base-path.js";
 import {
   createDevOnCaughtError,
   createOnUncaughtError,
@@ -419,6 +424,116 @@ function clearClientNavigationCaches(): void {
   clearVisitedResponseCache();
   clearPrefetchState();
   historyController.invalidateRestorableClientState();
+}
+
+function mergeRefreshedInterceptedSlot(
+  currentElements: AppElements,
+  interceptedElements: AppElements,
+): AppElements {
+  const interception = AppElementsWire.readMetadata(interceptedElements).interception;
+  if (interception === null) return currentElements;
+  const interceptedSlot = interceptedElements[interception.slotId];
+  if (interceptedSlot === undefined) return currentElements;
+
+  const currentMetadata = AppElementsWire.readMetadata(currentElements);
+  const interceptedMetadata = AppElementsWire.readMetadata(interceptedElements);
+  const interceptedBinding = interceptedMetadata.slotBindings.find(
+    (binding) => binding.slotId === interception.slotId,
+  );
+  const slotBindings: AppElementsSlotBinding[] = currentMetadata.slotBindings.filter(
+    (binding) => binding.slotId !== interception.slotId,
+  );
+  if (interceptedBinding) slotBindings.push(interceptedBinding);
+
+  return {
+    ...currentElements,
+    [interception.slotId]: interceptedSlot,
+    [APP_SLOT_BINDINGS_KEY]: slotBindings,
+  };
+}
+
+type PersistedRefreshInterception = {
+  interception: RouteManifestInterception;
+  interceptionContext: string;
+  targetPathname: string;
+};
+
+function getMatchedUrlPathname(matchedUrl: string): string {
+  return new URL(matchedUrl, "https://vinext.local").pathname;
+}
+
+function resolvePersistedRefreshInterceptions(
+  state: AppRouterState,
+  routeManifest: RouteManifest | null,
+  refreshUrl: URL,
+  requestInterceptionContext: string | null,
+): PersistedRefreshInterception[] {
+  if (routeManifest === null) return [];
+
+  const refreshPathname = stripBasePath(refreshUrl.pathname, __basePath);
+  const refreshPathParts = splitPathnameForRouteMatch(refreshPathname);
+  const resolved: PersistedRefreshInterception[] = [];
+
+  for (const binding of state.slotBindings) {
+    if (binding.state !== "active" || !binding.activeRouteId) continue;
+    const activeRoute = AppElementsWire.parseElementKey(binding.activeRouteId);
+    if (activeRoute?.kind !== "route") continue;
+    if (!binding.interceptionId || !binding.interceptionSourceMatchedUrl) continue;
+    const match = routeManifest.segmentGraph.interceptions.get(binding.interceptionId);
+    if (!match) continue;
+
+    const retainedInterception =
+      state.interception?.slotId === binding.slotId &&
+      matchRoutePattern(
+        splitPathnameForRouteMatch(getMatchedUrlPathname(state.interception.targetMatchedUrl)),
+        match.targetPatternParts,
+      ) !== null
+        ? state.interception
+        : null;
+    const targetPathname = retainedInterception?.targetMatchedUrl ?? activeRoute.path;
+    const targetParts = splitPathnameForRouteMatch(getMatchedUrlPathname(targetPathname));
+    const isPrimaryRefreshInterception =
+      requestInterceptionContext !== null &&
+      state.interception?.slotId === binding.slotId &&
+      matchRoutePattern(refreshPathParts, match.targetPatternParts) !== null &&
+      matchRoutePattern(targetParts, match.targetPatternParts) !== null;
+    if (isPrimaryRefreshInterception) continue;
+
+    const interceptionContext =
+      retainedInterception?.sourceMatchedUrl ?? binding.interceptionSourceMatchedUrl;
+
+    const targetUrl = new URL(targetPathname, refreshUrl);
+    targetUrl.pathname = addBasePathToPathname(targetUrl.pathname, __basePath);
+    targetUrl.search = refreshUrl.search;
+    resolved.push({
+      interception: match,
+      interceptionContext,
+      targetPathname: `${targetUrl.pathname}${targetUrl.search}`,
+    });
+  }
+
+  return resolved;
+}
+
+async function fetchPersistedInterceptedSlotRefresh(options: {
+  interceptionId: string;
+  interceptionContext: string;
+  mountedSlotsHeader: string | null;
+  signal: AbortSignal;
+  targetPathname: string;
+}): Promise<AppElements> {
+  const headers = createRscRequestHeaders({
+    interceptionContext: options.interceptionContext,
+    interceptionId: options.interceptionId,
+    mountedSlotsHeader: options.mountedSlotsHeader,
+    renderMode: APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI,
+  });
+  const response = await fetch(await createRscRequestUrl(options.targetPathname, headers), {
+    credentials: "include",
+    headers,
+    signal: options.signal,
+  });
+  return decodeAppElementsPromise(createFromFetch<AppWireElements>(Promise.resolve(response)));
 }
 
 function isSettledPrefetchCacheEntry(
@@ -1785,6 +1900,15 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
         const routerStateAtNavStart = getBrowserRouterState();
         const elementsAtNavStart = routerStateAtNavStart.elements;
         const mountedSlotsHeader = getMountedSlotIdsHeader(elementsAtNavStart);
+        const persistedRefreshInterceptions =
+          navigationKind === "refresh"
+            ? resolvePersistedRefreshInterceptions(
+                routerStateAtNavStart,
+                getBrowserRouteManifest(),
+                url,
+                requestInterceptionContext,
+              )
+            : [];
         // Next.js refetches page segments for same-page search changes even
         // when a visible Link prefetched the target. Search params are a page
         // input, so a cached full-route payload is not authoritative here.
@@ -2162,9 +2286,24 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
 
         if (!browserNavigationController.isCurrentNavigation(navId)) return;
 
-        const rscPayload = decodeAppElementsPromise(
+        let rscPayload = decodeAppElementsPromise(
           createFromFetch<AppWireElements>(Promise.resolve(reactResponse)),
         );
+        if (persistedRefreshInterceptions.length > 0) {
+          const interceptedSlotPayloads = persistedRefreshInterceptions.map((interception) =>
+            fetchPersistedInterceptedSlotRefresh({
+              interceptionContext: interception.interceptionContext,
+              interceptionId: interception.interception.id,
+              mountedSlotsHeader,
+              signal: navigationAbortController.signal,
+              targetPathname: interception.targetPathname,
+            }),
+          );
+          rscPayload = Promise.all([rscPayload, ...interceptedSlotPayloads]).then(
+            ([currentElements, ...interceptedElements]) =>
+              interceptedElements.reduce(mergeRefreshedInterceptedSlot, currentElements),
+          );
+        }
 
         if (!browserNavigationController.isCurrentNavigation(navId)) return;
 
@@ -2190,6 +2329,11 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
         // Don't cache the response if this navigation was superseded during
         // renderNavigationPayload's await — the elements were never dispatched.
         if (!browserNavigationController.isCurrentNavigation(navId)) return;
+        if (persistedRefreshInterceptions.length > 0) {
+          clearVisitedResponseCache();
+          void cacheBufferPromise.catch(() => {});
+          return;
+        }
         // Store the visited response only after renderNavigationPayload succeeds.
         // If we stored it before and renderNavigationPayload threw, a future
         // back/forward navigation could replay a snapshot from a navigation that

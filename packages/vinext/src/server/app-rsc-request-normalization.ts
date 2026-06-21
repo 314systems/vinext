@@ -6,6 +6,7 @@ import {
   RSC_HEADER,
   VINEXT_CLIENT_REUSE_MANIFEST_HEADER,
   VINEXT_INTERCEPTION_CONTEXT_HEADER,
+  VINEXT_INTERCEPTION_ID_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_RSC_RENDER_MODE_HEADER,
 } from "./headers.js";
@@ -36,6 +37,7 @@ export type NormalizedRscRequest = {
   isRscRequest: boolean;
   /** Sanitized X-Vinext-Interception-Context header (null bytes stripped). null when absent. */
   interceptionContextHeader: string | null;
+  interceptionIdHeader: string | null;
   /** Normalized x-vinext-mounted-slots header (deduplicated, sorted). null when absent or blank. */
   mountedSlotsHeader: string | null;
   /** Semantic RSC payload mode. HTML requests always normalize to "navigation". */
@@ -127,6 +129,14 @@ export function normalizeRscRequest(
   const interceptionContextHeader = normalizeInterceptionContextHeader(
     request.headers.get(VINEXT_INTERCEPTION_CONTEXT_HEADER),
   );
+  const rawInterceptionId = request.headers.get(VINEXT_INTERCEPTION_ID_HEADER);
+  if (
+    rawInterceptionId !== null &&
+    (rawInterceptionId.length > 4096 || !rawInterceptionId.startsWith("interception:"))
+  ) {
+    return badRequestResponse();
+  }
+  const interceptionIdHeader = rawInterceptionId !== null ? rawInterceptionId : null;
 
   // Step 9: Normalize mounted-slots header for canonical cache keying.
   const mountedSlotsHeader = normalizeMountedSlotsHeader(
@@ -146,6 +156,7 @@ export function normalizeRscRequest(
     cleanPathname,
     isRscRequest,
     interceptionContextHeader,
+    interceptionIdHeader,
     mountedSlotsHeader,
     renderMode,
   };

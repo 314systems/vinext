@@ -51,6 +51,7 @@ type BuildAppPageElementResult<TElement> = {
 };
 
 type AppPageInterceptMatch<TPage = unknown> = {
+  interceptionId: string | null;
   interceptLayouts?: readonly unknown[] | null;
   __loadInterceptLayouts?: readonly (() => Promise<unknown>)[] | null;
   matchedParams: AppPageParams;

@@ -157,11 +157,22 @@ function reduceApprovedVisibleCommitState(
       const preservePreviousSlotIds = action.reuseCurrentBfcacheIds
         ? commit.decision.preservePreviousSlotIds
         : [];
+      const suppliedActiveSlotIds = new Set(
+        action.slotBindings
+          .filter(
+            (binding) =>
+              binding.state === "active" && Object.hasOwn(action.elements, binding.slotId),
+          )
+          .map((binding) => binding.slotId),
+      );
+      const effectivePreservePreviousSlotIds = preservePreviousSlotIds.filter(
+        (slotId) => !suppliedActiveSlotIds.has(slotId),
+      );
       const mergedElements = mergeElements(state.elements, action.elements, {
         clearAbsentSlots: action.type === "traverse" || !action.reuseCurrentBfcacheIds,
         preserveAbsentSlots: action.reuseCurrentBfcacheIds && commit.decision.preserveAbsentSlots,
         preserveElementIds,
-        preservePreviousSlotIds,
+        preservePreviousSlotIds: effectivePreservePreviousSlotIds,
       });
       return commitVisibleRouterState(
         state,
@@ -185,7 +196,7 @@ function reduceApprovedVisibleCommitState(
             state.slotBindings,
             action.slotBindings,
             action.layoutIds,
-            preservePreviousSlotIds,
+            effectivePreservePreviousSlotIds,
           ),
         },
         action.operation,

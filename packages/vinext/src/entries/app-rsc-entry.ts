@@ -554,8 +554,8 @@ function matchRoute(url) {
  * Check if a pathname matches any intercepting route.
  * Returns the match info or null.
  */
-function findIntercept(pathname, sourcePathname = null) {
-  return __routeMatcher.findIntercept(pathname, sourcePathname);
+function findIntercept(pathname, sourcePathname = null, interceptionId = null) {
+  return __routeMatcher.findIntercept(pathname, sourcePathname, interceptionId);
 }
 
 async function buildPageElements(route, params, routePath, pageRequest, layoutParamAccess, displayPathname = routePath) {
@@ -667,6 +667,7 @@ export default createAppRscHandler({
     actionFailed,
     handlerStart,
     interceptionContext,
+    interceptionId,
     isProgressiveActionRender,
     isRscRequest,
     middlewareContext,
@@ -729,7 +730,7 @@ export default createAppRscHandler({
       fetchCache: __segmentConfig.fetchCache ?? null,
       isEdgeRuntime: __isEdgeRuntime(__segmentConfig.runtime),
       findIntercept(pathname) {
-        return findIntercept(pathname, interceptionContext);
+        return findIntercept(pathname, interceptionContext, interceptionId);
       },
       generateStaticParams: __generateStaticParams,
       getFontLinks: _getSSRFontLinks,

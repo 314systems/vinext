@@ -255,6 +255,25 @@ describe("App Router RSC cache-busting", () => {
     ).resolves.toBeNull();
   });
 
+  it("accepts the previous preserve-current-UI hash after adding interception id", async () => {
+    const headers = createRscRequestHeaders({
+      interceptionContext: "/feed",
+      interceptionId: "interception:slot:modal:/feed:/feed->/photos/:id",
+      mountedSlotsHeader: "slot:modal:/feed",
+      renderMode: APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI,
+    });
+    const previousHash = await sha256CacheBustingHash(
+      "0,0,0,0,/feed,slot:modal:/feed,refresh-preserve-ui",
+    );
+    const request = new Request(`https://example.com/photos/42.rsc?_rsc=${previousHash}`, {
+      headers,
+    });
+
+    await expect(
+      resolveInvalidRscCacheBustingRequest({ isRscRequest: true, request }),
+    ).resolves.toBeNull();
+  });
+
   it("does not accept a bare previous hash for preserve-current-UI payloads", async () => {
     const headers = createRscRequestHeaders({
       renderMode: APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI,
@@ -310,7 +329,7 @@ describe("App Router RSC cache-busting", () => {
 
   it("exports the full Vary value for RSC-bearing App Router responses", () => {
     expect(VINEXT_RSC_VARY_HEADER).toBe(
-      "RSC, Accept, Next-Router-State-Tree, Next-Router-Prefetch, Next-Router-Segment-Prefetch, Next-Url, X-Vinext-Interception-Context, X-Vinext-Mounted-Slots, X-Vinext-Rsc-Render-Mode",
+      "RSC, Accept, Next-Router-State-Tree, Next-Router-Prefetch, Next-Router-Segment-Prefetch, Next-Url, X-Vinext-Interception-Context, X-Vinext-Interception-Id, X-Vinext-Mounted-Slots, X-Vinext-Rsc-Render-Mode",
     );
   });
 

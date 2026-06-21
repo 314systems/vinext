@@ -12,6 +12,7 @@ import {
   RSC_HEADER,
   VINEXT_CLIENT_REUSE_MANIFEST_HEADER,
   VINEXT_INTERCEPTION_CONTEXT_HEADER,
+  VINEXT_INTERCEPTION_ID_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_RSC_RENDER_MODE_HEADER,
 } from "./headers.js";
@@ -38,6 +39,7 @@ export const VINEXT_RSC_VARY_HEADER = [
   NEXT_ROUTER_SEGMENT_PREFETCH_HEADER,
   NEXT_URL_HEADER,
   VINEXT_INTERCEPTION_CONTEXT_HEADER,
+  VINEXT_INTERCEPTION_ID_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_RSC_RENDER_MODE_HEADER,
 ].join(", ");
@@ -48,6 +50,7 @@ const textEncoder = new TextEncoder();
 type CreateRscRequestHeadersOptions = {
   clientReuseManifestHeader?: string | null;
   interceptionContext?: string | null;
+  interceptionId?: string | null;
   mountedSlotsHeader?: string | null;
   renderMode?: AppRscRenderMode;
 };
@@ -158,6 +161,7 @@ function normalizeRenderModeHeaderValue(value: string | null): string | null {
 }
 
 type CreateCacheBustingInputOptions = {
+  includeInterceptionIdHeader?: boolean;
   includeRenderModeHeader?: boolean;
 };
 
@@ -173,6 +177,9 @@ function createCacheBustingInput(
     headers.get(NEXT_ROUTER_STATE_TREE_HEADER),
     headers.get(NEXT_URL_HEADER),
     headers.get(VINEXT_INTERCEPTION_CONTEXT_HEADER),
+    ...(options.includeInterceptionIdHeader === false
+      ? []
+      : [headers.get(VINEXT_INTERCEPTION_ID_HEADER)]),
     headers.get(VINEXT_MOUNTED_SLOTS_HEADER),
     ...(options.includeRenderModeHeader === false
       ? []
@@ -197,7 +204,10 @@ function computeLegacyRscCacheBustingSearchParam(headers: Headers): string {
 }
 
 async function computePreviousRscCacheBustingSearchParam(headers: Headers): Promise<string | null> {
-  const input = createCacheBustingInput(headers, { includeRenderModeHeader: false });
+  const input = createCacheBustingInput(headers, {
+    includeInterceptionIdHeader: false,
+    includeRenderModeHeader: false,
+  });
   if (input === null) {
     return null;
   }
@@ -205,8 +215,25 @@ async function computePreviousRscCacheBustingSearchParam(headers: Headers): Prom
   return sha256CacheBustingHash(input);
 }
 
+async function computePreviousInterceptionIdRscCacheBustingSearchParam(
+  headers: Headers,
+): Promise<string | null> {
+  const input = createCacheBustingInput(headers, { includeInterceptionIdHeader: false });
+  return input === null ? null : sha256CacheBustingHash(input);
+}
+
 function computePreviousLegacyRscCacheBustingSearchParam(headers: Headers): string | null {
-  const input = createCacheBustingInput(headers, { includeRenderModeHeader: false });
+  const input = createCacheBustingInput(headers, {
+    includeInterceptionIdHeader: false,
+    includeRenderModeHeader: false,
+  });
+  return input === null ? null : fnv1a64(input);
+}
+
+function computePreviousInterceptionIdLegacyRscCacheBustingSearchParam(
+  headers: Headers,
+): string | null {
+  const input = createCacheBustingInput(headers, { includeInterceptionIdHeader: false });
   return input === null ? null : fnv1a64(input);
 }
 
@@ -284,6 +311,9 @@ export function createRscRequestHeaders(options: CreateRscRequestHeadersOptions 
 
   if (options.interceptionContext !== undefined && options.interceptionContext !== null) {
     headers.set(VINEXT_INTERCEPTION_CONTEXT_HEADER, options.interceptionContext);
+  }
+  if (options.interceptionId !== undefined && options.interceptionId !== null) {
+    headers.set(VINEXT_INTERCEPTION_ID_HEADER, options.interceptionId);
   }
 
   if (options.mountedSlotsHeader !== undefined && options.mountedSlotsHeader !== null) {
@@ -364,6 +394,14 @@ export async function resolveInvalidRscCacheBustingRequest(
   const acceptedHashes = new Set<string>([expectedHash]);
   if (actualHash !== null && actualHash !== expectedHash) {
     acceptedHashes.add(computeLegacyRscCacheBustingSearchParam(options.request.headers));
+    const previousInterceptionIdHash =
+      await computePreviousInterceptionIdRscCacheBustingSearchParam(options.request.headers);
+    const previousInterceptionIdLegacyHash =
+      computePreviousInterceptionIdLegacyRscCacheBustingSearchParam(options.request.headers);
+    if (previousInterceptionIdHash !== null) acceptedHashes.add(previousInterceptionIdHash);
+    if (previousInterceptionIdLegacyHash !== null) {
+      acceptedHashes.add(previousInterceptionIdLegacyHash);
+    }
     if (
       normalizeRenderModeHeaderValue(options.request.headers.get(VINEXT_RSC_RENDER_MODE_HEADER)) ===
       null
