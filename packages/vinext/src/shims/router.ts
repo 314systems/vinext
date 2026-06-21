@@ -430,6 +430,12 @@ type PagesRouterRuntimeState = {
   publicRouter?: Record<string, unknown>;
 };
 
+type PendingNavigation = {
+  activeNavigation: NonNullable<PagesRouterRuntimeState["activeNavigation"]>;
+  controller: AbortController;
+  navigationId: number;
+};
+
 type PagesRouterRuntimeComponents = {
   CommitBoundary: ComponentType<{
     children?: ReactNode;
@@ -642,10 +648,13 @@ function isSamePagesRoute(destinationUrl: string): boolean {
   if (!window.__VINEXT_PAGES_LINK_PREFETCH_ROUTES__) {
     const destinationPathname = getLocalPathname(destinationUrl);
     if (!destinationPathname) return false;
-    const locale = getLocalePathPrefix(destinationPathname, window.__VINEXT_LOCALES__);
-    const pathname = locale
-      ? destinationPathname.slice(locale.length + 1) || "/"
-      : destinationPathname;
+    const stripLocale = (pathname: string): string => {
+      const locale = getLocalePathPrefix(pathname, window.__VINEXT_LOCALES__);
+      return locale ? pathname.slice(locale.length + 1) || "/" : pathname;
+    };
+    const pathname = stripLocale(destinationPathname);
+    const currentPathname = stripLocale(stripBasePath(window.location.pathname, __basePath));
+    if (pathname === currentPathname) return true;
     return extractRouteParamsFromPath(currentRoute, pathname) !== null;
   }
   const destinationRoute = resolvePagesClientRoutePattern(destinationUrl, __basePath);
@@ -1479,6 +1488,22 @@ function supersedePendingNavigation(routeProps: { shallow: boolean } = { shallow
   return ++routerRuntimeState.navigationId;
 }
 
+function beginPendingNavigation(
+  eventUrl: string,
+  routeProps: { shallow: boolean },
+): PendingNavigation {
+  const navigationId = supersedePendingNavigation(routeProps);
+  const controller = new AbortController();
+  const activeNavigation = {
+    id: navigationId,
+    eventUrl,
+    cancellationEventEmitted: false,
+  };
+  routerRuntimeState.activeAbortController = controller;
+  routerRuntimeState.activeNavigation = activeNavigation;
+  return { activeNavigation, controller, navigationId };
+}
+
 function scheduleHardNavigationAndThrow(url: string, message: string): never {
   if (typeof window === "undefined") {
     throw new HardNavigationScheduledError(message);
@@ -2104,18 +2129,13 @@ async function navigateClient(
    * (display) into the data fetch step.
    */
   routeUrl: string = url,
+  pendingNavigation?: PendingNavigation,
 ): Promise<void> {
   if (typeof window === "undefined") return;
 
-  const controller = new AbortController();
-  const navId = supersedePendingNavigation();
-  routerRuntimeState.activeAbortController = controller;
-  const activeNavigation = {
-    id: navId,
-    eventUrl: options.eventUrl ?? url,
-    cancellationEventEmitted: false,
-  };
-  routerRuntimeState.activeNavigation = activeNavigation;
+  const navigation =
+    pendingNavigation ?? beginPendingNavigation(options.eventUrl ?? url, { shallow: false });
+  const { activeNavigation, controller, navigationId: navId } = navigation;
 
   /** Check if this navigation is still the active one. If not, throw. */
   function assertStillCurrent(): void {
@@ -2229,9 +2249,10 @@ async function runNavigateClient(
    * Defaults to `fullUrl`, making this a no-op for callers without a mask.
    */
   routeUrl: string = fullUrl,
+  pendingNavigation?: PendingNavigation,
 ): Promise<"completed" | "cancelled" | "failed"> {
   try {
-    await navigateClient(fullUrl, fetchUrl, options, routeUrl);
+    await navigateClient(fullUrl, fetchUrl, options, routeUrl, pendingNavigation);
     return "completed";
   } catch (err: unknown) {
     if (!(err instanceof NavigationCancelledError && err.cancellationEventEmitted)) {
@@ -2574,7 +2595,8 @@ async function performNavigation(
   const htmlFetchUrl =
     errorRouteHtmlFetchUrl ?? getPagesHtmlFetchUrl(fullRouteUrl, navigationLocale);
   const requestedShallow = options?.shallow === true;
-  const shallow = requestedShallow && isSamePagesRoute(interpolatedRoute);
+  const routeIdentityUrl = withBasePath(interpolatedRoute, __basePath);
+  const shallow = requestedShallow && isSamePagesRoute(routeIdentityUrl);
   const hashOnly = options?._h !== 1 && interpolatedRoute === resolved && isHashOnlyChange(full);
   const doScroll = options?.scroll ?? (hashOnly || !shallow);
   const hash = extractHash(resolved);
@@ -2686,7 +2708,9 @@ async function performNavigation(
 
   if (mode === "push") saveScrollPosition();
   const isQueryUpdating = options?._h === 1;
-  if (shallow) supersedePendingNavigation({ shallow });
+  const pendingNavigation = shallow
+    ? (supersedePendingNavigation({ shallow }), undefined)
+    : beginPendingNavigation(resolved, { shallow });
   if (!isQueryUpdating) {
     routerEvents.emit("routeChangeStart", resolved, { shallow });
   }
@@ -2703,6 +2727,7 @@ async function performNavigation(
       // fullRouteUrl === full when there is no mask, so this is a no-op
       // for the dominant case.
       fullRouteUrl,
+      pendingNavigation,
     );
     if (result === "cancelled") return false;
     if (result === "failed") return false;

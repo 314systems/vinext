@@ -14729,6 +14729,53 @@ describe("Pages Router concurrent navigation", () => {
     }
   });
 
+  it("keeps a basePath-qualified rewrite alias to the same page shallow", async () => {
+    const previousWindow = (globalThis as any).window;
+    const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
+    const originalFetch = globalThis.fetch;
+    const { win } = createNavWindow();
+    process.env.__NEXT_ROUTER_BASEPATH = "/docs";
+    Object.assign(win.location, {
+      pathname: "/docs/about",
+      href: "http://localhost/docs/about",
+    });
+    Object.assign(win, {
+      __VINEXT_PAGES_LINK_PREFETCH_ROUTES__: [
+        { canPrefetchLoadingShell: false, isDynamic: false, patternParts: ["about"] },
+      ],
+      __VINEXT_CLIENT_REWRITES__: {
+        beforeFiles: [{ source: "/about-alias", destination: "/about" }],
+        afterFiles: [],
+        fallback: [],
+      },
+      __NEXT_DATA__: { ...win.__NEXT_DATA__, page: "/about" },
+    });
+    (globalThis as any).window = win;
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error("same-page basePath rewrite alias must not fetch page HTML");
+    });
+
+    try {
+      vi.resetModules();
+      const { default: Router } = await import("../packages/vinext/src/shims/router.js");
+
+      await expect(Router.push("/about-alias", undefined, { shallow: true })).resolves.toBe(true);
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+      expect(win.history.pushState).toHaveBeenLastCalledWith(
+        expect.objectContaining({ options: expect.objectContaining({ shallow: true }) }),
+        "",
+        "/docs/about-alias",
+      );
+    } finally {
+      vi.resetModules();
+      if (previousBasePath === undefined) delete process.env.__NEXT_ROUTER_BASEPATH;
+      else process.env.__NEXT_ROUTER_BASEPATH = previousBasePath;
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   /**
    * Build a minimal HTML response that navigateClient can parse.
    * Includes __NEXT_DATA__ with a pageModuleUrl pointing to the given path.
@@ -17281,6 +17328,68 @@ describe("Pages Router concurrent navigation", () => {
       } else {
         (globalThis as any).window = previousWindow;
       }
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("emits deep navigation cancellation before the winning start and history events", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const { win } = createNavWindow();
+    Object.assign(win, {
+      __VINEXT_PAGE_LOADERS__: {
+        "/page-a": async () => ({ default: () => null }),
+        "/page-b": async () => ({ default: () => null }),
+      },
+    });
+    (globalThis as any).window = win;
+
+    const fetchA = createDeferred<Response>();
+    const fetchB = createDeferred<Response>();
+    globalThis.fetch = vi
+      .fn()
+      .mockImplementationOnce(() => fetchA.promise)
+      .mockImplementationOnce(() => fetchB.promise);
+
+    const events: string[] = [];
+    const onRouteChangeError = (...args: unknown[]) => events.push(`error:${String(args[1])}`);
+    const onRouteChangeStart = (...args: unknown[]) => events.push(`start:${String(args[0])}`);
+    const onBeforeHistoryChange = (...args: unknown[]) => events.push(`history:${String(args[0])}`);
+
+    try {
+      vi.resetModules();
+      const { default: Router } = await import("../packages/vinext/src/shims/router.js");
+      Router.events.on("routeChangeError", onRouteChangeError);
+      Router.events.on("routeChangeStart", onRouteChangeStart);
+      Router.events.on("beforeHistoryChange", onBeforeHistoryChange);
+
+      const navigationA = Router.push("/page-a");
+      await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+      const navigationB = Router.push("/page-b");
+
+      expect(events).toEqual([
+        "start:/page-a",
+        "history:/page-a",
+        "error:/page-a",
+        "start:/page-b",
+        "history:/page-b",
+      ]);
+
+      fetchB.resolve(new Response(buildNavHtml("/page-b", "/@fs/pages/page-b.js")));
+      fetchA.resolve(new Response(buildNavHtml("/page-a", "/@fs/pages/page-a.js")));
+      const results = await Promise.allSettled([navigationA, navigationB]);
+      expect(results).toEqual([
+        { status: "fulfilled", value: false },
+        { status: "fulfilled", value: true },
+      ]);
+    } finally {
+      const { default: Router } = await import("../packages/vinext/src/shims/router.js");
+      Router.events.off("routeChangeError", onRouteChangeError);
+      Router.events.off("routeChangeStart", onRouteChangeStart);
+      Router.events.off("beforeHistoryChange", onBeforeHistoryChange);
+      vi.resetModules();
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
       globalThis.fetch = originalFetch;
     }
   });
