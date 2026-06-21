@@ -37,7 +37,10 @@ import {
   getPagesRouterComponentsMap,
   markAppRouteDetectedOnPrefetch,
 } from "./internal/app-route-detection.js";
-import { resolveHybridClientRouteOwner } from "./internal/hybrid-client-route-owner.js";
+import {
+  resolveHybridClientRouteOwner,
+  resolvePagesClientRoutePattern,
+} from "./internal/hybrid-client-route-owner.js";
 import { dedupedPagesDataFetch } from "./internal/pages-data-fetch-dedup.js";
 import { installWindowNext, type PagesRouterPublicInstance } from "../client/window-next.js";
 import { isUnknownRecord } from "../utils/record.js";
@@ -414,7 +417,6 @@ type PagesRouterRuntimeState = {
   activeNavigation: {
     id: number;
     eventUrl: string;
-    shallow: boolean;
     cancellationEventEmitted: boolean;
   } | null;
   cancelPendingRenderCommit: (() => void) | null;
@@ -635,20 +637,21 @@ function getLocalPathname(url: string): string | null {
 }
 
 function isSamePagesRoute(destinationUrl: string): boolean {
-  const destinationPathname = getLocalPathname(destinationUrl);
   const currentRoute = window.__NEXT_DATA__?.page;
-  if (!destinationPathname || !currentRoute) return false;
-
-  const locales = window.__VINEXT_LOCALES__;
-  const stripLocale = (pathname: string): string => {
-    const locale = getLocalePathPrefix(pathname, locales);
-    if (!locale) return pathname;
-    return pathname.slice(locale.length + 1) || "/";
-  };
-  const normalizedDestinationPathname = stripLocale(destinationPathname);
-  const currentPathname = stripLocale(stripBasePath(window.location.pathname, __basePath));
-  if (normalizedDestinationPathname === currentPathname) return true;
-  return extractRouteParamsFromPath(currentRoute, normalizedDestinationPathname) !== null;
+  if (!currentRoute) return false;
+  if (!window.__VINEXT_PAGES_LINK_PREFETCH_ROUTES__) {
+    const destinationPathname = getLocalPathname(destinationUrl);
+    if (!destinationPathname) return false;
+    const locale = getLocalePathPrefix(destinationPathname, window.__VINEXT_LOCALES__);
+    const pathname = locale
+      ? destinationPathname.slice(locale.length + 1) || "/"
+      : destinationPathname;
+    return extractRouteParamsFromPath(currentRoute, pathname) !== null;
+  }
+  const destinationRoute = resolvePagesClientRoutePattern(destinationUrl, __basePath);
+  const currentPatternParts = routePatternParts(currentRoute);
+  const currentRoutePattern = `/${currentPatternParts.join("/")}`;
+  return destinationRoute === currentRoutePattern;
 }
 
 function resolvePagesErrorHtmlFetchUrl(
@@ -1460,15 +1463,13 @@ function cancelPreviousRenderCommit(): void {
   routerRuntimeState.cancelPendingRenderCommit = null;
 }
 
-function supersedePendingNavigation(): number {
+function supersedePendingNavigation(routeProps: { shallow: boolean } = { shallow: false }): number {
   const activeNavigation = routerRuntimeState.activeNavigation;
   if (activeNavigation && !activeNavigation.cancellationEventEmitted) {
     activeNavigation.cancellationEventEmitted = true;
     const error = new NavigationCancelledError(activeNavigation.eventUrl);
     error.cancellationEventEmitted = true;
-    routerEvents.emit("routeChangeError", error, activeNavigation.eventUrl, {
-      shallow: activeNavigation.shallow,
-    });
+    routerEvents.emit("routeChangeError", error, activeNavigation.eventUrl, routeProps);
   }
   const previousAbortController = routerRuntimeState.activeAbortController;
   if (previousAbortController) queueMicrotask(() => previousAbortController.abort());
@@ -2112,7 +2113,6 @@ async function navigateClient(
   const activeNavigation = {
     id: navId,
     eventUrl: options.eventUrl ?? url,
-    shallow: false,
     cancellationEventEmitted: false,
   };
   routerRuntimeState.activeNavigation = activeNavigation;
@@ -2646,7 +2646,7 @@ async function performNavigation(
     // Mirrors Next.js: packages/next/src/shared/lib/router/router.ts:1034-1046.
     if (mode === "push") saveScrollPosition();
     const eventUrl = resolveHashUrl(full);
-    supersedePendingNavigation();
+    supersedePendingNavigation({ shallow });
     routerEvents.emit("hashChangeStart", eventUrl, { shallow });
     updateHistory(mode, resolved.startsWith("#") ? resolved : full, navState);
     if (doScroll) scrollToHashTarget(extractHash(resolved));
@@ -2686,7 +2686,7 @@ async function performNavigation(
 
   if (mode === "push") saveScrollPosition();
   const isQueryUpdating = options?._h === 1;
-  if (shallow) supersedePendingNavigation();
+  if (shallow) supersedePendingNavigation({ shallow });
   if (!isQueryUpdating) {
     routerEvents.emit("routeChangeStart", resolved, { shallow });
   }
@@ -2704,7 +2704,7 @@ async function performNavigation(
       // for the dominant case.
       fullRouteUrl,
     );
-    if (result === "cancelled") return true;
+    if (result === "cancelled") return false;
     if (result === "failed") return false;
   } else {
     // Shallow navigations skip the render-commit path, so apply the scroll
@@ -3044,7 +3044,7 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
   }
   routerRuntimeState.lastPathnameAndSearch = browserUrl;
 
-  const navigationId = supersedePendingNavigation();
+  const navigationId = supersedePendingNavigation({ shallow });
 
   if (isHashOnly) {
     // Hash-only back/forward — no page fetch needed.

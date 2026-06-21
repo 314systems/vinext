@@ -142,6 +142,46 @@ function matchPagesRoute(
   );
 }
 
+export function resolvePagesClientRoutePattern(href: string, basePath: string): string | null {
+  if (typeof window === "undefined") return null;
+
+  const pagesRoutes = window.__VINEXT_PAGES_LINK_PREFETCH_ROUTES__;
+  if (!pagesRoutes) return null;
+  const rewrites = window.__VINEXT_CLIENT_REWRITES__;
+
+  if (rewrites) {
+    const beforeFilesRewrite = resolveClientRewrite(href, basePath, rewrites.beforeFiles, true);
+    if (beforeFilesRewrite?.kind === "document") return null;
+    if (beforeFilesRewrite?.kind === "rewrite") href = beforeFilesRewrite.href;
+  }
+
+  let pagesMatch = matchPagesRoute(href, basePath, pagesRoutes);
+
+  if (rewrites && (pagesMatch === null || pagesMatch.isDynamic)) {
+    for (const rewrite of rewrites.afterFiles) {
+      const afterFilesRewrite = resolveClientRewrite(href, basePath, [rewrite]);
+      if (afterFilesRewrite?.kind === "document") return null;
+      if (afterFilesRewrite?.kind !== "rewrite") continue;
+      href = afterFilesRewrite.href;
+      pagesMatch = matchPagesRoute(href, basePath, pagesRoutes);
+      if (pagesMatch) break;
+    }
+  }
+
+  if (rewrites && pagesMatch === null) {
+    for (const rewrite of rewrites.fallback) {
+      const fallbackRewrite = resolveClientRewrite(href, basePath, [rewrite]);
+      if (fallbackRewrite?.kind === "document") return null;
+      if (fallbackRewrite?.kind !== "rewrite") continue;
+      href = fallbackRewrite.href;
+      pagesMatch = matchPagesRoute(href, basePath, pagesRoutes);
+      if (pagesMatch) break;
+    }
+  }
+
+  return pagesMatch ? patternFromParts(pagesMatch.patternParts) : null;
+}
+
 /**
  * Decide which router should own a soft-navigated URL. Returns:
  *   - "app"    → the App Router runtime handles the navigation (RSC fetch).

@@ -637,7 +637,6 @@ describe("next/navigation shim", () => {
         search: "?from=committed",
         hash: "",
         href: "http://localhost/current?from=committed",
-        origin: "http://localhost",
       },
       history: {
         state: null,
@@ -14499,6 +14498,7 @@ describe("Pages Router concurrent navigation", () => {
         hash: "",
         href: "http://localhost/",
         hostname: "localhost",
+        origin: "http://localhost",
         assign: vi.fn(),
         replace: vi.fn(),
         reload: vi.fn(),
@@ -14567,8 +14567,12 @@ describe("Pages Router concurrent navigation", () => {
     Object.assign(win.location, {
       pathname: "/en/posts/42",
       href: "http://localhost/en/posts/42",
+      origin: "http://localhost",
     });
     Object.assign(win, {
+      __VINEXT_PAGES_LINK_PREFETCH_ROUTES__: [
+        { canPrefetchLoadingShell: false, isDynamic: true, patternParts: ["posts", ":id"] },
+      ],
       __VINEXT_LOCALE__: "en",
       __VINEXT_LOCALES__: ["en", "fr"],
       __VINEXT_DEFAULT_LOCALE__: "en",
@@ -14594,6 +14598,129 @@ describe("Pages Router concurrent navigation", () => {
         "",
         "/en/posts/43",
       );
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it.each([
+    {
+      name: "prefers a static page over a dynamic page",
+      currentPage: "/posts/[id]",
+      currentPathname: "/posts/42",
+      destination: "/posts/missing",
+      routes: [
+        { canPrefetchLoadingShell: false, isDynamic: false, patternParts: ["posts", "missing"] },
+        { canPrefetchLoadingShell: false, isDynamic: true, patternParts: ["posts", ":id"] },
+      ],
+    },
+    {
+      name: "prefers a dynamic page over a catch-all page",
+      currentPage: "/docs/[...slug]",
+      currentPathname: "/docs/guides/intro",
+      destination: "/docs/api",
+      routes: [
+        { canPrefetchLoadingShell: false, isDynamic: true, patternParts: ["docs", ":section"] },
+        { canPrefetchLoadingShell: false, isDynamic: true, patternParts: ["docs", ":slug+"] },
+      ],
+    },
+  ])("$name before validating shallow route identity", async (scenario) => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const { win } = createNavWindow();
+    Object.assign(win.location, {
+      pathname: scenario.currentPathname,
+      href: `http://localhost${scenario.currentPathname}`,
+      origin: "http://localhost",
+    });
+    Object.assign(win, {
+      __VINEXT_PAGES_LINK_PREFETCH_ROUTES__: scenario.routes,
+      __NEXT_DATA__: { ...win.__NEXT_DATA__, page: scenario.currentPage },
+    });
+    (globalThis as any).window = win;
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(buildNavHtml(scenario.destination, `/@fs/pages${scenario.destination}.js`)),
+    );
+
+    try {
+      vi.resetModules();
+      const { default: Router } = await import("../packages/vinext/src/shims/router.js");
+
+      await Router.push(scenario.destination, undefined, { shallow: true });
+
+      expect(globalThis.fetch).toHaveBeenCalled();
+      expect(win.history.pushState).toHaveBeenLastCalledWith(
+        expect.objectContaining({ options: expect.objectContaining({ shallow: false }) }),
+        "",
+        scenario.destination,
+      );
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it.each([
+    {
+      name: "static",
+      page: "/about",
+      pathname: "/about",
+      alias: "/about-alias",
+      destination: "/about",
+      route: { canPrefetchLoadingShell: false, isDynamic: false, patternParts: ["about"] },
+    },
+    {
+      name: "dynamic",
+      page: "/posts/[id]",
+      pathname: "/posts/42",
+      alias: "/post-alias/43",
+      destination: "/posts/43",
+      route: {
+        canPrefetchLoadingShell: false,
+        isDynamic: true,
+        patternParts: ["posts", ":id"],
+      },
+    },
+  ])("keeps configured rewrite aliases to the same $name page shallow", async (scenario) => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const { win } = createNavWindow();
+    Object.assign(win.location, {
+      pathname: scenario.pathname,
+      href: `http://localhost${scenario.pathname}`,
+      origin: "http://localhost",
+    });
+    Object.assign(win, {
+      __VINEXT_PAGES_LINK_PREFETCH_ROUTES__: [scenario.route],
+      __VINEXT_CLIENT_REWRITES__: {
+        beforeFiles: [
+          {
+            source: scenario.alias.replace(/\/\d+$/, "/:id"),
+            destination: scenario.destination.replace(/\/\d+$/, "/:id"),
+          },
+        ],
+        afterFiles: [],
+        fallback: [],
+      },
+      __NEXT_DATA__: { ...win.__NEXT_DATA__, page: scenario.page },
+    });
+    (globalThis as any).window = win;
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error("same-page rewrite alias must not fetch page HTML");
+    });
+
+    try {
+      vi.resetModules();
+      const { default: Router } = await import("../packages/vinext/src/shims/router.js");
+
+      await expect(Router.push(scenario.alias, undefined, { shallow: true })).resolves.toBe(true);
+      expect(globalThis.fetch).not.toHaveBeenCalled();
     } finally {
       vi.resetModules();
       if (previousWindow === undefined) delete (globalThis as any).window;
@@ -15423,9 +15550,9 @@ describe("Pages Router concurrent navigation", () => {
       return fetchB.promise;
     };
 
-    const errors: Array<{ err: unknown; url: string }> = [];
+    const errors: Array<{ err: unknown; url: string; routeProps: unknown }> = [];
     const onRouteChangeError = (...args: unknown[]) => {
-      errors.push({ err: args[0], url: String(args[1]) });
+      errors.push({ err: args[0], url: String(args[1]), routeProps: args[2] });
     };
 
     try {
@@ -15443,7 +15570,7 @@ describe("Pages Router concurrent navigation", () => {
       fetchB.resolve(new Response(buildNavHtml("/page-b", "/@fs/pages/page-b.js")));
       fetchA.resolve(new Response(buildNavHtml("/page-a", "/@fs/pages/page-a.js")));
 
-      await Promise.allSettled([navA, navB]);
+      const [resultA] = await Promise.all([navA, navB]);
 
       // The superseded navigation (page-a) should emit routeChangeError
       // with a cancelled error, matching Next.js behavior
@@ -15451,6 +15578,8 @@ describe("Pages Router concurrent navigation", () => {
       expect(cancelledError).toBeDefined();
       const errObj = cancelledError?.err;
       expect(errObj).toHaveProperty("cancelled", true);
+      expect(cancelledError?.routeProps).toEqual({ shallow: false });
+      expect(resultA).toBe(false);
     } finally {
       const routerModule = await import("../packages/vinext/src/shims/router.js");
       const Router = routerModule.default;
@@ -17166,10 +17295,10 @@ describe("Pages Router concurrent navigation", () => {
     globalThis.fetch = vi.fn(() => deepResponse.promise);
 
     const completedUrls: string[] = [];
-    const errors: Array<{ err: unknown; url: string }> = [];
+    const errors: Array<{ err: unknown; url: string; routeProps: unknown }> = [];
     const onRouteChangeComplete = (...args: unknown[]) => completedUrls.push(String(args[0]));
     const onRouteChangeError = (...args: unknown[]) => {
-      errors.push({ err: args[0], url: String(args[1]) });
+      errors.push({ err: args[0], url: String(args[1]), routeProps: args[2] });
     };
 
     try {
@@ -17183,13 +17312,14 @@ describe("Pages Router concurrent navigation", () => {
 
       await expect(Router.replace("/?shallow=1", undefined, { shallow: true })).resolves.toBe(true);
       deepResponse.resolve(new Response(buildNavHtml("/page-a", "/@fs/pages/page-a.js")));
-      await deepNavigation;
+      await expect(deepNavigation).resolves.toBe(false);
 
       expect(render).not.toHaveBeenCalled();
       expect(completedUrls).toEqual(["/?shallow=1"]);
       expect(errors).toContainEqual({
         err: expect.objectContaining({ cancelled: true }),
         url: "/page-a",
+        routeProps: { shallow: true },
       });
     } finally {
       const { default: Router } = await import("../packages/vinext/src/shims/router.js");
@@ -18123,7 +18253,7 @@ describe("Pages Router _next/data client navigation", () => {
         }),
       );
 
-      await expect(Promise.all([firstPush, secondPush])).resolves.toEqual([true, true]);
+      await expect(Promise.all([firstPush, secondPush])).resolves.toEqual([false, true]);
       expect(routeChangeErrors).toHaveLength(1);
       expect(routeChangeErrors[0]).toMatchObject({ cancelled: true });
       expect(routeChangeComplete).toHaveBeenCalledTimes(1);
