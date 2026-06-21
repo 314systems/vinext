@@ -816,12 +816,15 @@ function stampInitialHistoryState(): void {
   if (!window.history) return;
 
   const existingState = window.history.state;
+  if (existingState !== null && existingState !== undefined) {
+    routerRuntimeState.currentHistoryKey =
+      getRouterStateKey(existingState) ?? routerRuntimeState.currentHistoryKey;
+    return;
+  }
+
   const initialState = buildInitialRouterState();
   routerRuntimeState.currentHistoryKey = initialState.key;
-  window.history.replaceState(
-    isUnknownRecord(existingState) ? { ...existingState, ...initialState } : initialState,
-    "",
-  );
+  window.history.replaceState(initialState, "");
 }
 
 setStampInitialHistoryState(stampInitialHistoryState);
@@ -1913,20 +1916,35 @@ async function navigateClientData(
   // merged in one object, with route params winning on key collision (so
   // `/posts/123?id=456` still exposes `id: "123"`). Without this, code reading
   // `window.__NEXT_DATA__.query` directly would see only the dynamic params.
-  const mergedQuery = mergeRouteParamsIntoQuery(parseQueryString(target.search), target.params);
+  let routeParams = target.params;
+  if (target.pattern === initialTarget.pattern) {
+    try {
+      const visibleUrl = new URL(url, window.location.href);
+      const visiblePagePath = stripBasePath(visibleUrl.pathname, __basePath);
+      const visibleLocale = getLocalePathPrefix(visiblePagePath, window.__VINEXT_LOCALES__);
+      const visibleRoutePath = visibleLocale
+        ? visiblePagePath.slice(visibleLocale.length + 1) || "/"
+        : visiblePagePath;
+      routeParams = extractRouteParamsFromPath(target.pattern, visibleRoutePath) ?? routeParams;
+    } catch {
+      routeParams = initialTarget.params;
+    }
+  }
+  const mergedQuery = mergeRouteParamsIntoQuery(parseQueryString(target.search), routeParams);
   const resolvedQueryHeader = res.headers.get(VINEXT_RESOLVED_QUERY_HEADER);
   let resolvedQuery = mergedQuery;
   if (resolvedQueryHeader) {
     try {
       const parsed = JSON.parse(resolvedQueryHeader);
       if (isUnknownRecord(parsed)) {
-        resolvedQuery = {};
+        const parsedResolvedQuery: Record<string, string | string[]> = {};
         for (const [key, value] of Object.entries(parsed)) {
-          if (typeof value === "string") setOwnQueryValue(resolvedQuery, key, value);
+          if (typeof value === "string") setOwnQueryValue(parsedResolvedQuery, key, value);
           else if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
-            setOwnQueryValue(resolvedQuery, key, [...value]);
+            setOwnQueryValue(parsedResolvedQuery, key, [...value]);
           }
         }
+        resolvedQuery = mergeRouteParamsIntoQuery(parsedResolvedQuery, routeParams);
       }
     } catch {
       // Ignore malformed optional metadata and retain browser-derived query ownership.
@@ -2048,6 +2066,24 @@ async function navigateClientHtml(
   }
 
   const nextData = parseVinextNextDataJson(nextDataJson);
+  try {
+    const visibleUrl = new URL(browserUrl, window.location.href);
+    const visiblePagePath = stripBasePath(visibleUrl.pathname, __basePath);
+    const visibleLocale = getLocalePathPrefix(visiblePagePath, window.__VINEXT_LOCALES__);
+    const visibleRoutePath = visibleLocale
+      ? visiblePagePath.slice(visibleLocale.length + 1) || "/"
+      : visiblePagePath;
+    const visibleRouteParams = extractRouteParamsFromPath(nextData.page, visibleRoutePath);
+    const initialResolvedQuery = nextData.__vinext?.initialResolvedQuery;
+    if (visibleRouteParams && initialResolvedQuery) {
+      nextData.__vinext = {
+        ...nextData.__vinext,
+        initialResolvedQuery: mergeRouteParamsIntoQuery(initialResolvedQuery, visibleRouteParams),
+      };
+    }
+  } catch {
+    // Keep the server-resolved query when the visible URL cannot be parsed.
+  }
   const props = nextData.props && typeof nextData.props === "object" ? nextData.props : {};
   const rawPageProps = props.pageProps;
   const pageProps: Record<string, unknown> = isUnknownRecord(rawPageProps) ? rawPageProps : {};
