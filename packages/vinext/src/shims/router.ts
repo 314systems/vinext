@@ -1320,7 +1320,11 @@ function getPathnameAndQuery(): {
     : { ...searchQuery, ...routeQuery };
   if (isShallowNavigation) {
     for (const routeParamName of extractRouteParamNames(nextData?.page ?? "")) {
-      const routeParam = query[routeParamName] ?? routeQuery[routeParamName];
+      const routeParam = Object.hasOwn(query, routeParamName)
+        ? query[routeParamName]
+        : Object.hasOwn(routeQuery, routeParamName)
+          ? routeQuery[routeParamName]
+          : undefined;
       if (routeParam !== undefined) setQueryValue(query, routeParamName, routeParam);
     }
   }
@@ -3083,7 +3087,7 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
     state.options?.shallow === true &&
     routerRuntimeState.currentShallow &&
     withBasePath(state.as, __basePath) === browserUrl
-      ? resolveSamePagesRoute(browserUrl)
+      ? resolveSamePagesRoute(withBasePath(state.url, __basePath))
       : null;
   const shallow = restoredShallowRoute !== null;
   routerRuntimeState.currentShallow = shallow;

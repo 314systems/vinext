@@ -14560,6 +14560,47 @@ describe("Pages Router concurrent navigation", () => {
     return { win, pushState, replaceState, render };
   }
 
+  it("prefers special-name dynamic route params over same-key search params", async () => {
+    const previousWindow = (globalThis as any).window;
+    const { win } = createNavWindow();
+    Object.assign(win.location, {
+      pathname: "/actual-constructor/actual-to-string/actual-prototype",
+      search: "?constructor=spoofed&toString=spoofed&__proto__=spoofed",
+      href: "http://localhost/actual-constructor/actual-to-string/actual-prototype?constructor=spoofed&toString=spoofed&__proto__=spoofed",
+    });
+    Object.assign(win, {
+      __NEXT_DATA__: {
+        ...win.__NEXT_DATA__,
+        page: "/[constructor]/[toString]/[__proto__]",
+        query: {},
+        isFallback: false,
+      },
+    });
+    (globalThis as any).window = win;
+
+    try {
+      vi.resetModules();
+      const { default: Router } = await import("../packages/vinext/src/shims/router.js");
+      const runtimeStateKey = Symbol.for("vinext.pagesRouter.runtimeState");
+      const runtimeState = (globalThis as any).window[runtimeStateKey];
+      runtimeState.currentShallow = true;
+      runtimeState.currentShallowQuery = JSON.parse(
+        '{"constructor":"actual-constructor","toString":"actual-to-string","__proto__":"actual-prototype"}',
+      );
+      const query = Router.query as Record<string, string | string[]>;
+      expect(Object.hasOwn(query, "constructor")).toBe(true);
+      expect(query.constructor).toBe("actual-constructor");
+      expect(Object.hasOwn(query, "toString")).toBe(true);
+      expect(query["toString"]).toBe("actual-to-string");
+      expect(Object.hasOwn(query, "__proto__")).toBe(true);
+      expect(query["__proto__"]).toBe("actual-prototype");
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    }
+  });
+
   it("matches localized dynamic paths before validating shallow route identity", async () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
@@ -14928,6 +14969,96 @@ describe("Pages Router concurrent navigation", () => {
         slug: "reference",
         step: "two",
         view: "grid",
+      });
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("re-resolves masked shallow Back and Forward from href while preserving as", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const listeners = new Map<string, (event: any) => void>();
+    const { win } = createNavWindow();
+    Object.assign(win.location, {
+      pathname: "/catalog/old/entry/fr",
+      href: "http://localhost/catalog/old/entry/fr",
+      origin: "http://localhost",
+    });
+    Object.assign(win, {
+      addEventListener: vi.fn((type: string, handler: (event: any) => void) => {
+        listeners.set(type, handler);
+      }),
+      __VINEXT_PAGES_LINK_PREFETCH_ROUTES__: [
+        {
+          canPrefetchLoadingShell: false,
+          isDynamic: true,
+          patternParts: ["catalog", ":category", ":slug", ":locale"],
+        },
+      ],
+      __NEXT_DATA__: {
+        ...win.__NEXT_DATA__,
+        page: "/catalog/[category]/[slug]/[locale]",
+        query: { category: "old", locale: "fr", slug: "entry" },
+      },
+    });
+    (globalThis as any).window = win;
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error("masked shallow Back/Forward must not fetch page HTML");
+    });
+
+    try {
+      vi.resetModules();
+      const { default: Router } = await import("../packages/vinext/src/shims/router.js");
+      const { installPagesRouterRuntime } =
+        await import("../packages/vinext/src/shims/pages-router-runtime.js");
+      installPagesRouterRuntime();
+
+      await Router.push(
+        "/catalog/books/guide/en?view=grid&step=one",
+        "/store/guide/books?step=one",
+        { shallow: true },
+      );
+      const firstState = win.history.pushState.mock.calls.at(-1)?.[0];
+      await Router.push(
+        "/catalog/music/reference/en?view=list&step=two",
+        "/store/reference/music?step=two",
+        { shallow: true },
+      );
+      const secondState = win.history.pushState.mock.calls.at(-1)?.[0];
+
+      Object.assign(win.location, {
+        pathname: "/store/guide/books",
+        search: "?step=one",
+        href: "http://localhost/store/guide/books?step=one",
+      });
+      listeners.get("popstate")!({ state: firstState });
+      expect(Router.asPath).toBe("/store/guide/books?step=one");
+      expect(Router.query).toEqual({
+        category: "books",
+        locale: "en",
+        slug: "guide",
+        step: "one",
+        view: "grid",
+      });
+
+      Object.assign(win.location, {
+        pathname: "/store/reference/music",
+        search: "?step=two",
+        href: "http://localhost/store/reference/music?step=two",
+      });
+      listeners.get("popstate")!({ state: secondState });
+      expect(Router.asPath).toBe("/store/reference/music?step=two");
+      expect(Router.query).toEqual({
+        category: "music",
+        locale: "en",
+        slug: "reference",
+        step: "two",
+        view: "list",
       });
       expect(globalThis.fetch).not.toHaveBeenCalled();
     } finally {
