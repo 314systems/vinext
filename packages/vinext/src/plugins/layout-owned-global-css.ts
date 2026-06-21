@@ -339,19 +339,23 @@ export function createLayoutOwnedGlobalCssPlugin(
 
     pagesConsumerScan = (async () => {
       const pageExtensions = options.getPageExtensions?.() ?? ["tsx", "ts", "jsx", "js"];
-      const pageExtensionSet = new Set(pageExtensions.map((extension) => extension.toLowerCase()));
+      const normalizedPageExtensions = pageExtensions.map((extension) =>
+        extension.replace(/^\./, "").toLowerCase(),
+      );
+      const configuredPageExtension = (modulePath: string) => {
+        const lowerPath = modulePath.toLowerCase();
+        return normalizedPageExtensions.find((extension) => lowerPath.endsWith(`.${extension}`));
+      };
       const maxModules = options.maxPagesGraphModules ?? MAX_PAGES_GRAPH_MODULES;
       const isScannableModule = (modulePath: string) =>
-        SOURCE_MODULE_RE.test(modulePath) ||
-        pageExtensionSet.has(path.extname(modulePath).slice(1).toLowerCase());
+        SOURCE_MODULE_RE.test(modulePath) || configuredPageExtension(modulePath) !== undefined;
       const pending: string[] = [];
       const directoryEntries = await fs.readdir(pagesDir, {
         recursive: true,
         withFileTypes: true,
       });
       for (const entry of directoryEntries) {
-        const extension = path.extname(entry.name).slice(1).toLowerCase();
-        if (!entry.isFile() || !pageExtensionSet.has(extension)) continue;
+        if (!entry.isFile() || configuredPageExtension(entry.name) === undefined) continue;
         const modulePath = path.join(entry.parentPath, entry.name);
         markPagesConsumer(modulePath);
         pending.push(modulePath);
@@ -380,7 +384,7 @@ export function createLayoutOwnedGlobalCssPlugin(
         try {
           imports = SOURCE_MODULE_RE.test(cleanPath)
             ? extractModuleSources(cleanPath, source)
-            : path.extname(cleanPath).toLowerCase() === ".mdx"
+            : configuredPageExtension(cleanPath) !== undefined
               ? extractMdxModuleSources(source)
               : [];
         } catch {
