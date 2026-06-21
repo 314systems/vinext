@@ -2,11 +2,35 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { gunzipSync } from "node:zlib";
 import ts from "typescript";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-styled-jsx-types-"));
+
+function extractPackedPackage(packageTarball: string, packageDir: string) {
+  const archive = gunzipSync(fs.readFileSync(packageTarball));
+  let offset = 0;
+
+  while (offset + 512 <= archive.length) {
+    const header = archive.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0)) break;
+
+    const entryPath = header.toString("utf8", 0, 100).split("\0", 1)[0];
+    const entrySize = Number.parseInt(
+      header.toString("ascii", 124, 136).split("\0", 1)[0].trim() || "0",
+      8,
+    );
+    const packagePath = path.posix.relative("package", entryPath);
+    const targetPath = path.join(packageDir, packagePath);
+    const contentOffset = offset + 512;
+
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.writeFileSync(targetPath, archive.subarray(contentOffset, contentOffset + entrySize));
+    offset = contentOffset + Math.ceil(entrySize / 512) * 512;
+  }
+}
 
 beforeAll(() => {
   execFileSync("vp", ["run", "vinext#build"], {
@@ -25,11 +49,7 @@ beforeAll(() => {
   ).trim();
   const packageDir = path.join(tempDir, "node_modules/vinext");
   fs.mkdirSync(packageDir, { recursive: true });
-  execFileSync(
-    "tar",
-    ["-xzf", path.join(tempDir, packageTarball), "-C", packageDir, "--strip-components=1"],
-    { stdio: "pipe" },
-  );
+  extractPackedPackage(path.join(tempDir, packageTarball), packageDir);
   fs.mkdirSync(path.join(packageDir, "node_modules"), { recursive: true });
   fs.symlinkSync(
     path.join(repoRoot, "packages/vinext/node_modules/styled-jsx"),
