@@ -34,6 +34,7 @@ beforeAll(() => {
     path.join(tempDir, "node_modules/@types/react"),
     "dir",
   );
+  fs.writeFileSync(path.join(tempDir, "package.json"), '{"type":"module"}\n');
 }, 60_000);
 
 afterAll(() => {
@@ -46,8 +47,8 @@ describe("styled-jsx public types", () => {
     fs.writeFileSync(
       consumerPath,
       `import "vinext";
-import { createStyleRegistry, useStyleRegistry } from "styled-jsx";
-import type { StyledJsxStyleRegistry } from "styled-jsx";
+import { createStyleRegistry, style, useStyleRegistry } from "styled-jsx";
+import type { StyledJsxStyleRegistry, StyleRegistryInstance } from "styled-jsx";
 import JSXStyle from "styled-jsx/style";
 import css from "styled-jsx/css";
 import type { JSX } from "react";
@@ -57,6 +58,7 @@ type Equal<Left, Right> =
   (<Value>() => Value extends Right ? 1 : 2) ? true : false;
 type Assert<Value extends true> = Value;
 type CssExport = Assert<Equal<typeof import("styled-jsx/css"), typeof css>>;
+type RegistryAlias = Assert<Equal<StyleRegistryInstance, StyledJsxStyleRegistry>>;
 
 const registry: StyledJsxStyleRegistry = createStyleRegistry();
 registry.add({ id: "consumer-style", children: "p { color: red }" });
@@ -75,14 +77,21 @@ type ResolveReturn = Assert<
   Equal<typeof resolved, { className: string; styles: JSX.Element }>
 >;
 
-export type StyledJsxCssAssertions = CssExport | CssReturn | GlobalReturn | ResolveReturn;
+export type StyledJsxAssertions =
+  | CssExport
+  | CssReturn
+  | GlobalReturn
+  | RegistryAlias
+  | ResolveReturn;
 
 export function Consumer() {
   return (
     <>
       <style jsx global>{\`p { color: red }\`}</style>
       <JSXStyle id="consumer-style">{resolved.styles}</JSXStyle>
-      <p className={resolved.className}>styled-jsx consumer</p>
+      <p className={resolved.className} data-style-component={typeof style}>
+        styled-jsx consumer
+      </p>
     </>
   );
 }
@@ -91,12 +100,12 @@ export function Consumer() {
 
     const program = ts.createProgram([consumerPath], {
       target: ts.ScriptTarget.ES2022,
-      module: ts.ModuleKind.ESNext,
-      moduleResolution: ts.ModuleResolutionKind.Bundler,
+      module: ts.ModuleKind.NodeNext,
+      moduleResolution: ts.ModuleResolutionKind.NodeNext,
       jsx: ts.JsxEmit.Preserve,
       strict: true,
       noEmit: true,
-      skipLibCheck: true,
+      skipLibCheck: false,
     });
     const diagnostics = ts
       .getPreEmitDiagnostics(program)
