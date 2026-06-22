@@ -6,6 +6,8 @@ import type { AppRouteRuntime } from "../build/app-route-runtime.js";
 export const APP_ROUTE_RUNTIME_QUERY = "__vinext_app_runtime";
 
 const SCRIPT_EXTENSION_RE = /\.(?:[cm]?[jt]sx?)$/i;
+const NON_SCRIPT_EXTENSION_RE =
+  /\.(?:avif|bmp|css|csv|eot|gif|html?|ico|jpe?g|json|md|mdx|mp3|mp4|ogg|otf|pdf|png|svg|tiff?|txt|wav|webm|webp|woff2?|wasm|xml|ya?ml)$/i;
 
 function splitId(id: string): { pathname: string; query: string; search: URLSearchParams } {
   const queryIndex = id.indexOf("?");
@@ -36,8 +38,14 @@ export function withAppRouteRuntime(id: string, runtime: AppRouteRuntime): strin
   return `${idWithoutRuntime}${idWithoutRuntime.includes("?") ? "&" : "?"}${APP_ROUTE_RUNTIME_QUERY}=${runtime}`;
 }
 
-function isScriptModule(id: string): boolean {
-  return SCRIPT_EXTENSION_RE.test(splitId(id).pathname);
+function canLoadAsScriptModule(id: string): boolean {
+  const pathname = splitId(id).pathname;
+  return (
+    pathname.startsWith("\0") ||
+    pathname.startsWith("virtual:") ||
+    SCRIPT_EXTENSION_RE.test(pathname) ||
+    !NON_SCRIPT_EXTENSION_RE.test(pathname)
+  );
 }
 
 type AstNode = Record<string, unknown> & { end?: number; start?: number; type?: string };
@@ -121,13 +129,13 @@ export function createAppRouteRuntimePlugin(): Plugin {
 
       if (!importer || options?.isEntry) return null;
       const runtime = runtimeFromId(importer);
-      if (!runtime || source.startsWith("\0") || source.startsWith("virtual:")) return null;
+      if (!runtime) return null;
 
       const resolved = await this.resolve(source, splitId(importer).pathname, {
         ...options,
         skipSelf: true,
       });
-      if (!resolved || !isScriptModule(resolved.id)) {
+      if (!resolved || !canLoadAsScriptModule(resolved.id)) {
         return resolved;
       }
       return {

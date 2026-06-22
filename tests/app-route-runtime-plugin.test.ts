@@ -1,3 +1,4 @@
+import { createServer, type Plugin } from "vite";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   createAppRouteRuntimePlugin,
@@ -109,16 +110,57 @@ describe("App route runtime module graph", () => {
     expect(plugin.load).toBeUndefined();
   });
 
-  it("transforms JavaScript returned by another plugin loader", () => {
+  it("transforms JavaScript returned by a virtual plugin loader", async () => {
+    const virtualId = "\0runtime-generated";
+    const loader: Plugin = {
+      name: "test:runtime-generated-loader",
+      resolveId(source) {
+        if (source === "./message.custom") return virtualId;
+      },
+      load(id) {
+        if (id.startsWith(`${virtualId}?`)) {
+          return `export default process.env.NEXT_RUNTIME`;
+        }
+      },
+    };
+    const server = await createServer({
+      configFile: false,
+      logLevel: "silent",
+      plugins: [createAppRouteRuntimePlugin(), loader],
+      server: { middlewareMode: true },
+    });
+
+    try {
+      const pluginContainer = server.environments.ssr.pluginContainer;
+      const resolved = await pluginContainer.resolveId(
+        "./message.custom",
+        withAppRouteRuntime("/app/edge/page.tsx", "edge"),
+      );
+      expect(resolved?.id).toBe(`${virtualId}?__vinext_app_runtime=edge`);
+
+      const loaded = await pluginContainer.load(resolved!.id);
+      const code = typeof loaded === "string" ? loaded : loaded?.code;
+      expect(code).toBe(`export default process.env.NEXT_RUNTIME`);
+
+      const module = await server.ssrLoadModule(resolved!.id);
+      expect(module.default).toBe("edge");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("does not qualify genuine non-JavaScript assets", async () => {
     const plugin = createAppRouteRuntimePlugin();
-    const transform = hookHandler(plugin.transform!);
-    const result = transform.call(
-      {} as ThisParameterType<typeof transform>,
-      `export default process.env.NEXT_RUNTIME`,
-      withAppRouteRuntime("/app/generated.ts?custom-loader", "edge"),
+    const resolve = vi.fn(async () => ({ id: "/app/logo.svg" }));
+    const resolveId = hookHandler(plugin.resolveId!);
+    const result = await resolveId.call(
+      { resolve } as unknown as ThisParameterType<typeof resolveId>,
+      "./logo.svg",
+      withAppRouteRuntime("/app/edge/page.tsx", "edge"),
+      { attributes: {}, isEntry: false },
     );
 
-    expect(transformOutput(result).code).toBe(`export default "edge"`);
+    expect(result).toEqual({ id: "/app/logo.svg" });
   });
 
   it("strips only runtime qualification from client modules", async () => {
