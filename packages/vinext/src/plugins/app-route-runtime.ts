@@ -131,17 +131,16 @@ export function createAppRouteRuntimePlugin(): Plugin {
       const runtime = runtimeFromId(importer);
       if (!runtime) return null;
 
-      const resolved = await this.resolve(source, splitId(importer).pathname, {
+      const resolved = await this.resolve(source, withoutAppRouteRuntime(importer), {
         ...options,
         skipSelf: true,
       });
-      if (!resolved || !canLoadAsScriptModule(resolved.id)) {
+      if (!resolved || resolved.external || !canLoadAsScriptModule(resolved.id)) {
         return resolved;
       }
       return {
         ...resolved,
         id: withAppRouteRuntime(resolved.id, runtime),
-        external: false,
       };
     },
     transform: {

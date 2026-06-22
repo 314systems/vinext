@@ -35,7 +35,6 @@ describe("App route runtime module graph", () => {
     });
     expect(result).toEqual({
       id: "/app/shared.ts?__vinext_app_runtime=edge",
-      external: false,
     });
   });
 
@@ -88,7 +87,6 @@ describe("App route runtime module graph", () => {
 
     expect(result).toEqual({
       id: "/app/node_modules/pkg/index.js?__vinext_app_runtime=edge",
-      external: false,
     });
   });
 
@@ -105,22 +103,48 @@ describe("App route runtime module graph", () => {
 
     expect(result).toEqual({
       id: "/app/message.ts?raw&__vinext_app_runtime=edge",
-      external: false,
     });
     expect(plugin.load).toBeUndefined();
   });
 
+  it.each([
+    ["Node built-in", "node:fs"],
+    ["configured external package", "external-package"],
+  ])("preserves a resolved %s", async (_label, externalId) => {
+    const plugin = createAppRouteRuntimePlugin();
+    const resolve = vi.fn(async () => ({ id: externalId, external: true }));
+    const resolveId = hookHandler(plugin.resolveId!);
+    const result = await resolveId.call(
+      { resolve } as unknown as ThisParameterType<typeof resolveId>,
+      externalId,
+      withAppRouteRuntime("/app/edge/page.tsx", "edge"),
+      { attributes: {}, isEntry: false },
+    );
+
+    expect(result).toEqual({ id: externalId, external: true });
+  });
+
   it("transforms JavaScript returned by a virtual plugin loader", async () => {
     const virtualId = "\0runtime-generated";
+    const dependencyId = "\0runtime-generated-dependency";
+    const loaderQuery = "custom-loader=active";
     const loader: Plugin = {
       name: "test:runtime-generated-loader",
-      resolveId(source) {
-        if (source === "./message.custom") return virtualId;
+      resolveId(source, importer) {
+        if (source === "./message.custom") return `${virtualId}?${loaderQuery}`;
+        if (source === "./dependency.custom") {
+          expect(importer).toBe(`${virtualId}?${loaderQuery}`);
+          return dependencyId;
+        }
       },
       load(id) {
         if (id.startsWith(`${virtualId}?`)) {
-          return `export default process.env.NEXT_RUNTIME`;
+          return [
+            `import dependencyRuntime from "./dependency.custom"`,
+            `export default process.env.NEXT_RUNTIME + ":" + dependencyRuntime`,
+          ].join("\n");
         }
+        if (id.startsWith(`${dependencyId}?`)) return `export default process.env.NEXT_RUNTIME`;
       },
     };
     const server = await createServer({
@@ -136,14 +160,14 @@ describe("App route runtime module graph", () => {
         "./message.custom",
         withAppRouteRuntime("/app/edge/page.tsx", "edge"),
       );
-      expect(resolved?.id).toBe(`${virtualId}?__vinext_app_runtime=edge`);
+      expect(resolved?.id).toBe(`${virtualId}?${loaderQuery}&__vinext_app_runtime=edge`);
 
       const loaded = await pluginContainer.load(resolved!.id);
       const code = typeof loaded === "string" ? loaded : loaded?.code;
-      expect(code).toBe(`export default process.env.NEXT_RUNTIME`);
+      expect(code).toContain(`import dependencyRuntime from "./dependency.custom"`);
 
       const module = await server.ssrLoadModule(resolved!.id);
-      expect(module.default).toBe("edge");
+      expect(module.default).toBe("edge:edge");
     } finally {
       await server.close();
     }
