@@ -1,4 +1,5 @@
 import path from "node:path";
+import { readFile } from "node:fs/promises";
 import MagicString from "magic-string";
 import { parseAst, type Plugin } from "vite";
 import type { AppRouteRuntime } from "../build/app-route-runtime.js";
@@ -48,6 +49,34 @@ function canLoadAsScriptModule(id: string): boolean {
     SCRIPT_EXTENSION_RE.test(pathname) ||
     !NON_SCRIPT_EXTENSION_RE.test(pathname)
   );
+}
+
+async function hasReactServerBoundaryDirective(id: string): Promise<boolean> {
+  const pathname = splitId(id).pathname;
+  if (!path.isAbsolute(pathname) || pathname.startsWith("\0")) return false;
+
+  let code: string;
+  try {
+    code = await readFile(pathname, "utf8");
+  } catch {
+    return false;
+  }
+
+  const extension = path.extname(pathname).slice(1);
+  const lang =
+    extension === "tsx" || extension === "ts" ? extension : extension === "jsx" ? "jsx" : "js";
+  try {
+    const ast = parseAst(code, { lang });
+    for (const statement of ast.body) {
+      if (statement.type !== "ExpressionStatement" || typeof statement.directive !== "string") {
+        break;
+      }
+      if (statement.directive === "use client" || statement.directive === "use server") return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
 }
 
 type AstNode = Record<string, unknown> & { end?: number; start?: number; type?: string };
@@ -137,7 +166,12 @@ export function createAppRouteRuntimePlugin(): Plugin {
         ...options,
         skipSelf: true,
       });
-      if (!resolved || resolved.external || !canLoadAsScriptModule(resolved.id)) {
+      if (
+        !resolved ||
+        resolved.external ||
+        !canLoadAsScriptModule(resolved.id) ||
+        (await hasReactServerBoundaryDirective(resolved.id))
+      ) {
         return resolved;
       }
       return {

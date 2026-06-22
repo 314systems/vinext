@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { getPluginApi } from "@vitejs/plugin-rsc";
 import { createBuilder } from "vite";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import vinext from "../packages/vinext/src/index.js";
@@ -12,6 +13,8 @@ describe("App route NEXT_RUNTIME production parity", () => {
   let root: string;
   let handler: RscHandler;
   let clientOutDir: string;
+  let clientReferenceIds: string[];
+  let serverReferenceIds: string[];
 
   beforeAll(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-app-route-runtime-prod-"));
@@ -34,8 +37,29 @@ describe("App route NEXT_RUNTIME production parity", () => {
       `export default function Layout({ children }) { return <html><body>{children}</body></html> }`,
     );
     await fs.writeFile(
+      path.join(root, "app", "shared", "client.tsx"),
+      `
+        "use client"
+        export const sharedClientMarker = "vinext-shared-runtime-client"
+        export function SharedClient() { return <div>{sharedClientMarker}</div> }
+      `,
+    );
+    await fs.writeFile(
+      path.join(root, "app", "shared", "actions.ts"),
+      `
+        "use server"
+        export async function sharedAction() { return "vinext-shared-runtime-action" }
+      `,
+    );
+    await fs.writeFile(
       path.join(root, "app", "shared", "page.tsx"),
-      `export default function Page() { return <div id="runtime">{process.env.NEXT_RUNTIME}</div> }`,
+      `
+        import { SharedClient } from "./client"
+        import { sharedAction } from "./actions"
+        export default function Page() {
+          return <><div id="runtime">{process.env.NEXT_RUNTIME}</div><SharedClient /><form action={sharedAction} /></>
+        }
+      `,
     );
     await fs.writeFile(
       path.join(root, "app", "nodejs", "page.tsx"),
@@ -103,6 +127,15 @@ describe("App route NEXT_RUNTIME production parity", () => {
           ssrOutDir: path.join(rscOutDir, "ssr"),
           clientOutDir,
         }),
+        {
+          name: "test:capture-rsc-client-reference-ids",
+          buildEnd() {
+            if (this.environment?.name !== "rsc") return;
+            const pluginApi = getPluginApi(this.environment.config);
+            clientReferenceIds = Object.keys(pluginApi?.manager.clientReferenceMetaMap ?? {});
+            serverReferenceIds = Object.keys(pluginApi?.manager.serverReferenceMetaMap ?? {});
+          },
+        },
       ],
       logLevel: "silent",
     });
@@ -148,5 +181,31 @@ describe("App route NEXT_RUNTIME production parity", () => {
     expect(clientBundle).toContain("client-runtime:");
     expect(clientBundle).not.toContain("client-runtime:edge");
     expect(clientBundle).not.toContain("client-runtime:nodejs");
+  });
+
+  it("emits one client reference for a boundary shared across route runtimes", async () => {
+    const sharedClientReferences = clientReferenceIds.filter((id) =>
+      id.includes("/app/shared/client.tsx"),
+    );
+    expect(sharedClientReferences).toHaveLength(1);
+    expect(sharedClientReferences[0]).not.toContain("__vinext_app_runtime");
+
+    const assets = await fs.readdir(clientOutDir, { recursive: true });
+    const scripts = await Promise.all(
+      assets
+        .filter((asset) => asset.endsWith(".js"))
+        .map((asset) => fs.readFile(path.join(clientOutDir, asset), "utf8")),
+    );
+    expect(
+      scripts.filter((script) => script.includes("vinext-shared-runtime-client")),
+    ).toHaveLength(1);
+  });
+
+  it("emits one server reference for an action module shared across route runtimes", () => {
+    const sharedServerReferences = serverReferenceIds.filter((id) =>
+      id.includes("/app/shared/actions.ts"),
+    );
+    expect(sharedServerReferences).toHaveLength(1);
+    expect(sharedServerReferences[0]).not.toContain("__vinext_app_runtime");
   });
 });

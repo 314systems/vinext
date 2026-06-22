@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { createServer, type Plugin } from "vite";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
@@ -89,6 +92,30 @@ describe("App route runtime module graph", () => {
       id: "/app/node_modules/pkg/index.js?__vinext_app_runtime=edge",
     });
   });
+
+  it.each(["use client", "use server"])(
+    "keeps a shared %s boundary on its canonical module id",
+    async (directive) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-runtime-boundary-"));
+      const boundary = path.join(root, "boundary.ts");
+      await fs.writeFile(boundary, `${JSON.stringify(directive)}\nexport const value = 1`);
+      const plugin = createAppRouteRuntimePlugin();
+      const resolve = vi.fn(async () => ({ id: boundary }));
+      const resolveId = hookHandler(plugin.resolveId!);
+
+      try {
+        const result = await resolveId.call(
+          { resolve } as unknown as ThisParameterType<typeof resolveId>,
+          "./boundary",
+          withAppRouteRuntime("/app/edge/page.tsx", "edge"),
+          { attributes: {}, isEntry: false },
+        );
+        expect(result).toEqual({ id: boundary });
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("preserves query-based loader semantics while propagating the runtime", async () => {
     const plugin = createAppRouteRuntimePlugin();
