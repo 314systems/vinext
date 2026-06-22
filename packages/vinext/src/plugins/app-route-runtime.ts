@@ -3,7 +3,8 @@ import MagicString from "magic-string";
 import { parseAst, type Plugin } from "vite";
 import type { AppRouteRuntime } from "../build/app-route-runtime.js";
 
-export const APP_ROUTE_RUNTIME_QUERY = "__vinext_app_runtime";
+const APP_ROUTE_RUNTIME_QUERY = "__vinext_app_runtime";
+const VITE_RSC_ENCRYPTION_KEY_ID = "\0virtual:vite-rsc/encryption-key";
 
 const SCRIPT_EXTENSION_RE = /\.(?:[cm]?[jt]sx?)$/i;
 const NON_SCRIPT_EXTENSION_RE =
@@ -40,6 +41,7 @@ export function withAppRouteRuntime(id: string, runtime: AppRouteRuntime): strin
 
 function canLoadAsScriptModule(id: string): boolean {
   const pathname = splitId(id).pathname;
+  if (pathname === VITE_RSC_ENCRYPTION_KEY_ID) return false;
   return (
     pathname.startsWith("\0") ||
     pathname.startsWith("virtual:") ||

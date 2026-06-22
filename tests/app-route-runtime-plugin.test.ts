@@ -187,6 +187,21 @@ describe("App route runtime module graph", () => {
     expect(result).toEqual({ id: "/app/logo.svg" });
   });
 
+  it("does not qualify Vite RSC virtual modules with exact loader IDs", async () => {
+    const plugin = createAppRouteRuntimePlugin();
+    const virtualId = "\0virtual:vite-rsc/encryption-key";
+    const resolve = vi.fn(async () => ({ id: virtualId }));
+    const resolveId = hookHandler(plugin.resolveId!);
+    const result = await resolveId.call(
+      { resolve } as unknown as ThisParameterType<typeof resolveId>,
+      "virtual:vite-rsc/encryption-key",
+      withAppRouteRuntime("/app/edge/page.tsx", "edge"),
+      { attributes: {}, isEntry: false },
+    );
+
+    expect(result).toEqual({ id: virtualId });
+  });
+
   it("strips only runtime qualification from client modules", async () => {
     const plugin = createAppRouteRuntimePlugin();
     const resolve = vi.fn(async () => ({ id: "/app/client.tsx?raw&custom-loader=active" }));
