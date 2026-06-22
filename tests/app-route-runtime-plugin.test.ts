@@ -103,7 +103,7 @@ describe("App route runtime module graph", () => {
     );
 
     expect(result).toEqual({
-      id: "/app/message.ts?raw=&__vinext_app_runtime=edge",
+      id: "/app/message.ts?raw&__vinext_app_runtime=edge",
       external: false,
     });
     expect(plugin.load).toBeUndefined();
@@ -121,20 +121,25 @@ describe("App route runtime module graph", () => {
     expect(transformOutput(result).code).toBe(`export default "edge"`);
   });
 
-  it("strips runtime qualification from client modules", async () => {
+  it("strips only runtime qualification from client modules", async () => {
     const plugin = createAppRouteRuntimePlugin();
-    const resolve = vi.fn(async () => ({ id: "/app/client.tsx" }));
+    const resolve = vi.fn(async () => ({ id: "/app/client.tsx?raw&custom-loader=active" }));
     const resolveId = hookHandler(plugin.resolveId!);
     const result = await resolveId.call(
       { environment: { name: "client" }, resolve } as unknown as ThisParameterType<
         typeof resolveId
       >,
-      withAppRouteRuntime("/app/client.tsx", "edge"),
+      withAppRouteRuntime("/app/client.tsx?raw&custom-loader=active", "edge"),
       undefined,
       { attributes: {}, isEntry: false },
     );
 
-    expect(result).toEqual({ id: "/app/client.tsx" });
+    expect(resolve).toHaveBeenCalledWith("/app/client.tsx?raw&custom-loader=active", undefined, {
+      attributes: {},
+      isEntry: false,
+      skipSelf: true,
+    });
+    expect(result).toEqual({ id: "/app/client.tsx?raw&custom-loader=active" });
   });
 
   it("does not replace NEXT_RUNTIME in client transforms", () => {

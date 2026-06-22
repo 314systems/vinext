@@ -7,12 +7,23 @@ export const APP_ROUTE_RUNTIME_QUERY = "__vinext_app_runtime";
 
 const SCRIPT_EXTENSION_RE = /\.(?:[cm]?[jt]sx?)$/i;
 
-function splitId(id: string): { pathname: string; search: URLSearchParams } {
+function splitId(id: string): { pathname: string; query: string; search: URLSearchParams } {
   const queryIndex = id.indexOf("?");
+  const query = queryIndex === -1 ? "" : id.slice(queryIndex + 1);
   return {
     pathname: queryIndex === -1 ? id : id.slice(0, queryIndex),
-    search: new URLSearchParams(queryIndex === -1 ? "" : id.slice(queryIndex + 1)),
+    query,
+    search: new URLSearchParams(query),
   };
+}
+
+function withoutAppRouteRuntime(id: string): string {
+  const { pathname, query } = splitId(id);
+  const remainingQuery = query
+    .split("&")
+    .filter((part) => part.split("=", 1)[0] !== APP_ROUTE_RUNTIME_QUERY)
+    .join("&");
+  return remainingQuery ? `${pathname}?${remainingQuery}` : pathname;
 }
 
 function runtimeFromId(id: string): AppRouteRuntime | null {
@@ -21,9 +32,8 @@ function runtimeFromId(id: string): AppRouteRuntime | null {
 }
 
 export function withAppRouteRuntime(id: string, runtime: AppRouteRuntime): string {
-  const { pathname, search } = splitId(id);
-  search.set(APP_ROUTE_RUNTIME_QUERY, runtime);
-  return `${pathname}?${search.toString()}`;
+  const idWithoutRuntime = withoutAppRouteRuntime(id);
+  return `${idWithoutRuntime}${idWithoutRuntime.includes("?") ? "&" : "?"}${APP_ROUTE_RUNTIME_QUERY}=${runtime}`;
 }
 
 function isScriptModule(id: string): boolean {
@@ -103,7 +113,7 @@ export function createAppRouteRuntimePlugin(): Plugin {
     async resolveId(source, importer, options) {
       if (this.environment?.name === "client") {
         if (!runtimeFromId(source)) return null;
-        return this.resolve(splitId(source).pathname, importer, {
+        return this.resolve(withoutAppRouteRuntime(source), importer, {
           ...options,
           skipSelf: true,
         });
