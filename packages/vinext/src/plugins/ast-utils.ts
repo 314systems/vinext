@@ -46,8 +46,9 @@ export function getAstName(value: unknown): string | null {
 }
 
 export function forEachAstChild(node: AstRecord, callback: (child: AstRecord) => void): void {
-  for (const [key, value] of Object.entries(node)) {
+  for (const key in node) {
     if (SKIP_CHILD_KEYS.has(key)) continue;
+    const value = node[key];
     const child = toAstRecord(value);
     if (child) {
       callback(child);
