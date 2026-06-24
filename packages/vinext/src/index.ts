@@ -694,6 +694,28 @@ function projectMayContainServerActions(projectRoot: string): boolean {
   }
 }
 
+function projectMayContainCommonjs(projectRoot: string): boolean {
+  try {
+    for (const entry of fs.readdirSync(projectRoot, { withFileTypes: true })) {
+      const filePath = path.join(projectRoot, entry.name);
+      if (entry.isDirectory()) {
+        if (SERVER_ACTION_SCAN_EXCLUDED_DIRS.has(entry.name)) continue;
+        if (projectMayContainCommonjs(filePath)) return true;
+        continue;
+      }
+      if (!entry.isFile() || !SERVER_ACTION_SCAN_EXTENSIONS.has(path.extname(entry.name))) {
+        continue;
+      }
+      if (commonjsTransformCodeFilter.test(fs.readFileSync(filePath, "utf-8"))) {
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 function generateRootParamsModule(rootParamNames: Iterable<string>): string {
   const names = Array.from(new Set(rootParamNames)).filter(isValidExportIdentifier).sort();
   if (names.length === 0) return "export {};\n";
@@ -733,13 +755,16 @@ const appClientManualChunks = createClientManualChunks(_shimsDir, true);
 const appClientCodeSplittingConfig = createClientCodeSplittingConfig(appClientManualChunks);
 const commonjsTransformCodeFilter = /\b(?:require\s*\(|module\s*\.|exports\s*\.)/;
 
-function createCommonjsPlugin(): Plugin {
+function createCommonjsPlugin(isEnabled: () => boolean): Plugin {
   const plugin = commonjs();
   if (typeof plugin.transform === "function") {
     const handler = plugin.transform;
     plugin.transform = {
       filter: { code: commonjsTransformCodeFilter },
-      handler,
+      handler(...args) {
+        if (!isEnabled()) return null;
+        return Reflect.apply(handler, this, args);
+      },
     };
   }
   return plugin;
@@ -1145,6 +1170,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   const staticImageAssets = new Map<string, { fileName: string; source: Buffer }>();
   const staticImageImportsByModule = new Map<string, Set<string>>();
   const writtenStaticImageFiles = new Set<string>();
+  let commonjsCompatibilityEnabled = true;
 
   // Shared state for the MDX proxy plugin. We auto-inject @mdx-js/rollup when
   // MDX is detected in app/pages during config(), and lazily on first plain
@@ -1222,7 +1248,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     createIgnoreDynamicRequestsPlugin(() => nextConfig?.turbopackTranspilePackages ?? []),
     // Transform CJS require()/module.exports to ESM before other plugins
     // analyze imports (RSC directive scanning, shim resolution, etc.)
-    createCommonjsPlugin(),
+    createCommonjsPlugin(() => commonjsCompatibilityEnabled),
     // Enable JSX in plain .js files. Next.js allows JSX in .js files
     // (Babel/SWC handle it transparently), but Vite 8's built-in `vite:oxc`
     // plugin excludes .js files by default (`exclude: /\.js$/`) AND infers
@@ -1390,6 +1416,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         appDir = path.posix.join(baseDir, "app");
         hasPagesDir = fs.existsSync(pagesDir);
         hasAppDir = !options.disableAppRouter && fs.existsSync(appDir);
+        commonjsCompatibilityEnabled = env?.command !== "build" || projectMayContainCommonjs(root);
 
         // Load next.config.js if present (always from project root, not src/),
         // unless vinext({ nextConfig }) explicitly overrides it.
