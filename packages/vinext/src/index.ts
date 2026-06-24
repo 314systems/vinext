@@ -4631,7 +4631,11 @@ export const loadServerActionClient = ${
           if (normalizePathSeparators(id).startsWith(cacheDirPrefix)) {
             return null;
           }
-          return replaceTypeofWindow(code, getTypeofWindowReplacement(this.environment), id);
+          return replaceTypeofWindow(code, getTypeofWindowReplacement(this.environment), id, {
+            sourcemap:
+              this.environment.config.command !== "build" ||
+              Boolean(this.environment.config.build.sourcemap),
+          });
         },
       },
     },

@@ -30,6 +30,10 @@ type EnvironmentLike = {
   };
 };
 
+type ReplaceTypeofWindowOptions = {
+  sourcemap?: boolean;
+};
+
 function createChildScope(node: AstNode, parent: AstScope): AstScope | null {
   if (
     node.type !== "Program" &&
@@ -108,9 +112,16 @@ function evaluateTypeofWindowComparison(
   return node.operator === "==" || node.operator === "===" ? equal : !equal;
 }
 
-export function replaceTypeofWindow(code: string, replacement: WindowType, id = "file.js") {
+export function replaceTypeofWindow(
+  code: string,
+  replacement: WindowType,
+  idOrOptions: string | ReplaceTypeofWindowOptions = "file.js",
+  maybeOptions: ReplaceTypeofWindowOptions = {},
+) {
   if (!/typeof\s+window/.test(code)) return null;
 
+  const id = typeof idOrOptions === "string" ? idOrOptions : "file.js";
+  const options = typeof idOrOptions === "string" ? maybeOptions : idOrOptions;
   const extension = path.extname(id.split("?", 1)[0]);
   const lang =
     extension === ".ts" || extension === ".mts" || extension === ".cts"
@@ -223,6 +234,6 @@ export function replaceTypeofWindow(code: string, replacement: WindowType, id = 
 
   return {
     code: output.toString(),
-    map: output.generateMap({ hires: "boundary" }),
+    map: options.sourcemap === false ? null : output.generateMap({ hires: "boundary" }),
   };
 }

@@ -210,6 +210,15 @@ console.log(typeof window)`,
     expect(result?.code).toBe("const value = (serverValue, fallbackValue)");
   });
 
+  it("can skip source map generation when build sourcemaps are disabled", () => {
+    const result = replaceTypeofWindow(`export const value = typeof window`, "undefined", {
+      sourcemap: false,
+    });
+
+    expect(result?.code).toBe(`export const value = "undefined"`);
+    expect(result?.map).toBeNull();
+  });
+
   it("uses the resolved environment consumer for custom client environments", () => {
     expect(getTypeofWindowReplacement({ config: { consumer: "client" } })).toBe("object");
     expect(getTypeofWindowReplacement({ config: { consumer: "server" } })).toBe("undefined");
