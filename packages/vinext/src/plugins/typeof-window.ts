@@ -118,7 +118,10 @@ export function replaceTypeofWindow(
   idOrOptions: string | ReplaceTypeofWindowOptions = "file.js",
   maybeOptions: ReplaceTypeofWindowOptions = {},
 ) {
-  if (!/typeof\s+window/.test(code)) return null;
+  const typeofWindowPositions = [...code.matchAll(/\btypeof\s+window\b/g)].map(
+    (match) => match.index,
+  );
+  if (typeofWindowPositions.length === 0) return null;
 
   const id = typeof idOrOptions === "string" ? idOrOptions : "file.js";
   const options = typeof idOrOptions === "string" ? maybeOptions : idOrOptions;
@@ -146,16 +149,36 @@ export function replaceTypeofWindow(
   collectDirectScopeBindings(ast, rootScope);
   collectVarScopeBindings(ast, rootScope);
 
+  function mayContainTypeofWindow(node: AstNode): boolean {
+    if (!hasRange(node)) return true;
+    let low = 0;
+    let high = typeofWindowPositions.length - 1;
+    while (low <= high) {
+      const middle = (low + high) >> 1;
+      const position = typeofWindowPositions[middle]!;
+      if (position < node.start) {
+        low = middle + 1;
+      } else if (position >= node.end) {
+        high = middle - 1;
+      } else {
+        return true;
+      }
+    }
+    return false;
+  }
+
   function visit(node: AstNode, parentScope: AstScope): void {
     if (isFunctionNode(node)) {
       const parameterScope = createAstScope(parentScope);
       collectBindingNames(node.id, parameterScope.bindings);
       for (const parameter of nodeArray(node.params)) {
         collectBindingNames(parameter, parameterScope.bindings);
-        if (isAstRecord(parameter)) visit(parameter, parameterScope);
+        if (isAstRecord(parameter) && mayContainTypeofWindow(parameter)) {
+          visit(parameter, parameterScope);
+        }
       }
 
-      if (isAstRecord(node.body)) {
+      if (isAstRecord(node.body) && mayContainTypeofWindow(node.body)) {
         if (node.body.type === "BlockStatement") {
           const bodyScope = createAstScope(parameterScope);
           collectDirectScopeBindings(node.body, bodyScope);
@@ -187,7 +210,7 @@ export function replaceTypeofWindow(
         if (isAstRecord(selected) && hasRange(selected)) {
           output.remove(node.start, selected.start);
           output.remove(selected.end, node.end);
-          visit(selected, scope);
+          if (mayContainTypeofWindow(selected)) visit(selected, scope);
         } else {
           output.overwrite(node.start, node.end, ";");
         }
@@ -206,7 +229,7 @@ export function replaceTypeofWindow(
         } else {
           output.appendLeft(selected.end, ")");
         }
-        visit(selected, scope);
+        if (mayContainTypeofWindow(selected)) visit(selected, scope);
         changed = true;
         return;
       }
@@ -224,11 +247,13 @@ export function replaceTypeofWindow(
       return;
     }
 
-    forEachAstChild(node, (child) => visit(child, scope));
+    forEachAstChild(node, (child) => {
+      if (mayContainTypeofWindow(child)) visit(child, scope);
+    });
   }
 
   for (const node of ast.body) {
-    if (isAstRecord(node)) visit(node, rootScope);
+    if (isAstRecord(node) && mayContainTypeofWindow(node)) visit(node, rootScope);
   }
   if (!changed) return null;
 
