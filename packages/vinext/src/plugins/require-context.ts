@@ -57,7 +57,10 @@ export function createRequireContextPlugin(): Plugin {
     enforce: "pre",
     transform: {
       filter: {
-        id: /\.(?:[cm]?[jt]s|[jt]sx)(?:\?.*)?$/i,
+        id: {
+          include: /\.(?:[cm]?[jt]s|[jt]sx)(?:\?.*)?$/i,
+          exclude: /[\\/]node_modules[\\/]/,
+        },
         code: /\brequire\b[\s\S]*\.context/,
       },
       handler(code, id) {
