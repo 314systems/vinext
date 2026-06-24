@@ -6,6 +6,47 @@ import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import vinext from "../packages/vinext/src/index.js";
 import { APP_FIXTURE_DIR, fetchHtml, RSC_ENTRIES } from "./helpers.js";
 
+async function resolvePluginPromises(plugins: ReturnType<typeof vinext>): Promise<any[]> {
+  return (
+    await Promise.all(
+      plugins.map(async (plugin) => {
+        if (plugin && typeof (plugin as any).then === "function") {
+          return await (plugin as Promise<any>);
+        }
+        return plugin;
+      }),
+    )
+  ).flat();
+}
+
+function writeFakeRscPackage(root: string): void {
+  const packageDir = path.join(root, "node_modules", "@vitejs", "plugin-rsc");
+  fs.mkdirSync(packageDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(packageDir, "package.json"),
+    JSON.stringify({
+      name: "@vitejs/plugin-rsc",
+      type: "module",
+      exports: {
+        ".": "./index.js",
+        "./transforms": "./transforms.js",
+      },
+    }),
+  );
+  fs.writeFileSync(
+    path.join(packageDir, "index.js"),
+    `
+export default function rsc(options) {
+  return [{ name: "rsc", __options: options }];
+}
+export function getPluginApi() {
+  return undefined;
+}
+`,
+  );
+  fs.writeFileSync(path.join(packageDir, "transforms.js"), "export {};\n");
+}
+
 describe("RSC plugin auto-registration", () => {
   let server: ViteDevServer;
   let baseUrl: string;
@@ -149,16 +190,7 @@ describe("RSC plugin auto-registration", () => {
 
       const plugins = vinext({ appDir: tmpDir, react: false });
 
-      const resolvedPlugins = (
-        await Promise.all(
-          plugins.map(async (plugin) => {
-            if (plugin && typeof (plugin as any).then === "function") {
-              return await (plugin as Promise<any>);
-            }
-            return plugin;
-          }),
-        )
-      ).flat();
+      const resolvedPlugins = await resolvePluginPromises(plugins);
 
       const hasRscPlugin = resolvedPlugins.some((p) => p && (p as any).name === "rsc");
       expect(hasRscPlugin).toBe(true);
@@ -173,19 +205,53 @@ describe("RSC plugin auto-registration", () => {
       // Empty directory — no app/ or src/app/.
       const plugins = vinext({ appDir: tmpDir, react: false });
 
-      const resolvedPlugins = (
-        await Promise.all(
-          plugins.map(async (plugin) => {
-            if (plugin && typeof (plugin as any).then === "function") {
-              return await (plugin as Promise<any>);
-            }
-            return plugin;
-          }),
-        )
-      ).flat();
+      const resolvedPlugins = await resolvePluginPromises(plugins);
 
       const hasRscPlugin = resolvedPlugins.some((p) => p && (p as any).name === "rsc");
       expect(hasRscPlugin).toBe(false);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("disables plugin-rsc server reference scanning when the project has no server actions", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-no-actions-"));
+    try {
+      fs.mkdirSync(path.join(tmpDir, "app"), { recursive: true });
+      fs.writeFileSync(
+        path.join(tmpDir, "app", "page.tsx"),
+        "export default function Home() { return <h1>Home</h1>; }",
+      );
+      writeFakeRscPackage(tmpDir);
+
+      const resolvedPlugins = await resolvePluginPromises(vinext({ appDir: tmpDir, react: false }));
+      const rscPlugin = resolvedPlugins.find((p) => p && (p as any).name === "rsc") as any;
+
+      expect(rscPlugin.__options.serverReferences).toBe(false);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps plugin-rsc server reference scanning when server actions live outside app/", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-actions-"));
+    try {
+      fs.mkdirSync(path.join(tmpDir, "app"), { recursive: true });
+      fs.mkdirSync(path.join(tmpDir, "lib"), { recursive: true });
+      fs.writeFileSync(
+        path.join(tmpDir, "app", "page.tsx"),
+        "import { action } from '../lib/actions'; export default function Home() { return <h1>Home</h1>; }",
+      );
+      fs.writeFileSync(
+        path.join(tmpDir, "lib", "actions.ts"),
+        "'use server';\nexport async function action() {}\n",
+      );
+      writeFakeRscPackage(tmpDir);
+
+      const resolvedPlugins = await resolvePluginPromises(vinext({ appDir: tmpDir, react: false }));
+      const rscPlugin = resolvedPlugins.find((p) => p && (p as any).name === "rsc") as any;
+
+      expect(rscPlugin.__options.serverReferences).toBe(true);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

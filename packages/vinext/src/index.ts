@@ -690,6 +690,49 @@ function hasReactDirective(code: string): boolean {
   return getLeadingReactDirective(code) !== null;
 }
 
+const SERVER_ACTION_SCAN_EXTENSIONS = new Set([
+  ".js",
+  ".jsx",
+  ".ts",
+  ".tsx",
+  ".mjs",
+  ".mts",
+  ".cjs",
+  ".cts",
+  ".mdx",
+]);
+const SERVER_ACTION_SCAN_EXCLUDED_DIRS = new Set([
+  ".git",
+  ".next",
+  ".vinext",
+  ".vite",
+  "coverage",
+  "dist",
+  "node_modules",
+]);
+
+function projectMayContainServerActions(projectRoot: string): boolean {
+  try {
+    for (const entry of fs.readdirSync(projectRoot, { withFileTypes: true })) {
+      const filePath = path.join(projectRoot, entry.name);
+      if (entry.isDirectory()) {
+        if (SERVER_ACTION_SCAN_EXCLUDED_DIRS.has(entry.name)) continue;
+        if (projectMayContainServerActions(filePath)) return true;
+        continue;
+      }
+      if (!entry.isFile() || !SERVER_ACTION_SCAN_EXTENSIONS.has(path.extname(entry.name))) {
+        continue;
+      }
+      if (fs.readFileSync(filePath, "utf-8").includes("use server")) {
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 function generateRootParamsModule(rootParamNames: Iterable<string>): string {
   const names = Array.from(new Set(rootParamNames)).filter(isValidExportIdentifier).sort();
   if (names.length === 0) return "export {};\n";
@@ -1009,10 +1052,17 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   // Must mirror the full detection logic: check {base}/app then {base}/src/app.
   const autoRsc = options.rsc !== false;
   const earlyBaseDir = options.appDir ?? process.cwd();
-  const earlyAppDirExists =
-    !options.disableAppRouter &&
-    (fs.existsSync(path.join(earlyBaseDir, "app")) ||
-      fs.existsSync(path.join(earlyBaseDir, "src", "app")));
+  const earlyRootAppDir = path.join(earlyBaseDir, "app");
+  const earlySrcAppDir = path.join(earlyBaseDir, "src", "app");
+  const earlyAppDir =
+    !options.disableAppRouter && fs.existsSync(earlyRootAppDir)
+      ? earlyRootAppDir
+      : !options.disableAppRouter && fs.existsSync(earlySrcAppDir)
+        ? earlySrcAppDir
+        : null;
+  const earlyAppDirExists = earlyAppDir !== null;
+  const earlyMayContainServerActions =
+    earlyAppDir === null ? true : projectMayContainServerActions(earlyBaseDir);
 
   // IMPORTANT: Resolve @vitejs/plugin-rsc subpath imports from the user's
   // project root, not from vinext's own package location. When vinext is
@@ -1057,13 +1107,17 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     rscPluginModulePromise = rscImport;
     rscPluginPromise = rscImport
       .then((mod) => {
-        const rsc = mod.default;
+        const rsc = mod.default as (options: {
+          entries: { rsc: string; ssr: string; client: string };
+          serverReferences: boolean;
+        }) => Plugin[];
         return rsc({
           entries: {
             rsc: VIRTUAL_RSC_ENTRY,
             ssr: VIRTUAL_APP_SSR_ENTRY,
             client: VIRTUAL_APP_BROWSER_ENTRY,
           },
+          serverReferences: earlyMayContainServerActions,
         });
       })
       .catch((cause) => {
@@ -1079,7 +1133,13 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     if (config.command !== "build" || !rscPluginModulePromise) return true;
 
     const { getPluginApi } = await rscPluginModulePromise;
-    const pluginApi = getPluginApi(config);
+    const pluginApi = (
+      getPluginApi as (config: {
+        plugins: unknown;
+      }) =>
+        | { manager: { isScanBuild: boolean; serverReferenceMetaMap: Record<string, unknown> } }
+        | undefined
+    )({ plugins: config.plugins });
     if (!pluginApi || pluginApi.manager.isScanBuild) return true;
     return Object.keys(pluginApi.manager.serverReferenceMetaMap).length > 0;
   }
