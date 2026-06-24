@@ -29,18 +29,8 @@ import {
   createValidFileMatcher,
   findFileWithExts,
 } from "./routing/file-matcher.js";
-import { createSSRHandler } from "./server/dev-server.js";
-import { handleApiRoute } from "./server/api-handler.js";
-import {
-  DEFAULT_DEVICE_SIZES,
-  DEFAULT_IMAGE_SIZES,
-  isImageOptimizationPath,
-  resolveDevImageRedirect,
-} from "./server/image-optimization.js";
 
 import { installSocketErrorBackstop } from "./server/socket-error-backstop.js";
-import { shouldInvalidateAppRouteFile } from "./server/dev-route-files.js";
-import { createDirectRunner } from "./server/dev-module-runner.js";
 import { generateRscEntry } from "./entries/app-rsc-entry.js";
 import { generateSsrEntry } from "./entries/app-ssr-entry.js";
 import {
@@ -78,24 +68,6 @@ import {
 import { mergeServerExternalPackages } from "./config/server-external-packages.js";
 
 import { findMiddlewareFile, isProxyFile, runMiddleware } from "./server/middleware.js";
-import { isNextDataPathname, parseNextDataPathname } from "./server/pages-data-route.js";
-import { resolvePagesI18nRequest } from "./server/pages-i18n.js";
-import {
-  MIDDLEWARE_NEXT_HEADER,
-  MIDDLEWARE_REWRITE_HEADER,
-  NEXTJS_DEPLOYMENT_ID_HEADER,
-  VINEXT_MW_CTX_HEADER,
-  VINEXT_TIMING_HEADER,
-} from "./server/headers.js";
-import { logRequest, now } from "./server/request-log.js";
-import { normalizePath } from "./server/normalize-path.js";
-import {
-  filterInternalHeaders,
-  INTERNAL_HEADERS,
-  isOpenRedirectShaped,
-  normalizeTrailingSlash,
-  VINEXT_INTERNAL_HEADERS,
-} from "./server/request-pipeline.js";
 import {
   findInstrumentationClientFile,
   findInstrumentationFile,
@@ -106,21 +78,10 @@ import { precompressAssets } from "./build/precompress.js";
 import { ensureAssetsIgnore } from "./build/assets-ignore.js";
 import { emitNextClientRuntimeManifests } from "./build/next-client-runtime-manifests.js";
 import { collectInlineCssManifest, injectInlineCssManifestGlobal } from "./build/inline-css.js";
-import { validateDevRequest } from "./server/dev-origin-check.js";
-import { installDevStackSourcemapMiddleware } from "./server/dev-stack-sourcemap.js";
 
 import { scanMetadataFiles } from "./server/metadata-routes.js";
 
-import {
-  runPagesRequest,
-  type PagesPipelineDeps,
-  type MiddlewareResult,
-} from "./server/pages-request-pipeline.js";
-import {
-  pagesRouteHasPriorityOverAppRoute,
-  validateHybridRouteConflicts,
-} from "./server/hybrid-route-priority.js";
-import { matchesRewriteSource, proxyExternalRequest } from "./config/config-matchers.js";
+import type { PagesPipelineDeps, MiddlewareResult } from "./server/pages-request-pipeline.js";
 import { detectPackageManager } from "./utils/project.js";
 import { isUnknownRecord as isRecord } from "./utils/record.js";
 import { VIRTUAL_MODULE_ID_RE, VIRTUAL_PREFIX } from "./utils/virtual-module.js";
@@ -2739,6 +2700,8 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         sassComposesLoader.setResolvedConfig(config);
 
         if (config.command === "build" && hasAppDir && hasPagesDir) {
+          const { validateHybridRouteConflicts } =
+            await import("./server/hybrid-route-priority.js");
           const [appRoutes, pageRoutes, apiRoutes] = await Promise.all([
             appRouter(appDir, nextConfig?.pageExtensions, fileMatcher),
             pagesRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher),
@@ -3440,7 +3403,60 @@ export const loadServerActionClient = ${
         }
       },
 
-      configureServer(server: ViteDevServer) {
+      async configureServer(server: ViteDevServer) {
+        const [
+          { createSSRHandler },
+          { handleApiRoute },
+          {
+            DEFAULT_DEVICE_SIZES,
+            DEFAULT_IMAGE_SIZES,
+            isImageOptimizationPath,
+            resolveDevImageRedirect,
+          },
+          { shouldInvalidateAppRouteFile },
+          { createDirectRunner },
+          { isNextDataPathname, parseNextDataPathname },
+          { resolvePagesI18nRequest },
+          {
+            MIDDLEWARE_NEXT_HEADER,
+            MIDDLEWARE_REWRITE_HEADER,
+            NEXTJS_DEPLOYMENT_ID_HEADER,
+            VINEXT_MW_CTX_HEADER,
+            VINEXT_TIMING_HEADER,
+          },
+          { logRequest, now },
+          { normalizePath },
+          {
+            filterInternalHeaders,
+            INTERNAL_HEADERS,
+            isOpenRedirectShaped,
+            normalizeTrailingSlash,
+            VINEXT_INTERNAL_HEADERS,
+          },
+          { runPagesRequest },
+          { validateDevRequest },
+          { installDevStackSourcemapMiddleware },
+          { pagesRouteHasPriorityOverAppRoute, validateHybridRouteConflicts },
+          { matchesRewriteSource, proxyExternalRequest },
+        ] = await Promise.all([
+          import("./server/dev-server.js"),
+          import("./server/api-handler.js"),
+          import("./server/image-optimization.js"),
+          import("./server/dev-route-files.js"),
+          import("./server/dev-module-runner.js"),
+          import("./server/pages-data-route.js"),
+          import("./server/pages-i18n.js"),
+          import("./server/headers.js"),
+          import("./server/request-log.js"),
+          import("./server/normalize-path.js"),
+          import("./server/request-pipeline.js"),
+          import("./server/pages-request-pipeline.js"),
+          import("./server/dev-origin-check.js"),
+          import("./server/dev-stack-sourcemap.js"),
+          import("./server/hybrid-route-priority.js"),
+          import("./config/config-matchers.js"),
+        ]);
+
         // Watch route files for additions/removals to invalidate route cache.
         const pageExtensions = fileMatcher.extensionRegex;
 
