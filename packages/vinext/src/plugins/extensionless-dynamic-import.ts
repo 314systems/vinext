@@ -41,6 +41,8 @@ export function createExtensionlessDynamicImportPlugin(): Plugin {
         code: /\bimport\s*\(/,
       },
       handler(code, id) {
+        if (!hasPossibleExtensionlessRelativeTemplateImport(code)) return null;
+
         const lang = langForId(id)!;
 
         let ast: unknown;
@@ -70,6 +72,82 @@ export function createExtensionlessDynamicImportPlugin(): Plugin {
       },
     },
   };
+}
+
+function hasPossibleExtensionlessRelativeTemplateImport(code: string): boolean {
+  let index = -1;
+  while ((index = code.indexOf("import", index + 1)) >= 0) {
+    if (index > 0 && isIdentifierChar(code.charCodeAt(index - 1))) continue;
+
+    let cursor = skipWhitespace(code, index + "import".length);
+    if (code[cursor] !== "(") continue;
+
+    cursor = skipWhitespaceAndComments(code, cursor + 1);
+    if (code[cursor] !== "`") continue;
+
+    const sourceStart = cursor + 1;
+    if (code.startsWith("./", sourceStart) || code.startsWith("../", sourceStart)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function skipWhitespace(code: string, index: number): number {
+  while (index < code.length && isWhitespaceChar(code.charCodeAt(index))) index += 1;
+  return index;
+}
+
+function skipWhitespaceAndComments(code: string, index: number): number {
+  while (index < code.length) {
+    const whitespaceEnd = skipWhitespace(code, index);
+    if (whitespaceEnd !== index) {
+      index = whitespaceEnd;
+      continue;
+    }
+
+    if (code.startsWith("/*", index)) {
+      const commentEnd = code.indexOf("*/", index + 2);
+      if (commentEnd < 0) return code.length;
+      index = commentEnd + 2;
+      continue;
+    }
+
+    if (code.startsWith("//", index)) {
+      const lineEnd = code.indexOf("\n", index + 2);
+      if (lineEnd < 0) return code.length;
+      index = lineEnd + 1;
+      continue;
+    }
+
+    break;
+  }
+
+  return index;
+}
+
+function isIdentifierChar(charCode: number): boolean {
+  return (
+    charCode === 36 ||
+    charCode === 95 ||
+    (charCode >= 48 && charCode <= 57) ||
+    (charCode >= 65 && charCode <= 90) ||
+    (charCode >= 97 && charCode <= 122)
+  );
+}
+
+function isWhitespaceChar(charCode: number): boolean {
+  return (
+    charCode === 9 ||
+    charCode === 10 ||
+    charCode === 11 ||
+    charCode === 12 ||
+    charCode === 13 ||
+    charCode === 32 ||
+    charCode === 160 ||
+    charCode === 65279
+  );
 }
 
 function langForId(id: string): "js" | "jsx" | "ts" | "tsx" | null {
