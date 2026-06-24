@@ -964,6 +964,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   // Populated from the resolved Vite config before transform filters are
   // compiled, while keeping the filter object referenced by the plugin stable.
   const typeofWindowIdFilter = { exclude: /(?!)/ };
+  const middlewareExportValidationIdFilter = { include: /(?!)/ };
 
   // Build-time layout classification manifest, captured in the RSC virtual
   // module's load hook and consumed in renderChunk to patch the generated
@@ -1507,6 +1508,17 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             ? path.posix.join(root, "src")
             : root;
         middlewarePath = findMiddlewareFile(root, fileMatcher, middlewareConventionDir);
+        if (middlewarePath) {
+          const middlewareIds = new Set([
+            normalizePathSeparators(middlewarePath),
+            canonicalize(middlewarePath),
+          ]);
+          middlewareExportValidationIdFilter.include = new RegExp(
+            `^(?:${[...middlewareIds].map(escapeRegExp).join("|")})(?:\\?.*)?$`,
+          );
+        } else {
+          middlewareExportValidationIdFilter.include = /(?!)/;
+        }
         const instrumentationClientInjects = nextConfig.instrumentationClientInject.map((spec) =>
           spec.startsWith("./") || spec.startsWith("../") ? path.resolve(root, spec) : spec,
         );
@@ -4494,17 +4506,20 @@ export const loadServerActionClient = ${
     {
       name: "vinext:validate-middleware-exports",
       enforce: "pre",
-      transform(code, id) {
-        if (!middlewarePath) return null;
-        const modulePath = stripViteModuleQuery(id);
-        if (canonicalize(modulePath) !== canonicalize(middlewarePath)) return null;
-        validateMiddlewareModuleExports(
-          code,
-          modulePath,
-          middlewarePath,
-          isProxyFile(middlewarePath),
-        );
-        return null;
+      transform: {
+        filter: { id: middlewareExportValidationIdFilter },
+        handler(code, id) {
+          if (!middlewarePath) return null;
+          const modulePath = stripViteModuleQuery(id);
+          if (canonicalize(modulePath) !== canonicalize(middlewarePath)) return null;
+          validateMiddlewareModuleExports(
+            code,
+            modulePath,
+            middlewarePath,
+            isProxyFile(middlewarePath),
+          );
+          return null;
+        },
       },
     },
     // Next.js rejects `export * from "..."` when compiling Pages Router files
