@@ -770,6 +770,19 @@ const clientManualChunks = createClientManualChunks(_shimsDir);
 const clientCodeSplittingConfig = createClientCodeSplittingConfig(clientManualChunks);
 const appClientManualChunks = createClientManualChunks(_shimsDir, true);
 const appClientCodeSplittingConfig = createClientCodeSplittingConfig(appClientManualChunks);
+const commonjsTransformCodeFilter = /\b(?:require\s*\(|module\s*\.|exports\s*\.)/;
+
+function createCommonjsPlugin(): Plugin {
+  const plugin = commonjs();
+  if (typeof plugin.transform === "function") {
+    const handler = plugin.transform;
+    plugin.transform = {
+      filter: { code: commonjsTransformCodeFilter },
+      handler,
+    };
+  }
+  return plugin;
+}
 
 function getClientOutputConfigForVite(
   viteMajorVersion: number,
@@ -1247,7 +1260,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     createIgnoreDynamicRequestsPlugin(() => nextConfig?.turbopackTranspilePackages ?? []),
     // Transform CJS require()/module.exports to ESM before other plugins
     // analyze imports (RSC directive scanning, shim resolution, etc.)
-    commonjs(),
+    createCommonjsPlugin(),
     // Enable JSX in plain .js files. Next.js allows JSX in .js files
     // (Babel/SWC handle it transparently), but Vite 8's built-in `vite:oxc`
     // plugin excludes .js files by default (`exclude: /\.js$/`) AND infers
