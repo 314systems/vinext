@@ -21,6 +21,7 @@ import {
   appRouter,
   invalidateAppRouteCache,
   matchAppRoute,
+  type AppRoute,
 } from "./routing/app-router.js";
 import type { NitroRouteRuleConfig } from "./build/nitro-route-rules.js";
 import {
@@ -49,11 +50,7 @@ import {
   toDocumentOnlyAppRoute,
   toLinkPrefetchRoute,
 } from "./entries/app-browser-entry.js";
-import {
-  collectRouteClassificationManifest,
-  type RouteClassificationManifest,
-} from "./build/route-classification-manifest.js";
-import { planRouteClassificationInjection } from "./build/route-classification-injector.js";
+import type { RouteClassificationManifest } from "./build/route-classification-manifest.js";
 import { normalizePathnameForRouteMatchStrict } from "./routing/utils.js";
 import {
   createRscCompatibilityId,
@@ -253,6 +250,77 @@ function hasServerOnlyMarkerImport(code: string): boolean {
   }
 
   return walk(ast.body);
+}
+
+function unwrapExpressionNode(node: ASTNode | null | undefined): ASTNode | null {
+  let current = node;
+  while (
+    current?.type === "TSAsExpression" ||
+    current?.type === "TSSatisfiesExpression" ||
+    current?.type === "TSNonNullExpression"
+  ) {
+    current = (current as ASTNode & { expression?: ASTNode }).expression;
+  }
+  return current ?? null;
+}
+
+function moduleExportsForceDynamic(code: string, filePath: string): boolean {
+  if (!code.includes("dynamic") || !code.includes("force-dynamic")) return false;
+
+  const lang = filePath.endsWith(".ts") ? "ts" : "tsx";
+  let ast: ReturnType<typeof parseAst>;
+  try {
+    ast = parseAst(code, { lang });
+  } catch {
+    return false;
+  }
+
+  for (const node of ast.body) {
+    if (node.type !== "ExportNamedDeclaration") continue;
+
+    const declaration = (node as ASTNode & { declaration?: ASTNode }).declaration;
+    if (declaration?.type !== "VariableDeclaration") continue;
+
+    const declarations = (
+      declaration as ASTNode & {
+        declarations?: Array<{
+          id?: { type?: string; name?: string };
+          init?: ASTNode | null;
+        }>;
+      }
+    ).declarations;
+
+    for (const declarator of declarations ?? []) {
+      if (declarator.id?.type !== "Identifier" || declarator.id.name !== "dynamic") continue;
+
+      const init = unwrapExpressionNode(declarator.init);
+      if (init?.type !== "Literal") continue;
+      if ((init as ASTNode & { value?: unknown }).value === "force-dynamic") return true;
+    }
+  }
+
+  return false;
+}
+
+function rootLayoutsForceDynamic(routes: readonly AppRoute[]): boolean {
+  const rootLayouts = new Set<string>();
+  for (const route of routes) {
+    const rootLayout = route.layouts[0];
+    if (rootLayout) rootLayouts.add(rootLayout);
+  }
+  if (rootLayouts.size === 0) return false;
+
+  for (const rootLayout of rootLayouts) {
+    let code: string;
+    try {
+      code = fs.readFileSync(rootLayout, "utf-8");
+    } catch {
+      return false;
+    }
+    if (!moduleExportsForceDynamic(code, rootLayout)) return false;
+  }
+
+  return true;
 }
 
 const __dirname = import.meta.dirname;
@@ -3173,7 +3241,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             // `routes` value passed to generateRscEntry below so that layout
             // indices in the manifest correspond 1:1 to the route.layouts arrays
             // used during codegen. renderChunk clears this after patching.
-            rscClassificationManifest = collectRouteClassificationManifest(routes);
+            rscClassificationManifest = rootLayoutsForceDynamic(routes)
+              ? null
+              : (
+                  await import("./build/route-classification-manifest.js")
+                ).collectRouteClassificationManifest(routes);
             return generateRscEntry(
               appDir,
               routes,
@@ -3306,7 +3378,7 @@ export const loadServerActionClient = ${
       // by reference rather than by name.
       renderChunk: {
         order: "pre",
-        handler(code, chunk) {
+        async handler(code, chunk) {
           // Only run in the RSC environment. SSR/client builds never contain
           // the __VINEXT_CLASS stub so there is nothing to patch there, and
           // pulling ModuleInfo from the wrong graph would give nonsense
@@ -3332,6 +3404,8 @@ export const loadServerActionClient = ${
           // on every renderChunk invocation. The macOS realpath quirk
           // (/var/folders/... → /private/var/folders/...) still applies to
           // every path we hand to the classifier.
+          const { planRouteClassificationInjection } =
+            await import("./build/route-classification-injector.js");
 
           // Adapter: the classifier in `build/layout-classification.ts` uses
           // `dynamicImportedIds` (matches the old-Rollup field name we used when
