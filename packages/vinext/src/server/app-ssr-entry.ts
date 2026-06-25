@@ -307,7 +307,10 @@ function buildHeadInjectionHtml(
   const navPayload = {
     pathname: navContext.pathname,
     searchParams: [...navContext.searchParams.entries()],
-    ...(navContext.didSearchParamsBailout === true ? { useLocationSearchParams: true } : {}),
+    ...(navContext.didSearchParamsBailout === true ||
+    (typeof navContext.isStaticGeneration === "object" && navContext.isForceStatic !== true)
+      ? { useLocationSearchParams: true }
+      : {}),
   };
   const rscMetadataScript = createInlineScriptTag(
     createNavigationRuntimeRscMetadataScript(navContext.params, navPayload),

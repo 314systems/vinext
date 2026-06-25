@@ -1491,6 +1491,9 @@ describe("app page dispatch", () => {
       loadSsrHandler: async () => ({
         async handleSsr(_rscStream, navigationContext, _fontData, captureOptions) {
           capturedNavigationContext = navigationContext;
+          expect(navigationContext?.isStaticGeneration).toEqual(
+            expect.objectContaining({ peek: expect.any(Function), read: expect.any(Function) }),
+          );
           try {
             readStaticGenerationNavigationContext(navigationContext);
           } catch (pendingDecision) {
