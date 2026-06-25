@@ -5497,6 +5497,7 @@ export const loadServerActionClient = ${
               // pure App Router gets its client entry via the RSC plugin.
               const script = buildRuntimeGlobalsScript({
                 clientEntryFile,
+                appBootstrapPreinitModules: runtimeMetadata.appBootstrapPreinitModules,
                 ssrManifest: ssrManifestData,
                 lazyChunks: lazyChunksData,
                 dynamicPreloads: dynamicPreloadsData,
@@ -5529,6 +5530,7 @@ export const loadServerActionClient = ${
             // Prepend globals to worker entry
             const script = buildRuntimeGlobalsScript({
               clientEntryFile,
+              appBootstrapPreinitModules: runtimeMetadata.appBootstrapPreinitModules,
               ssrManifest: ssrManifestData,
               lazyChunks: lazyChunksData,
               dynamicPreloads: dynamicPreloadsData,

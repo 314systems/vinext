@@ -268,6 +268,14 @@ declare global {
   var __VINEXT_DYNAMIC_PRELOADS__: Record<string, string[]> | undefined;
 
   /**
+   * Static imports of the App Router browser entry. During SSR these are
+   * preinitialized as modules so React hoists them into `<head>`, leaving the
+   * browser entry as the only bootstrap script in `<body>`.
+   */
+  // oxlint-disable-next-line no-var
+  var __VINEXT_APP_BOOTSTRAP_PREINIT_MODULES__: string[] | undefined;
+
+  /**
    * The client entry JS filename (e.g. `"_next/static/entry-abc123.js"`) for Pages
    * Router builds.
    * Injected into the Worker entry at build time for Pages Router only.

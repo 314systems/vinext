@@ -3,6 +3,7 @@
 import "./server-globals.js";
 import type { ReactNode } from "react";
 import type { ReactFormState } from "react-dom/client";
+import { preinitModule } from "react-dom";
 import { Fragment, createElement as createReactElement, use } from "react";
 import { createFromReadableStream } from "@vitejs/plugin-rsc/ssr";
 import type { RenderToReadableStreamOptions } from "react-dom/server";
@@ -415,6 +416,12 @@ export async function handleSsr(
         let flightRoot: PromiseLike<AppWireElements> | null = null;
 
         function VinextFlightRoot(): ReactNode {
+          for (const moduleUrl of globalThis.__VINEXT_APP_BOOTSTRAP_PREINIT_MODULES__ ?? []) {
+            preinitModule(moduleUrl, {
+              as: "script",
+              nonce: options?.scriptNonce,
+            });
+          }
           if (!flightRoot) {
             flightRoot = createFromReadableStream<AppWireElements>(ssrStream);
           }

@@ -398,6 +398,7 @@ function installClientBuildManifestGlobals(
   assetPrefix: string,
 ): void {
   const metadata = computeClientRuntimeMetadata({ clientDir, assetBase, assetPrefix });
+  globalThis.__VINEXT_APP_BOOTSTRAP_PREINIT_MODULES__ = metadata.appBootstrapPreinitModules;
   globalThis.__VINEXT_LAZY_CHUNKS__ = metadata.lazyChunks;
   globalThis.__VINEXT_DYNAMIC_PRELOADS__ = metadata.dynamicPreloads;
 }
@@ -1163,6 +1164,7 @@ function installPagesClientAssetGlobals(options: {
   });
 
   globalThis.__VINEXT_CLIENT_ENTRY__ = metadata.clientEntryFile;
+  globalThis.__VINEXT_APP_BOOTSTRAP_PREINIT_MODULES__ = metadata.appBootstrapPreinitModules;
   globalThis.__VINEXT_LAZY_CHUNKS__ = metadata.lazyChunks;
   globalThis.__VINEXT_DYNAMIC_PRELOADS__ = metadata.dynamicPreloads;
 

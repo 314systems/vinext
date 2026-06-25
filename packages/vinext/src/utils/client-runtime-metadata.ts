@@ -19,9 +19,47 @@ import { resolveAssetsDir } from "./asset-prefix.js";
 
 type ClientRuntimeMetadata = {
   clientEntryFile?: string;
+  appBootstrapPreinitModules?: string[];
   lazyChunks?: string[];
   dynamicPreloads?: Record<string, string[]>;
 };
+
+function collectAppBootstrapPreinitModules(
+  buildManifest: NonNullable<ReturnType<typeof readClientBuildManifest>>,
+  appBrowserEntry: string | undefined,
+  applyBase: (file: string) => string,
+): string[] | undefined {
+  if (!appBrowserEntry) return undefined;
+
+  const entryKey = Object.keys(buildManifest).find(
+    (key) => buildManifest[key].file === appBrowserEntry,
+  );
+  if (!entryKey) return undefined;
+
+  const modules: string[] = [];
+  const seenFiles = new Set<string>();
+  const visitedChunks = new Set<string>();
+
+  function visit(key: string): void {
+    if (visitedChunks.has(key)) return;
+    visitedChunks.add(key);
+
+    const chunk = buildManifest[key];
+    if (!chunk) return;
+
+    for (const importedKey of chunk.imports ?? []) {
+      const importedChunk = buildManifest[importedKey];
+      if (importedChunk?.file.endsWith(".js") && !seenFiles.has(importedChunk.file)) {
+        seenFiles.add(importedChunk.file);
+        modules.push(applyBase(importedChunk.file));
+      }
+      visit(importedKey);
+    }
+  }
+
+  visit(entryKey);
+  return modules.length > 0 ? modules : undefined;
+}
 
 /**
  * Read the client build manifest and compute runtime metadata used by
@@ -45,11 +83,11 @@ export function computeClientRuntimeMetadata(opts: {
 }): ClientRuntimeMetadata {
   const buildManifestPath = path.join(opts.clientDir, ".vite", "manifest.json");
   const buildManifest = readClientBuildManifest(buildManifestPath);
+  const clientEntryManifest = readClientEntryManifest(opts.clientDir);
 
   const metadata: ClientRuntimeMetadata = {};
 
   if (opts.includeClientEntry) {
-    const clientEntryManifest = readClientEntryManifest(opts.clientDir);
     const entryOptions = {
       buildManifest,
       clientDir: opts.clientDir,
@@ -66,6 +104,12 @@ export function computeClientRuntimeMetadata(opts: {
   }
 
   if (!buildManifest) return metadata;
+
+  metadata.appBootstrapPreinitModules = collectAppBootstrapPreinitModules(
+    buildManifest,
+    clientEntryManifest?.appBrowserEntry,
+    (file) => manifestFileWithAssetPrefix(file, opts.assetBase, opts.assetPrefix),
+  );
 
   // `lazyChunks` and `dynamicPreloads` live in DIFFERENT key-spaces and must be
   // normalised differently:
@@ -107,6 +151,7 @@ export function computeClientRuntimeMetadata(opts: {
  */
 export function buildRuntimeGlobalsScript(input: {
   clientEntryFile?: string | null;
+  appBootstrapPreinitModules?: string[] | null;
   ssrManifest?: Record<string, string[]> | null;
   lazyChunks?: string[] | null;
   dynamicPreloads?: Record<string, string[]> | null;
@@ -119,6 +164,11 @@ export function buildRuntimeGlobalsScript(input: {
   const globals: string[] = [];
   if (input.clientEntryFile) {
     globals.push(`globalThis.__VINEXT_CLIENT_ENTRY__ = ${JSON.stringify(input.clientEntryFile)};`);
+  }
+  if (input.appBootstrapPreinitModules && input.appBootstrapPreinitModules.length > 0) {
+    globals.push(
+      `globalThis.__VINEXT_APP_BOOTSTRAP_PREINIT_MODULES__ = ${JSON.stringify(input.appBootstrapPreinitModules)};`,
+    );
   }
   if (input.ssrManifest && Object.keys(input.ssrManifest).length > 0) {
     globals.push(`globalThis.__VINEXT_SSR_MANIFEST__ = ${JSON.stringify(input.ssrManifest)};`);

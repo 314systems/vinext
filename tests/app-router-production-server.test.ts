@@ -247,6 +247,22 @@ describe("App Router Production server (startProdServer)", () => {
     expect(html).toContain("<script");
   });
 
+  // Ported from Next.js: test/e2e/app-dir/app/index.test.ts
+  // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/app/index.test.ts
+  it("emits only the bootstrap script in the body and preinitializes the rest", async () => {
+    expect(globalThis.__VINEXT_APP_BOOTSTRAP_PREINIT_MODULES__).toBeTruthy();
+    const res = await fetch(`${baseUrl}/`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    const asyncScripts = html.match(/<script\b[^>]*\basync(?:=(?:""|''|async))?[^>]*>/g) ?? [];
+    const bodyHtml = html.match(/<body\b[^>]*>([\s\S]*?)<\/body>/)?.[1] ?? "";
+    const bodyAsyncScripts =
+      bodyHtml.match(/<script\b[^>]*\basync(?:=(?:""|''|async))?[^>]*>/g) ?? [];
+
+    expect(asyncScripts.length).toBeGreaterThan(1);
+    expect(bodyAsyncScripts).toHaveLength(1);
+  });
+
   // Ported from Next.js: test/e2e/app-dir/navigation/navigation.test.ts
   // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/navigation/navigation.test.ts
   //
@@ -315,6 +331,9 @@ describe("App Router Production server (startProdServer)", () => {
     expect(firstHtml).toContain(
       '<script nonce="first">Object.assign(((self[Symbol.for("vinext.navigationRuntime")]',
     );
+    for (const tag of firstHtml.match(/<script\b[^>]*\basync[^>]*><\/script>/g) ?? []) {
+      expect(tag).toContain('nonce="first"');
+    }
 
     const secondRes = await fetch(`${baseUrl}/revalidate-test?csp-nonce=second`);
     expect(secondRes.status).toBe(200);
@@ -473,6 +492,7 @@ describe("App Router Production server (startProdServer)", () => {
     let assetPrefixServer: import("node:http").Server | undefined;
     const prodGlobalKeys = [
       "__VINEXT_CLIENT_ENTRY__",
+      "__VINEXT_APP_BOOTSTRAP_PREINIT_MODULES__",
       "__VINEXT_DYNAMIC_PRELOADS__",
       "__VINEXT_LAZY_CHUNKS__",
       "__VINEXT_SSR_MANIFEST__",
@@ -577,6 +597,7 @@ describe("App Router Production server (startProdServer)", () => {
     let assetPrefixServer: import("node:http").Server | undefined;
     const prodGlobalKeys = [
       "__VINEXT_CLIENT_ENTRY__",
+      "__VINEXT_APP_BOOTSTRAP_PREINIT_MODULES__",
       "__VINEXT_DYNAMIC_PRELOADS__",
       "__VINEXT_LAZY_CHUNKS__",
       "__VINEXT_SSR_MANIFEST__",
@@ -1065,6 +1086,7 @@ describe("App Router Production server (startProdServer)", () => {
       let ccServer: import("node:http").Server | undefined;
       const prodGlobalKeys = [
         "__VINEXT_CLIENT_ENTRY__",
+        "__VINEXT_APP_BOOTSTRAP_PREINIT_MODULES__",
         "__VINEXT_DYNAMIC_PRELOADS__",
         "__VINEXT_LAZY_CHUNKS__",
         "__VINEXT_SSR_MANIFEST__",
@@ -1588,6 +1610,7 @@ describe("App Router production server entry module identity", () => {
     const EVAL_COUNT_KEY = "__vinext_test_entry_evaluations__";
     const prodGlobalKeys = [
       "__VINEXT_CLIENT_ENTRY__",
+      "__VINEXT_APP_BOOTSTRAP_PREINIT_MODULES__",
       "__VINEXT_DYNAMIC_PRELOADS__",
       "__VINEXT_LAZY_CHUNKS__",
       "__VINEXT_SSR_MANIFEST__",

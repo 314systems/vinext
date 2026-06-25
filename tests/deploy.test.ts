@@ -2554,6 +2554,7 @@ describe("Cloudflare closeBundle lazy chunk injection", () => {
     if (!fs.existsSync(workerEntry)) return;
     const script = buildRuntimeGlobalsScript({
       clientEntryFile: runtimeMetadata.clientEntryFile,
+      appBootstrapPreinitModules: runtimeMetadata.appBootstrapPreinitModules,
       ssrManifest: ssrManifestData,
       lazyChunks: runtimeMetadata.lazyChunks,
       dynamicPreloads: runtimeMetadata.dynamicPreloads,
@@ -2612,6 +2613,7 @@ describe("Cloudflare closeBundle lazy chunk injection", () => {
 
     const script = buildRuntimeGlobalsScript({
       clientEntryFile: runtimeMetadata.clientEntryFile,
+      appBootstrapPreinitModules: runtimeMetadata.appBootstrapPreinitModules,
       ssrManifest: ssrManifestData,
       lazyChunks: runtimeMetadata.lazyChunks,
       dynamicPreloads: runtimeMetadata.dynamicPreloads,
@@ -2641,6 +2643,15 @@ describe("Cloudflare closeBundle lazy chunk injection", () => {
       path.join(root, "dist", "client", ".vite", "manifest.json"),
       JSON.stringify(manifest),
     );
+    const appBrowserEntry = Object.values(manifest).find(
+      (entry: any) => entry.isEntry && entry.file.includes("app-entry"),
+    )?.file;
+    if (appBrowserEntry) {
+      fs.writeFileSync(
+        path.join(root, "dist", "client", "vinext-client-entry-manifest.json"),
+        JSON.stringify({ appBrowserEntry }),
+      );
+    }
 
     // dist/client/.vite/ssr-manifest.json (optional)
     if (ssrManifest) {
@@ -2722,6 +2733,17 @@ describe("Cloudflare closeBundle lazy chunk injection", () => {
     // Eager chunks should NOT be in the lazy list
     expect(lazyChunks).not.toContain("assets/app-entry.js");
     expect(lazyChunks).not.toContain("assets/framework.js");
+  });
+
+  it("App Router: injects static browser-entry imports for SSR preinitialization", () => {
+    setupAppRouterBuildOutput(tmpDir, manifestWithLazyChunks);
+
+    simulateCloseBundleAppRouter(tmpDir);
+
+    const code = fs.readFileSync(path.join(tmpDir, "dist", "server", "index.js"), "utf-8");
+    expect(code).toContain(
+      'globalThis.__VINEXT_APP_BOOTSTRAP_PREINIT_MODULES__ = ["assets/framework.js"];',
+    );
   });
 
   it("App Router: injects __VINEXT_DYNAMIC_PRELOADS__ into dist/server/index.js", () => {
