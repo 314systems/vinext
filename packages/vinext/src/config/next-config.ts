@@ -18,6 +18,23 @@ import { applyLocaleToRoutes, isExternalUrl } from "./config-matchers.js";
 import { loadTsconfigResolutionForRoot } from "./tsconfig-paths.js";
 import { getViteMajorVersion } from "../utils/vite-version.js";
 import { loadCommonJsModule, shouldRetryAsCommonJs } from "../utils/commonjs-loader.js";
+import {
+  collectBindingNames,
+  forEachAstChild,
+  isAstRecord,
+  nodeArray,
+  type AstRecord,
+} from "../plugins/ast-utils.js";
+import {
+  collectDirectScopeBindings,
+  collectLoopScopeBindings,
+  collectSwitchScopeBindings,
+  collectVarScopeBindings,
+  createAstScope,
+  hasAstBinding,
+  isFunctionNode,
+  type AstScope,
+} from "../plugins/ast-scope.js";
 
 /**
  * Parse a body size limit value (string or number) into bytes.
@@ -702,6 +719,140 @@ export function referencesCjsGlobals(source: string): boolean {
   return /\b(?:__filename|__dirname|require|module|exports)\b/.test(source);
 }
 
+const CJS_GLOBAL_NAMES = new Set(["__filename", "__dirname", "require", "module", "exports"]);
+
+function createConfigChildScope(node: AstRecord, parent: AstScope): AstScope | null {
+  if (
+    node.type !== "Program" &&
+    node.type !== "BlockStatement" &&
+    node.type !== "StaticBlock" &&
+    node.type !== "TSModuleBlock" &&
+    node.type !== "CatchClause" &&
+    node.type !== "ForStatement" &&
+    node.type !== "ForInStatement" &&
+    node.type !== "ForOfStatement" &&
+    node.type !== "ClassDeclaration" &&
+    node.type !== "ClassExpression"
+  ) {
+    return null;
+  }
+
+  const scope = createAstScope(parent);
+  if (node.type === "ClassDeclaration" || node.type === "ClassExpression") {
+    collectBindingNames(node.id, scope.bindings);
+  } else if (node.type === "CatchClause") {
+    collectBindingNames(node.param, scope.bindings);
+  }
+  collectDirectScopeBindings(node, scope);
+  if (node.type === "StaticBlock" || node.type === "TSModuleBlock") {
+    collectVarScopeBindings(node, scope);
+  }
+  if (
+    node.type === "ForStatement" ||
+    node.type === "ForInStatement" ||
+    node.type === "ForOfStatement"
+  ) {
+    collectLoopScopeBindings(node, scope);
+  }
+  return scope;
+}
+
+function isConfigIdentifierReference(node: AstRecord, parent: AstRecord | null): boolean {
+  if (!parent) return true;
+  if (
+    (parent.type === "MemberExpression" || parent.type === "OptionalMemberExpression") &&
+    parent.property === node &&
+    parent.computed !== true
+  ) {
+    return false;
+  }
+  if (
+    (parent.type === "Property" ||
+      parent.type === "PropertyDefinition" ||
+      parent.type === "MethodDefinition" ||
+      parent.type === "TSPropertySignature" ||
+      parent.type === "TSMethodSignature") &&
+    parent.key === node &&
+    parent.computed !== true &&
+    parent.shorthand !== true
+  ) {
+    return false;
+  }
+  return ![
+    "ImportSpecifier",
+    "ImportDefaultSpecifier",
+    "ImportNamespaceSpecifier",
+    "ExportSpecifier",
+    "LabeledStatement",
+    "BreakStatement",
+    "ContinueStatement",
+  ].includes(parent.type);
+}
+
+async function referencesUnboundCjsGlobals(source: string): Promise<boolean> {
+  if (!referencesCjsGlobals(source)) return false;
+
+  let ast: AstRecord;
+  try {
+    const { parseAst } = await import("vite");
+    ast = parseAst(source, { lang: "ts" }) as unknown as AstRecord;
+  } catch {
+    return true;
+  }
+
+  const rootScope = createAstScope(null);
+  collectDirectScopeBindings(ast, rootScope);
+  collectVarScopeBindings(ast, rootScope);
+  let found = false;
+
+  function visit(node: AstRecord, parent: AstRecord | null, parentScope: AstScope): void {
+    if (found) return;
+    if (isFunctionNode(node)) {
+      const parameterScope = createAstScope(parentScope);
+      collectBindingNames(node.id, parameterScope.bindings);
+      for (const parameter of nodeArray(node.params)) {
+        collectBindingNames(parameter, parameterScope.bindings);
+      }
+      if (isAstRecord(node.body)) {
+        if (node.body.type === "BlockStatement") {
+          const bodyScope = createAstScope(parameterScope);
+          collectDirectScopeBindings(node.body, bodyScope);
+          collectVarScopeBindings(node.body, bodyScope);
+          visit(node.body, node, bodyScope);
+        } else {
+          visit(node.body, node, parameterScope);
+        }
+      }
+      return;
+    }
+    if (node.type === "SwitchStatement") {
+      if (isAstRecord(node.discriminant)) visit(node.discriminant, node, parentScope);
+      const switchScope = createAstScope(parentScope);
+      collectSwitchScopeBindings(node, switchScope);
+      for (const switchCase of nodeArray(node.cases)) {
+        if (isAstRecord(switchCase)) visit(switchCase, node, switchScope);
+      }
+      return;
+    }
+
+    const scope = createConfigChildScope(node, parentScope) ?? parentScope;
+    if (
+      node.type === "Identifier" &&
+      typeof node.name === "string" &&
+      CJS_GLOBAL_NAMES.has(node.name) &&
+      !hasAstBinding(scope, node.name) &&
+      isConfigIdentifierReference(node, parent)
+    ) {
+      found = true;
+      return;
+    }
+    forEachAstChild(node, (child) => visit(child, node, scope));
+  }
+
+  visit(ast, null, rootScope);
+  return found;
+}
+
 /**
  * Static heuristic: returns true when the source appears to assign to
  * `module.exports` — either via `module.exports = …`, `module.exports.foo = …`,
@@ -959,7 +1110,7 @@ export async function loadNextConfig(
   const canUseNativeTypeScript =
     process.features?.typescript &&
     (filename.endsWith(".ts") || filename.endsWith(".mts")) &&
-    !referencesCjsGlobals(fs.readFileSync(configPath, "utf8"));
+    !(await referencesUnboundCjsGlobals(fs.readFileSync(configPath, "utf8")));
   if (canUseNativeTypeScript) {
     let nativeModule: unknown;
     try {

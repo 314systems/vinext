@@ -617,14 +617,16 @@ describe("loadNextConfig with tsconfig path aliases", () => {
       fs.writeFileSync(
         path.join(tmpDir, `next.config.${extension}`),
         `await Promise.resolve();\n` +
+          `const note = "module exports require"; // require is mentioned in a comment\n` +
           `export default async function config() {\n` +
           `  const { foo } = await import("./foo.ts");\n` +
-          `  return { env: { FOO: foo } };\n` +
+          `  return { env: { FOO: foo, NOTE: note } };\n` +
           `}\n`,
       );
 
       const config = await loadNextConfig(tmpDir);
       expect(config?.env?.FOO).toBe("foo");
+      expect(config?.env?.NOTE).toBe("module exports require");
     },
   );
 
