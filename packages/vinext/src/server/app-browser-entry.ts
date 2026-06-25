@@ -355,6 +355,7 @@ function restoreHistoryStateSnapshot(historyState: unknown): boolean {
   });
   if (!restored) return false;
 
+  browserNavigationController.beginNavigation();
   commitClientNavigationState();
   return true;
 }

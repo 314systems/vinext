@@ -579,7 +579,9 @@ export function createAppBrowserNavigationController(
 
   function dispatchSynchronousVisibleCommit(commit: ApprovedVisibleCommit): void {
     const setter = getBrowserRouterStateSetter();
-    setter(applyApprovedVisibleCommit(getBrowserRouterState(), commit));
+    flushSync(() => {
+      setter(applyApprovedVisibleCommit(getBrowserRouterState(), commit));
+    });
   }
 
   function createRestoredHistorySnapshotCommit(options: {
