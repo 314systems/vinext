@@ -16,11 +16,13 @@ const REQUIRE_MODULE_SUFFIX = ".vinext-require.js";
 
 type StaticRequire = {
   argument: AstRange;
+  call: AstRange;
   specifier: string;
 };
 
 export function createRequireExportConditionPlugin(): Plugin {
   const clientRequireModules = new Map<string, string>();
+  const serverRequireModules = new Map<string, string>();
   const externalRequireModules = new Map<string, string>();
 
   return {
@@ -47,14 +49,24 @@ export function createRequireExportConditionPlugin(): Plugin {
         const requires = collectStaticPackageRequires(ast);
         if (requires.length === 0) return null;
 
-        const output = new MagicString(code);
+        let output: MagicString | undefined;
         for (const requireCall of requires) {
+          const resolved = await this.resolve(requireCall.specifier, id, {
+            skipSelf: true,
+            kind: "require-call",
+          });
+          if (!resolved || isVirtualId(resolved.id)) continue;
+
+          output ??= new MagicString(code);
           output.overwrite(
             requireCall.argument.start,
             requireCall.argument.end,
             JSON.stringify(REQUIRE_PROXY_PREFIX + encodeURIComponent(requireCall.specifier)),
           );
+          output.appendRight(requireCall.call.end, ".__vinextRequireValue");
         }
+
+        if (!output) return null;
 
         return {
           code: output.toString(),
@@ -85,7 +97,9 @@ export function createRequireExportConditionPlugin(): Plugin {
         } catch {}
       }
       if (!(await hasLeadingUseClientDirective(requireResolvedId))) {
-        return { ...resolved, id: requireResolvedId };
+        const requireModuleId = `\0${cleanId}${REQUIRE_MODULE_SUFFIX}`;
+        serverRequireModules.set(requireModuleId, requireResolvedId);
+        return requireModuleId;
       }
 
       const requireModuleId = `\0${cleanId}${REQUIRE_MODULE_SUFFIX}`;
@@ -98,7 +112,15 @@ export function createRequireExportConditionPlugin(): Plugin {
         return `'use client';
 import * as namespace from ${JSON.stringify(realId)};
 const value = "default" in namespace ? namespace.default : namespace;
-export default value;
+export { value as __vinextRequireValue };
+`;
+      }
+
+      const serverId = serverRequireModules.get(id);
+      if (serverId) {
+        return `import * as namespace from ${JSON.stringify(serverId)};
+const value = "default" in namespace ? namespace.default : namespace;
+export { value as __vinextRequireValue };
 `;
       }
 
@@ -106,7 +128,7 @@ export default value;
       if (!specifier) return null;
       return `import { createRequire } from "node:module";
 const value = createRequire(import.meta.url)(${JSON.stringify(specifier)});
-export default value;
+export { value as __vinextRequireValue };
 `;
     },
   };
@@ -243,7 +265,7 @@ function collectStaticPackageRequires(ast: unknown): StaticRequire[] {
 }
 
 function parseStaticPackageRequire(node: AstRecord): StaticRequire | null {
-  if (node.type !== "CallExpression") return null;
+  if (node.type !== "CallExpression" || !hasRange(node)) return null;
   const callee = node.callee;
   if (!isAstRecord(callee) || callee.type !== "Identifier" || callee.name !== "require") {
     return null;
@@ -256,7 +278,7 @@ function parseStaticPackageRequire(node: AstRecord): StaticRequire | null {
 
   const specifier = stringLiteralValue(argument);
   if (!specifier || !isPackageSpecifier(specifier)) return null;
-  return { argument, specifier };
+  return { argument, call: node, specifier };
 }
 
 function stringLiteralValue(node: AstRecord): string | null {

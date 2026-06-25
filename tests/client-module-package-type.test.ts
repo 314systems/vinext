@@ -287,7 +287,8 @@ export default function Layout({ children }: { children: ReactNode }) {
           root,
           "app/page.tsx",
           `const value = require("external-condition");
-export default function Page() { return <p>external: {value}</p>; }`,
+const falsy = require("external-falsy");
+export default function Page() { return <p>external: {value}; falsy: {String(falsy)}</p>; }`,
         );
         writeFixtureFile(
           root,
@@ -308,6 +309,12 @@ export default function Page() { return <p>external: {value}</p>; }`,
           "node_modules/external-condition/import.js",
           `export default "import";`,
         );
+        writeFixtureFile(
+          root,
+          "node_modules/external-falsy/package.json",
+          JSON.stringify({ name: "external-falsy", type: "commonjs", main: "index.cjs" }),
+        );
+        writeFixtureFile(root, "node_modules/external-falsy/index.cjs", `module.exports = false;`);
 
         const createConfig = (): InlineConfig => ({
           root,
@@ -316,14 +323,20 @@ export default function Page() { return <p>external: {value}</p>; }`,
             vinext({
               appDir: root,
               ...(kind === "next-config"
-                ? { nextConfig: { serverExternalPackages: ["external-condition"] } }
+                ? {
+                    nextConfig: {
+                      serverExternalPackages: ["external-condition", "external-falsy"],
+                    },
+                  }
                 : {}),
             }),
           ],
-          ...(kind === "vite-config" ? { ssr: { external: ["external-condition"] } } : {}),
+          ...(kind === "vite-config"
+            ? { ssr: { external: ["external-condition", "external-falsy"] } }
+            : {}),
           logLevel: "silent",
         });
-        const routes = [["", "external: require"]] as const;
+        const routes = [["", "external: require; falsy: false"]] as const;
 
         await withDevServer(createConfig, (baseUrl) => expectRoutes(baseUrl, routes));
         await withProdServer(createConfig, path.join(root, "dist"), (baseUrl) =>

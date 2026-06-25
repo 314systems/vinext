@@ -43,7 +43,9 @@ const dynamicValue = require(name);`,
         "/app/page.tsx",
       );
 
-      expect(result?.code).toContain('require("virtual:vinext-require-condition:client-pkg")');
+      expect(result?.code).toContain(
+        'require("virtual:vinext-require-condition:client-pkg").__vinextRequireValue',
+      );
       expect(result?.code).toContain('require("./relative.js")');
       expect(result?.code).toContain("require(name)");
 
@@ -78,9 +80,18 @@ const dynamicValue = require(name);`,
         id: string,
         importer: string,
       ) => Promise<unknown>;
+      const serverProxyId = await resolveId.call(
+        { resolve },
+        "virtual:vinext-require-condition:server-pkg",
+        "/app/page.tsx",
+      );
+      expect(serverProxyId).toBe("\0virtual:vinext-require-condition:server-pkg.vinext-require.js");
+      const load = plugin.load as (id: string) => string | null;
+      expect(load(String(serverProxyId))).not.toContain("'use client'");
+      expect(load(String(serverProxyId))).toContain("export { value as __vinextRequireValue };");
       await expect(
         resolveId.call({ resolve }, "virtual:vinext-require-condition:server-pkg", "/app/page.tsx"),
-      ).resolves.toEqual({ id: moduleId });
+      ).resolves.toBe(serverProxyId);
       await expect(
         resolveId.call(
           { resolve },
@@ -106,7 +117,7 @@ const dynamicValue = require(name);`,
         "virtual:vinext-require-condition:next%2Fheaders",
         "/app/page.tsx",
       ),
-    ).resolves.toEqual({ id: "/vinext/shims/headers.ts" });
+    ).resolves.toBe("\0virtual:vinext-require-condition:next%2Fheaders.vinext-require.js");
   });
 
   it("loads external packages through createRequire at runtime", async () => {
@@ -146,9 +157,12 @@ const dynamicValue = require(name);`,
       );
       const load = plugin.load as (id: string) => string | null;
 
-      expect(load(resolvedProxyId ?? "")).toContain(
+      const code = load(resolvedProxyId ?? "");
+      expect(code).toContain(
         'const value = "default" in namespace ? namespace.default : namespace;',
       );
+      expect(code).toContain("export { value as __vinextRequireValue };");
+      expect(code).not.toContain("export default");
     });
   });
 
