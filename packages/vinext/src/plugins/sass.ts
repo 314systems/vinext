@@ -26,6 +26,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import MagicString from "magic-string";
 import {
   normalizePath,
   preprocessCSS,
@@ -47,6 +48,12 @@ type VitePreprocessorOptions = {
 const SASS_STYLESHEET_RE = /\.(?:scss|sass)(?:$|[?#])/;
 const CSS_IMPORT_PATH_RE = /^~[^\s"')]+\.css(?:[?#][^\s"')]*)?$/;
 
+type SassTildeReplacement = {
+  start: number;
+  end: number;
+  value: string;
+};
+
 export function normalizeSassTildeCssImport(
   source: string,
   importer: string | undefined,
@@ -60,11 +67,40 @@ export function normalizeSassTildeCssImport(
   return stripped.startsWith("/") ? normalizePath(path.resolve(root, `.${stripped}`)) : stripped;
 }
 
-function rewriteImportStatement(statement: string, id: string, root: string): string {
+function startsTildeCssImportTarget(statement: string, start: number): boolean {
+  let index = start;
+  while (/\s/.test(statement[index] ?? "")) index++;
+
+  const quote = statement[index];
+  if (quote === '"' || quote === "'") {
+    const end = statement.indexOf(quote, index + 1);
+    return end !== -1 && CSS_IMPORT_PATH_RE.test(statement.slice(index + 1, end));
+  }
+
+  if (statement.slice(index, index + 4).toLowerCase() !== "url(") return false;
+  index += 4;
+  while (/\s/.test(statement[index] ?? "")) index++;
+
+  const urlQuote = statement[index];
+  if (urlQuote === '"' || urlQuote === "'") {
+    const end = statement.indexOf(urlQuote, index + 1);
+    return end !== -1 && CSS_IMPORT_PATH_RE.test(statement.slice(index + 1, end));
+  }
+
+  const end = statement.indexOf(")", index);
+  return end !== -1 && CSS_IMPORT_PATH_RE.test(statement.slice(index, end).trimEnd());
+}
+
+function rewriteImportStatement(
+  statement: string,
+  statementStart: number,
+  id: string,
+  root: string,
+  replacements: SassTildeReplacement[],
+): string {
   let output = "";
   let parentheses = 0;
   let expectsTarget = true;
-  let hasTargetConditions = false;
 
   for (let index = 0; index < statement.length; ) {
     const char = statement[index];
@@ -104,7 +140,13 @@ function rewriteImportStatement(statement: string, id: string, root: string): st
       output += normalized ? `${char}${normalized}${char}` : statement.slice(index, end + 1);
       if (expectsTarget) {
         expectsTarget = false;
-        hasTargetConditions = false;
+        if (normalized) {
+          replacements.push({
+            start: statementStart + index + 1,
+            end: statementStart + end,
+            value: normalized,
+          });
+        }
       }
       index = Math.min(end + 1, statement.length);
       continue;
@@ -128,7 +170,11 @@ function rewriteImportStatement(statement: string, id: string, root: string): st
           if (normalized) {
             output += `${statement.slice(index, contentStart)}${normalized}${statement.slice(contentEnd, close + 1)}`;
             expectsTarget = false;
-            hasTargetConditions = false;
+            replacements.push({
+              start: statementStart + contentStart,
+              end: statementStart + contentEnd,
+              value: normalized,
+            });
             index = close + 1;
             continue;
           }
@@ -136,12 +182,8 @@ function rewriteImportStatement(statement: string, id: string, root: string): st
       }
     }
 
-    if (!expectsTarget && parentheses === 0) {
-      if (char === "," && !hasTargetConditions) {
-        expectsTarget = true;
-      } else if (!/\s/.test(char) && char !== ";") {
-        hasTargetConditions = true;
-      }
+    if (!expectsTarget && parentheses === 0 && char === ",") {
+      expectsTarget = startsTildeCssImportTarget(statement, index + 1);
     }
 
     if (char === "(") parentheses++;
@@ -154,9 +196,14 @@ function rewriteImportStatement(statement: string, id: string, root: string): st
   return output;
 }
 
-export function rewriteSassTildeCssImports(code: string, id: string, root: string): string | null {
+function rewriteSassTildeCssImportsWithReplacements(
+  code: string,
+  id: string,
+  root: string,
+): { code: string; replacements: SassTildeReplacement[] } | null {
   let output = "";
   let changed = false;
+  const replacements: SassTildeReplacement[] = [];
   const indentedSyntax = /\.sass(?:$|[?#])/.test(id);
   let parentheses = 0;
 
@@ -260,7 +307,7 @@ export function rewriteSassTildeCssImports(code: string, id: string, root: strin
       }
 
       const statement = code.slice(index, end);
-      const rewritten = rewriteImportStatement(statement, id, root);
+      const rewritten = rewriteImportStatement(statement, index, id, root, replacements);
       changed ||= rewritten !== statement;
       output += rewritten;
       index = end;
@@ -271,7 +318,11 @@ export function rewriteSassTildeCssImports(code: string, id: string, root: strin
     index++;
   }
 
-  return changed ? output : null;
+  return changed ? { code: output, replacements } : null;
+}
+
+export function rewriteSassTildeCssImports(code: string, id: string, root: string): string | null {
+  return rewriteSassTildeCssImportsWithReplacements(code, id, root)?.code ?? null;
 }
 
 export function wrapSassTildeAdditionalData(additionalData: string, root: string): string;
@@ -312,8 +363,17 @@ export function createSassTildeCssImportPlugin(): Plugin {
     transform: {
       filter: { id: SASS_STYLESHEET_RE, code: "@import" },
       handler(code, id) {
-        const rewritten = rewriteSassTildeCssImports(code, id, root);
-        return rewritten ? { code: rewritten, map: null } : null;
+        const rewritten = rewriteSassTildeCssImportsWithReplacements(code, id, root);
+        if (!rewritten) return null;
+
+        const output = new MagicString(code);
+        for (const replacement of rewritten.replacements) {
+          output.overwrite(replacement.start, replacement.end, replacement.value);
+        }
+        return {
+          code: output.toString(),
+          map: output.generateMap({ hires: "boundary", source: id, includeContent: true }),
+        };
       },
     },
   };

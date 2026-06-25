@@ -321,6 +321,13 @@ describe("rewriteSassTildeCssImports", () => {
     expect(rewriteSassTildeCssImports(source, id, root)).toBeNull();
   });
 
+  it("rewrites later imports after import conditions", () => {
+    const source = `@import '~package/a.css' layer(foo), '~package/b.css';`;
+    expect(rewriteSassTildeCssImports(source, id, root)).toBe(
+      `@import 'package/a.css' layer(foo), 'package/b.css';`,
+    );
+  });
+
   it("leaves Sass imports and ordinary CSS imports unchanged", () => {
     expect(
       rewriteSassTildeCssImports(
