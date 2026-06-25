@@ -255,6 +255,10 @@ export function createExternalHistoryStatePreservingMetadata(
   const bfcacheIds = readHistoryStateBfcacheIds(currentHistoryState);
   const bfcacheVersion = readHistoryStateBfcacheVersion(currentHistoryState);
 
+  if (previousNextUrl === null && traversalIndex === null && bfcacheIds === null) {
+    return callerState;
+  }
+
   const nextState = createHistoryStateWithNavigationMetadata(callerState, {
     bfcacheIds,
     bfcacheVersion: bfcacheIds === null ? undefined : bfcacheVersion,

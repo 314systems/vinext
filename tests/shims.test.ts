@@ -848,6 +848,12 @@ describe("next/navigation shim", () => {
         [historyTraversalIndexKey]: 7,
       });
       expect(win.history.state).not.toHaveProperty(externalHistoryStateKey);
+
+      const pagesRouterState = ["preserve", { nested: true }];
+      win.history.state = null;
+      win.history.pushState(pagesRouterState, "", "/pages-router-state");
+      expect(win.history.state).toBe(pagesRouterState);
+      expect(win.history.state).not.toHaveProperty(externalHistoryStateKey);
     } finally {
       vi.resetModules();
       if (previousWindow === undefined) {
