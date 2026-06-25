@@ -1708,7 +1708,7 @@ describe("Link prefetch scheduling", () => {
       });
       await flushPrefetchTasks();
 
-      expect(navigateRestorableHistoryTarget).toHaveBeenCalledWith("/intent-prefetch-target");
+      expect(navigateRestorableHistoryTarget).toHaveBeenCalledWith("/intent-prefetch-target", true);
       expect(result.fetch).not.toHaveBeenCalled();
       expect(result.navigate).not.toHaveBeenCalled();
     } finally {
@@ -1735,8 +1735,29 @@ describe("Link prefetch scheduling", () => {
       });
       await flushPrefetchTasks();
 
-      expect(navigateRestorableHistoryTarget).toHaveBeenCalledWith("/intent-prefetch-target");
+      expect(navigateRestorableHistoryTarget).toHaveBeenCalledWith("/intent-prefetch-target", true);
       expect(result.navigate).toHaveBeenCalledOnce();
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("prefetches a retained history target when Link uses replace", async () => {
+    const observer = stubIntersectionObserver();
+    const hasRestorableHistoryTarget = vi.fn(() => true);
+    const result = await renderIsolatedLink({
+      href: "/intent-prefetch-target",
+      nodeEnv: "production",
+      props: { replace: true },
+      runtimeFunctions: { hasRestorableHistoryTarget },
+    });
+
+    try {
+      observer.dispatchIntersectingEntry(result.anchor);
+      await flushPrefetchTasks();
+
+      expect(hasRestorableHistoryTarget).not.toHaveBeenCalled();
+      expect(result.fetch).toHaveBeenCalledOnce();
     } finally {
       result.restoreNodeEnv();
     }

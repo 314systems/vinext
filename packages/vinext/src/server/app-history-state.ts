@@ -48,21 +48,18 @@ export class HistoryStateSnapshotCache<TState> {
     this.#snapshots.clear();
   }
 
-  findCurrentIndex(options: {
+  hasCurrentAtIndex(options: {
     currentBfcacheVersion: number;
     guarded: boolean;
+    historyIndex: number;
     predicate: (state: TState) => boolean;
-  }): number | null {
-    if (options.guarded) return null;
-    for (const [historyIndex, snapshot] of this.#snapshots) {
-      if (
-        snapshot.bfcacheVersion === options.currentBfcacheVersion &&
-        options.predicate(snapshot.state)
-      ) {
-        return historyIndex;
-      }
-    }
-    return null;
+  }): boolean {
+    if (options.guarded) return false;
+    const snapshot = this.#snapshots.get(options.historyIndex);
+    return (
+      snapshot?.bfcacheVersion === options.currentBfcacheVersion &&
+      options.predicate(snapshot.state)
+    );
   }
 
   remember(options: { bfcacheVersion: number; historyIndex: number | null; state: TState }): void {
@@ -183,10 +180,14 @@ export class RestorableClientStateController<TState> {
     });
   }
 
-  findRestorableSnapshotIndex(predicate: (state: TState) => boolean): number | null {
-    return this.#snapshots.findCurrentIndex({
+  hasRestorableSnapshotAtIndex(
+    historyIndex: number,
+    predicate: (state: TState) => boolean,
+  ): boolean {
+    return this.#snapshots.hasCurrentAtIndex({
       currentBfcacheVersion: this.#currentBfcacheVersion,
       guarded: this.isCacheInvalidationGuarded(),
+      historyIndex,
       predicate,
     });
   }

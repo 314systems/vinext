@@ -187,8 +187,11 @@ export class AppBrowserHistoryController {
     this.#restorableClientState.invalidateClientState();
   }
 
-  findRestorableSnapshotIndex(predicate: (state: AppRouterState) => boolean): number | null {
-    return this.#restorableClientState.findRestorableSnapshotIndex(predicate);
+  hasRestorableSnapshotAtIndex(
+    historyIndex: number,
+    predicate: (state: AppRouterState) => boolean,
+  ): boolean {
+    return this.#restorableClientState.hasRestorableSnapshotAtIndex(historyIndex, predicate);
   }
 
   rememberHistoryStateSnapshot(state: AppRouterState): void {

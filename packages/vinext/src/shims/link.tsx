@@ -404,7 +404,12 @@ export function resolveAutoAppRoutePrefetch(href: string): {
  * Uses `requestIdleCallback` (or `setTimeout` fallback) to avoid blocking
  * the main thread during initial page load.
  */
-function prefetchUrl(href: string, mode: LinkPrefetchMode, priority: "low" | "high" = "low"): void {
+function prefetchUrl(
+  href: string,
+  mode: LinkPrefetchMode,
+  priority: "low" | "high" = "low",
+  canReuseRetainedHistory = true,
+): void {
   if (typeof window === "undefined") return;
 
   const prefetchHref = getLinkPrefetchHref({
@@ -467,7 +472,10 @@ function prefetchUrl(href: string, mode: LinkPrefetchMode, priority: "low" | "hi
         // Distinguish the same visible URL when it is prefetched from different
         // request contexts such as /feed vs /gallery or different mounted slots.
         const rscUrl = await createRscRequestUrl(fullHref, headers);
-        if (getNavigationRuntime()?.functions.hasRestorableHistoryTarget?.(fullHref) === true) {
+        if (
+          canReuseRetainedHistory &&
+          getNavigationRuntime()?.functions.hasRestorableHistoryTarget?.(fullHref) === true
+        ) {
           return;
         }
         const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
@@ -620,6 +628,7 @@ function promotePrefetchEntriesForNavigation(href: string): void {
  */
 let sharedObserver: IntersectionObserver | null = null;
 type LinkPrefetchInstance = {
+  canReuseRetainedHistory: boolean;
   href: string;
   isVisible: boolean;
   mode: LinkPrefetchMode;
@@ -635,7 +644,7 @@ function setVisibleLinkPrefetch(instance: LinkPrefetchInstance, isVisible: boole
   if (isVisible) {
     visibleLinkPrefetches.add(instance);
     if (instance.routerMode === "pages" && instance.viewportPrefetched) return;
-    prefetchUrl(instance.href, instance.mode, "low");
+    prefetchUrl(instance.href, instance.mode, "low", instance.canReuseRetainedHistory);
     instance.viewportPrefetched = true;
   } else {
     visibleLinkPrefetches.delete(instance);
@@ -650,7 +659,7 @@ function registerVisibleLinkPing(): void {
 function pingVisibleLinkPrefetches(): void {
   for (const instance of visibleLinkPrefetches) {
     if (instance.isVisible && instance.routerMode === "app") {
-      prefetchUrl(instance.href, instance.mode, "low");
+      prefetchUrl(instance.href, instance.mode, "low", instance.canReuseRetainedHistory);
     }
   }
 }
@@ -945,6 +954,7 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
 
     registerVisibleLinkPing();
     const instance: LinkPrefetchInstance = {
+      canReuseRetainedHistory: !replace,
       href: hrefToPrefetch,
       isVisible: false,
       mode: prefetchMode,
@@ -959,7 +969,7 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
       observedLinkPrefetches.delete(node);
       visibleLinkPrefetches.delete(instance);
     };
-  }, [shouldViewportPrefetch, prefetchMode, normalizedHref]);
+  }, [shouldViewportPrefetch, prefetchMode, normalizedHref, replace]);
 
   const prefetchOnIntent = useCallback(() => {
     if (
@@ -980,8 +990,8 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
       }
       promotePrefetchEntriesForNavigation(normalizedHref);
     }
-    prefetchUrl(normalizedHref, intentMode, "high");
-  }, [prefetchProp, isDangerous, prefetchMode, normalizedHref, unstable_dynamicOnHover]);
+    prefetchUrl(normalizedHref, intentMode, "high", !replace);
+  }, [prefetchProp, isDangerous, prefetchMode, normalizedHref, unstable_dynamicOnHover, replace]);
 
   const handleMouseEnter = useCallback(
     (e: MouseEvent<HTMLAnchorElement>) => {

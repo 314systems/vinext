@@ -327,6 +327,7 @@ let latestRscHmrUpdateId = 0;
 // navigation. This is intentionally not a per-navigation set — a future
 // asynchronous scroll restore for an older navId is already stale.
 let synchronousPopstateScrollRestoreNavigationId: number | null = null;
+let pendingRetainedHistoryScrollPosition: { x: number; y: number } | null = null;
 
 // Vite can notify the browser about an RSC HMR update before the dev server's
 // request runner has swapped to the invalidated module graph. Give the
@@ -2038,23 +2039,31 @@ function bootstrapHydration(
     commitHashNavigation: (href, historyUpdateMode, scroll) =>
       historyController.commitHashOnlyNavigation(href, historyUpdateMode, scroll),
     hasRestorableHistoryTarget: (href) => {
-      const targetHistoryIndex = historyController.findRestorableSnapshotIndex((state) =>
-        isSnapshotTargetHref(__basePath, state.navigationSnapshot, href),
-      );
+      const targetUrl = new URL(href, window.location.href);
+      if (targetUrl.hash !== "") return false;
       const currentHistoryIndex = historyController.currentHistoryTraversalIndex;
       return (
-        targetHistoryIndex !== null &&
         currentHistoryIndex !== null &&
-        targetHistoryIndex === currentHistoryIndex + 1
+        historyController.hasRestorableSnapshotAtIndex(currentHistoryIndex + 1, (state) =>
+          isSnapshotTargetHref(__basePath, state.navigationSnapshot, href),
+        )
       );
     },
-    navigateRestorableHistoryTarget: (href) => {
-      const targetHistoryIndex = historyController.findRestorableSnapshotIndex((state) =>
-        isSnapshotTargetHref(__basePath, state.navigationSnapshot, href),
-      );
+    navigateRestorableHistoryTarget: (href, scroll) => {
+      const targetUrl = new URL(href, window.location.href);
+      if (targetUrl.hash !== "") return false;
       const currentHistoryIndex = historyController.currentHistoryTraversalIndex;
-      if (targetHistoryIndex === null || currentHistoryIndex === null) return false;
-      if (targetHistoryIndex !== currentHistoryIndex + 1) return false;
+      if (
+        currentHistoryIndex === null ||
+        !historyController.hasRestorableSnapshotAtIndex(currentHistoryIndex + 1, (state) =>
+          isSnapshotTargetHref(__basePath, state.navigationSnapshot, href),
+        )
+      ) {
+        return false;
+      }
+      pendingRetainedHistoryScrollPosition = scroll
+        ? { x: 0, y: 0 }
+        : { x: window.scrollX, y: window.scrollY };
       window.history.forward();
       return true;
     },
@@ -2084,20 +2093,39 @@ function bootstrapHydration(
     },
     shouldSkipScrollRestore: (navId) => synchronousPopstateScrollRestoreNavigationId === navId,
     tryRestoreHistorySnapshot: (historyState) => {
+      const retainedHistoryScrollPosition = pendingRetainedHistoryScrollPosition;
+      pendingRetainedHistoryScrollPosition = null;
       browserNavigationController.beginNavigation();
       if (!restoreHistoryStateSnapshot(historyState)) return false;
 
-      restoreSynchronousPopstateScrollPosition(
-        {
-          getActiveNavigationId: () => browserNavigationController.getActiveNavigationId(),
-          isCurrentNavigation: (navId) => browserNavigationController.isCurrentNavigation(navId),
-          markScrollRestoreConsumed: (navId) => {
-            synchronousPopstateScrollRestoreNavigationId = navId;
+      if (retainedHistoryScrollPosition === null) {
+        restoreSynchronousPopstateScrollPosition(
+          {
+            getActiveNavigationId: () => browserNavigationController.getActiveNavigationId(),
+            isCurrentNavigation: (navId) => browserNavigationController.isCurrentNavigation(navId),
+            markScrollRestoreConsumed: (navId) => {
+              synchronousPopstateScrollRestoreNavigationId = navId;
+            },
+            restorePopstateScrollPosition,
           },
-          restorePopstateScrollPosition,
-        },
-        historyState,
-      );
+          historyState,
+        );
+      } else {
+        restoreSynchronousPopstateScrollPosition(
+          {
+            getActiveNavigationId: () => browserNavigationController.getActiveNavigationId(),
+            isCurrentNavigation: (navId) => browserNavigationController.isCurrentNavigation(navId),
+            markScrollRestoreConsumed: (navId) => {
+              synchronousPopstateScrollRestoreNavigationId = navId;
+            },
+            restorePopstateScrollPosition,
+          },
+          {
+            __vinext_scrollX: retainedHistoryScrollPosition.x,
+            __vinext_scrollY: retainedHistoryScrollPosition.y,
+          },
+        );
+      }
       return true;
     },
   });

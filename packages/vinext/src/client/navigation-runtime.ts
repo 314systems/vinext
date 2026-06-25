@@ -53,7 +53,7 @@ export type NavigationRuntimeFunctions = {
   ) => Promise<void>;
   navigate?: NavigationRuntimeNavigate;
   hasRestorableHistoryTarget?: (href: string) => boolean;
-  navigateRestorableHistoryTarget?: (href: string) => boolean;
+  navigateRestorableHistoryTarget?: (href: string, scroll: boolean) => boolean;
   /**
    * Called at the start of every App Router navigation so the <Link> shim can
    * reset any link that is still showing a `useLinkStatus()` pending state but

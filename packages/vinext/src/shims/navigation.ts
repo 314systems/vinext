@@ -1678,7 +1678,7 @@ export async function navigateClientSide(
 
   if (
     mode === "push" &&
-    getNavigationRuntime()?.functions.navigateRestorableHistoryTarget?.(fullHref) === true
+    getNavigationRuntime()?.functions.navigateRestorableHistoryTarget?.(fullHref, scroll) === true
   ) {
     clearAppNavigationFailureTarget(fullHref);
     return;
