@@ -86,6 +86,8 @@ export default function Page() {
     path.join(dynamicDir, "page.tsx"),
     `import { Suspense } from "react";
 
+export const revalidate = 30;
+
 async function DynamicContent({ param }: { param: string }) {
   await new Promise((resolve) => setTimeout(resolve, 5_000));
   return <div id={\`dynamic-page-content-\${param}\`}>{\`Dynamic page \${param}\`}</div>;
@@ -182,7 +184,10 @@ test("prefetches a fallback from a user Suspense boundary", async ({ page }) => 
       );
     });
     await page.click("#reveal-link");
-    expect((await prefetchResponse).ok()).toBe(true);
+    const response = await prefetchResponse;
+    expect(response.ok()).toBe(true);
+    expect(response.headers()["cache-control"]).toBe("no-store, must-revalidate");
+    expect(response.headers()["x-vinext-cache"]).toBeUndefined();
     await expect
       .poll(() =>
         page.evaluate(() =>

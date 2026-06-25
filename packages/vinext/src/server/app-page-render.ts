@@ -794,7 +794,9 @@ export async function renderAppPageLifecycle(
     // When skip transport is enabled, omit cacheState because the response is a
     // per-client payload, not a shared-cache MISS/HIT artifact. The absence also
     // keeps finalizeAppPageRscCacheResponse from overwriting no-store.
-    const rscResponsePolicy = shouldBypassRscCacheForSkipTransport
+    const shouldBypassRscCache =
+      shouldBypassRscCacheForSkipTransport || prefetchSuspenseShellWasAborted;
+    const rscResponsePolicy = shouldBypassRscCache
       ? { cacheControl: NO_STORE_CACHE_CONTROL }
       : resolveAppPageRscResponsePolicy({
           dynamicUsedDuringBuild,
@@ -808,6 +810,8 @@ export async function renderAppPageLifecycle(
         });
     if (shouldBypassRscCacheForSkipTransport) {
       options.isrDebug?.("RSC cache write skipped (skip transport payload)", options.cleanPathname);
+    } else if (prefetchSuspenseShellWasAborted) {
+      options.isrDebug?.("RSC cache write skipped (partial Suspense shell)", options.cleanPathname);
     }
     const shouldEmitDynamicStaleTime =
       options.dynamicStaleTimeSeconds !== undefined &&
@@ -858,7 +862,9 @@ export async function renderAppPageLifecycle(
 
     return finalizeAppPageRscCacheResponse(devRscResponse, {
       capturedRscDataPromise:
-        options.isProduction && shouldCaptureRscForCacheMetadata ? capturedRscDataRef.value : null,
+        options.isProduction && shouldCaptureRscForCacheMetadata && !prefetchSuspenseShellWasAborted
+          ? capturedRscDataRef.value
+          : null,
       cleanPathname: options.cleanPathname,
       consumeDynamicUsage: options.consumeDynamicUsage,
       consumeRenderObservationState: options.consumeRenderObservationState,
