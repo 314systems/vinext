@@ -584,6 +584,35 @@ describe("loadNextConfig with tsconfig path aliases", () => {
     }
   });
 
+  it.each(["ts", "mts"])(
+    "supports dynamic TypeScript imports from next.config.%s",
+    async (extension) => {
+      // Ported from Next.js:
+      // test/e2e/app-dir/next-config-ts-native-ts/dynamic-import-esm/
+      // test/e2e/app-dir/next-config-ts-native-mts/dynamic-import-esm/
+      // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/next-config-ts-native-ts/dynamic-import-esm/next.config.ts
+      tmpDir = makeTempDir();
+
+      fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify({ type: "module" }));
+      fs.writeFileSync(path.join(tmpDir, "foo.ts"), `export const foo = "foo";\n`);
+      fs.writeFileSync(
+        path.join(tmpDir, "tsconfig.json"),
+        JSON.stringify({ compilerOptions: { allowImportingTsExtensions: true } }),
+      );
+      fs.writeFileSync(
+        path.join(tmpDir, `next.config.${extension}`),
+        `await Promise.resolve();\n` +
+          `export default async function config() {\n` +
+          `  const { foo } = await import("./foo.ts");\n` +
+          `  return { env: { FOO: foo } };\n` +
+          `}\n`,
+      );
+
+      const config = await loadNextConfig(tmpDir);
+      expect(config?.env?.FOO).toBe("foo");
+    },
+  );
+
   it("resolves '@/*' imports in next.config.ts from tsconfig paths (no baseUrl)", async () => {
     tmpDir = makeTempDir();
 

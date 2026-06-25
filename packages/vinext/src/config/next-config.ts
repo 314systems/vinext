@@ -7,7 +7,7 @@
 import path from "node:path";
 import { createRequire } from "node:module";
 import fs from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 import commonjs from "vite-plugin-commonjs";
 import { PHASE_DEVELOPMENT_SERVER } from "vinext/shims/constants";
@@ -945,6 +945,23 @@ export async function loadNextConfig(
   // exclude the config file itself. macOS uses /private/var symlinks, so
   // string-compare without realpath would falsely include the config.
   const normalizedConfigPath = safeRealpath(path.resolve(configPath));
+
+  // Match Next.js's native TypeScript config path on Node 22.10+. Native
+  // import keeps the module loader alive while an exported async config runs,
+  // so dynamic imports inside that function continue to work. Vite's
+  // runnerImport closes its temporary runner after returning the namespace,
+  // which is too early for a later `await import()` from the config function.
+  // Fall back to the Vite runner when native Node resolution cannot load the
+  // project (for example tsconfig path aliases or CommonJS globals).
+  if (process.features?.typescript && (filename.endsWith(".ts") || filename.endsWith(".mts"))) {
+    let nativeModule: unknown;
+    try {
+      nativeModule = await import(pathToFileURL(configPath).href);
+    } catch {
+      // The Vite path below supports the broader config compatibility surface.
+    }
+    if (nativeModule !== undefined) return await unwrapConfig(nativeModule, phase);
+  }
 
   try {
     // Load config via Vite's module runner (TS + extensionless import support)
