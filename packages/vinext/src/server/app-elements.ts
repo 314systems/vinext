@@ -35,6 +35,7 @@ export {
   normalizeAppElements,
   parseAppElementsWireElementKey,
   readAppElementsMetadata,
+  readAppElementsRouteId,
   withLayoutFlags,
   type AppElementValue,
   type AppElementsInterception,

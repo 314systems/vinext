@@ -22,6 +22,7 @@ import {
   isAppElementsRecord,
   normalizeAppElements,
   readAppElementsMetadata,
+  readAppElementsRouteId,
   resolveVisitedResponseInterceptionContext,
   withLayoutFlags,
 } from "../packages/vinext/src/server/app-elements.js";
@@ -445,6 +446,15 @@ describe("app elements payload helpers", () => {
         }),
       ),
     ).toThrow("[vinext] Missing __route string in App Router payload");
+  });
+
+  it("reads and validates the route id without parsing unrelated metadata", () => {
+    expect(readAppElementsRouteId({ [APP_ROUTE_KEY]: "route:/dashboard" })).toBe(
+      "route:/dashboard",
+    );
+    expect(() => readAppElementsRouteId({})).toThrow(
+      "[vinext] Missing __route string in App Router payload",
+    );
   });
 
   it("rejects payloads with an invalid __rootLayout value", () => {

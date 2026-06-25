@@ -9,12 +9,8 @@ import {
   createProgressiveRscStream,
   getVinextBrowserGlobal,
 } from "./app-browser-stream.js";
-import {
-  readAppElementsMetadata,
-  normalizeAppElements,
-  type AppElements,
-  type AppWireElements,
-} from "./app-elements.js";
+import { normalizeAppElements, type AppElements, type AppWireElements } from "./app-elements.js";
+import { readAppElementsRouteId } from "./app-elements-route.js";
 import { ElementsContext, Slot } from "virtual:vinext-app-slot-runtime";
 import { installWindowNext } from "../client/window-next.js";
 
@@ -24,7 +20,7 @@ function decodeAppElementsPromise(payload: Promise<AppWireElements>): Promise<Ap
 
 function BrowserRoot({ initialElements }: { initialElements: Promise<AppElements> }) {
   const elements = use(initialElements);
-  const metadata = readAppElementsMetadata(elements);
+  const routeId = readAppElementsRouteId(elements);
 
   useEffect(() => {
     const hydratedAt = performance.now();
@@ -37,7 +33,7 @@ function BrowserRoot({ initialElements }: { initialElements: Promise<AppElements
   return createElement(
     ElementsContext.Provider,
     { value: elements },
-    createElement(Slot, { id: metadata.routeId }),
+    createElement(Slot, { id: routeId }),
   );
 }
 

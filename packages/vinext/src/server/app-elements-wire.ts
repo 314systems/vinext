@@ -14,8 +14,11 @@ import type {
 import type { ClientReuseManifestSkipDisposition } from "./client-reuse-manifest.js";
 import { isInterceptionMatchedUrlPath } from "./normalize-path.js";
 import { releaseAppElementRenderDependency } from "./app-render-dependency.js";
+import { APP_ROUTE_KEY, readAppElementsRouteId } from "./app-elements-route.js";
 import { compareStrings } from "../utils/compare.js";
 import { isUnknownRecord } from "../utils/record.js";
+
+export { APP_ROUTE_KEY, readAppElementsRouteId } from "./app-elements-route.js";
 
 const APP_INTERCEPTION_SEPARATOR = "\0";
 
@@ -26,7 +29,6 @@ export const APP_INTERCEPTION_CONTEXT_KEY = "__interceptionContext";
 export const APP_LAYOUT_IDS_KEY = "__layoutIds";
 export const APP_LAYOUT_FLAGS_KEY = "__layoutFlags";
 export const APP_RENDER_OBSERVATION_KEY = "__renderObservation";
-export const APP_ROUTE_KEY = "__route";
 export const APP_ROOT_LAYOUT_KEY = "__rootLayout";
 export const APP_SKIPPED_LAYOUT_IDS_KEY = "__skippedLayoutIds";
 export const APP_SOURCE_PAGE_KEY = "__sourcePage";
@@ -57,7 +59,7 @@ function createCacheProofRejectionCodeSet<const T extends readonly CacheProofRej
   return new Set(codes);
 }
 
-const CACHE_PROOF_REJECTION_CODES = createCacheProofRejectionCodeSet([
+const CACHE_PROOF_REJECTION_CODE_VALUES = [
   "CP_CACHE_ENTRY_PROOF_MISSING",
   "CP_MODEL_DISABLED",
   "CP_ARTIFACT_COMPATIBILITY_INCOMPATIBLE",
@@ -87,7 +89,14 @@ const CACHE_PROOF_REJECTION_CODES = createCacheProofRejectionCodeSet([
   "CP_STATIC_LAYOUT_ROOT_BOUNDARY_MISMATCH",
   "CP_STATIC_LAYOUT_ROOT_BOUNDARY_UNKNOWN",
   "CP_STATIC_LAYOUT_VARIANT_DIMENSION_UNPROVEN",
-]);
+] as const;
+let cacheProofRejectionCodes: ReadonlySet<string> | undefined;
+
+function getCacheProofRejectionCodes(): ReadonlySet<string> {
+  return (cacheProofRejectionCodes ??= createCacheProofRejectionCodeSet(
+    CACHE_PROOF_REJECTION_CODE_VALUES,
+  ));
+}
 
 type AppElementsSlotBindingState = "active" | "default" | "unmatched";
 
@@ -729,7 +738,7 @@ function createMissingCacheEntryReuseProof(): CacheEntryReuseProof {
 }
 
 function isCacheProofRejectionCode(value: unknown): value is CacheProofRejectionCode {
-  return typeof value === "string" && CACHE_PROOF_REJECTION_CODES.has(value);
+  return typeof value === "string" && getCacheProofRejectionCodes().has(value);
 }
 
 function isCacheProofFallbackMode(value: unknown): value is CacheProofBreakerFallbackMode {
@@ -799,11 +808,7 @@ function parseCacheEntryReuseProofMetadata(value: unknown): CacheEntryReuseProof
 export function readAppElementsMetadata(
   elements: Readonly<Record<string, unknown>>,
 ): AppElementsMetadata {
-  const routeId = elements[APP_ROUTE_KEY];
-  if (typeof routeId !== "string") {
-    throw new Error("[vinext] Missing __route string in App Router payload");
-  }
-
+  const routeId = readAppElementsRouteId(elements);
   const interceptionContext = elements[APP_INTERCEPTION_CONTEXT_KEY];
   if (
     interceptionContext !== undefined &&
