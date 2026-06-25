@@ -83,11 +83,7 @@ import type {
 import type { CreateRenderLifecycleSkipDispositionInput } from "./skip-cache-proof.js";
 import { buildAppPageTags } from "./implicit-tags.js";
 import type { ISRCacheEntry } from "./isr-cache.js";
-import {
-  createAppLayoutParamAccessTracker,
-  isAppLayoutObservationUnsafeForStaticReuse,
-  type AppLayoutParamAccessTracker,
-} from "./app-layout-param-observation.js";
+import type { AppLayoutParamAccessTracker } from "./app-layout-param-observation.js";
 
 type AppPageParams = Record<string, string | string[]>;
 type AppPageElement = ReactNode | Readonly<Record<string, ReactNode>>;
@@ -159,6 +155,11 @@ type LayoutSegmentConfigClassification = Readonly<{
 type EffectiveLayoutClassifications = Readonly<{
   buildTimeClassifications: ReadonlyMap<number, "static" | "dynamic"> | null;
   buildTimeReasons: ReadonlyMap<number, ClassificationReason> | null | undefined;
+}>;
+
+export type AppLayoutObservationRuntime = Readonly<{
+  createTracker: () => AppLayoutParamAccessTracker;
+  isUnsafeForStaticReuse: (tracker: AppLayoutParamAccessTracker, layoutId: string) => boolean;
 }>;
 
 export type AppPageDispatchRoute = {
@@ -282,6 +283,7 @@ export type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
   ) => string;
   isrSet: AppPageCacheSetter;
   appPageCacheRuntime?: typeof AppPageCacheRuntime;
+  layoutObservationRuntime?: AppLayoutObservationRuntime;
   loadSsrHandler: () => Promise<AppPageSsrHandler>;
   middlewareContext: AppPageMiddlewareContext;
   mountedSlotsHeader?: string | null;
@@ -486,7 +488,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
   const isDynamicError = dynamicConfig === "error";
   const isForceDynamic = dynamicConfig === "force-dynamic";
   const isDraftMode = isDraftModeRequest(options.request, options.draftModeSecret);
-  const layoutParamAccess = createAppLayoutParamAccessTracker();
+  const layoutParamAccess = options.layoutObservationRuntime?.createTracker();
 
   setCurrentFetchSoftTags(buildAppPageTags(options.cleanPathname, [], route.routeSegments));
   setCurrentFetchCacheMode(options.fetchCache ?? null);
@@ -847,10 +849,9 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     params: navigationParams,
   });
 
-  const layoutClassifications = getEffectiveLayoutClassifications(
-    route,
-    options.debugClassification,
-  );
+  const layoutClassifications = layoutParamAccess
+    ? getEffectiveLayoutClassifications(route, options.debugClassification)
+    : null;
   const activeFallbackShellState = options.pprRuntime?.getState() ?? null;
   const pprFallbackShellSignal = activeFallbackShellState?.abortController.signal;
   const pprFallbackShellReactSignal = activeFallbackShellState?.reactAbortController.signal;
@@ -932,33 +933,37 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     probePage() {
       return options.probePage();
     },
-    classification: {
-      getLayoutId(index) {
-        const treePosition = route.layoutTreePositions?.[index] ?? 0;
-        return createAppPayloadLayoutId(
-          createAppPageTreePath([...route.routeSegments], treePosition),
-        );
-      },
-      buildTimeClassifications: layoutClassifications.buildTimeClassifications,
-      buildTimeReasons: layoutClassifications.buildTimeReasons,
-      debugClassification: options.debugClassification,
-      isLayoutObservationDynamic(layoutId) {
-        return isAppLayoutObservationUnsafeForStaticReuse(
-          layoutParamAccess.getLayoutObservation(layoutId),
-        );
-      },
-      async runWithIsolatedDynamicScope(fn) {
-        const priorDynamic = consumeDynamicUsage();
-        try {
-          const result = await fn();
-          const dynamicDetected = consumeDynamicUsage();
-          return { result, dynamicDetected };
-        } finally {
-          consumeDynamicUsage();
-          if (priorDynamic) markDynamicUsage();
-        }
-      },
-    },
+    classification:
+      layoutParamAccess && layoutClassifications
+        ? {
+            getLayoutId(index) {
+              const treePosition = route.layoutTreePositions?.[index] ?? 0;
+              return createAppPayloadLayoutId(
+                createAppPageTreePath([...route.routeSegments], treePosition),
+              );
+            },
+            buildTimeClassifications: layoutClassifications.buildTimeClassifications,
+            buildTimeReasons: layoutClassifications.buildTimeReasons,
+            debugClassification: options.debugClassification,
+            isLayoutObservationDynamic(layoutId) {
+              return options.layoutObservationRuntime!.isUnsafeForStaticReuse(
+                layoutParamAccess,
+                layoutId,
+              );
+            },
+            async runWithIsolatedDynamicScope(fn) {
+              const priorDynamic = consumeDynamicUsage();
+              try {
+                const result = await fn();
+                const dynamicDetected = consumeDynamicUsage();
+                return { result, dynamicDetected };
+              } finally {
+                consumeDynamicUsage();
+                if (priorDynamic) markDynamicUsage();
+              }
+            },
+          }
+        : undefined,
     dynamicStaleTimeSeconds: options.dynamicStaleTimeSeconds,
     revalidateSeconds: currentRevalidateSeconds,
     mountedSlotsHeader: options.mountedSlotsHeader,

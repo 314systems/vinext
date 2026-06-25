@@ -220,8 +220,18 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
 
     expect(code).not.toContain("client-reuse-manifest");
     expect(code).not.toContain("skip-cache-proof");
+    expect(code).not.toContain("app-layout-param-observation");
     expect(code).not.toContain("parseClientReuseManifestHeader:");
     expect(code).not.toContain("createClientReuseSkipDisposition:");
+    expect(code).not.toContain("layoutObservationRuntime:");
+  });
+
+  it("keeps layout observation for client layout reuse", () => {
+    const code = generateRscEntry("/tmp/test/app", minimalRoutes, null, [], null, "", false);
+
+    expect(code).toContain("app-layout-param-observation");
+    expect(code).toContain("layoutObservationRuntime:");
+    expect(code).toContain("createTracker: __createAppLayoutParamAccessTracker");
   });
 
   it("omits unused App Router font registries", () => {

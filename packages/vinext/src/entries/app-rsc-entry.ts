@@ -73,6 +73,10 @@ const appPageRouteWiringPath = resolveEntryPath(
   "../server/app-page-route-wiring.js",
   import.meta.url,
 );
+const appLayoutParamObservationPath = resolveEntryPath(
+  "../server/app-layout-param-observation.js",
+  import.meta.url,
+);
 const appPageProbePath = resolveEntryPath("../server/app-page-probe.js", import.meta.url);
 const appPageDispatchPath = resolveEntryPath("../server/app-page-dispatch.js", import.meta.url);
 const appPageCacheRuntimePath = resolveEntryPath(
@@ -443,7 +447,11 @@ ${
 ${
   hasClientRouterRuntime
     ? `import { parseClientReuseManifestHeader as __parseClientReuseManifestHeader } from ${JSON.stringify(clientReuseManifestPath)};
-import { createRenderLifecycleSkipDisposition as __createRenderLifecycleSkipDisposition } from ${JSON.stringify(skipCacheProofPath)};`
+import { createRenderLifecycleSkipDisposition as __createRenderLifecycleSkipDisposition } from ${JSON.stringify(skipCacheProofPath)};
+import {
+  createAppLayoutParamAccessTracker as __createAppLayoutParamAccessTracker,
+  isAppLayoutObservationUnsafeForStaticReuse as __isAppLayoutObservationUnsafeForStaticReuse,
+} from ${JSON.stringify(appLayoutParamObservationPath)};`
     : ""
 }
 ${
@@ -950,6 +958,18 @@ export default createAppRscHandler({
     const _asyncRouteParams = makeThenableParams(params);
       return __dispatchAppPage({
       ${hasIsrRuntime ? "appPageCacheRuntime: __appPageCacheRuntime," : ""}
+      ${
+        hasClientRouterRuntime
+          ? `layoutObservationRuntime: {
+        createTracker: __createAppLayoutParamAccessTracker,
+        isUnsafeForStaticReuse(tracker, layoutId) {
+          return __isAppLayoutObservationUnsafeForStaticReuse(
+            tracker.getLayoutObservation(layoutId),
+          );
+        },
+      },`
+          : ""
+      }
       basePath: __basePath,
       ensureRouteLoaded: __ensureRouteLoaded,
       clientTraceMetadata: __clientTraceMetadata,

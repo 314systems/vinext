@@ -8,7 +8,11 @@ import {
 import { dispatchAppPage } from "../packages/vinext/src/server/app-page-dispatch.js";
 import * as appPageCacheRuntime from "../packages/vinext/src/server/app-page-cache-runtime.js";
 import { createClientReuseManifestHeaderFromVisibleAppState } from "../packages/vinext/src/server/app-browser-client-reuse-manifest.js";
-import type { AppLayoutParamAccessTracker } from "../packages/vinext/src/server/app-layout-param-observation.js";
+import {
+  createAppLayoutParamAccessTracker,
+  isAppLayoutObservationUnsafeForStaticReuse,
+  type AppLayoutParamAccessTracker,
+} from "../packages/vinext/src/server/app-layout-param-observation.js";
 import {
   buildPageElements,
   type AppPageBuildRoute,
@@ -322,6 +326,12 @@ function createDispatchOptions(overrides: CreateDispatchOptionsOverrides = {}) {
     }));
   const options: DispatchOptions = {
     appPageCacheRuntime,
+    layoutObservationRuntime: {
+      createTracker: createAppLayoutParamAccessTracker,
+      isUnsafeForStaticReuse(tracker, layoutId) {
+        return isAppLayoutObservationUnsafeForStaticReuse(tracker.getLayoutObservation(layoutId));
+      },
+    },
     buildPageElement,
     cleanPathname: overrides.cleanPathname ?? "/posts/hello",
     clearRequestContext,
