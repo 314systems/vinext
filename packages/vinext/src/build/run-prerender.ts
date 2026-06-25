@@ -169,15 +169,6 @@ export async function runPrerender(options: RunPrerenderOptions): Promise<Preren
 
   if (!appDir && !pagesDir) return null;
 
-  // Mark the entire prerender orchestration so the socket-error backstop
-  // re-throws peer-disconnect errors during user fetch() calls instead of
-  // silently absorbing them and producing corrupt output. prerender.ts
-  // sets and clears this var around its own render passes, but we widen
-  // the scope here to cover startProdServer / shared-server setup that
-  // happens before those phases run. See server/socket-error-backstop.ts.
-  const previousPrerenderFlag = process.env.VINEXT_PRERENDER;
-  process.env.VINEXT_PRERENDER = "1";
-
   // The manifest lands in dist/server/ alongside the server bundle so it's
   // cleaned with the rest of vinext's build output on rebuild and co-located
   // with server artifacts.
@@ -243,6 +234,13 @@ export async function runPrerender(options: RunPrerenderOptions): Promise<Preren
   // and ensures both phases render against the same built bundle.
   let sharedProdServer: { server: HttpServer; port: number } | null = null;
   let sharedPrerenderSecret: string | undefined;
+
+  // Mark the server-backed prerender orchestration so the socket-error
+  // backstop re-throws peer-disconnect errors during user fetch() calls.
+  // Static-export route validation above intentionally runs first so an
+  // unsupported route graph cannot leak process-global prerender state.
+  const previousPrerenderFlag = process.env.VINEXT_PRERENDER;
+  process.env.VINEXT_PRERENDER = "1";
 
   try {
     if (appDir && pagesDir) {

@@ -1473,6 +1473,7 @@ describe("runPrerender — output: 'export' wiring", () => {
       );
 
       const { runPrerender } = await import("../packages/vinext/src/build/run-prerender.js");
+      const previousPrerenderFlag = process.env.VINEXT_PRERENDER;
       await expect(
         runPrerender({
           root,
@@ -1480,6 +1481,7 @@ describe("runPrerender — output: 'export' wiring", () => {
           rscBundlePath: path.join(root, "missing-server-bundle.js"),
         }),
       ).rejects.toThrow("Intercepting routes are not supported with static export.");
+      expect(process.env.VINEXT_PRERENDER).toBe(previousPrerenderFlag);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
