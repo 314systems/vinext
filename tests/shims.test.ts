@@ -845,9 +845,9 @@ describe("next/navigation shim", () => {
         "/photo/1?filter=replayed",
       );
       expect(win.history.state).toEqual({
-        [historyPreviousNextUrlKey]: "/photo/1?filter=done",
-        [historyTraversalIndexKey]: 8,
+        [historyTraversalIndexKey]: 7,
       });
+      expect(win.history.state).not.toHaveProperty(externalHistoryStateKey);
     } finally {
       vi.resetModules();
       if (previousWindow === undefined) {
