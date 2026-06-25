@@ -238,6 +238,7 @@ export type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
     searchParams: URLSearchParams,
     layoutParamAccess?: AppLayoutParamAccessTracker,
     options?: {
+      metadataPlacement?: "body" | "head";
       observeMetadataSearchParamsAccess?: boolean;
       observePageSearchParamsAccess?: boolean;
     },
@@ -693,6 +694,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
               new URLSearchParams(),
               undefined,
               {
+                metadataPlacement: "head",
                 observeMetadataSearchParamsAccess: revalidationDynamicConfig !== "force-static",
                 observePageSearchParamsAccess: revalidationDynamicConfig !== "force-static",
               },
@@ -892,6 +894,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
           pageSearchParams,
           layoutParamAccess,
           {
+            metadataPlacement: process.env.VINEXT_PRERENDER === "1" ? "head" : undefined,
             observeMetadataSearchParamsAccess: !isForceStatic,
             observePageSearchParamsAccess: !isForceStatic,
           },
