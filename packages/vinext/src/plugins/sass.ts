@@ -61,6 +61,7 @@ export function normalizeSassTildeCssImport(
 
 function rewriteImportStatement(statement: string, id: string, root: string): string {
   let output = "";
+  let parentheses = 0;
 
   for (let index = 0; index < statement.length; ) {
     const char = statement[index];
@@ -74,7 +75,7 @@ function rewriteImportStatement(statement: string, id: string, root: string): st
       continue;
     }
 
-    if (char === "/" && next === "/") {
+    if (char === "/" && next === "/" && parentheses === 0 && statement[index - 1] !== ":") {
       const end = statement.indexOf("\n", index + 2);
       const nextIndex = end === -1 ? statement.length : end;
       output += statement.slice(index, nextIndex);
@@ -124,6 +125,9 @@ function rewriteImportStatement(statement: string, id: string, root: string): st
         }
       }
     }
+
+    if (char === "(") parentheses++;
+    if (char === ")") parentheses = Math.max(0, parentheses - 1);
 
     output += char;
     index++;
@@ -209,7 +213,12 @@ export function rewriteSassTildeCssImports(code: string, id: string, root: strin
           comment = true;
           end += 2;
           continue;
-        } else if (current === "/" && following === "/") {
+        } else if (
+          current === "/" &&
+          following === "/" &&
+          parentheses === 0 &&
+          code[end - 1] !== ":"
+        ) {
           lineComment = true;
           end += 2;
           continue;

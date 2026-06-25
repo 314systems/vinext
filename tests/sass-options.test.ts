@@ -293,6 +293,16 @@ describe("rewriteSassTildeCssImports", () => {
     expect(rewriteSassTildeCssImports(source, id, root)).toBeNull();
   });
 
+  it("does not mistake URL protocols for Sass line comments", () => {
+    for (const source of [
+      `@import url(http://example.com/base.css), '~package/http.css';`,
+      `@import url(https://example.com/base.css), '~package/https.css';`,
+      `@import url(//cdn.example.com/base.css), '~package/protocol-relative.css';`,
+    ]) {
+      expect(rewriteSassTildeCssImports(source, id, root)).toBe(source.replace("'~", "'"));
+    }
+  });
+
   it("leaves Sass imports and ordinary CSS imports unchanged", () => {
     expect(
       rewriteSassTildeCssImports(
