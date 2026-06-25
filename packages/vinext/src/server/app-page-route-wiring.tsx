@@ -684,12 +684,12 @@ export function buildAppPageElements<
   }
 
   const routeLoadingComponent = getDefaultExport(options.route.loading);
-  const inheritedPrefetchLoadingComponent = getDefaultExport(
-    (options.route.ancestorLoadings ?? []).find((loadingModule) =>
-      Boolean(getDefaultExport(loadingModule)),
-    ),
+  const prefetchLoadingComponent = getDefaultExport(
+    Array.from(ancestorLoadingByTreePosition.entries())
+      .sort(([left], [right]) => left - right)
+      .map(([, loadingModule]) => loadingModule)
+      .find((loadingModule) => Boolean(getDefaultExport(loadingModule))) ?? options.route.loading,
   );
-  const prefetchLoadingComponent = routeLoadingComponent ?? inheritedPrefetchLoadingComponent;
   const isPrefetchLoadingShell = renderMode === APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL;
   const shouldRenderPrefetchLoadingShell =
     isPrefetchLoadingShell && prefetchLoadingComponent !== null;

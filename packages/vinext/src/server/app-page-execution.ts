@@ -491,7 +491,7 @@ export async function probeAppPageLayouts(
       if (options.shouldProbeLayoutAt?.(layoutIndex) === false) {
         if (cls) {
           const layoutId = cls.getLayoutId(layoutIndex);
-          layoutFlags[layoutId] = buildTimeResult === "static" ? "s" : "d";
+          layoutFlags[layoutId] = "d";
         }
         continue;
       }

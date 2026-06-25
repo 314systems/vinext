@@ -788,6 +788,45 @@ describe("app page route wiring helpers", () => {
     expect(html).not.toContain("Page");
   });
 
+  it("uses the rootmost loading boundary for loading-shell prefetches", async () => {
+    function ParentLoading() {
+      return createElement("p", null, "Parent loading");
+    }
+
+    const elements = buildAppPageElements({
+      element: createElement(PageProbe),
+      makeThenableParams(params) {
+        return Promise.resolve(params);
+      },
+      matchedParams: {},
+      resolvedMetadata: null,
+      resolvedViewport: {},
+      route: {
+        ancestorLoadings: [{ default: ParentLoading }],
+        ancestorLoadingTreePositions: [0],
+        error: null,
+        errors: [null],
+        layoutTreePositions: [0],
+        layouts: [{ default: RootLayout }],
+        loading: { default: RouteLoadingProbe },
+        notFound: null,
+        notFounds: [null],
+        routeSegments: ["dashboard", "settings"],
+        templateTreePositions: [],
+        templates: [],
+      },
+      routePath: "/dashboard/settings",
+      rootNotFoundModule: null,
+      renderMode: APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
+    });
+
+    const html = await renderRouteEntry(elements, "route:/dashboard/settings");
+
+    expect(html).toContain("Parent loading");
+    expect(html).not.toContain("Route loading");
+    expect(html).not.toContain("Page");
+  });
+
   it("does not render page content for loading-shell prefetches without a route loading boundary", async () => {
     const elements = buildAppPageElements({
       element: createElement(PageProbe),

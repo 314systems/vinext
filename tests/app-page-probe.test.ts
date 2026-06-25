@@ -265,7 +265,7 @@ describe("app page probe helpers", () => {
     expect(result.layoutFlags).toEqual({
       "layout:/": "s",
       "layout:/parent": "d",
-      "layout:/parent/child": "s",
+      "layout:/parent/child": "d",
     });
   });
 

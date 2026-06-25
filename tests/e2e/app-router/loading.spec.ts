@@ -89,6 +89,18 @@ test.describe("Loading boundaries (loading.tsx)", () => {
     });
   });
 
+  test("parameterized navigation does not reuse a skipped descendant layout", async ({ page }) => {
+    await page.goto(`${BASE}/loading-param-reuse/first`);
+    await waitForAppRouterHydration(page);
+
+    await expect(page.getByTestId("loading-param-layout-slug")).toHaveText("Layout slug: first");
+    await page.getByTestId("loading-param-second-link").hover();
+    await page.getByTestId("loading-param-second-link").click();
+
+    await expect(page.getByTestId("loading-param-page-slug")).toHaveText("Page slug: second");
+    await expect(page.getByTestId("loading-param-layout-slug")).toHaveText("Layout slug: second");
+  });
+
   test("segment loading boundary wraps a slow parallel slot", async ({ page }) => {
     void page.goto(`${BASE}/parallel-slot-loading`);
 
