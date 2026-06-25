@@ -22,6 +22,7 @@ import type { AppRoute } from "../routing/app-router.js";
 import type { ResolvedNextConfig } from "../config/next-config.js";
 import { prerenderPages, prerenderApp, type PrerenderRouteResult } from "./prerender.js";
 import { scanMetadataFiles } from "../server/metadata-routes.js";
+import { assertNoStaticExportInterceptionRoutes } from "./interception-static-export.js";
 
 export type StaticExportOptions = {
   /**
@@ -129,14 +130,6 @@ export type AppStaticExportOptions = {
   config: ResolvedNextConfig;
 };
 
-function hasInterceptionRoutes(routes: readonly AppRoute[]): boolean {
-  return routes.some(
-    (route) =>
-      route.siblingIntercepts.length > 0 ||
-      route.parallelSlots.some((slot) => slot.interceptingRoutes.length > 0),
-  );
-}
-
 /**
  * Run static export for App Router.
  *
@@ -145,9 +138,7 @@ function hasInterceptionRoutes(routes: readonly AppRoute[]): boolean {
 export async function staticExportApp(
   options: AppStaticExportOptions,
 ): Promise<StaticExportResult> {
-  if (hasInterceptionRoutes(options.routes)) {
-    throw new Error("Intercepting routes are not supported with static export.");
-  }
+  assertNoStaticExportInterceptionRoutes(options.routes);
 
   const metadataRoutes = options.appDir ? scanMetadataFiles(options.appDir) : [];
 

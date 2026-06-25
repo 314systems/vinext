@@ -154,6 +154,33 @@ describe("App Router Static export", () => {
       await expect(
         staticExportApp({ routes, appDir, rscBundlePath, outDir: tempDir, config }),
       ).rejects.toThrow("Intercepting routes are not supported with static export.");
+
+      fs.rmSync(path.join(appDir, "@modal"), { recursive: true, force: true });
+      fs.mkdirSync(path.join(appDir, "source", "(.)target"), { recursive: true });
+      fs.mkdirSync(path.join(appDir, "target"), { recursive: true });
+      fs.writeFileSync(
+        path.join(appDir, "source", "page.tsx"),
+        "export default function SourcePage() { return null }",
+      );
+      fs.writeFileSync(
+        path.join(appDir, "source", "(.)target", "page.tsx"),
+        "export default function InterceptedTarget() { return null }",
+      );
+      fs.writeFileSync(
+        path.join(appDir, "target", "page.tsx"),
+        "export default function TargetPage() { return null }",
+      );
+
+      const siblingRoutes = await appRouter(appDir);
+      await expect(
+        staticExportApp({
+          routes: siblingRoutes,
+          appDir,
+          rscBundlePath,
+          outDir: tempDir,
+          config,
+        }),
+      ).rejects.toThrow("Intercepting routes are not supported with static export.");
     } finally {
       fs.rmSync(fixtureDir, { recursive: true, force: true });
     }

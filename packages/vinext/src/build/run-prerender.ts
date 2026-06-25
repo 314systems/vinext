@@ -34,6 +34,7 @@ import { appRouter } from "../routing/app-router.js";
 import { scanMetadataFiles } from "../server/metadata-routes.js";
 import { findDir } from "../utils/project.js";
 import { startProdServer } from "../server/prod-server.js";
+import { assertNoStaticExportInterceptionRoutes } from "./interception-static-export.js";
 
 // ─── Progress UI ──────────────────────────────────────────────────────────────
 
@@ -208,6 +209,10 @@ export async function runPrerender(options: RunPrerenderOptions): Promise<Preren
   // In export mode, SSR routes and any dynamic routes without static params are
   // build errors rather than silently skipped.
   const mode = config.output === "export" ? "export" : "default";
+  const appRoutes = appDir ? await appRouter(appDir, config.pageExtensions) : null;
+  if (mode === "export" && appRoutes) {
+    assertNoStaticExportInterceptionRoutes(appRoutes);
+  }
   const allRoutes: PrerenderRouteResult[] = [];
   const allOutputFiles: string[] = [];
 
@@ -258,8 +263,7 @@ export async function runPrerender(options: RunPrerenderOptions): Promise<Preren
     }
 
     // ── App Router phase ──────────────────────────────────────────────────────
-    if (appDir) {
-      const routes = await appRouter(appDir, config.pageExtensions);
+    if (appDir && appRoutes) {
       const metadataRoutes = scanMetadataFiles(appDir);
 
       // We don't know the exact render-queue size until prerenderApp starts, so
@@ -268,7 +272,7 @@ export async function runPrerender(options: RunPrerenderOptions): Promise<Preren
       let appTotal = 0;
       const result = await prerenderApp({
         mode,
-        routes,
+        routes: appRoutes,
         metadataRoutes,
         outDir,
         skipManifest: true,
