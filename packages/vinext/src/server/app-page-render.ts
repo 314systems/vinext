@@ -599,7 +599,7 @@ export function shouldUseStaticGenerationNavigationSemantics(
   );
 }
 
-export function createStaticGenerationNavigationDecision(
+function createStaticGenerationNavigationDecision(
   result: Promise<boolean>,
 ): StaticGenerationNavigationDecision {
   let settledValue: boolean | undefined;
