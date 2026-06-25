@@ -152,15 +152,11 @@ export function createBabelConfigPlugin(
         id: /\.[cm]?[jt]sx?(?:\?.*)?$/,
       },
       async handler(code, id) {
-        const options = getOptions();
-        if (
-          !configPath ||
-          options.forceSwcTransforms ||
-          id.startsWith("\0") ||
-          isViteSpecialQuery(id)
-        ) {
+        if (!configPath || id.startsWith("\0") || isViteSpecialQuery(id)) {
           return;
         }
+        const options = getOptions();
+        if (options.forceSwcTransforms) return;
 
         const filename = id.replace(/\?.*$/, "");
         if (!path.isAbsolute(filename)) return;
