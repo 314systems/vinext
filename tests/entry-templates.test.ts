@@ -187,6 +187,32 @@ describe("App Router generated manifest construction", () => {
         siblingIntercepts: [],
       },
       {
+        pattern: "/inherited-loading",
+        patternParts: ["inherited-loading"],
+        pagePath: "/tmp/test/app/inherited-loading/page.tsx",
+        routePath: null,
+        layouts: ["/tmp/test/app/layout.tsx"],
+        templates: [],
+        parallelSlots: [],
+        loadingPath: null,
+        ancestorLoadingPaths: ["/tmp/test/app/loading.tsx"],
+        ancestorLoadingTreePositions: [0],
+        errorPath: null,
+        layoutErrorPaths: [null],
+        notFoundPath: null,
+        notFoundPaths: [null],
+        forbiddenPaths: [null],
+        forbiddenPath: null,
+        unauthorizedPaths: [null],
+        unauthorizedPath: null,
+        routeSegments: ["inherited-loading"],
+        templateTreePositions: [],
+        layoutTreePositions: [0],
+        isDynamic: false,
+        params: [],
+        siblingIntercepts: [],
+      },
+      {
         pattern: "/api",
         patternParts: ["api"],
         pagePath: null,
@@ -224,6 +250,9 @@ describe("App Router generated manifest construction", () => {
     );
     expect(code).toContain(
       '{"canPrefetchLoadingShell":true,"patternParts":["docs",":slug"],"isDynamic":true}',
+    );
+    expect(code).toContain(
+      '{"canPrefetchLoadingShell":true,"patternParts":["inherited-loading"],"isDynamic":false}',
     );
     expect(code).toContain(
       '{"canPrefetchLoadingShell":false,"patternParts":["modal-host"],"isDynamic":false}',

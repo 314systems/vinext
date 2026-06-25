@@ -175,6 +175,7 @@ export type AppPageDispatchRoute = {
   error?: AppPageModule | null;
   errors?: readonly (AppPageModule | null | undefined)[];
   ancestorLoadings?: readonly (AppPageModule | null | undefined)[];
+  ancestorLoadingTreePositions?: readonly number[];
   forbidden?: AppPageModule | null;
   forbiddens?: readonly (AppPageModule | null | undefined)[];
   isDynamic: boolean;
@@ -1031,6 +1032,12 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     },
     probeLayoutAt(layoutIndex) {
       return options.probeLayoutAt(layoutIndex, layoutParamAccess);
+    },
+    shouldProbeLayoutAt(layoutIndex) {
+      const layoutTreePosition = route.layoutTreePositions?.[layoutIndex] ?? 0;
+      return !route.ancestorLoadingTreePositions?.some(
+        (loadingTreePosition) => loadingTreePosition < layoutTreePosition,
+      );
     },
     probePage() {
       return options.probePage(pageSearchParams);

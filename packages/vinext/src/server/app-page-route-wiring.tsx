@@ -411,6 +411,8 @@ function createAppPageParallelSlotEntries<
   layoutEntries: readonly AppPageLayoutEntry<TModule, TErrorModule>[],
   route: AppPageRouteWiringRoute<TModule, TErrorModule>,
   getEffectiveSlotParams: (slotKey: string, slotName: string) => AppPageParams,
+  loadingComponent: AppPageComponent | null,
+  loadingResetKey: string,
 ): Readonly<Record<string, ReactNode>> | undefined {
   const parallelSlots: Record<string, ReactNode> = {};
 
@@ -428,11 +430,20 @@ function createAppPageParallelSlotEntries<
     const slotSegments = slot.routeSegments
       ? resolveAppPageChildSegments(slot.routeSegments, 0, slotParams)
       : [];
-    parallelSlots[slotName] = (
+    let slotElement: ReactNode = (
       <LayoutSegmentProvider segmentMap={{ children: slotSegments }}>
         <Slot id={slotId} />
       </LayoutSegmentProvider>
     );
+    if (loadingComponent) {
+      const LoadingComponent = loadingComponent;
+      slotElement = (
+        <Suspense key={loadingResetKey} fallback={<LoadingComponent />}>
+          {slotElement}
+        </Suspense>
+      );
+    }
+    parallelSlots[slotName] = slotElement;
   }
 
   return Object.keys(parallelSlots).length > 0 ? parallelSlots : undefined;
@@ -673,8 +684,15 @@ export function buildAppPageElements<
   }
 
   const routeLoadingComponent = getDefaultExport(options.route.loading);
+  const inheritedPrefetchLoadingComponent = getDefaultExport(
+    (options.route.ancestorLoadings ?? []).find((loadingModule) =>
+      Boolean(getDefaultExport(loadingModule)),
+    ),
+  );
+  const prefetchLoadingComponent = routeLoadingComponent ?? inheritedPrefetchLoadingComponent;
   const isPrefetchLoadingShell = renderMode === APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL;
-  const shouldRenderPrefetchLoadingShell = isPrefetchLoadingShell && routeLoadingComponent !== null;
+  const shouldRenderPrefetchLoadingShell =
+    isPrefetchLoadingShell && prefetchLoadingComponent !== null;
   if (shouldRenderPrefetchLoadingShell) {
     // Client loading components serialize as module references in Flight. Keep
     // a durable marker in the shell payload so external router tests and
@@ -914,11 +932,11 @@ export function buildAppPageElements<
     // so it intentionally does not mount AppRouterScrollTarget — the scroll/focus
     // effect belongs to the real render that replaces this shell (handled in the
     // else branch below).
-    if (routeLoadingComponent === null) {
+    if (prefetchLoadingComponent === null) {
       routeChildren = null;
     } else {
-      const RouteLoadingComponent = routeLoadingComponent;
-      routeChildren = <RouteLoadingComponent />;
+      const PrefetchLoadingComponent = prefetchLoadingComponent;
+      routeChildren = <PrefetchLoadingComponent />;
     }
   } else {
     // Wrap the page slot in a per-segment RedirectBoundary so that a
@@ -1026,6 +1044,9 @@ export function buildAppPageElements<
     const ancestorLoadingComponent = getDefaultExport(
       ancestorLoadingByTreePosition.get(treePosition),
     );
+    const segmentLoadingComponent =
+      ancestorLoadingComponent ??
+      (treePosition === routeSegments.length ? routeLoadingComponent : null);
 
     // Next.js nesting per segment (outer to inner): Layout > Template > Error > Unauthorized > Forbidden > NotFound > children.
     // Building bottom-up means NotFoundBoundary must wrap the leaf subtree first,
@@ -1128,6 +1149,8 @@ export function buildAppPageElements<
               layoutEntries,
               options.route,
               getEffectiveSlotParams,
+              shouldSuppressLoadingBoundaries(renderMode) ? null : segmentLoadingComponent,
+              segmentResetKey,
             )}
           >
             {segmentChildren}

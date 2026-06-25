@@ -399,6 +399,7 @@ type ProbeAppPageBeforeRenderOptions = {
   skipProbes?: boolean;
   layoutCount: number;
   probeLayoutAt: (layoutIndex: number) => unknown;
+  shouldProbeLayoutAt?: (layoutIndex: number) => boolean;
   probePage: () => unknown;
   renderLayoutSpecialError: (
     specialError: AppPageSpecialError,
@@ -434,6 +435,7 @@ export async function probeAppPageBeforeRender(
         return options.renderLayoutSpecialError(specialError, layoutIndex);
       },
       probeLayoutAt: options.probeLayoutAt,
+      shouldProbeLayoutAt: options.shouldProbeLayoutAt,
       runWithSuppressedHookWarning(probe) {
         return options.runWithSuppressedHookWarning(probe);
       },

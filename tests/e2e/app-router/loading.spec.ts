@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { waitForAppRouterHydration } from "../helpers";
 
 const BASE = "http://localhost:4174";
 
@@ -56,6 +57,46 @@ test.describe("Loading boundaries (loading.tsx)", () => {
 
     const html = await response.text();
     expect(html).toContain('<p id="loading-layout">Loading layout...</p>');
+  });
+
+  test("parent loading boundary streams before an ordinary async nested layout", async ({
+    page,
+  }) => {
+    void page.goto(`${BASE}/slow-layout-with-loading/slow`);
+
+    await expect(page.locator("#loading-layout")).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator("#slow-layout-message")).toHaveText("Slow layout loaded", {
+      timeout: 10_000,
+    });
+  });
+
+  test("client prefetch and navigation use an inherited loading boundary", async ({ page }) => {
+    await page.goto(`${BASE}/loading-prefetch-nav`);
+    await waitForAppRouterHydration(page);
+    expect(
+      await page.evaluate(() =>
+        window.__VINEXT_LINK_PREFETCH_ROUTES__?.find(
+          (route) => route.patternParts.join("/") === "slow-layout-with-loading/slow",
+        ),
+      ),
+    ).toMatchObject({ canPrefetchLoadingShell: true });
+
+    await page.hover("#inherited-loading-link");
+    await page.click("#inherited-loading-link");
+    await expect(page.locator("#loading-layout")).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator("#slow-layout-message")).toHaveText("Slow layout loaded", {
+      timeout: 10_000,
+    });
+  });
+
+  test("segment loading boundary wraps a slow parallel slot", async ({ page }) => {
+    void page.goto(`${BASE}/parallel-slot-loading`);
+
+    await expect(page.locator("#parallel-slot-page")).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator("#parallel-slot-loading")).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator("#slow-parallel-slot")).toHaveText("Slow parallel slot loaded", {
+      timeout: 10_000,
+    });
   });
 
   test("parent and leaf loading boundaries are included for a slow layout and page", async ({
