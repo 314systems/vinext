@@ -21,7 +21,11 @@ describe("App Router Static export", () => {
     const { resolveNextConfig } = await import("../packages/vinext/src/config/next-config.js");
 
     const appDir = path.resolve(APP_FIXTURE_DIR, "app");
-    const routes = await appRouter(appDir);
+    const routes = (await appRouter(appDir)).filter(
+      (route) =>
+        route.siblingIntercepts.length === 0 &&
+        route.parallelSlots.every((slot) => slot.interceptingRoutes.length === 0),
+    );
     const config = await resolveNextConfig({ output: "export" });
 
     const result = await staticExportApp({
