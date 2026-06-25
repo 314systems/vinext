@@ -188,6 +188,46 @@ describe("AppBrowserHistoryController traversal index allocation", () => {
   });
 });
 
+describe("AppBrowserHistoryController shallow history snapshots", () => {
+  it("assigns pushed shallow entries a unique restorable traversal index", () => {
+    const { controller, store } = createController({
+      initialState: createHistoryStateWithNavigationMetadata(null, {
+        previousNextUrl: null,
+        traversalIndex: 2,
+      }),
+      initialHref: "https://example.com/shallow",
+    });
+    const state = createRouterState({
+      navigationSnapshot: createClientNavigationRenderSnapshot(
+        "https://example.com/shallow/alias",
+        {},
+      ),
+    });
+
+    controller.commitExternalHistorySnapshot({
+      historyState: { __vinext_externalHistory: true },
+      historyUpdateMode: "push",
+      state,
+    });
+
+    expect(readHistoryStateTraversalIndex(store.state)).toBe(3);
+    expect(controller.currentHistoryTraversalIndex).toBe(3);
+
+    const approveVisibleRestore = vi.fn((candidate: RestorableSnapshotCandidate) => {
+      candidate.beforeCommit();
+      return true;
+    });
+    expect(
+      controller.restoreHistorySnapshot({
+        historyState: store.state,
+        stageClientParams: vi.fn(),
+        approveVisibleRestore,
+      }),
+    ).toBe(true);
+    expect(approveVisibleRestore.mock.calls[0]?.[0].state).toBe(state);
+  });
+});
+
 describe("AppBrowserHistoryController hash-only navigation", () => {
   it("strips vinext scroll metadata on a scroll-enabled hash-only replace", () => {
     const { controller, store } = createController({

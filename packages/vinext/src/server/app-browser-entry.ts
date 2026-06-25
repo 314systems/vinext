@@ -2325,6 +2325,21 @@ function bootstrapHydration(
     clearNavigationCaches: clearClientNavigationCaches,
     commitHashNavigation: (href, historyUpdateMode, scroll) =>
       historyController.commitHashOnlyNavigation(href, historyUpdateMode, scroll),
+    commitShallowHistory: (historyUpdateMode) => {
+      if (!hasBrowserRouterState()) return;
+      const state = getBrowserRouterState();
+      historyController.commitExternalHistorySnapshot({
+        historyState: window.history.state,
+        historyUpdateMode,
+        state: {
+          ...state,
+          navigationSnapshot: createClientNavigationRenderSnapshot(
+            window.location.href,
+            state.navigationSnapshot.params,
+          ),
+        },
+      });
+    },
     navigate: navigateRsc,
   });
 
@@ -2369,10 +2384,10 @@ function bootstrapHydration(
     }
     if (isExternalHistoryState(event.state)) {
       notifyAppRouterTransitionStart(href, "traverse");
-      historyController.commitTraversalIndexFromHistoryState(event.state);
-      commitClientNavigationState();
-      restorePopstateScrollPosition(event.state);
-      return;
+      if (restoreHistoryStateSnapshot(event.state)) {
+        restorePopstateScrollPosition(event.state);
+        return;
+      }
     }
     const snapshotNavigationId = browserNavigationController.beginNavigation();
     if (

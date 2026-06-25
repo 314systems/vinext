@@ -1,6 +1,7 @@
 import {
   RestorableClientStateController,
   createHistoryStateWithNavigationMetadata,
+  markExternalHistoryState,
   readHistoryStateBfcacheIds,
   readHistoryStatePreviousNextUrl,
   readHistoryStateTraversalIndex,
@@ -192,6 +193,27 @@ export class AppBrowserHistoryController {
       historyIndex: this.#currentHistoryTraversalIndex,
       state,
     });
+  }
+
+  commitExternalHistorySnapshot(options: {
+    historyState: unknown;
+    historyUpdateMode: HistoryUpdateMode;
+    state: AppRouterState;
+  }): void {
+    const historyIndex = this.allocateNavigationHistoryTraversalIndex(options.historyUpdateMode);
+    this.#replaceHistoryState(
+      markExternalHistoryState(
+        createHistoryStateWithNavigationMetadata(options.historyState, {
+          bfcacheIds: options.state.bfcacheIds,
+          bfcacheVersion: this.#restorableClientState.currentBfcacheVersion,
+          previousNextUrl: options.state.previousNextUrl,
+          traversalIndex: historyIndex,
+        }),
+      ),
+      this.#readCurrentHref(),
+    );
+    this.commitHistoryTraversalIndex(historyIndex);
+    this.rememberHistoryStateSnapshot(options.state);
   }
 
   // --- History metadata writes ---

@@ -249,10 +249,7 @@ export function createExternalHistoryStatePreservingMetadata(
   callerState: unknown,
   currentHistoryState: unknown,
 ): unknown {
-  const callerHasNavigationMetadata =
-    readHistoryStatePreviousNextUrl(callerState) !== null ||
-    readHistoryStateTraversalIndex(callerState) !== null ||
-    readHistoryStateBfcacheIds(callerState) !== null;
+  const callerTraversalIndex = readHistoryStateTraversalIndex(callerState);
   const previousNextUrl = readHistoryStatePreviousNextUrl(currentHistoryState);
   const traversalIndex = readHistoryStateTraversalIndex(currentHistoryState);
   const bfcacheIds = readHistoryStateBfcacheIds(currentHistoryState);
@@ -264,13 +261,17 @@ export function createExternalHistoryStatePreservingMetadata(
     previousNextUrl,
     traversalIndex,
   });
-  if (callerHasNavigationMetadata) return nextState;
+  if (callerTraversalIndex !== null && callerTraversalIndex !== traversalIndex) return nextState;
 
   return { ...nextState, [VINEXT_EXTERNAL_HISTORY_STATE_KEY]: true };
 }
 
 export function isExternalHistoryState(state: unknown): boolean {
   return readHistoryStateRecord(state)?.[VINEXT_EXTERNAL_HISTORY_STATE_KEY] === true;
+}
+
+export function markExternalHistoryState(state: unknown): HistoryStateRecord {
+  return { ...cloneHistoryState(state), [VINEXT_EXTERNAL_HISTORY_STATE_KEY]: true };
 }
 
 export function readHistoryStatePreviousNextUrl(state: unknown): string | null {
