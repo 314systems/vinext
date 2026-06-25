@@ -2199,7 +2199,7 @@ function bootstrapHydration(
         window.location.reload();
         return;
       }
-      // HMR can also fire before BrowserRoot's layout effect publishes
+      // HMR can also fire before BrowserRoot's insertion effect publishes
       // the browser router state (e.g. saving a file while the initial RSC
       // stream is still suspended). Wait for readiness, then re-check the
       // mounted state — readiness can race with cleanup, which nulls it again.
