@@ -33,7 +33,12 @@ import {
   DefaultCdnCacheAdapter,
   setCdnCacheAdapter,
 } from "../packages/vinext/src/shims/cdn-cache.js";
-import { markDynamicUsage } from "../packages/vinext/src/shims/headers.js";
+import {
+  cookies,
+  headers,
+  headersContextFromRequest,
+  markDynamicUsage,
+} from "../packages/vinext/src/shims/headers.js";
 import {
   createRequestContext,
   runWithRequestContext,
@@ -1422,6 +1427,70 @@ describe("app page render lifecycle", () => {
       kind: "http-access-fallback",
       statusCode: 404,
     });
+  });
+
+  it("keeps request headers and cookies available while rendering a late special error", async () => {
+    const common = createCommonOptions();
+    const notFoundError = Object.assign(new Error("NEXT_NOT_FOUND"), { digest: "NEXT_NOT_FOUND" });
+    const requestContext = createRequestContext({
+      headersContext: headersContextFromRequest(
+        new Request("https://example.com/late-error", {
+          headers: {
+            cookie: "session=late-error-cookie",
+            "x-late-error": "available",
+          },
+        }),
+      ),
+    });
+    const clearRequestContext = vi.fn(() => {
+      requestContext.headersContext = null;
+    });
+    let capturedOnError: ((error: unknown, ...args: unknown[]) => void) | null = null;
+    const renderPageSpecialError = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            async pull(controller) {
+              expect((await headers()).get("x-late-error")).toBe("available");
+              expect((await cookies()).get("session")?.value).toBe("late-error-cookie");
+              expect(clearRequestContext).not.toHaveBeenCalled();
+              controller.enqueue(new TextEncoder().encode("late-error-boundary"));
+              controller.close();
+              clearRequestContext();
+            },
+          }),
+          { status: 404 },
+        ),
+    );
+
+    const response = await runWithRequestContext(requestContext, () =>
+      renderAppPageLifecycle({
+        ...common.options,
+        clearRequestContext,
+        hasLoadingBoundary: true,
+        loadSsrHandler: async () => ({
+          async handleSsr() {
+            capturedOnError?.(notFoundError, null, null);
+            return {
+              htmlStream: createStream(["<html>fallback</html>"]),
+              metadataReady: Promise.resolve(),
+              capturedRscData: null,
+            };
+          },
+        }),
+        renderPageSpecialError,
+        renderToReadableStream(_element, opts) {
+          capturedOnError = opts.onError;
+          return createStream(["flight-data"]);
+        },
+      }),
+    );
+
+    expect(response.status).toBe(404);
+    expect(clearRequestContext).not.toHaveBeenCalled();
+    await expect(response.text()).resolves.toBe("late-error-boundary");
+    expect(renderPageSpecialError).toHaveBeenCalledTimes(1);
+    expect(clearRequestContext).toHaveBeenCalledTimes(1);
   });
 });
 

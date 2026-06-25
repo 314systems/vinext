@@ -74,6 +74,7 @@ export function trackStreamCompletion(
       }
     },
     cancel(reason) {
+      complete();
       return reader.cancel(reason);
     },
   });

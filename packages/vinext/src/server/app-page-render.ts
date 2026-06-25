@@ -708,6 +708,7 @@ export async function renderAppPageLifecycle(
     }
   }
   let renderLifecycleFinalized = false;
+  let requestContextCleared = false;
   const finalizeRenderLifecycle = (abortReason?: unknown) => {
     if (renderLifecycleFinalized) return;
     renderLifecycleFinalized = true;
@@ -716,7 +717,15 @@ export async function renderAppPageLifecycle(
     }
     options.requestSignal?.removeEventListener("abort", onRequestAbort);
     externalRscSignal?.removeEventListener("abort", onExternalRscAbort);
+  };
+  const clearRequestContext = () => {
+    if (requestContextCleared) return;
+    requestContextCleared = true;
     options.clearRequestContext();
+  };
+  const completeRenderLifecycle = (abortReason?: unknown) => {
+    finalizeRenderLifecycle(abortReason);
+    clearRequestContext();
   };
   const abortRscRender = (reason: unknown) => {
     if (!rscAbortController.signal.aborted) {
@@ -724,7 +733,7 @@ export async function renderAppPageLifecycle(
     }
   };
   const onRequestAbort = () => {
-    finalizeRenderLifecycle(options.requestSignal?.reason);
+    completeRenderLifecycle(options.requestSignal?.reason);
   };
   if (options.requestSignal) {
     if (options.requestSignal.aborted) {
@@ -976,11 +985,11 @@ export async function renderAppPageLifecycle(
       resolveSpecialError: resolveAppPageSpecialError,
     });
   } catch (error) {
-    finalizeRenderLifecycle(error);
+    completeRenderLifecycle(error);
     throw error;
   }
   if (htmlRender.response) {
-    finalizeRenderLifecycle(new Error("App page HTML render returned an alternate response"));
+    completeRenderLifecycle(new Error("App page HTML render returned an alternate response"));
     return htmlRender.response;
   }
   let htmlStream = htmlRender.htmlStream;
@@ -1018,7 +1027,12 @@ export async function renderAppPageLifecycle(
       if (specialError) {
         void htmlStream.cancel().catch(() => {});
         finalizeRenderLifecycle(specialError);
-        return options.renderPageSpecialError(specialError);
+        try {
+          return await options.renderPageSpecialError(specialError);
+        } catch (error) {
+          clearRequestContext();
+          throw error;
+        }
       }
     }
   }
@@ -1048,7 +1062,7 @@ export async function renderAppPageLifecycle(
     () => {
       dynamicUsedBeforeContextCleanup =
         dynamicUsedBeforeContextCleanup || options.consumeDynamicUsage();
-      finalizeRenderLifecycle();
+      completeRenderLifecycle();
     },
     (reason) => {
       abortRscRender(reason);
