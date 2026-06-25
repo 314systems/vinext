@@ -5,7 +5,11 @@ import { waitForAppRouterHydration } from "../../helpers";
 
 const BASE = "http://localhost:4174";
 
-test("a descendant layout effect can shallow-push during hydration", async ({ page }) => {
+test("a descendant layout effect can shallow-push during hydration", async ({
+  page,
+  consoleErrors,
+}) => {
+  void consoleErrors;
   await page.goto(`${BASE}/nextjs-compat/shallow-history/target?layout-effect=push`);
   await waitForAppRouterHydration(page);
 
