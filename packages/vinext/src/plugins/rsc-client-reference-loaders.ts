@@ -34,6 +34,7 @@ type ClientRouterRuntimeAnalysisOptions = {
 type RscClientReferenceLoadersPluginOptions = {
   internalRoot?: string;
   onClientRouterRuntimeAnalysis?: (required: boolean) => void;
+  onServerActionRuntimeAnalysis?: (required: boolean) => void;
   rewriteClientReferenceImportId?: (
     importId: string,
     context: { hasServerActions: boolean },
@@ -292,6 +293,15 @@ export function createRscClientReferenceLoadersPlugin(
     },
     async generateBundle() {
       const manager = rscApi?.manager;
+      if (
+        this.environment.name === "ssr" &&
+        manager?.isScanBuild &&
+        options.onServerActionRuntimeAnalysis
+      ) {
+        options.onServerActionRuntimeAnalysis(
+          Object.keys(manager.serverReferenceMetaMap).length > 0,
+        );
+      }
       if (
         this.environment.name !== "rsc" ||
         !manager?.isScanBuild ||

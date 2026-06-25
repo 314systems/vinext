@@ -1060,6 +1060,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   }
 
   let clientRouterRuntimeRequired: boolean | null = null;
+  let serverActionRuntimeRequired: boolean | null = null;
   let googleFontRuntimeRequired = false;
   let localFontRuntimeRequired = false;
   let fetchCacheRuntimeRequired = false;
@@ -5736,7 +5737,17 @@ export const loadServerActionClient = ${
   // Append auto-injected RSC plugins if applicable
   if (rscPluginPromise) {
     plugins.push(rscPluginPromise);
-    plugins.push(createActionFreeFlightServerRuntimePlugin());
+    plugins.push(
+      createActionFreeFlightServerRuntimePlugin({
+        useActionFreeFlightClientRuntime(config) {
+          return (
+            config.command === "build" &&
+            !nextConfig.cacheComponents &&
+            serverActionRuntimeRequired === false
+          );
+        },
+      }),
+    );
     plugins.push(
       createRscClientReferenceLoadersPlugin({
         internalRoot: path.resolve(__dirname),
@@ -5763,6 +5774,9 @@ export const loadServerActionClient = ${
         ],
         onClientRouterRuntimeAnalysis(required) {
           clientRouterRuntimeRequired = required;
+        },
+        onServerActionRuntimeAnalysis(required) {
+          serverActionRuntimeRequired = required;
         },
         useActionFreeFlightServerRuntime() {
           return !nextConfig.cacheComponents;

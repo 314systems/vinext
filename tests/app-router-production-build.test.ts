@@ -53,6 +53,23 @@ describe("App Router Production build", () => {
     expect(fs.existsSync(path.join(outDir, "server", "ssr", "index.js"))).toBe(true);
     // Client bundle should exist
     expect(fs.existsSync(path.join(outDir, "client"))).toBe(true);
+    const clientBundleCode = readAllJs(path.join(outDir, "client"));
+    const ssrBundleCode = readAllJs(path.join(outDir, "server", "ssr"));
+    // app-basic contains server actions, so both Flight client environments
+    // must retain React's complete reply encoder instead of the action-free
+    // decode-only specialization.
+    expect(clientBundleCode).toContain(
+      "Only plain objects, and a few built-ins, can be passed to Server Functions",
+    );
+    expect(ssrBundleCode).toContain(
+      "Only plain objects, and a few built-ins, can be passed to Server Functions",
+    );
+    expect(clientBundleCode).not.toContain(
+      "Cannot encode a server reply in an action-free React Flight build.",
+    );
+    expect(ssrBundleCode).not.toContain(
+      "Cannot encode a server reply in an action-free React Flight build.",
+    );
 
     const rscEntryCode = fs.readFileSync(path.join(outDir, "server", "index.js"), "utf-8");
     const rscStaticDir = path.join(outDir, "server", "_next", "static");
@@ -137,6 +154,69 @@ describe("App Router Production build", () => {
     expect(fs.existsSync(buildIdPath)).toBe(true);
     expect(fs.readFileSync(buildIdPath, "utf-8").trim().length).toBeGreaterThan(0);
   }, 30000);
+
+  it("uses decode-only Flight client runtimes for action-free production builds", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-action-free-flight-client-"));
+
+    try {
+      fs.writeFileSync(path.join(tmpDir, "package.json"), `{"type":"module"}`);
+      fs.symlinkSync(
+        path.resolve(import.meta.dirname, "../node_modules"),
+        path.join(tmpDir, "node_modules"),
+        "junction",
+      );
+      fs.mkdirSync(path.join(tmpDir, "app"), { recursive: true });
+      fs.writeFileSync(
+        path.join(tmpDir, "app", "layout.tsx"),
+        `export default function Root({ children }: { children: React.ReactNode }) {
+  return <html><body>{children}</body></html>;
+}
+`,
+      );
+      fs.writeFileSync(
+        path.join(tmpDir, "app", "counter.tsx"),
+        `"use client";
+import { useState } from "react";
+export function Counter() {
+  const [count, setCount] = useState(0);
+  return <button onClick={() => setCount(count + 1)}>{count}</button>;
+}
+`,
+      );
+      fs.writeFileSync(
+        path.join(tmpDir, "app", "page.tsx"),
+        `import { Counter } from "./counter";
+export default function Page() {
+  return <main><h1>action free</h1><Counter /></main>;
+}
+`,
+      );
+
+      const builder = await createBuilder({
+        root: tmpDir,
+        configFile: false,
+        plugins: [vinext({ appDir: tmpDir })],
+        logLevel: "silent",
+      });
+      await builder.buildApp();
+
+      const clientBundleCode = readAllJs(path.join(tmpDir, "dist", "client"));
+      const ssrBundleCode = readAllJs(path.join(tmpDir, "dist", "server", "ssr"));
+      for (const bundleCode of [clientBundleCode, ssrBundleCode]) {
+        expect(bundleCode).toContain(
+          "Unexpected server reference in an action-free React Flight payload.",
+        );
+        expect(bundleCode).toContain(
+          "Cannot encode a server reply in an action-free React Flight build.",
+        );
+        expect(bundleCode).not.toContain(
+          "Only plain objects, and a few built-ins, can be passed to Server Functions",
+        );
+      }
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 120000);
 
   it("adopts __VINEXT_SHARED_BUILD_ID so the runtime and BUILD_ID file agree", async () => {
     // The `vinext build` CLI resolves the build ID once and shares it via
