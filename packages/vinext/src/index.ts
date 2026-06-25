@@ -1185,10 +1185,14 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     // plugin uses OXC and no longer loads Babel configs, so run the project's
     // configured Babel transform first when one is present.
     createBabelConfigPlugin(() => ({
-      externalDir: nextConfig?.externalDir ?? false,
       forceSwcTransforms: nextConfig?.forceSwcTransforms ?? false,
+      includeExternalDirs:
+        (nextConfig?.externalDir ?? false) || (nextConfig?.transpilePackages.length ?? 0) > 0,
       serverTarget: hasCloudflarePlugin ? "webworker" : "node",
-      transpilePackages: nextConfig?.transpilePackages ?? [],
+      transpilePackages: [
+        ...(nextConfig?.turbopackTranspilePackages ?? []),
+        ...(nextConfig?.optimizePackageImports ?? []),
+      ],
     })),
     // React Fast Refresh + JSX transform for client components.
     reactPluginPromise,

@@ -36,8 +36,8 @@ type BabelCore = {
 };
 
 type BabelConfigPluginOptions = {
-  externalDir: boolean;
   forceSwcTransforms: boolean;
+  includeExternalDirs: boolean;
   serverTarget: "node" | "webworker";
   transpilePackages: string[];
 };
@@ -96,8 +96,8 @@ function resolvePackageRoot(root: string, packageName: string): string | null {
 
 export function createBabelConfigPlugin(
   getOptions: () => BabelConfigPluginOptions = () => ({
-    externalDir: false,
     forceSwcTransforms: false,
+    includeExternalDirs: false,
     serverTarget: "node",
     transpilePackages: [],
   }),
@@ -155,7 +155,6 @@ export function createBabelConfigPlugin(
         const normalizedFilename = filename.replaceAll("\\", "/");
         const canonicalFilename = tryRealpathSync(filename) ?? filename;
         const isProjectFile = relativeWithinRoot(canonicalRoot, canonicalFilename);
-        const includesExternalDirs = options.externalDir || options.transpilePackages.length > 0;
         const isTranspiledPackage = options.transpilePackages.some((packageName) => {
           if (isPathInPackage(filename, packageName)) return true;
 
@@ -168,12 +167,15 @@ export function createBabelConfigPlugin(
           return packageRoot !== null && relativeWithinRoot(packageRoot, canonicalFilename);
         });
         if (
-          ((!isProjectFile && !includesExternalDirs) ||
+          ((!isProjectFile && !options.includeExternalDirs) ||
             normalizedFilename.includes("/node_modules/")) &&
           !isTranspiledPackage
         ) {
           return;
         }
+
+        const environmentConfig = this.environment?.config;
+        if (!environmentConfig) return;
 
         if (!babelCorePromise) {
           const babelCorePath = resolveBabelCore(root);
@@ -193,8 +195,6 @@ export function createBabelConfigPlugin(
         }
 
         const babelCore = await babelCorePromise;
-        const environmentConfig = this.environment?.config;
-        if (!environmentConfig) return;
         const isServer = environmentConfig.consumer !== "client";
         const isDev = environmentConfig.command === "serve";
         const result = await babelCore.transformAsync(code, {
