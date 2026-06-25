@@ -73,6 +73,7 @@ describe("App Router Production build", () => {
 
     const rscEntryCode = fs.readFileSync(path.join(outDir, "server", "index.js"), "utf-8");
     const rscStaticDir = path.join(outDir, "server", "_next", "static");
+    expect(rscEntryCode + readAllJs(rscStaticDir)).toContain("twitter:player");
     const groupedPageChunks = fs
       .readdirSync(rscStaticDir)
       .filter((file) => file.startsWith("route-pages-") && file.endsWith(".js"));
@@ -168,7 +169,8 @@ describe("App Router Production build", () => {
       fs.mkdirSync(path.join(tmpDir, "app"), { recursive: true });
       fs.writeFileSync(
         path.join(tmpDir, "app", "layout.tsx"),
-        `export default function Root({ children }: { children: React.ReactNode }) {
+        `export const metadata = { title: "Action free", description: "Basic metadata" };
+export default function Root({ children }: { children: React.ReactNode }) {
   return <html><body>{children}</body></html>;
 }
 `,
@@ -208,6 +210,7 @@ export default function Page() {
       expect(rscBundleCode).not.toContain("react.temporary.reference");
       expect(rscBundleCode).not.toContain("writtenServerReferences");
       expect(rscBundleCode).not.toContain("react.server.reference");
+      expect(rscBundleCode).not.toContain("twitter:player");
       for (const bundleCode of [clientBundleCode, ssrBundleCode]) {
         expect(bundleCode).toContain(
           "Unexpected server reference in an action-free React Flight payload.",

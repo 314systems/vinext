@@ -60,6 +60,7 @@ import {
   collectRouteClassificationManifest,
   type RouteClassificationManifest,
 } from "./build/route-classification-manifest.js";
+import { appRoutesCanUseBasicMetadataRuntime } from "./build/app-metadata-capabilities.js";
 import { planRouteClassificationInjection } from "./build/route-classification-injector.js";
 import { normalizePathnameForRouteMatchStrict } from "./routing/utils.js";
 import {
@@ -594,6 +595,8 @@ function createStaticImageAsset(imagePath: string): { fileName: string; source: 
  */
 const _shimsDir = normalizePathSeparators(path.resolve(__dirname, "shims")) + "/";
 const _fontGoogleShimPath = resolveShimModulePath(_shimsDir, "font-google");
+const _metadataShimPath = resolveShimModulePath(_shimsDir, "metadata");
+const _basicMetadataShimPath = resolveShimModulePath(_shimsDir, "metadata-basic");
 const _appBrowserServerActionClientPath = resolveShimModulePath(
   path.resolve(__dirname, "server"),
   "app-browser-server-action-client",
@@ -874,6 +877,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   let hasCloudflarePlugin = false;
   let warnedInlineNextConfigOverride = false;
   let hasNitroPlugin = false;
+  let useBasicMetadataRuntime = false;
   let rscCompatibilityId: string | undefined;
   const draftModeSecret = randomUUID();
 
@@ -1440,6 +1444,13 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               : createRscCompatibilityId(nextConfig);
         }
         fileMatcher = createValidFileMatcher(nextConfig.pageExtensions);
+        useBasicMetadataRuntime =
+          env?.command === "build" &&
+          hasAppDir &&
+          scanMetadataFiles(appDir).length === 0 &&
+          appRoutesCanUseBasicMetadataRuntime(
+            await appRouter(appDir, nextConfig.pageExtensions, fileMatcher),
+          );
         instrumentationPath = findInstrumentationFile(root, fileMatcher);
         instrumentationClientPath = findInstrumentationClientFile(root, fileMatcher);
         middlewarePath = findMiddlewareFile(root, fileMatcher);
@@ -1762,7 +1773,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             "client-only": path.join(shimsDir, "client-only"),
             "vinext/error-boundary": path.join(shimsDir, "error-boundary"),
             "vinext/layout-segment-context": path.join(shimsDir, "layout-segment-context"),
-            "vinext/metadata": path.join(shimsDir, "metadata"),
+            "vinext/metadata": path.join(
+              shimsDir,
+              useBasicMetadataRuntime ? "metadata-basic" : "metadata",
+            ),
             "vinext/fetch-cache": path.join(shimsDir, "fetch-cache"),
             "vinext/cache-runtime": path.join(shimsDir, "cache-runtime"),
             "vinext/navigation-state": path.join(shimsDir, "navigation-state"),
@@ -2764,9 +2778,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         // Hook filter: only invoke JS for handled Next/Vinext compatibility modules.
         // Matches "next/navigation", "next/router.js", "virtual:vinext-rsc-entry",
         // direct @vercel/og imports in metadata routes, and \0-prefixed
-        // re-imports from @vitejs/plugin-rsc.
+        // re-imports from @vitejs/plugin-rsc. The metadata path also catches
+        // relative imports emitted by the packed vinext package.
         filter: {
-          id: /(?:next\/|vinext\/(?:shims\/|server\/app-rsc-handler)|virtual:vinext-|@vercel\/og(?:\.js)?$)/,
+          id: /(?:next\/|vinext\/(?:shims\/|server\/app-rsc-handler)|virtual:vinext-|@vercel\/og(?:\.js)?$|(?:^|[/\\])shims[/\\]metadata\.[cm]?[jt]sx?(?:\?.*)?$)/,
         },
         handler(id, importer) {
           // Strip \0 prefix if present — @vitejs/plugin-rsc's generated
@@ -2803,10 +2818,25 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
 
           const vinextShimPrefix = "vinext/shims/";
           if (cleanId.startsWith(vinextShimPrefix)) {
-            return resolveShimModulePath(
+            const shimPath = resolveShimModulePath(
               _shimsDir,
               stripJsExtension(stripViteModuleQuery(cleanId.slice(vinextShimPrefix.length))),
             );
+            return useBasicMetadataRuntime && shimPath === _metadataShimPath
+              ? _basicMetadataShimPath
+              : shimPath;
+          }
+
+          if (useBasicMetadataRuntime && importer && cleanId.startsWith(".")) {
+            const cleanImporter = stripViteModuleQuery(
+              importer.startsWith(VIRTUAL_PREFIX) ? importer.slice(1) : importer,
+            );
+            const resolvedPath = normalizePathSeparators(
+              path.resolve(path.dirname(cleanImporter), stripViteModuleQuery(cleanId)),
+            );
+            if (resolvedPath === _metadataShimPath) {
+              return _basicMetadataShimPath;
+            }
           }
 
           // Pages Router virtual modules
