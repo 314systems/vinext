@@ -7,7 +7,7 @@
 import path from "node:path";
 import { createRequire } from "node:module";
 import fs from "node:fs";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import commonjs from "vite-plugin-commonjs";
 import { PHASE_DEVELOPMENT_SERVER } from "vinext/shims/constants";
@@ -18,23 +18,6 @@ import { applyLocaleToRoutes, isExternalUrl } from "./config-matchers.js";
 import { loadTsconfigResolutionForRoot } from "./tsconfig-paths.js";
 import { getViteMajorVersion } from "../utils/vite-version.js";
 import { loadCommonJsModule, shouldRetryAsCommonJs } from "../utils/commonjs-loader.js";
-import {
-  collectBindingNames,
-  forEachAstChild,
-  isAstRecord,
-  nodeArray,
-  type AstRecord,
-} from "../plugins/ast-utils.js";
-import {
-  collectDirectScopeBindings,
-  collectLoopScopeBindings,
-  collectSwitchScopeBindings,
-  collectVarScopeBindings,
-  createAstScope,
-  hasAstBinding,
-  isFunctionNode,
-  type AstScope,
-} from "../plugins/ast-scope.js";
 
 /**
  * Parse a body size limit value (string or number) into bytes.
@@ -719,159 +702,6 @@ export function referencesCjsGlobals(source: string): boolean {
   return /\b(?:__filename|__dirname|require|module|exports)\b/.test(source);
 }
 
-const CJS_GLOBAL_NAMES = new Set(["__filename", "__dirname", "require", "module", "exports"]);
-
-function createConfigChildScope(node: AstRecord, parent: AstScope): AstScope | null {
-  if (
-    node.type !== "Program" &&
-    node.type !== "BlockStatement" &&
-    node.type !== "StaticBlock" &&
-    node.type !== "TSModuleBlock" &&
-    node.type !== "CatchClause" &&
-    node.type !== "ForStatement" &&
-    node.type !== "ForInStatement" &&
-    node.type !== "ForOfStatement" &&
-    node.type !== "ClassDeclaration" &&
-    node.type !== "ClassExpression"
-  ) {
-    return null;
-  }
-
-  const scope = createAstScope(parent);
-  if (node.type === "ClassDeclaration" || node.type === "ClassExpression") {
-    collectBindingNames(node.id, scope.bindings);
-  } else if (node.type === "CatchClause") {
-    collectBindingNames(node.param, scope.bindings);
-  }
-  collectDirectScopeBindings(node, scope);
-  if (node.type === "StaticBlock" || node.type === "TSModuleBlock") {
-    collectVarScopeBindings(node, scope);
-  }
-  if (
-    node.type === "ForStatement" ||
-    node.type === "ForInStatement" ||
-    node.type === "ForOfStatement"
-  ) {
-    collectLoopScopeBindings(node, scope);
-  }
-  return scope;
-}
-
-function isConfigIdentifierReference(node: AstRecord, parent: AstRecord | null): boolean {
-  if (!parent) return true;
-  if (
-    (parent.type === "MemberExpression" || parent.type === "OptionalMemberExpression") &&
-    parent.property === node &&
-    parent.computed !== true
-  ) {
-    return false;
-  }
-  if (
-    (parent.type === "Property" ||
-      parent.type === "PropertyDefinition" ||
-      parent.type === "MethodDefinition" ||
-      parent.type === "TSPropertySignature" ||
-      parent.type === "TSMethodSignature") &&
-    parent.key === node &&
-    parent.computed !== true &&
-    parent.shorthand !== true
-  ) {
-    return false;
-  }
-  return ![
-    "ImportSpecifier",
-    "ImportDefaultSpecifier",
-    "ImportNamespaceSpecifier",
-    "ExportSpecifier",
-    "LabeledStatement",
-    "BreakStatement",
-    "ContinueStatement",
-  ].includes(parent.type);
-}
-
-function isErasedTypeScriptNode(node: AstRecord): boolean {
-  if (!node.type.startsWith("TS")) return false;
-  return ![
-    "TSAsExpression",
-    "TSSatisfiesExpression",
-    "TSNonNullExpression",
-    "TSInstantiationExpression",
-    "TSParameterProperty",
-    "TSExportAssignment",
-    "TSModuleDeclaration",
-    "TSModuleBlock",
-    "TSEnumDeclaration",
-  ].includes(node.type);
-}
-
-async function referencesUnboundCjsGlobals(source: string): Promise<boolean> {
-  if (!referencesCjsGlobals(source)) return false;
-
-  let ast: AstRecord;
-  try {
-    const { parseAst } = await import("vite");
-    ast = parseAst(source, { lang: "ts" }) as unknown as AstRecord;
-  } catch {
-    return true;
-  }
-
-  const rootScope = createAstScope(null);
-  collectDirectScopeBindings(ast, rootScope);
-  collectVarScopeBindings(ast, rootScope);
-  let found = false;
-
-  function visit(node: AstRecord, parent: AstRecord | null, parentScope: AstScope): void {
-    if (found) return;
-    if (isErasedTypeScriptNode(node)) return;
-    if (isFunctionNode(node)) {
-      const parameterScope = createAstScope(parentScope);
-      collectBindingNames(node.id, parameterScope.bindings);
-      for (const parameter of nodeArray(node.params)) {
-        collectBindingNames(parameter, parameterScope.bindings);
-      }
-      for (const parameter of nodeArray(node.params)) {
-        if (isAstRecord(parameter)) visit(parameter, node, parameterScope);
-      }
-      if (isAstRecord(node.body)) {
-        if (node.body.type === "BlockStatement") {
-          const bodyScope = createAstScope(parameterScope);
-          collectDirectScopeBindings(node.body, bodyScope);
-          collectVarScopeBindings(node.body, bodyScope);
-          visit(node.body, node, bodyScope);
-        } else {
-          visit(node.body, node, parameterScope);
-        }
-      }
-      return;
-    }
-    if (node.type === "SwitchStatement") {
-      if (isAstRecord(node.discriminant)) visit(node.discriminant, node, parentScope);
-      const switchScope = createAstScope(parentScope);
-      collectSwitchScopeBindings(node, switchScope);
-      for (const switchCase of nodeArray(node.cases)) {
-        if (isAstRecord(switchCase)) visit(switchCase, node, switchScope);
-      }
-      return;
-    }
-
-    const scope = createConfigChildScope(node, parentScope) ?? parentScope;
-    if (
-      node.type === "Identifier" &&
-      typeof node.name === "string" &&
-      CJS_GLOBAL_NAMES.has(node.name) &&
-      !hasAstBinding(scope, node.name) &&
-      isConfigIdentifierReference(node, parent)
-    ) {
-      found = true;
-      return;
-    }
-    forEachAstChild(node, (child) => visit(child, node, scope));
-  }
-
-  visit(ast, null, rootScope);
-  return found;
-}
-
 /**
  * Static heuristic: returns true when the source appears to assign to
  * `module.exports` — either via `module.exports = …`, `module.exports.foo = …`,
@@ -1116,34 +946,17 @@ export async function loadNextConfig(
   // string-compare without realpath would falsely include the config.
   const normalizedConfigPath = safeRealpath(path.resolve(configPath));
 
-  // Match Next.js's native TypeScript config path on Node 22.10+. Native
-  // import keeps the module loader alive while an exported async config runs,
-  // so dynamic imports inside that function continue to work. Vite's
-  // runnerImport closes its temporary runner after returning the namespace,
-  // which is too early for a later `await import()` from the config function.
-  // Keep configs that reference CommonJS globals on the Vite path, including
-  // non-throwing checks such as `typeof require`, so they retain vinext's
-  // existing injected-global compatibility. Fall back to Vite when native
-  // Node resolution cannot load other project-specific imports such as
-  // tsconfig path aliases.
-  const canUseNativeTypeScript =
-    process.features?.typescript &&
-    (filename.endsWith(".ts") || filename.endsWith(".mts")) &&
-    !(await referencesUnboundCjsGlobals(fs.readFileSync(configPath, "utf8")));
-  if (canUseNativeTypeScript) {
-    let nativeModule: unknown;
-    try {
-      nativeModule = await import(pathToFileURL(configPath).href);
-    } catch {
-      // The Vite path below supports the broader config compatibility surface.
-    }
-    if (nativeModule !== undefined) return await unwrapConfig(nativeModule, phase);
-  }
-
   try {
-    // Load config via Vite's module runner (TS + extensionless import support)
+    // Resolve and invoke the config inside the temporary Vite runner. This
+    // keeps the runner alive while an async config performs deferred imports,
+    // while preserving Vite's TS aliases, CJS shims, and fresh evaluation on
+    // every load.
     const { runnerImport } = await import("vite");
-    const { module: mod } = await runnerImport(configPath, {
+    const virtualConfigId = "virtual:vinext-resolved-next-config";
+    const resolvedVirtualConfigId = `\0${virtualConfigId}`;
+    const configPathLiteral = JSON.stringify(configPath);
+    const phaseLiteral = JSON.stringify(phase);
+    const { module: mod } = await runnerImport<{ default: NextConfig }>(virtualConfigId, {
       root,
       logLevel: "error",
       clearScreen: false,
@@ -1186,6 +999,24 @@ export async function loadNextConfig(
       // same source produces an `Identifier 'module' has already been
       // declared` syntax error.
       plugins: [
+        {
+          name: "vinext:resolve-next-config-value",
+          resolveId(id: string) {
+            if (id === virtualConfigId) return resolvedVirtualConfigId;
+          },
+          load(id: string) {
+            if (id !== resolvedVirtualConfigId) return;
+            return (
+              `import * as configModule from ${configPathLiteral};\n` +
+              `const cjsModule = configModule[${JSON.stringify(VINEXT_CJS_EXPORTS_KEY)}];\n` +
+              `const cjsInitial = configModule[${JSON.stringify(VINEXT_CJS_INITIAL_KEY)}];\n` +
+              `const cjsExports = cjsModule && cjsModule.exports;\n` +
+              `const cjsValue = cjsExports != null && (cjsExports !== cjsInitial || (typeof cjsExports === "object" && Object.keys(cjsExports).length > 0)) ? cjsExports : undefined;\n` +
+              `const value = cjsValue ?? configModule.default ?? configModule;\n` +
+              `export default typeof value === "function" ? await value(${phaseLiteral}, { defaultConfig: {} }) : value;\n`
+            );
+          },
+        },
         ...(isTypeScriptConfig ? [cjsGlobalsInjectorPlugin(configPath)] : []),
         commonjs({
           filter: (id: string) => {
@@ -1201,7 +1032,7 @@ export async function loadNextConfig(
         }),
       ],
     });
-    return await unwrapConfig(mod, phase);
+    return mod.default as NextConfig;
   } catch (e) {
     // If the error indicates a CJS file loaded in ESM context, retry with
     // createRequire which provides a proper CommonJS environment.
