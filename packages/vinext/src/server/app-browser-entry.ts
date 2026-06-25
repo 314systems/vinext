@@ -2086,14 +2086,13 @@ function bootstrapHydration(
     // and awaits nextElements, yielding at least one microtask.
     //
     // restoreHistoryStateSnapshot runs synchronously (flushSync, no await) in
-    // the same task, commits the cached history snapshot, and bumps
-    // visibleCommitVersion to N+1.
+    // the same task, commits the cached history snapshot, then starts a new
+    // navigation lifecycle. The old traversal fails its next navId authority
+    // check before it can dispatch the fetched payload.
     //
-    // When the async traverse resolves,
-    // resolvePendingNavigationCommitDispositionDecision sees
-    // startedVisibleCommitVersion (N) !== currentState.visibleCommitVersion
-    // (N+1) and returns staleOperation → no-commit, discarding the fresh
-    // RSC payload in favor of the cached client snapshot.
+    // The visible commit also bumps visibleCommitVersion to N+1, so the
+    // operation-token check remains a backstop if a traversal reaches commit
+    // classification without observing the superseding navId first.
     //
     // This matches Next's in-memory bfcache behaviour (no refetch on back).
     // The ordering is deterministic only because restoreHistoryStateSnapshot
