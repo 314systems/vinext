@@ -20,11 +20,26 @@ type BabelCore = {
   transformAsync(
     code: string,
     options: Record<string, unknown>,
-  ): Promise<{ code?: string | null; map?: Record<string, unknown> | null } | null>;
+  ): Promise<{
+    code?: string | null;
+    map?: {
+      version: number;
+      mappings: string;
+      names: string[];
+      sources: string[];
+      sourcesContent?: Array<string | null>;
+      file?: string;
+      sourceRoot?: string;
+    } | null;
+  } | null>;
 };
 
-function hasBabelConfig(root: string): boolean {
-  return BABEL_CONFIG_FILES.some((file) => fs.existsSync(path.join(root, file)));
+function findBabelConfig(root: string): string | null {
+  for (const file of BABEL_CONFIG_FILES) {
+    const configPath = path.join(root, file);
+    if (fs.existsSync(configPath)) return configPath;
+  }
+  return null;
 }
 
 function resolveBabelCore(root: string): string | null {
@@ -45,7 +60,7 @@ export function createBabelConfigPlugin(): Plugin {
   let root = process.cwd();
   let canonicalRoot = fs.realpathSync.native(root);
   let babelCorePromise: Promise<BabelCore> | null = null;
-  let enabled = false;
+  let configPath: string | null = null;
 
   return {
     name: "vinext:babel-config",
@@ -53,14 +68,29 @@ export function createBabelConfigPlugin(): Plugin {
     configResolved(config) {
       root = config.root;
       canonicalRoot = fs.realpathSync.native(root);
-      enabled = hasBabelConfig(root);
+      configPath = findBabelConfig(root);
+    },
+    configureServer(server) {
+      const configCandidates = BABEL_CONFIG_FILES.map((file) => path.join(root, file));
+      server.watcher.add(configCandidates);
+      let restartPending = false;
+      const restartForBabelConfig = (changedPath: string) => {
+        if (!configCandidates.includes(changedPath) || restartPending) return;
+        restartPending = true;
+        void server.restart().finally(() => {
+          restartPending = false;
+        });
+      };
+      server.watcher.on("add", restartForBabelConfig);
+      server.watcher.on("change", restartForBabelConfig);
+      server.watcher.on("unlink", restartForBabelConfig);
     },
     transform: {
       filter: {
         id: /\.[cm]?[jt]sx?(?:\?.*)?$/,
       },
       async handler(code, id) {
-        if (!enabled || id.startsWith("\0") || id.includes("/node_modules/")) return;
+        if (!configPath || id.startsWith("\0") || id.includes("/node_modules/")) return;
 
         const filename = id.replace(/\?.*$/, "");
         if (!path.isAbsolute(filename)) return;
@@ -87,6 +117,9 @@ export function createBabelConfigPlugin(): Plugin {
         }
 
         const babelCore = await babelCorePromise;
+        const environmentConfig = this.environment.config;
+        const isServer = environmentConfig.consumer !== "client";
+        const isDev = environmentConfig.command === "serve";
         const result = await babelCore.transformAsync(code, {
           filename: canonicalFilename,
           cwd: canonicalRoot,
@@ -98,11 +131,22 @@ export function createBabelConfigPlugin(): Plugin {
             supportsDynamicImport: true,
             supportsTopLevelAwait: true,
             supportsExportNamespaceFrom: true,
+            target: isServer ? "node" : "web",
+            isServer,
+            isDev,
+            srcDir: fs.existsSync(path.join(canonicalRoot, "src"))
+              ? path.join(canonicalRoot, "src")
+              : canonicalRoot,
+            pagesDir: fs.existsSync(path.join(canonicalRoot, "pages"))
+              ? path.join(canonicalRoot, "pages")
+              : path.join(canonicalRoot, "src", "pages"),
+            transformMode: "default",
+            hasJsxRuntime: true,
           },
         });
 
         if (!result?.code) return;
-        return { code: result.code };
+        return { code: result.code, map: result.map ?? undefined };
       },
     },
   };
