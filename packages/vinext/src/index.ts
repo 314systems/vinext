@@ -5845,6 +5845,12 @@ export const loadServerActionClient = ${
           ) {
             return resolveShimModulePath(_shimsDir, "slot-document");
           }
+          if (
+            useDocumentOnlyRuntime &&
+            importId === resolveShimModulePath(_shimsDir, "app-router-scroll")
+          ) {
+            return resolveShimModulePath(_shimsDir, "app-router-scroll-document");
+          }
           return importId;
         },
       }),

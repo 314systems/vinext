@@ -211,6 +211,8 @@ export default function Page() {
       expect(rscBundleCode).not.toContain("writtenServerReferences");
       expect(rscBundleCode).not.toContain("react.server.reference");
       expect(rscBundleCode).not.toContain("twitter:player");
+      expect(clientBundleCode).not.toContain("targetHoistedInHead");
+      expect(ssrBundleCode).not.toContain("targetHoistedInHead");
       for (const bundleCode of [clientBundleCode, ssrBundleCode]) {
         expect(bundleCode).toContain(
           "Unexpected server reference in an action-free React Flight payload.",
