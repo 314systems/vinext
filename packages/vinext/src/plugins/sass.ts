@@ -26,7 +26,13 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { preprocessCSS, type Plugin, type PreprocessCSSResult, type ResolvedConfig } from "vite";
+import {
+  normalizePath,
+  preprocessCSS,
+  type Plugin,
+  type PreprocessCSSResult,
+  type ResolvedConfig,
+} from "vite";
 
 type AdditionalData = string | ((source: string, filename: string) => string | Promise<string>);
 
@@ -38,7 +44,7 @@ type VitePreprocessorOptions = {
 };
 
 const SASS_STYLESHEET_RE = /\.(?:scss|sass)(?:$|[?#])/;
-const TILDE_CSS_IMPORT_RE = /(@import\s+(?:url\(\s*)?)(["'])~([^"']+\.css(?:[?#][^"']*)?)\2/g;
+const CSS_IMPORT_PATH_RE = /^~[^\s"')]+\.css(?:[?#][^\s"')]*)?$/;
 
 export function normalizeSassTildeCssImport(
   source: string,
@@ -50,21 +56,170 @@ export function normalizeSassTildeCssImport(
   const stripped = source.slice(1);
   if (!stripped) return null;
 
-  return stripped.startsWith("/") ? path.resolve(root, `.${stripped}`) : stripped;
+  return stripped.startsWith("/") ? normalizePath(path.resolve(root, `.${stripped}`)) : stripped;
+}
+
+function rewriteImportStatement(statement: string, id: string, root: string): string {
+  let output = "";
+
+  for (let index = 0; index < statement.length; ) {
+    const char = statement[index];
+    const next = statement[index + 1];
+
+    if (char === "/" && next === "*") {
+      const end = statement.indexOf("*/", index + 2);
+      const nextIndex = end === -1 ? statement.length : end + 2;
+      output += statement.slice(index, nextIndex);
+      index = nextIndex;
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      let end = index + 1;
+      while (end < statement.length) {
+        if (statement[end] === "\\") {
+          end += 2;
+          continue;
+        }
+        if (statement[end] === char) break;
+        end++;
+      }
+      const value = statement.slice(index + 1, end);
+      const normalized = CSS_IMPORT_PATH_RE.test(value)
+        ? normalizeSassTildeCssImport(value, id, root)
+        : null;
+      output += normalized ? `${char}${normalized}${char}` : statement.slice(index, end + 1);
+      index = Math.min(end + 1, statement.length);
+      continue;
+    }
+
+    if (statement.slice(index, index + 4).toLowerCase() === "url(") {
+      const valueStart = index + 4;
+      let contentStart = valueStart;
+      while (/\s/.test(statement[contentStart] ?? "")) contentStart++;
+      if (statement[contentStart] !== '"' && statement[contentStart] !== "'") {
+        const close = statement.indexOf(")", contentStart);
+        if (close !== -1) {
+          let contentEnd = close;
+          while (contentEnd > contentStart && /\s/.test(statement[contentEnd - 1] ?? "")) {
+            contentEnd--;
+          }
+          const value = statement.slice(contentStart, contentEnd);
+          const normalized = CSS_IMPORT_PATH_RE.test(value)
+            ? normalizeSassTildeCssImport(value, id, root)
+            : null;
+          if (normalized) {
+            output += `${statement.slice(index, contentStart)}${normalized}${statement.slice(contentEnd, close + 1)}`;
+            index = close + 1;
+            continue;
+          }
+        }
+      }
+    }
+
+    output += char;
+    index++;
+  }
+
+  return output;
 }
 
 export function rewriteSassTildeCssImports(code: string, id: string, root: string): string | null {
+  let output = "";
   let changed = false;
-  const rewritten = code.replace(
-    TILDE_CSS_IMPORT_RE,
-    (match, prefix: string, quote: string, source: string) => {
-      const normalized = normalizeSassTildeCssImport(`~${source}`, id, root);
-      if (!normalized) return match;
-      changed = true;
-      return `${prefix}${quote}${normalized}${quote}`;
-    },
-  );
-  return changed ? rewritten : null;
+
+  for (let index = 0; index < code.length; ) {
+    const char = code[index];
+    const next = code[index + 1];
+
+    if (char === "/" && next === "*") {
+      const end = code.indexOf("*/", index + 2);
+      const nextIndex = end === -1 ? code.length : end + 2;
+      output += code.slice(index, nextIndex);
+      index = nextIndex;
+      continue;
+    }
+
+    if (char === "/" && next === "/") {
+      const end = code.indexOf("\n", index + 2);
+      const nextIndex = end === -1 ? code.length : end;
+      output += code.slice(index, nextIndex);
+      index = nextIndex;
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      let end = index + 1;
+      while (end < code.length) {
+        if (code[end] === "\\") {
+          end += 2;
+          continue;
+        }
+        if (code[end] === char) break;
+        end++;
+      }
+      output += code.slice(index, end + 1);
+      index = Math.min(end + 1, code.length);
+      continue;
+    }
+
+    if (char === "@" && code.slice(index, index + 7).toLowerCase() === "@import") {
+      const afterKeyword = code[index + 7];
+      if (afterKeyword && /[\w-]/.test(afterKeyword)) {
+        output += char;
+        index++;
+        continue;
+      }
+
+      let end = index + 7;
+      let quote: string | null = null;
+      let comment = false;
+      let parentheses = 0;
+      while (end < code.length) {
+        const current = code[end];
+        const following = code[end + 1];
+        if (comment) {
+          if (current === "*" && following === "/") {
+            comment = false;
+            end += 2;
+            continue;
+          }
+        } else if (quote) {
+          if (current === "\\") {
+            end += 2;
+            continue;
+          }
+          if (current === quote) quote = null;
+        } else if (current === "/" && following === "*") {
+          comment = true;
+          end += 2;
+          continue;
+        } else if (current === '"' || current === "'") {
+          quote = current;
+        } else if (current === "(") {
+          parentheses++;
+        } else if (current === ")") {
+          parentheses = Math.max(0, parentheses - 1);
+        } else if (current === ";" && parentheses === 0) {
+          end++;
+          break;
+        }
+        end++;
+      }
+
+      const statement = code.slice(index, end);
+      const rewritten = rewriteImportStatement(statement, id, root);
+      changed ||= rewritten !== statement;
+      output += rewritten;
+      index = end;
+      continue;
+    }
+
+    output += char;
+    index++;
+  }
+
+  return changed ? output : null;
 }
 
 export function createSassTildeCssImportPlugin(): Plugin {

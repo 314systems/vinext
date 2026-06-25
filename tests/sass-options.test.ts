@@ -221,7 +221,7 @@ describe("normalizeSassTildeCssImport", () => {
         path.join(root, "styles", "global.scss"),
         root,
       ),
-    ).toBe(path.join(root, "styles", "base.css?inline"));
+    ).toBe(path.join(root, "styles", "base.css?inline").replaceAll(path.sep, "/"));
   });
 
   it("ignores tilde imports from JavaScript modules", () => {
@@ -250,15 +250,27 @@ describe("rewriteSassTildeCssImports", () => {
       `@use '~/styles/variables' as *;`,
       `@import '~nprogress/nprogress.css';`,
       `@import url("~/styles/base.css");`,
+      `@import url(~package/unquoted.css), '~package/second.css';`,
     ].join("\n");
 
     expect(rewriteSassTildeCssImports(source, id, root)).toBe(
       [
         `@use '~/styles/variables' as *;`,
         `@import 'nprogress/nprogress.css';`,
-        `@import url("${path.join(root, "styles", "base.css")}");`,
+        `@import url("${path.join(root, "styles", "base.css").replaceAll(path.sep, "/")}");`,
+        `@import url(package/unquoted.css), 'package/second.css';`,
       ].join("\n"),
     );
+  });
+
+  it("does not rewrite import-like text in comments or strings", () => {
+    const source = [
+      `/* @import '~package/comment.css'; */`,
+      `// @import '~package/line-comment.css';`,
+      `$value: "@import '~package/string.css'";`,
+      `.example { content: $value; }`,
+    ].join("\n");
+    expect(rewriteSassTildeCssImports(source, id, root)).toBeNull();
   });
 
   it("leaves Sass imports and ordinary CSS imports unchanged", () => {
