@@ -333,8 +333,12 @@ describe("rewriteSassTildeCssImports", () => {
   });
 
   it("does not rewrite strings in import conditions", () => {
-    const source = `@import 'theme.css' supports(selector(a[href="~package/token.css"]));`;
-    expect(rewriteSassTildeCssImports(source, id, root)).toBeNull();
+    for (const source of [
+      `@import 'theme.css' supports(selector(a[href="~package/token.css"]));`,
+      `@import url(base.css) screen and (foo: "~package/token.css");`,
+    ]) {
+      expect(rewriteSassTildeCssImports(source, id, root)).toBeNull();
+    }
   });
 
   it("does not treat media-query commas as import separators", () => {

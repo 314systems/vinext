@@ -204,7 +204,8 @@ function rewriteImportStatement(
       const valueStart = index + 4;
       let contentStart = valueStart;
       while (/\s/.test(statement[contentStart] ?? "")) contentStart++;
-      if (statement[contentStart] !== '"' && statement[contentStart] !== "'") {
+      const quoted = statement[contentStart] === '"' || statement[contentStart] === "'";
+      if (!quoted) {
         const close = statement.indexOf(")", contentStart);
         if (close !== -1) {
           let contentEnd = close;
@@ -227,6 +228,7 @@ function rewriteImportStatement(
             continue;
           }
         }
+        expectsTarget = false;
       }
     }
 
