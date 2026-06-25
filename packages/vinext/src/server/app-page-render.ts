@@ -1,6 +1,9 @@
 import type { ReactNode } from "react";
 import type { ReactFormState } from "react-dom/client";
-import type { NavigationContext } from "vinext/shims/navigation";
+import type {
+  NavigationContext,
+  StaticGenerationNavigationDecision,
+} from "vinext/shims/navigation";
 import type { CachedAppPageValue } from "vinext/shims/cache-handler";
 import type { RootParams } from "vinext/shims/root-params";
 import { runWithFetchDedupe } from "vinext/shims/fetch-cache";
@@ -596,6 +599,32 @@ export function shouldUseStaticGenerationNavigationSemantics(
   );
 }
 
+export function createStaticGenerationNavigationDecision(
+  result: Promise<boolean>,
+): StaticGenerationNavigationDecision {
+  let settledValue: boolean | undefined;
+  const settled = result.then(
+    (value) => {
+      settledValue = value;
+    },
+    () => {
+      settledValue = false;
+    },
+  );
+
+  return {
+    peek() {
+      return settledValue;
+    },
+    read() {
+      if (settledValue === undefined) {
+        throw settled;
+      }
+      return settledValue;
+    },
+  };
+}
+
 export async function renderAppPageLifecycle(
   options: RenderAppPageLifecycleOptions,
 ): Promise<Response> {
@@ -749,6 +778,7 @@ export async function renderAppPageLifecycle(
     : teeAppPageRscStreamForCapture(rscStream, shouldCaptureRscForCacheMetadata);
   const rscForResponse = rscCapture.ssrStream;
   let rscSideStream = rscCapture.sideStream;
+  let staticGenerationNavigationDecision: StaticGenerationNavigationDecision | undefined;
 
   // When the fused tee (#981) is active, the sideStream carries both the embed
   // transform AND the raw RSC byte accumulation. For RSC requests, we consume
@@ -765,7 +795,11 @@ export async function renderAppPageLifecycle(
     shouldCaptureRscForCacheMetadata
   ) {
     const [observationStream, embedStream] = rscSideStream.tee();
-    await settleCapturedRscRenderForCacheMetadata(readAppPageBinaryStream(observationStream));
+    const observationResult = readAppPageBinaryStream(observationStream).then(() =>
+      shouldUseStaticGenerationNavigationSemantics(options.peekRenderObservationState?.()),
+    );
+    staticGenerationNavigationDecision =
+      createStaticGenerationNavigationDecision(observationResult);
     rscSideStream = embedStream;
   }
 
@@ -923,7 +957,8 @@ export async function renderAppPageLifecycle(
         isStaticGeneration: shouldCaptureRscForCacheMetadata
           ? options.isPrerender === true
             ? true
-            : shouldUseStaticGenerationNavigationSemantics(options.peekRenderObservationState?.())
+            : (staticGenerationNavigationDecision ??
+              shouldUseStaticGenerationNavigationSemantics(options.peekRenderObservationState?.()))
           : false,
         waitForAllReady: options.isPrerender === true,
       });

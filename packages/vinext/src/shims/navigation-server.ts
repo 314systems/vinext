@@ -20,6 +20,7 @@ export {
   getLayoutSegmentContext,
   getNavigationContext,
   isStaticGenerationNavigationContext,
+  readStaticGenerationNavigationContext,
   registerServerInsertedHTMLCallback,
   renderServerInsertedHTML,
   setNavigationContext,

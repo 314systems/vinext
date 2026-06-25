@@ -70,7 +70,7 @@ import {
   getBfcacheSegmentIdContext,
   getLayoutSegmentContext,
   getNavigationContext,
-  isStaticGenerationNavigationContext,
+  readStaticGenerationNavigationContext,
   registerServerInsertedHTMLCallback,
   type NavigationContext,
 } from "./navigation-context-state.js";
@@ -78,6 +78,7 @@ import {
 export {
   type NavigationContext,
   type NavigationStateAccessors,
+  type StaticGenerationNavigationDecision,
   type SegmentMap,
   GLOBAL_ACCESSORS_KEY,
   ServerInsertedHTMLContext,
@@ -89,6 +90,7 @@ export {
   getLayoutSegmentContext,
   getNavigationContext,
   isStaticGenerationNavigationContext,
+  readStaticGenerationNavigationContext,
   renderServerInsertedHTML,
   setNavigationContext,
 } from "./navigation-context-state.js";
@@ -1330,7 +1332,7 @@ export function useSearchParams(): ReadonlyURLSearchParams {
     markPprFallbackShellDynamicBoundary();
     const navigationContext = getNavigationContext();
     if (
-      isStaticGenerationNavigationContext(navigationContext) &&
+      readStaticGenerationNavigationContext(navigationContext) &&
       navigationContext?.isForceStatic !== true
     ) {
       throw new BailoutToCSRError("useSearchParams()");

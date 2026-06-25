@@ -1,6 +1,9 @@
 import type { AppPageFontPreload } from "./app-page-execution.js";
 import type { ReactFormState } from "react-dom/client";
-import type { NavigationContext } from "vinext/shims/navigation";
+import type {
+  NavigationContext,
+  StaticGenerationNavigationDecision,
+} from "vinext/shims/navigation";
 import { VINEXT_RSC_VARY_HEADER } from "./app-rsc-cache-busting.js";
 import { isNavigationSignalError } from "../utils/navigation-signal.js";
 import { applyEdgeRuntimeHeader } from "./app-page-response.js";
@@ -179,7 +182,7 @@ type RenderAppPageHtmlStreamOptions = {
   /** When true, wait for the full React tree before emitting bytes. */
   waitForAllReady?: boolean;
   /** When true, client navigation hooks use static-generation semantics. */
-  isStaticGeneration?: boolean;
+  isStaticGeneration?: boolean | StaticGenerationNavigationDecision;
   /** Dev-only: original server error to surface in the browser overlay. */
   initialDevServerError?: unknown;
   /** True when the app supplies a custom global-error.tsx. Disables the

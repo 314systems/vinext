@@ -39,6 +39,7 @@ import type { ISRCacheEntry } from "../packages/vinext/src/server/isr-cache.js";
 import type { CachedAppPageValue } from "../packages/vinext/src/shims/cache.js";
 import {
   isStaticGenerationNavigationContext,
+  readStaticGenerationNavigationContext,
   type NavigationContext,
 } from "../packages/vinext/src/shims/navigation.js";
 import { markAppPprDynamicFallbackShellHtml } from "../packages/vinext/src/server/app-ppr-fallback-shell.js";
@@ -1490,6 +1491,12 @@ describe("app page dispatch", () => {
       loadSsrHandler: async () => ({
         async handleSsr(_rscStream, navigationContext, _fontData, captureOptions) {
           capturedNavigationContext = navigationContext;
+          try {
+            readStaticGenerationNavigationContext(navigationContext);
+          } catch (pendingDecision) {
+            await pendingDecision;
+            readStaticGenerationNavigationContext(navigationContext);
+          }
           void captureOptions?.sideStream?.cancel().catch(() => {});
           return createStream(["<html>dynamic content</html>"]);
         },

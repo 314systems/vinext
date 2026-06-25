@@ -1,5 +1,8 @@
 import type { ReactNode } from "react";
-import type { NavigationContext } from "vinext/shims/navigation";
+import type {
+  NavigationContext,
+  StaticGenerationNavigationDecision,
+} from "vinext/shims/navigation";
 import type { RootParams } from "vinext/shims/root-params";
 import { _consumeRequestScopedCacheLife } from "vinext/shims/cache-request-state";
 import type { CacheControlMetadata } from "vinext/shims/cache-handler";
@@ -43,7 +46,7 @@ export type RenderAppPageCacheArtifactsOptions = {
   ) => ReadableStream<Uint8Array>;
   rootParams?: RootParams;
   route: AppPageCacheRoute;
-  isStaticGeneration: boolean;
+  isStaticGeneration: boolean | StaticGenerationNavigationDecision;
   waitForAllReady?: boolean;
 };
 
