@@ -48,6 +48,7 @@ import {
   type ClientNavigationRenderSnapshot,
   type PrefetchCacheEntry,
 } from "vinext/shims/navigation";
+import { createExternalHistoryStatePreservingMetadata } from "./app-history-state.js";
 import {
   getNavigationRuntime,
   registerNavigationRuntimeBootstrap,
@@ -344,8 +345,9 @@ function restoreHistoryStateSnapshot(historyState: unknown): boolean {
     restored = historyController.restoreHistorySnapshot({
       historyState,
       stageClientParams,
-      approveVisibleRestore: ({ state, beforeCommit }) =>
+      approveVisibleRestore: ({ allowUnclassifiedRestore, state, beforeCommit }) =>
         browserNavigationController.restoreHistorySnapshotVisibleState({
+          allowUnclassifiedRestore,
           beforeCommit,
           navId,
           state,
@@ -355,7 +357,10 @@ function restoreHistoryStateSnapshot(historyState: unknown): boolean {
   });
   if (!restored) return false;
 
-  commitClientNavigationState();
+  commitClientNavigationState(undefined, {
+    clearPendingPathname: true,
+    resetSnapshots: true,
+  });
   return true;
 }
 
@@ -2034,6 +2039,58 @@ function bootstrapHydration(
   // the browser entry share a single App Router capability contract.
   registerNavigationRuntimeFunctions({
     clearNavigationCaches: clearClientNavigationCaches,
+    commitExternalHistoryNavigation: (callerState, href, historyUpdateMode) => {
+      const targetHref = new URL(href ?? window.location.href, window.location.href).href;
+      // bootstrapHydration registers this seam before BrowserRoot's layout
+      // effect publishes committed router state. Preserve native History API
+      // behavior during that brief window instead of throwing from the router
+      // state getter.
+      if (!hasBrowserRouterState()) {
+        const historyState = createExternalHistoryStatePreservingMetadata(
+          callerState,
+          window.history.state,
+        );
+        if (historyUpdateMode === "replace") {
+          replaceHistoryStateWithoutNotify(historyState, "", targetHref);
+        } else {
+          pushHistoryStateWithoutNotify(historyState, "", targetHref);
+        }
+        return;
+      }
+      // Next.js dispatches ACTION_RESTORE for both raw pushState and
+      // replaceState, so either successful write supersedes pending router work
+      // before publishing the externally selected URL.
+      const currentState = getBrowserRouterState();
+      historyController.commitExternalHistoryNavigation({
+        callerState,
+        href: targetHref,
+        historyUpdateMode,
+        snapshotState: {
+          ...currentState,
+          navigationSnapshot: createClientNavigationRenderSnapshot(
+            targetHref,
+            currentState.navigationSnapshot.params,
+          ),
+        },
+      });
+      activeNavigationAbortController?.abort();
+      activeNavigationAbortController = null;
+      const navId = browserNavigationController.beginNavigation();
+      flushSync(() => {
+        browserNavigationController.restoreHistorySnapshotVisibleState({
+          allowUnclassifiedRestore: true,
+          navId,
+          state: {
+            ...currentState,
+            navigationSnapshot: createClientNavigationRenderSnapshot(
+              targetHref,
+              currentState.navigationSnapshot.params,
+            ),
+          },
+          targetHref,
+        });
+      });
+    },
     commitHashNavigation: (href, historyUpdateMode, scroll) =>
       historyController.commitHashOnlyNavigation(href, historyUpdateMode, scroll),
     navigate: navigateRsc,
@@ -2072,32 +2129,29 @@ function bootstrapHydration(
     // restore scroll directly and skip the RSC dispatch.
     const href = window.location.href;
     if (isSameAppRoutePopstateTarget(href)) {
+      activeNavigationAbortController?.abort();
+      activeNavigationAbortController = null;
+      browserNavigationController.beginNavigation();
       notifyAppRouterTransitionStart(href, "traverse");
       historyController.commitTraversalIndexFromHistoryState(event.state);
+      commitClientNavigationState(undefined, {
+        clearPendingPathname: true,
+        resetSnapshots: true,
+      });
       restorePopstateScrollPosition(event.state);
       return;
     }
-    handlePopstate(event);
-    // Synchronous snapshot restore supersedes the in-flight async RSC traverse.
-    //
-    // handlePopstate calls navigate() which starts an async RSC traversal:
-    // renderNavigationPayload captures startedState (visibleCommitVersion N)
-    // and awaits nextElements, yielding at least one microtask.
-    //
-    // restoreHistoryStateSnapshot runs synchronously (flushSync, no await) in
-    // the same task, commits the cached history snapshot, and bumps
-    // visibleCommitVersion to N+1.
-    //
-    // When the async traverse resolves,
-    // resolvePendingNavigationCommitDispositionDecision sees
-    // startedVisibleCommitVersion (N) !== currentState.visibleCommitVersion
-    // (N+1) and returns staleOperation → no-commit, discarding the fresh
-    // RSC payload in favor of the cached client snapshot.
-    //
-    // This matches Next's in-memory bfcache behaviour (no refetch on back).
-    // The ordering is deterministic only because restoreHistoryStateSnapshot
-    // is synchronous while the async traverse always yields.
+    // Prefer an explicitly captured history snapshot before starting an RSC
+    // traversal. Starting navigateRsc first clears the restorable client-state
+    // cache, which makes a forward traversal to a shallow pushState URL fall
+    // through to a fresh request even though the matching snapshot exists.
+    // Begin a new navigation lifecycle and abort older work so the restored
+    // snapshot remains authoritative over any previously pending navigation.
+    activeNavigationAbortController?.abort();
+    activeNavigationAbortController = null;
+    browserNavigationController.beginNavigation();
     if (restoreHistoryStateSnapshot(event.state)) {
+      notifyAppRouterTransitionStart(href, "traverse");
       restoreSynchronousPopstateScrollPosition(
         {
           getActiveNavigationId: () => browserNavigationController.getActiveNavigationId(),
@@ -2109,7 +2163,10 @@ function bootstrapHydration(
         },
         event.state,
       );
+      return;
     }
+
+    handlePopstate(event);
   });
 
   if (import.meta.env.DEV && import.meta.hot) {

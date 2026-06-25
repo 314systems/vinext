@@ -367,6 +367,21 @@ export function approveHmrVisibleCommit(pending: PendingNavigationCommit): Appro
   });
 }
 
+export function approveRestoredHistorySnapshotCommit(
+  pending: PendingNavigationCommit,
+): ApprovedVisibleCommit {
+  if (pending.action.operation.lane !== "traverse") {
+    throw new Error("[vinext] Restored history approval requires a traverse operation");
+  }
+
+  const decision = addCommitTransactionTrace(createVisibleCommitDecision(), pending);
+  if (decision.disposition !== "commit") {
+    throw new Error("[vinext] Restored history approval did not produce a commit decision");
+  }
+
+  return createApprovedVisibleCommit({ decision, pending });
+}
+
 export function approvePendingNavigationCommit(options: {
   activeNavigationId: number;
   currentState: AppRouterState;
