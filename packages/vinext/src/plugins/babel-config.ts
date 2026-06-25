@@ -126,7 +126,7 @@ export function createBabelConfigPlugin(): Plugin {
           sourceMaps: true,
           sourceFileName: filename,
           caller: {
-            name: "vinext",
+            name: "next-babel-turbo-loader",
             supportsStaticESM: true,
             supportsDynamicImport: true,
             supportsTopLevelAwait: true,

@@ -3178,7 +3178,7 @@ describe("Production build", () => {
       await fsp.mkdir(path.join(tmpRoot, "pages"), { recursive: true });
       await fsp.writeFile(
         path.join(tmpRoot, ".babelrc"),
-        JSON.stringify({ plugins: ["./replace-babel-sentinel.cjs"] }),
+        JSON.stringify({ presets: ["next/babel"], plugins: ["./replace-babel-sentinel.cjs"] }),
       );
       await fsp.writeFile(
         path.join(tmpRoot, "replace-babel-sentinel.cjs"),
@@ -3195,7 +3195,10 @@ describe("Production build", () => {
       );
       await fsp.writeFile(
         path.join(tmpRoot, "pages", "index.jsx"),
-        `export default function Page() { return "BABEL_CONFIG_BEFORE"; }\n`,
+        `import React from "react";
+export default class Page extends React.Component {
+  render() { return <div>BABEL_CONFIG_BEFORE</div>; }
+}\n`,
       );
 
       await build({
