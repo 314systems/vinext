@@ -4807,8 +4807,8 @@ export const loadServerActionClient = ${
             if (
               collectMatchingWebpackLoaderRules(
                 this.environment?.name === "client"
-                  ? nextConfig.webpackLoaderRules.client
-                  : nextConfig.webpackLoaderRules.server,
+                  ? (nextConfig?.webpackLoaderRules.client ?? [])
+                  : (nextConfig?.webpackLoaderRules.server ?? []),
                 absImagePath,
                 resolvedImage.slice(absImagePath.length),
                 id,
