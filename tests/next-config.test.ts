@@ -345,16 +345,20 @@ describe("loadNextConfig with CJS globals in next.config.ts", () => {
     expect(config?.env?.VAL).toBe("json-data");
   });
 
-  it("exposes a CommonJS module/exports object inside next.config.ts", async () => {
-    tmpDir = makeTempDir();
-    fs.writeFileSync(
-      path.join(tmpDir, "next.config.ts"),
-      `module.exports = { env: { VIA: "module.exports" } };\n`,
-    );
+  it.each(["ts", "mts"])(
+    "exposes a CommonJS module/exports object inside next.config.%s under type:module",
+    async (extension) => {
+      tmpDir = makeTempDir();
+      fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify({ type: "module" }));
+      fs.writeFileSync(
+        path.join(tmpDir, `next.config.${extension}`),
+        `module.exports = { env: { VIA: "module.exports" } };\n`,
+      );
 
-    const config = await loadNextConfig(tmpDir);
-    expect(config?.env?.VIA).toBe("module.exports");
-  });
+      const config = await loadNextConfig(tmpDir);
+      expect(config?.env?.VIA).toBe("module.exports");
+    },
+  );
 
   it("does not inject __dirname when user already declares it", async () => {
     // Regression test for https://github.com/cloudflare/vinext/issues/1345.
