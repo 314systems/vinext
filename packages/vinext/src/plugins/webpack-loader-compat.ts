@@ -101,6 +101,14 @@ function loaderEntries(rule: WebpackLoaderRule): unknown[] {
     : [...uses, { loader: rule.loader, options: rule.options }];
 }
 
+function isFrameworkLoader(loaderPath: string): boolean {
+  return (
+    loaderPath.includes("next-babel-loader") ||
+    loaderPath.includes("mdx") ||
+    loaderPath.startsWith("next/dist/build/webpack")
+  );
+}
+
 function resolveLoader(
   entry: unknown,
   requireFromRoot: NodeJS.Require,
@@ -108,12 +116,26 @@ function resolveLoader(
   let loader: unknown;
   let options: unknown;
   if (typeof entry === "function") loader = entry;
-  else if (typeof entry === "string") loader = requireFromRoot(entry);
+  else if (typeof entry === "string") {
+    if (isFrameworkLoader(entry)) return null;
+    try {
+      loader = requireFromRoot(entry);
+    } catch {
+      return null;
+    }
+  }
   else if (entry && typeof entry === "object") {
     const record = entry as Record<string, unknown>;
     options = record.options;
     if (typeof record.loader === "function") loader = record.loader;
-    else if (typeof record.loader === "string") loader = requireFromRoot(record.loader);
+    else if (typeof record.loader === "string") {
+      if (isFrameworkLoader(record.loader)) return null;
+      try {
+        loader = requireFromRoot(record.loader);
+      } catch {
+        return null;
+      }
+    }
   }
   if (loader && typeof loader === "object" && "default" in loader) {
     loader = (loader as { default: unknown }).default;
@@ -188,6 +210,19 @@ export function createWebpackLoaderCompatPlugin(
   const rulesForEnvironment = (environmentName: string | undefined): WebpackLoaderRule[] =>
     environmentName === "client" ? getRules().client : getRules().server;
 
+  const resolveMatchingLoaders = (
+    rules: WebpackLoaderRule[],
+    root: string,
+  ): Array<{ loader: LoaderFunction; options: unknown }> | null => {
+    const requireFromRoot = createRequire(path.join(root, "package.json"));
+    const loaders = rules
+      .flatMap(loaderEntries)
+      .map((entry) => resolveLoader(entry, requireFromRoot));
+    return loaders.length > 0 && loaders.every((entry) => entry !== null)
+      ? loaders
+      : null;
+  };
+
   return {
     name: "vinext:webpack-loader-compat",
     enforce: "pre",
@@ -200,7 +235,7 @@ export function createWebpackLoaderCompatPlugin(
       const resourcePath = resolved.id.split("?", 1)[0];
       if (resourcePath.startsWith("\0")) return null;
       const matchingRules = collectMatchingWebpackLoaderRules(configuredRules, resourcePath);
-      if (!matchingRules.some((rule) => loaderEntries(rule).length > 0)) return null;
+      if (!resolveMatchingLoaders(matchingRules, getRoot())) return null;
       return `${WEBPACK_LOADER_PREFIX}${resourcePath}`;
     },
     async load(id) {
@@ -213,18 +248,15 @@ export function createWebpackLoaderCompatPlugin(
       if (rules.length === 0) return null;
 
       const root = getRoot();
-      const requireFromRoot = createRequire(path.join(root, "package.json"));
-      const loaders = rules
-        .flatMap(loaderEntries)
-        .map((entry) => resolveLoader(entry, requireFromRoot));
-      if (loaders.some((entry) => entry === null)) return null;
+      const loaders = resolveMatchingLoaders(rules, root);
+      if (!loaders) return null;
 
       let source: string | Buffer = await fs.readFile(resourcePath);
       for (const entry of loaders.reverse()) {
         source = await runLoader(
-          entry!.loader,
+          entry.loader,
           source,
-          entry!.options,
+          entry.options,
           resourcePath,
           root,
           this.environment?.mode === "dev" ? "development" : "production",

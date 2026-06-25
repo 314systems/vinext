@@ -4,7 +4,10 @@ import path from "node:path";
 import { createBuilder } from "vite";
 import { afterEach, expect, it } from "vitest";
 import vinext from "../packages/vinext/src/index.js";
-import { collectMatchingWebpackLoaderRules } from "../packages/vinext/src/plugins/webpack-loader-compat.js";
+import {
+  collectMatchingWebpackLoaderRules,
+  createWebpackLoaderCompatPlugin,
+} from "../packages/vinext/src/plugins/webpack-loader-compat.js";
 
 const roots: string[] = [];
 
@@ -28,6 +31,30 @@ it("requires parent webpack rule conditions before matching nested loaders", () 
 
   expect(collectMatchingWebpackLoaderRules(rules, "/app/icon.svg")).toContain(nestedRule);
   expect(collectMatchingWebpackLoaderRules(rules, "/app/page.tsx")).not.toContain(nestedRule);
+});
+
+it("leaves Next.js framework loader rules to Vite", async () => {
+  const plugin = createWebpackLoaderCompatPlugin(
+    () => ({
+      client: [{ test: /\.tsx$/, use: ["next-babel-loader"] }],
+      server: [{ test: /\.tsx$/, use: ["next-babel-loader"] }],
+    }),
+    () => "/app",
+  );
+  const resolveId = plugin.resolveId;
+  expect(resolveId).toBeTypeOf("function");
+  if (typeof resolveId !== "function") return;
+
+  const result = await resolveId.call(
+    {
+      environment: { name: "rsc" },
+      resolve: async () => ({ id: "/app/page.tsx" }),
+    } as never,
+    "./page.tsx",
+    "/app/layout.tsx",
+    {} as never,
+  );
+  expect(result).toBeNull();
 });
 
 it("applies matching webpack loaders to App Router modules", async () => {
