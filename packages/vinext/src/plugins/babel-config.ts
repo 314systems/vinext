@@ -3,6 +3,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import type { Plugin } from "vite";
+import { relativeWithinRoot, tryRealpathSync } from "../build/ssr-manifest.js";
 
 const BABEL_CONFIG_FILES = [
   ".babelrc",
@@ -61,6 +62,8 @@ export function createBabelConfigPlugin(): Plugin {
   let canonicalRoot = fs.realpathSync.native(root);
   let babelCorePromise: Promise<BabelCore> | null = null;
   let configPath: string | null = null;
+  let srcDir = canonicalRoot;
+  let pagesDir = path.join(canonicalRoot, "src", "pages");
 
   return {
     name: "vinext:babel-config",
@@ -69,6 +72,12 @@ export function createBabelConfigPlugin(): Plugin {
       root = config.root;
       canonicalRoot = fs.realpathSync.native(root);
       configPath = findBabelConfig(root);
+      srcDir = fs.existsSync(path.join(canonicalRoot, "src"))
+        ? path.join(canonicalRoot, "src")
+        : canonicalRoot;
+      pagesDir = fs.existsSync(path.join(canonicalRoot, "pages"))
+        ? path.join(canonicalRoot, "pages")
+        : path.join(canonicalRoot, "src", "pages");
     },
     configureServer(server) {
       const configCandidates = BABEL_CONFIG_FILES.map((file) => path.join(root, file));
@@ -94,10 +103,8 @@ export function createBabelConfigPlugin(): Plugin {
 
         const filename = id.replace(/\?.*$/, "");
         if (!path.isAbsolute(filename)) return;
-        const canonicalFilename = fs.realpathSync.native(filename);
-        const relativeFilename = path.relative(canonicalRoot, canonicalFilename);
-        if (relativeFilename.startsWith(`..${path.sep}`) || path.isAbsolute(relativeFilename))
-          return;
+        const canonicalFilename = tryRealpathSync(filename) ?? filename;
+        if (!relativeWithinRoot(canonicalRoot, canonicalFilename)) return;
 
         if (!babelCorePromise) {
           const babelCorePath = resolveBabelCore(root);
@@ -117,7 +124,8 @@ export function createBabelConfigPlugin(): Plugin {
         }
 
         const babelCore = await babelCorePromise;
-        const environmentConfig = this.environment.config;
+        const environmentConfig = this.environment?.config;
+        if (!environmentConfig) return;
         const isServer = environmentConfig.consumer !== "client";
         const isDev = environmentConfig.command === "serve";
         const result = await babelCore.transformAsync(code, {
@@ -136,12 +144,8 @@ export function createBabelConfigPlugin(): Plugin {
             target: isServer ? "node" : "web",
             isServer,
             isDev,
-            srcDir: fs.existsSync(path.join(canonicalRoot, "src"))
-              ? path.join(canonicalRoot, "src")
-              : canonicalRoot,
-            pagesDir: fs.existsSync(path.join(canonicalRoot, "pages"))
-              ? path.join(canonicalRoot, "pages")
-              : path.join(canonicalRoot, "src", "pages"),
+            srcDir,
+            pagesDir,
             transformMode: "default",
             hasJsxRuntime: true,
           },
