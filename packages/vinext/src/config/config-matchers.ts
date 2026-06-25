@@ -1127,7 +1127,9 @@ export function matchesRewriteSource(
  * Substitute all matched route params into a redirect/rewrite destination.
  *
  * Handles repeated params (e.g. `/api/:id/:id`) and catch-all suffix forms
- * (`:path*`, `:path+`) in a single pass. Unknown params are left intact.
+ * (`:path*`, `:path+`) in a single pass. Params interpolated anywhere in the
+ * query component are URI-encoded so decoded separators cannot create new
+ * query keys or values. Unknown params are left intact.
  */
 function substituteDestinationParams(destination: string, params: Record<string, string>): string {
   const keys = Object.keys(params);
@@ -1149,7 +1151,30 @@ function substituteDestinationParams(destination: string, params: Record<string,
     _compiledDestinationParamCache.set(cacheKey, paramRe);
   }
 
-  return destination.replace(paramRe, (_token, key: string) => params[key]);
+  return destination.replace(
+    paramRe,
+    (_token, key: string, _modifier: string | undefined, offset: number) => {
+      if (!isDestinationQueryOffset(destination, offset)) return params[key];
+      return encodeURIComponent(params[key]);
+    },
+  );
+}
+
+/**
+ * Check whether a destination param starts inside the query component.
+ *
+ * Encoding both query keys and values is deliberate defense-in-depth: although
+ * Next.js config validation normally limits placeholder placement, vinext's
+ * runtime matcher must not let a decoded `&` or `=` create query syntax in any
+ * accepted destination form. The pathname, hostname, and fragment retain their
+ * existing substitution behavior.
+ */
+function isDestinationQueryOffset(destination: string, offset: number): boolean {
+  const queryStart = destination.indexOf("?");
+  if (queryStart === -1 || offset <= queryStart) return false;
+
+  const hashStart = destination.indexOf("#");
+  return hashStart === -1 || (hashStart > queryStart && offset < hashStart);
 }
 
 /**

@@ -11788,7 +11788,50 @@ describe("matchRewrite with external URLs", () => {
       ...emptyCtx,
       headers: new Headers({ "x-authorized": "yes" }),
     });
-    expect(result).toBe("/home?authorized=yes&path=docs/intro");
+    expect(result).toBe("/home?authorized=yes&path=docs%2Fintro");
+  });
+
+  it("encodes path params substituted into rewrite query values", async () => {
+    const { matchRewrite } = await import("../packages/vinext/src/config/config-matchers.js");
+    // Matches the final Next.js URL behavior while also encoding query-key
+    // placeholders as defense-in-depth when vinext accepts unusual syntax.
+    // https://github.com/vercel/next.js/blob/v16.2.9/packages/next/src/shared/lib/router/utils/prepare-destination.ts
+    const result = matchRewrite(
+      "/search/foo&admin=true",
+      [{ source: "/search/:term", destination: "/api/search?q=:term&fixed=1" }],
+      emptyCtx,
+    );
+
+    expect(result).toBe("/api/search?q=foo%26admin%3Dtrue&fixed=1&term=foo%26admin%3Dtrue");
+  });
+
+  it("encodes params substituted into rewrite query keys", async () => {
+    const { matchRewrite } = await import("../packages/vinext/src/config/config-matchers.js");
+    const result = matchRewrite(
+      "/search/foo&admin=true",
+      [{ source: "/search/:term", destination: "/api/search?:term=value&fixed=1" }],
+      emptyCtx,
+    );
+
+    expect(result).toBe("/api/search?foo%26admin%3Dtrue=value&fixed=1&term=foo%26admin%3Dtrue");
+  });
+
+  it("encodes repeated params throughout the rewrite query component", async () => {
+    const { matchRewrite } = await import("../packages/vinext/src/config/config-matchers.js");
+    const result = matchRewrite(
+      "/search/a/b&admin=true",
+      [
+        {
+          source: "/search/:term*",
+          destination: "https://example.com/api?:term=:term&again=:term#raw=:term",
+        },
+      ],
+      emptyCtx,
+    );
+
+    expect(result).toBe(
+      "https://example.com/api?a%2Fb%26admin%3Dtrue=a%2Fb%26admin%3Dtrue&again=a%2Fb%26admin%3Dtrue#raw=a/b&admin=true",
+    );
   });
 
   it("appends source params not referenced by the rewrite destination", async () => {
@@ -11833,6 +11876,17 @@ describe("matchRewrite with external URLs", () => {
     );
 
     expect(result).toBe("/status#500");
+  });
+
+  it("does not query-encode params in fragment text after a question mark", async () => {
+    const { matchRewrite } = await import("../packages/vinext/src/config/config-matchers.js");
+    const result = matchRewrite(
+      "/docs/foo&bar=true",
+      [{ source: "/docs/:code", destination: "/status#next?value=:code" }],
+      emptyCtx,
+    );
+
+    expect(result).toBe("/status#next?value=foo&bar=true");
   });
 });
 
@@ -11890,6 +11944,26 @@ describe("matchRedirect destination param substitution", () => {
       headers: new Headers({ "x-authorized": "yes" }),
     });
     expect(result).toEqual({ destination: "/home?authorized=yes", permanent: false });
+  });
+
+  it("encodes path params substituted into redirect query values", async () => {
+    const { matchRedirect } = await import("../packages/vinext/src/config/config-matchers.js");
+    // Matches the final Next.js URL behavior while protecting every accepted
+    // query-component placeholder from creating new query syntax.
+    // https://github.com/vercel/next.js/blob/v16.2.9/packages/next/src/shared/lib/router/utils/prepare-destination.ts
+    const redirects = [
+      {
+        source: "/go/:next*",
+        destination: "/login?next=/:next&safe=1",
+        permanent: false,
+      },
+    ];
+    const result = matchRedirect("/go/foo&next=https://evil.example", redirects, emptyCtx);
+
+    expect(result).toEqual({
+      destination: "/login?next=/foo%26next%3Dhttps%3A%2F%2Fevil.example&safe=1",
+      permanent: false,
+    });
   });
 });
 
