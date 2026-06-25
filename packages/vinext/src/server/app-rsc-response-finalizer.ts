@@ -30,7 +30,10 @@ type FinalizeAppRscResponseOptions = {
 };
 
 function lockPartialShellCacheHeaders(response: Response, isPartialShell: boolean): void {
-  if (!isPartialShell) return;
+  if (!isPartialShell) {
+    response.headers.delete(VINEXT_RSC_PARTIAL_SHELL_HEADER);
+    return;
+  }
 
   response.headers.set(VINEXT_RSC_PARTIAL_SHELL_HEADER, "1");
   applyCdnResponseHeaders(response.headers, { cacheControl: NO_STORE_CACHE_CONTROL });

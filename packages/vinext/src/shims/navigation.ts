@@ -414,6 +414,7 @@ function findPrefetchCacheEntryForNavigation(
   if (
     exactEntry &&
     exactEntry.cacheForNavigation !== false &&
+    exactEntry.optimisticRouteShell !== true &&
     isPrefetchCacheEntryCompatibleWithMountedSlots(exactEntry, mountedSlotsHeader)
   ) {
     return { cacheKey: exactCacheKey, entry: exactEntry };
@@ -424,7 +425,7 @@ function findPrefetchCacheEntryForNavigation(
 
   for (const [cacheKey, entry] of cache) {
     if (cacheKey === exactCacheKey) continue;
-    if (entry.cacheForNavigation === false) continue;
+    if (entry.cacheForNavigation === false || entry.optimisticRouteShell === true) continue;
 
     const source = parsePrefetchCacheKey(cacheKey);
     if (source.interceptionContext !== interceptionContext) continue;
@@ -788,6 +789,7 @@ export function consumePrefetchResponse(
   if (
     exactEntry &&
     exactEntry.cacheForNavigation !== false &&
+    exactEntry.optimisticRouteShell !== true &&
     !isPrefetchCacheEntryCompatibleWithMountedSlots(exactEntry, mountedSlotsHeader)
   ) {
     deletePrefetchCacheEntry(cache, getPrefetchedUrls(), exactCacheKey, exactEntry, false);
@@ -804,7 +806,7 @@ export function consumePrefetchResponse(
   // Skip in-flight snapshots and error-path residue where pending cleared
   // without a successful transition to a cache-seeded entry.
   if (entry.pending || entry.outcome !== "cache-seeded") return null;
-  if (entry.cacheForNavigation === false) return null;
+  if (entry.cacheForNavigation === false || entry.optimisticRouteShell === true) return null;
 
   deletePrefetchCacheEntry(cache, getPrefetchedUrls(), cacheKey, entry, false);
 

@@ -107,6 +107,27 @@ describe("finalizeAppRscResponse — config header application", () => {
     expect(response.headers.get(VINEXT_RSC_PARTIAL_SHELL_HEADER)).toBe("1");
   });
 
+  it("removes config-injected partial shell markers from full responses", () => {
+    const response = new Response("body", {
+      headers: { "Cache-Control": "s-maxage=30" },
+    });
+
+    finalizeAppRscResponse(response, new Request("http://example.com/about"), {
+      basePath: "",
+      configHeaders: [
+        {
+          source: "/about",
+          headers: [{ key: VINEXT_RSC_PARTIAL_SHELL_HEADER, value: "1" }],
+        },
+      ],
+      i18nConfig: null,
+      requestContext: makeRequestContext(),
+    });
+
+    expect(response.headers.get(VINEXT_RSC_PARTIAL_SHELL_HEADER)).toBeNull();
+    expect(response.headers.get("cache-control")).toBe("s-maxage=30");
+  });
+
   it("uses the active CDN adapter to clear custom cache headers", () => {
     const adapter: CdnCacheAdapter = {
       ownsBackgroundRevalidation: false,

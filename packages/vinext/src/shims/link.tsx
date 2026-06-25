@@ -508,7 +508,7 @@ function prefetchUrl(href: string, mode: LinkPrefetchMode, priority: "low" | "hi
           }
 
           const existing = getPrefetchCache().get(cacheKey);
-          if (existing?.cacheForNavigation === false) {
+          if (existing?.cacheForNavigation === false && existing.optimisticRouteShell !== true) {
             existing.cacheForNavigation = true;
           }
         }

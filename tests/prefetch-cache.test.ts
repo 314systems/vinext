@@ -347,6 +347,30 @@ describe("prefetch cache eviction", () => {
     expect(consumePrefetchResponse(rscUrl)).toBeNull();
   });
 
+  it("rejects partial shells even if their navigation flag is promoted", async () => {
+    const rscUrl = "/promoted-suspense-shell.rsc";
+    prefetchRscResponse(
+      rscUrl,
+      Promise.resolve(
+        new Response("shell", {
+          headers: {
+            "content-type": "text/x-component",
+            [VINEXT_RSC_PARTIAL_SHELL_HEADER]: "1",
+          },
+        }),
+      ),
+    );
+
+    await waitForPrefetchSetup(() => getPrefetchCache().get(rscUrl)?.outcome === "cache-seeded");
+
+    const entry = getPrefetchCache().get(rscUrl);
+    expect(entry).toBeDefined();
+    entry!.cacheForNavigation = true;
+
+    expect(hasPrefetchCacheEntryForNavigation(rscUrl)).toBe(false);
+    expect(consumePrefetchResponse(rscUrl)).toBeNull();
+  });
+
   it("derives the interception context from the current pathname", () => {
     (globalThis as any).window.location.pathname = "/feed";
 
