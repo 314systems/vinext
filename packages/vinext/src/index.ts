@@ -100,7 +100,6 @@ import { createMiddlewareServerOnlyPlugin } from "./plugins/middleware-server-on
 import { validateMiddlewareModuleExports } from "./plugins/middleware-export-validation.js";
 import { createOptimizeImportsPlugin } from "./plugins/optimize-imports.js";
 import { createDynamicPreloadMetadataPlugin } from "./plugins/dynamic-preload-metadata.js";
-import { createOgInlineFetchAssetsPlugin, createOgAssetsPlugin } from "./plugins/og-assets.js";
 import { generateRouteTypes } from "./typegen.js";
 import {
   mergeOptimizeDepsExclude,
@@ -673,6 +672,20 @@ const SERVER_ACTION_SCAN_EXCLUDED_DIRS = new Set([
   "dist",
   "node_modules",
 ]);
+const OG_ASSET_SCAN_ROUTE_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx", ".mjs", ".mts"]);
+const OG_ASSET_DYNAMIC_METADATA_ROUTE_NAMES = new Set([
+  "apple-icon",
+  "icon",
+  "opengraph-image",
+  "twitter-image",
+]);
+const OG_ASSET_SCAN_TOKENS = [
+  "next/og",
+  "@vercel/og",
+  "ImageResponse",
+  "fetch(new URL(",
+  "readFileSync(fileURLToPath(new URL(",
+] as const;
 
 function projectMayContainServerActions(projectRoot: string): boolean {
   try {
@@ -716,6 +729,56 @@ function projectMayContainCommonjs(projectRoot: string): boolean {
   } catch {
     return true;
   }
+}
+
+function sourceFileMayNeedOgAssetPlugins(filePath: string): boolean {
+  const fileName = path.basename(filePath);
+  const extension = path.extname(fileName);
+  if (
+    OG_ASSET_SCAN_ROUTE_EXTENSIONS.has(extension) &&
+    OG_ASSET_DYNAMIC_METADATA_ROUTE_NAMES.has(path.basename(fileName, extension))
+  ) {
+    return true;
+  }
+
+  if (!SERVER_ACTION_SCAN_EXTENSIONS.has(extension)) return false;
+  const code = fs.readFileSync(filePath, "utf-8");
+  return OG_ASSET_SCAN_TOKENS.some((token) => code.includes(token));
+}
+
+function directoryMayNeedOgAssetPlugins(dir: string): boolean {
+  try {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const filePath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (SERVER_ACTION_SCAN_EXCLUDED_DIRS.has(entry.name)) continue;
+        if (directoryMayNeedOgAssetPlugins(filePath)) return true;
+        continue;
+      }
+      if (entry.isFile() && sourceFileMayNeedOgAssetPlugins(filePath)) return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+function projectMayNeedOgAssetPlugins(projectRoot: string): boolean {
+  for (const routeRoot of [
+    path.join(projectRoot, "app"),
+    path.join(projectRoot, "pages"),
+    path.join(projectRoot, "src", "app"),
+    path.join(projectRoot, "src", "pages"),
+  ]) {
+    try {
+      if (!fs.statSync(routeRoot).isDirectory()) continue;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return true;
+      continue;
+    }
+    if (directoryMayNeedOgAssetPlugins(routeRoot)) return true;
+  }
+  return false;
 }
 
 function generateRootParamsModule(rootParamNames: Iterable<string>): string {
@@ -1176,6 +1239,13 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   const earlyAppDirExists = earlyAppDir !== null;
   const earlyMayContainServerActions =
     earlyAppDir === null ? true : projectMayContainServerActions(earlyBaseDir);
+  const earlyMayNeedOgAssetPlugins = projectMayNeedOgAssetPlugins(earlyBaseDir);
+  const ogAssetPluginsPromise: Promise<Plugin[]> | null = earlyMayNeedOgAssetPlugins
+    ? import("./plugins/og-assets.js").then((mod) => [
+        mod.createOgInlineFetchAssetsPlugin(),
+        mod.createOgAssetsPlugin(),
+      ])
+    : null;
 
   // IMPORTANT: Resolve @vitejs/plugin-rsc subpath imports from the user's
   // project root, not from vinext's own package location. When vinext is
@@ -5373,11 +5443,9 @@ export const loadServerActionClient = ${
     // Expand Webpack's build-time `require.context(...)` into a static module
     // map backed by `import.meta.glob` — see src/plugins/require-context.ts
     createRequireContextPlugin(),
-    // Inline binary assets fetched via `fetch(new URL("./asset", import.meta.url))` —
-    // see src/plugins/og-assets.ts
-    createOgInlineFetchAssetsPlugin(),
-    // Dedupe/copy @vercel/og binary WASM assets in the RSC output — see src/plugins/og-assets.ts
-    createOgAssetsPlugin(),
+    // Inline and dedupe @vercel/og-style runtime-fetched assets only for apps
+    // that may need dynamic OG image support — see src/plugins/og-assets.ts
+    ...(ogAssetPluginsPromise ? [ogAssetPluginsPromise] : []),
     // Collect SSR/RSC bundle externals and write dist/server/vinext-externals.json.
     // Used by emitStandaloneOutput to determine which packages to copy into
     // standalone/node_modules/ — uses the bundler's own import graph instead of
