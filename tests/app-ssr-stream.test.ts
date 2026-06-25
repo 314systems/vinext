@@ -198,8 +198,11 @@ describe("createRscEmbedTransform raw buffer (#981)", () => {
     };
     const context = createContext({ self });
     const runScripts = (html: string) => {
-      for (const match of html.matchAll(/<script>(.*?)<\/script>/g)) {
-        runInContext(match[1]!, context);
+      const scriptSources = html
+        .slice("<script>".length, -"</script>".length)
+        .split("</script><script>");
+      for (const scriptSource of scriptSources) {
+        runInContext(scriptSource, context);
       }
     };
 
