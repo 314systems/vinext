@@ -951,9 +951,16 @@ export async function loadNextConfig(
   // so dynamic imports inside that function continue to work. Vite's
   // runnerImport closes its temporary runner after returning the namespace,
   // which is too early for a later `await import()` from the config function.
-  // Fall back to the Vite runner when native Node resolution cannot load the
-  // project (for example tsconfig path aliases or CommonJS globals).
-  if (process.features?.typescript && (filename.endsWith(".ts") || filename.endsWith(".mts"))) {
+  // Keep configs that reference CommonJS globals on the Vite path, including
+  // non-throwing checks such as `typeof require`, so they retain vinext's
+  // existing injected-global compatibility. Fall back to Vite when native
+  // Node resolution cannot load other project-specific imports such as
+  // tsconfig path aliases.
+  const canUseNativeTypeScript =
+    process.features?.typescript &&
+    (filename.endsWith(".ts") || filename.endsWith(".mts")) &&
+    !referencesCjsGlobals(fs.readFileSync(configPath, "utf8"));
+  if (canUseNativeTypeScript) {
     let nativeModule: unknown;
     try {
       nativeModule = await import(pathToFileURL(configPath).href);

@@ -405,6 +405,21 @@ describe("loadNextConfig with CJS globals in next.config.ts", () => {
     expect(config?.env?.HAS_REQUIRE).toBe("function");
   });
 
+  it.each(["ts", "mts"])(
+    "preserves require observed with typeof in next.config.%s",
+    async (extension) => {
+      tmpDir = makeTempDir();
+      fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify({ type: "module" }));
+      fs.writeFileSync(
+        path.join(tmpDir, `next.config.${extension}`),
+        `export default { env: { HAS_REQUIRE: typeof require } };\n`,
+      );
+
+      const config = await loadNextConfig(tmpDir);
+      expect(config?.env?.HAS_REQUIRE).toBe("function");
+    },
+  );
+
   it("loads a pure-ESM next.config.ts without injecting CJS shims", async () => {
     // No __filename / __dirname / require / module / exports references —
     // the injector transform should short-circuit. We only assert
