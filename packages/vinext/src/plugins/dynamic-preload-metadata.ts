@@ -386,10 +386,6 @@ function objectProperties(node: unknown): AstRecord[] {
   return getArray(node, "properties").filter(isRecord);
 }
 
-function hasObjectProperty(node: unknown, name: string): boolean {
-  return objectProperties(node).some((property) => propertyKeyName(property) === name);
-}
-
 function findObjectProperty(node: unknown, name: string): AstRecord | null {
   return objectProperties(node).find((property) => propertyKeyName(property) === name) ?? null;
 }
@@ -564,7 +560,8 @@ async function resolveManifestModuleIds(
 function isNextBabelLoadableGenerated(property: AstRecord): boolean {
   const value = property.value;
   if (!isRecord(value) || getString(value, "type") !== "ObjectExpression") return false;
-  if (hasObjectProperty(value, "webpack")) return true;
+  const webpackProperty = findObjectProperty(value, "webpack");
+  if (webpackProperty && isNextBabelWebpackCallback(webpackProperty.value)) return true;
 
   const modulesProperty = findObjectProperty(value, "modules");
   const modules = modulesProperty?.value;
@@ -574,6 +571,35 @@ function isNextBabelLoadableGenerated(property: AstRecord): boolean {
     if (getString(element, "type") === "BinaryExpression") return true;
     return (nodeStringValue(element) ?? "").includes(" -> ");
   });
+}
+
+function isNextBabelWebpackCallback(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const type = getString(value, "type");
+  if (type !== "ArrowFunctionExpression" && type !== "FunctionExpression") return false;
+
+  let returnedValue = value.body;
+  if (isRecord(returnedValue) && getString(returnedValue, "type") === "BlockStatement") {
+    const statements = getArray(returnedValue, "body");
+    if (statements.length !== 1 || !isRecord(statements[0])) return false;
+    const returnStatement = statements[0];
+    if (getString(returnStatement, "type") !== "ReturnStatement") return false;
+    returnedValue = returnStatement.argument;
+  }
+  if (!isRecord(returnedValue) || getString(returnedValue, "type") !== "ArrayExpression") {
+    return false;
+  }
+
+  const elements = getArray(returnedValue, "elements");
+  return (
+    elements.length > 0 &&
+    elements.every((element) => {
+      if (!isRecord(element) || getString(element, "type") !== "CallExpression") return false;
+      const callee = element.callee;
+      if (!isRecord(callee) || getString(callee, "type") !== "MemberExpression") return false;
+      return nodeName(callee.object) === "require" && nodeName(callee.property) === "resolveWeak";
+    })
+  );
 }
 
 function findLoadableGeneratedProperty(firstArg: unknown, secondArg: unknown): AstRecord | null {

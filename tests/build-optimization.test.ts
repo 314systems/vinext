@@ -1552,7 +1552,7 @@ describe("next/dynamic preload metadata transform", () => {
     const code = [
       `import dynamic from "next/dynamic";`,
       `const Widget = dynamic(() => import("./dynamic-widget"), {`,
-      `  loadableGenerated: { webpack: () => [require.resolveWeak("./dynamic-widget")] },`,
+      `  loadableGenerated: { webpack: function webpack() { return [require.resolveWeak("./dynamic-widget")]; } },`,
       `});`,
     ].join("\n");
     const result = await _transformNextDynamicPreloadMetadata(
@@ -1564,6 +1564,23 @@ describe("next/dynamic preload metadata transform", () => {
 
     expect(result?.code).toContain(`loadableGenerated: { modules: ["app/dynamic-widget.tsx"] }`);
     expect(result?.code).not.toContain("resolveWeak");
+  });
+
+  it("preserves custom webpack loadableGenerated metadata", async () => {
+    const code = [
+      `import dynamic from "next/dynamic";`,
+      `const Widget = dynamic(() => import("./dynamic-widget"), {`,
+      `  loadableGenerated: { webpack: () => ["custom-chunk"] },`,
+      `});`,
+    ].join("\n");
+    const result = await _transformNextDynamicPreloadMetadata(
+      code,
+      importer,
+      root,
+      resolveDynamicImport,
+    );
+
+    expect(result).toBeNull();
   });
 
   it("supports the object loader form", async () => {
