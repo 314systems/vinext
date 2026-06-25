@@ -195,7 +195,7 @@ async function runLoader(
           (value) => complete(null, value as string | Buffer | undefined),
           reject,
         );
-      } else if (result !== undefined) {
+      } else if (result !== undefined && !asyncRequested) {
         complete(null, result as string | Buffer);
       } else if (!asyncRequested && !completed) {
         complete(null, source);

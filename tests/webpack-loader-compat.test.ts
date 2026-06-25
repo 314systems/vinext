@@ -92,6 +92,40 @@ it("keeps custom loaders from mixed framework loader chains", async () => {
   expect(output).toBe('export default "custom-output"');
 });
 
+it("waits for async loader callbacks instead of using sync returns", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-webpack-loader-async-"));
+  roots.push(root);
+  const loaderPath = path.join(root, "async-loader.cjs");
+  fs.writeFileSync(
+    loaderPath,
+    `module.exports = function () { const done = this.async(); setTimeout(() => done(null, 'export default "async-output"'), 0); return 'export default "sync-output"' }`,
+  );
+  fs.writeFileSync(path.join(root, "value.txt"), "source");
+
+  const plugin = createWebpackLoaderCompatPlugin(
+    () => ({ client: [], server: [{ test: /\.txt$/, use: [loaderPath] }] }),
+    () => root,
+  );
+  const resolveId = plugin.resolveId;
+  const load = plugin.load;
+  expect(resolveId).toBeTypeOf("function");
+  expect(load).toBeTypeOf("function");
+  if (typeof resolveId !== "function" || typeof load !== "function") return;
+
+  const context = {
+    environment: { name: "rsc", mode: "build" },
+    resolve: async () => ({ id: path.join(root, "value.txt") }),
+  } as never;
+  const resolved = await resolveId.call(
+    context,
+    "./value.txt",
+    path.join(root, "page.tsx"),
+    {} as never,
+  );
+  const output = await load.call(context, resolved as string, {} as never);
+  expect(output).toBe('export default "async-output"');
+});
+
 it("applies matching webpack loaders to App Router modules", async () => {
   // Ported from Next.js: test/e2e/app-dir/webpack-loader-set-environment-variable/
   // webpack-loader-set-environment-variable.test.ts
