@@ -69,7 +69,25 @@ export function normalizeSassTildeCssImport(
 
 function startsTildeCssImportTarget(statement: string, start: number): boolean {
   let index = start;
-  while (/\s/.test(statement[index] ?? "")) index++;
+  while (index < statement.length) {
+    while (/\s/.test(statement[index] ?? "")) index++;
+
+    if (statement.slice(index, index + 2) === "/*") {
+      const end = statement.indexOf("*/", index + 2);
+      if (end === -1) return false;
+      index = end + 2;
+      continue;
+    }
+
+    if (statement.slice(index, index + 2) === "//") {
+      const end = statement.indexOf("\n", index + 2);
+      if (end === -1) return false;
+      index = end + 1;
+      continue;
+    }
+
+    break;
+  }
 
   const quote = statement[index];
   if (quote === '"' || quote === "'") {
@@ -89,6 +107,16 @@ function startsTildeCssImportTarget(statement: string, start: number): boolean {
 
   const end = statement.indexOf(")", index);
   return end !== -1 && CSS_IMPORT_PATH_RE.test(statement.slice(index, end).trimEnd());
+}
+
+function isSassStatementStart(code: string, index: number): boolean {
+  for (let current = index - 1; current >= 0; current--) {
+    const char = code[current];
+    if (char === "\n" || char === "\r") return true;
+    if (/\s/.test(char)) continue;
+    return char === "{" || char === ";" || char === "}";
+  }
+  return true;
 }
 
 function rewriteImportStatement(
@@ -245,7 +273,11 @@ function rewriteSassTildeCssImportsWithReplacements(
     if (char === "(") parentheses++;
     if (char === ")") parentheses = Math.max(0, parentheses - 1);
 
-    if (char === "@" && code.slice(index, index + 7).toLowerCase() === "@import") {
+    if (
+      char === "@" &&
+      code.slice(index, index + 7) === "@import" &&
+      isSassStatementStart(code, index)
+    ) {
       const afterKeyword = code[index + 7];
       if (afterKeyword && /[\w-]/.test(afterKeyword)) {
         output += char;

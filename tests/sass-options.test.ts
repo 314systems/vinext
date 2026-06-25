@@ -274,6 +274,15 @@ describe("rewriteSassTildeCssImports", () => {
     expect(rewriteSassTildeCssImports(source, id, root)).toBeNull();
   });
 
+  it("does not rewrite non-Sass import text", () => {
+    for (const source of [
+      `@IMPORT '~package/uppercase.css';`,
+      `.example { --raw: @import '~package/custom-property.css'; }`,
+    ]) {
+      expect(rewriteSassTildeCssImports(source, id, root)).toBeNull();
+    }
+  });
+
   it("stops semicolonless indented Sass imports at the newline", () => {
     const source = [
       `@import '~package/base.css'`,
@@ -326,6 +335,15 @@ describe("rewriteSassTildeCssImports", () => {
     expect(rewriteSassTildeCssImports(source, id, root)).toBe(
       `@import 'package/a.css' layer(foo), 'package/b.css';`,
     );
+  });
+
+  it("rewrites later imports after comments", () => {
+    for (const source of [
+      `@import 'base.css', /* keep */ '~package/next.css';`,
+      [`@import 'base.css',`, `  // keep`, `  '~package/next.css';`].join("\n"),
+    ]) {
+      expect(rewriteSassTildeCssImports(source, id, root)).toBe(source.replace("'~", "'"));
+    }
   });
 
   it("leaves Sass imports and ordinary CSS imports unchanged", () => {
