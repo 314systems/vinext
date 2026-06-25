@@ -1153,9 +1153,10 @@ function substituteDestinationParams(destination: string, params: Record<string,
 
   return destination.replace(
     paramRe,
-    (_token, key: string, _modifier: string | undefined, offset: number) => {
+    (_token, key: string, modifier: string | undefined, offset: number) => {
       if (!isDestinationQueryOffset(destination, offset)) return params[key];
-      return encodeURIComponent(params[key]);
+      const encoded = encodeURIComponent(params[key]);
+      return modifier === "*" || modifier === "+" ? encoded.replace(/%2F/gi, "/") : encoded;
     },
   );
 }

@@ -11788,7 +11788,7 @@ describe("matchRewrite with external URLs", () => {
       ...emptyCtx,
       headers: new Headers({ "x-authorized": "yes" }),
     });
-    expect(result).toBe("/home?authorized=yes&path=docs%2Fintro");
+    expect(result).toBe("/home?authorized=yes&path=docs/intro");
   });
 
   it("encodes path params substituted into rewrite query values", async () => {
@@ -11954,14 +11954,14 @@ describe("matchRedirect destination param substitution", () => {
     const redirects = [
       {
         source: "/go/:next*",
-        destination: "/login?next=/:next&safe=1",
+        destination: "/login?next=/:next*&safe=1",
         permanent: false,
       },
     ];
     const result = matchRedirect("/go/foo&next=https://evil.example", redirects, emptyCtx);
 
     expect(result).toEqual({
-      destination: "/login?next=/foo%26next%3Dhttps%3A%2F%2Fevil.example&safe=1",
+      destination: "/login?next=/foo%26next%3Dhttps%3A//evil.example&safe=1",
       permanent: false,
     });
   });
