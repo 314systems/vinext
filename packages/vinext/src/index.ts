@@ -2234,14 +2234,6 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               // Base options shared by both .scss and .sass preprocessors.
               const baseOpts: SassPreprocessorOptions = {
                 ...sassPreprocessorOptions,
-                ...(sassPreprocessorOptions?.additionalData
-                  ? {
-                      additionalData: wrapSassTildeAdditionalData(
-                        sassPreprocessorOptions.additionalData,
-                        root,
-                      ),
-                    }
-                  : {}),
                 // Merge user-supplied importers (from sassOptions) with the
                 // tilde importer. Tilde goes first so it gets first crack at
                 // ~ prefixed URLs; other importers follow; Vite's own internal
@@ -2263,8 +2255,30 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 // Apply the same options to both `.scss` and `.sass` entry
                 // points. Next.js's sass-loader rule matches /\.s[ca]ss$/,
                 // so a single `sassOptions` block covers both syntaxes there.
-                scss: baseOpts,
-                sass: baseOpts,
+                scss: {
+                  ...baseOpts,
+                  ...(sassPreprocessorOptions?.additionalData
+                    ? {
+                        additionalData: wrapSassTildeAdditionalData(
+                          sassPreprocessorOptions.additionalData,
+                          root,
+                          "scss",
+                        ),
+                      }
+                    : {}),
+                },
+                sass: {
+                  ...baseOpts,
+                  ...(sassPreprocessorOptions?.additionalData
+                    ? {
+                        additionalData: wrapSassTildeAdditionalData(
+                          sassPreprocessorOptions.additionalData,
+                          root,
+                          "sass",
+                        ),
+                      }
+                    : {}),
+                },
               };
             })(),
             ...cssModulesOverride,

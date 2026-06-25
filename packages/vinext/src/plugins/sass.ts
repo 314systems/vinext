@@ -111,10 +111,32 @@ function startsTildeCssImportTarget(statement: string, start: number): boolean {
 }
 
 function isSassStatementStart(code: string, index: number, indentedSyntax: boolean): boolean {
-  for (let current = index - 1; current >= 0; current--) {
+  for (let current = index - 1; current >= 0; ) {
     const char = code[current];
     if (indentedSyntax && (char === "\n" || char === "\r")) return true;
-    if (/\s/.test(char)) continue;
+    if (/\s/.test(char)) {
+      current--;
+      continue;
+    }
+
+    if (char === "/" && code[current - 1] === "*") {
+      const start = code.lastIndexOf("/*", current - 2);
+      if (start === -1) return false;
+      current = start - 1;
+      continue;
+    }
+
+    const lineStart = code.lastIndexOf("\n", current) + 1;
+    if (
+      code
+        .slice(lineStart, current + 1)
+        .trimStart()
+        .startsWith("//")
+    ) {
+      current = lineStart - 1;
+      continue;
+    }
+
     return char === "{" || char === ";" || char === "}";
   }
   return true;
@@ -358,21 +380,28 @@ export function rewriteSassTildeCssImports(code: string, id: string, root: strin
   return rewriteSassTildeCssImportsWithReplacements(code, id, root)?.code ?? null;
 }
 
-export function wrapSassTildeAdditionalData(additionalData: string, root: string): string;
+export function wrapSassTildeAdditionalData(
+  additionalData: string,
+  root: string,
+  syntax?: "scss" | "sass",
+): string;
 export function wrapSassTildeAdditionalData(
   additionalData: AdditionalDataFunction,
   root: string,
+  syntax?: "scss" | "sass",
 ): AdditionalDataFunction;
 export function wrapSassTildeAdditionalData(
   additionalData: AdditionalData,
   root: string,
+  syntax?: "scss" | "sass",
 ): AdditionalData;
 export function wrapSassTildeAdditionalData(
   additionalData: AdditionalData,
   root: string,
+  syntax: "scss" | "sass" = "scss",
 ): AdditionalData {
   if (typeof additionalData === "string") {
-    const syntheticFilename = path.join(root, "__vinext_additional_data.scss");
+    const syntheticFilename = path.join(root, `__vinext_additional_data.${syntax}`);
     return rewriteSassTildeCssImports(additionalData, syntheticFilename, root) ?? additionalData;
   }
 

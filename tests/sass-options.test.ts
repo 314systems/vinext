@@ -264,6 +264,16 @@ describe("rewriteSassTildeCssImports", () => {
     );
   });
 
+  it("rewrites imports after leading comments", () => {
+    for (const source of [
+      [`/* banner */`, `@import '~package/theme.css';`].join("\n"),
+      [`// banner`, `@import '~package/theme.css';`].join("\n"),
+      `/* banner */ @import '~package/theme.css';`,
+    ]) {
+      expect(rewriteSassTildeCssImports(source, id, root)).toBe(source.replace("'~", "'"));
+    }
+  });
+
   it("does not rewrite import-like text in comments or strings", () => {
     const source = [
       `/* @import '~package/comment.css'; */`,
@@ -365,6 +375,17 @@ describe("wrapSassTildeAdditionalData", () => {
   it("rewrites tilde CSS imports injected by string additionalData", () => {
     const wrapped = wrapSassTildeAdditionalData(`@import '~package/injected.css';\n`, root);
     expect(wrapped).toBe(`@import 'package/injected.css';\n`);
+  });
+
+  it("uses indented Sass parsing for string additionalData", () => {
+    const wrapped = wrapSassTildeAdditionalData(
+      [`@import '~package/base.css'`, `$value: foo, '~package/not-an-import.css'`].join("\n"),
+      root,
+      "sass",
+    );
+    expect(wrapped).toBe(
+      [`@import 'package/base.css'`, `$value: foo, '~package/not-an-import.css'`].join("\n"),
+    );
   });
 
   it("rewrites tilde CSS imports returned by function additionalData", async () => {
