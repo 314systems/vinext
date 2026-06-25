@@ -30,6 +30,10 @@ type LoaderFunction = ((this: LoaderContext, source: string | Buffer) => unknown
   raw?: boolean;
 };
 
+type ResolvedLoader = { loader: LoaderFunction; options: unknown };
+
+const SKIP_FRAMEWORK_LOADER = Symbol("skip-framework-loader");
+
 function matchesCondition(condition: unknown, value: string): boolean {
   if (condition === undefined) return true;
   if (condition instanceof RegExp) {
@@ -112,12 +116,12 @@ function isFrameworkLoader(loaderPath: string): boolean {
 function resolveLoader(
   entry: unknown,
   requireFromRoot: NodeJS.Require,
-): { loader: LoaderFunction; options: unknown } | null {
+): ResolvedLoader | typeof SKIP_FRAMEWORK_LOADER | null {
   let loader: unknown;
   let options: unknown;
   if (typeof entry === "function") loader = entry;
   else if (typeof entry === "string") {
-    if (isFrameworkLoader(entry)) return null;
+    if (isFrameworkLoader(entry)) return SKIP_FRAMEWORK_LOADER;
     try {
       loader = requireFromRoot(entry);
     } catch {
@@ -128,7 +132,7 @@ function resolveLoader(
     options = record.options;
     if (typeof record.loader === "function") loader = record.loader;
     else if (typeof record.loader === "string") {
-      if (isFrameworkLoader(record.loader)) return null;
+      if (isFrameworkLoader(record.loader)) return SKIP_FRAMEWORK_LOADER;
       try {
         loader = requireFromRoot(record.loader);
       } catch {
@@ -212,12 +216,16 @@ export function createWebpackLoaderCompatPlugin(
   const resolveMatchingLoaders = (
     rules: WebpackLoaderRule[],
     root: string,
-  ): Array<{ loader: LoaderFunction; options: unknown }> | null => {
+  ): ResolvedLoader[] | null => {
     const requireFromRoot = createRequire(path.join(root, "package.json"));
     const loaders = rules
       .flatMap(loaderEntries)
       .map((entry) => resolveLoader(entry, requireFromRoot));
-    return loaders.length > 0 && loaders.every((entry) => entry !== null) ? loaders : null;
+    if (loaders.some((entry) => entry === null)) return null;
+    const compatibleLoaders = loaders.filter(
+      (entry): entry is ResolvedLoader => entry !== SKIP_FRAMEWORK_LOADER,
+    );
+    return compatibleLoaders.length > 0 ? compatibleLoaders : null;
   };
 
   return {

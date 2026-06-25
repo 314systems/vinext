@@ -57,6 +57,41 @@ it("leaves Next.js framework loader rules to Vite", async () => {
   expect(result).toBeNull();
 });
 
+it("keeps custom loaders from mixed framework loader chains", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-webpack-loader-mixed-"));
+  roots.push(root);
+  const loaderPath = path.join(root, "custom-loader.cjs");
+  fs.writeFileSync(loaderPath, `module.exports = () => 'export default "custom-output"'`);
+  fs.writeFileSync(path.join(root, "value.txt"), "source");
+
+  const plugin = createWebpackLoaderCompatPlugin(
+    () => ({
+      client: [],
+      server: [{ test: /\.txt$/, use: ["next-babel-loader", loaderPath] }],
+    }),
+    () => root,
+  );
+  const resolveId = plugin.resolveId;
+  const load = plugin.load;
+  expect(resolveId).toBeTypeOf("function");
+  expect(load).toBeTypeOf("function");
+  if (typeof resolveId !== "function" || typeof load !== "function") return;
+
+  const context = {
+    environment: { name: "rsc", mode: "build" },
+    resolve: async () => ({ id: path.join(root, "value.txt") }),
+  } as never;
+  const resolved = await resolveId.call(
+    context,
+    "./value.txt",
+    path.join(root, "page.tsx"),
+    {} as never,
+  );
+  expect(resolved).toBeTypeOf("string");
+  const output = await load.call(context, resolved as string, {} as never);
+  expect(output).toBe('export default "custom-output"');
+});
+
 it("applies matching webpack loaders to App Router modules", async () => {
   // Ported from Next.js: test/e2e/app-dir/webpack-loader-set-environment-variable/
   // webpack-loader-set-environment-variable.test.ts
