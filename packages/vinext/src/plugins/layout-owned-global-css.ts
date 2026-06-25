@@ -10,6 +10,7 @@ const EMPTY_LAYOUT_CSS_PREFIX = "\0vinext:layout-owned-global-css/";
 const SOURCE_MODULE_RE = /\.(?:[cm]?[jt]sx?)$/i;
 const MAX_EXTERNAL_GRAPH_MODULES_PER_ROOT = 10_000;
 const MAX_PAGES_GRAPH_MODULES = 10_000;
+const NON_STYLESHEET_QUERY_RE = /[?&](?:inline|raw|url)\b/;
 
 type LayoutOwnedGlobalCssOptions = {
   getPageExtensions?: () => string[];
@@ -39,13 +40,7 @@ function graphModuleId(id: string): string {
 }
 
 function hasNonStylesheetQuery(id: string): boolean {
-  const queryIndex = id.indexOf("?");
-  if (queryIndex === -1) return false;
-
-  const hashIndex = id.indexOf("#", queryIndex);
-  const query = id.slice(queryIndex + 1, hashIndex === -1 ? undefined : hashIndex);
-  const params = new URLSearchParams(query);
-  return params.has("inline") || params.has("raw") || params.has("url");
+  return NON_STYLESHEET_QUERY_RE.test(id);
 }
 
 function isNonStylesheetImport(source: string, resolvedId: string): boolean {
@@ -213,6 +208,8 @@ export function createLayoutOwnedGlobalCssPlugin(
   getPagesDir: () => string | null = () => null,
   options: LayoutOwnedGlobalCssOptions = {},
 ): Plugin {
+  // plugin-rsc builds RSC and server environments before the client environment.
+  // Client deduplication depends on those earlier builds populating the ownership graph.
   const ownerDirectories = new Map<string, Set<string>>();
   const moduleOwners = new Map<string, Set<string>>();
   const moduleImports = new Map<string, Set<string>>();
@@ -552,6 +549,7 @@ export function createLayoutOwnedGlobalCssPlugin(
       if (!resolved || resolved.id.startsWith("\0")) return null;
       if (this.environment?.name === "rsc") {
         addImport(importer, resolved.id, false);
+        return null;
       } else if (isPagesServerEnvironment(this.environment)) {
         const pagesDir = getPagesDir();
         if (!pagesDir) return resolved;
@@ -561,8 +559,9 @@ export function createLayoutOwnedGlobalCssPlugin(
           markPagesConsumer(importer);
         }
         if (pagesConsumers.has(importerId)) addPagesImport(importer, resolved.id);
+        return resolved;
       }
-      return resolved;
+      return null;
     },
 
     async resolveId(source, importer) {
@@ -604,7 +603,13 @@ export function createLayoutOwnedGlobalCssPlugin(
           globalStylesheets.add(resolved.id);
         }
         addOwners(resolved.id, moduleOwners.get(graphModuleId(importer)) ?? []);
-        if (resolved.external) await scanExternalModule(this, resolved.id);
+        if (resolved.external) {
+          try {
+            await scanExternalModule(this, resolved.id);
+          } catch {
+            pagesScanIsConservative = true;
+          }
+        }
 
         return isStylesheetImport ? resolved : null;
       }

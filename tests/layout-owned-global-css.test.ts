@@ -438,6 +438,45 @@ describe("layout-owned global CSS", () => {
     }
   });
 
+  it("keeps external package CSS when source scanning fails", async () => {
+    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-layout-css-invalid-"));
+    try {
+      const appDir = path.join(fixtureRoot, "app");
+      const layout = path.join(appDir, "dashboard", "layout.tsx");
+      const packageEntry = path.join(fixtureRoot, "node_modules", "design-system", "index.js");
+      const packageStyles = path.join(fixtureRoot, "node_modules", "design-system", "styles.css");
+      await fs.mkdir(path.dirname(packageEntry), { recursive: true });
+      await fs.writeFile(packageEntry, `export default function () {`);
+      await fs.writeFile(packageStyles, `.external-layout-style { color: green; }\n`);
+
+      const plugin = createLayoutOwnedGlobalCssPlugin(() => appDir);
+      const resolveId =
+        typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
+
+      await expect(
+        resolveId!.call(
+          createContext("rsc", {
+            "design-system": { id: packageEntry, external: true },
+          }) as never,
+          "design-system",
+          layout,
+          { isEntry: false },
+        ),
+      ).resolves.toBeNull();
+
+      await expect(
+        resolveId!.call(
+          createContext("client", { "./styles.css": packageStyles }) as never,
+          "./styles.css",
+          packageEntry,
+          { isEntry: false },
+        ),
+      ).resolves.toBeNull();
+    } finally {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
   it("ignores import-like comments and strings while scanning external packages", async () => {
     const fs = await import("node:fs/promises");
     const fixtureRoot = await fs.mkdtemp(
@@ -949,22 +988,6 @@ describe("layout-owned global CSS", () => {
     );
     const resolveId =
       typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
-    const configResolved =
-      typeof plugin.configResolved === "object"
-        ? plugin.configResolved.handler
-        : plugin.configResolved;
-    await configResolved?.call(
-      {} as never,
-      {
-        createResolver: () => async (source: string, importer?: string) => {
-          if (!importer) return undefined;
-          if (source === "../src/shared-client") return sharedClient;
-          if (source === "./shared.css") return stylesheet;
-          return undefined;
-        },
-      } as never,
-    );
-
     await runPagesServerDiscovery(plugin, (source, importer) => {
       if (!importer) return null;
       if (source === "../src/shared-client") return sharedClient;
@@ -1026,18 +1049,6 @@ describe("layout-owned global CSS", () => {
     );
     const resolveId =
       typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
-    const configResolved =
-      typeof plugin.configResolved === "object"
-        ? plugin.configResolved.handler
-        : plugin.configResolved;
-    await configResolved?.call(
-      {} as never,
-      {
-        createResolver: () => async (source: string, importer?: string) =>
-          importer ? resolutions.get(`${importer}:${source}`) : undefined,
-      } as never,
-    );
-
     await runPagesServerDiscovery(plugin, (source, importer) =>
       importer ? (resolutions.get(`${importer}:${source}`) ?? null) : null,
     );
@@ -1105,21 +1116,6 @@ describe("layout-owned global CSS", () => {
     );
     const resolveId =
       typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
-    const configResolved =
-      typeof plugin.configResolved === "object"
-        ? plugin.configResolved.handler
-        : plugin.configResolved;
-    await configResolved?.call(
-      {} as never,
-      {
-        createResolver: () => async (source: string, importer?: string) => {
-          if (!importer) return undefined;
-          resolvedSources.push(`${importer}:${source}`);
-          return resolutions.get(`${importer}:${source}`);
-        },
-      } as never,
-    );
-
     await runPagesServerDiscovery(plugin, (source, importer) => {
       if (!importer) return null;
       resolvedSources.push(`${importer}:${source}`);
@@ -1248,11 +1244,6 @@ describe("layout-owned global CSS", () => {
     await fs.writeFile(sharedClient, `import "./shared.css";\n`);
     await fs.writeFile(stylesheet, `.shared { color: teal; }\n`);
 
-    const resolutions = new Map([
-      [`${pagesRoute}:../src/pages-helper`, pagesHelper],
-      [`${pagesHelper}:./shared-client`, sharedClient],
-      [`${sharedClient}:./shared.css`, stylesheet],
-    ]);
     const plugin = createLayoutOwnedGlobalCssPlugin(
       () => appDir,
       () => pagesDir,
@@ -1260,18 +1251,6 @@ describe("layout-owned global CSS", () => {
     );
     const resolveId =
       typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
-    const configResolved =
-      typeof plugin.configResolved === "object"
-        ? plugin.configResolved.handler
-        : plugin.configResolved;
-    await configResolved?.call(
-      {} as never,
-      {
-        createResolver: () => async (source: string, importer?: string) =>
-          importer ? resolutions.get(`${importer}:${source}`) : undefined,
-      } as never,
-    );
-
     for (const [source, importer, resolved] of [
       ["./shared", layout, appHelper],
       ["@shared/client", appHelper, sharedClient],
@@ -1357,18 +1336,6 @@ describe("layout-owned global CSS", () => {
     );
     const resolveId =
       typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
-    const configResolved =
-      typeof plugin.configResolved === "object"
-        ? plugin.configResolved.handler
-        : plugin.configResolved;
-    await configResolved?.call(
-      {} as never,
-      {
-        createResolver: () => async (source: string, importer?: string) =>
-          importer ? resolutions.get(`${importer}:${source}`) : undefined,
-      } as never,
-    );
-
     await runPagesServerDiscovery(plugin, (source, importer) =>
       importer ? (resolutions.get(`${importer}:${source}`) ?? null) : null,
     );
@@ -1496,21 +1463,6 @@ describe("layout-owned global CSS", () => {
     );
     const resolveId =
       typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
-    const configResolved =
-      typeof plugin.configResolved === "object"
-        ? plugin.configResolved.handler
-        : plugin.configResolved;
-    await configResolved?.call(
-      {} as never,
-      {
-        createResolver: () => async (source: string, importer?: string) => {
-          if (!importer) return undefined;
-          resolvedSources.push(`${importer}:${source}`);
-          return resolutions.get(`${importer}:${source}`);
-        },
-      } as never,
-    );
-
     await runPagesServerDiscovery(plugin, (source, importer) => {
       if (!importer) return null;
       resolvedSources.push(`${importer}:${source}`);
@@ -1569,37 +1521,12 @@ describe("layout-owned global CSS", () => {
     await fs.writeFile(sharedClient, `import "./shared.css";\n`);
     await fs.writeFile(stylesheet, `.shared { color: teal; }\n`);
 
-    const ssrFlags: boolean[] = [];
     const plugin = createLayoutOwnedGlobalCssPlugin(
       () => appDir,
       () => pagesDir,
     );
     const resolveId =
       typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
-    const configResolved =
-      typeof plugin.configResolved === "object"
-        ? plugin.configResolved.handler
-        : plugin.configResolved;
-    await configResolved?.call(
-      {} as never,
-      {
-        createResolver:
-          () =>
-          async (
-            source: string,
-            importer: string | undefined,
-            _aliasOnly: boolean,
-            ssr: boolean,
-          ) => {
-            ssrFlags.push(ssr);
-            if (source === "conditional-package") return ssr ? serverEntry : clientEntry;
-            if (source === "./shared-client") return sharedClient;
-            if (source === "./shared.css") return stylesheet;
-            return undefined;
-          },
-      } as never,
-    );
-
     await runPagesServerDiscovery(plugin, (source) => {
       if (source === "conditional-package") return serverEntry;
       if (source === "./shared-client") return sharedClient;
@@ -1625,8 +1552,6 @@ describe("layout-owned global CSS", () => {
         isEntry: false,
       }),
     ).resolves.toBeNull();
-    expect(ssrFlags).toEqual([]);
-
     await fs.rm(projectDir, { recursive: true, force: true });
   });
 
@@ -1665,18 +1590,6 @@ describe("layout-owned global CSS", () => {
     );
     const resolveId =
       typeof plugin.resolveId === "object" ? plugin.resolveId.handler : plugin.resolveId;
-    const configResolved =
-      typeof plugin.configResolved === "object"
-        ? plugin.configResolved.handler
-        : plugin.configResolved;
-    await configResolved?.call(
-      {} as never,
-      {
-        createResolver: () => async (source: string, importer?: string) =>
-          importer ? resolutions.get(`${importer}:${source}`) : undefined,
-      } as never,
-    );
-
     await runPagesServerDiscovery(plugin, (source, importer) =>
       importer ? (resolutions.get(`${importer}:${source}`) ?? null) : null,
     );
