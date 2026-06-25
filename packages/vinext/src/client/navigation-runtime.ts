@@ -5,7 +5,17 @@ import type { AppRouterScrollIntent } from "vinext/shims/app-router-scroll-state
 export type NavigationRuntimeSnapshot = {
   pathname: string;
   searchParams: [string, string][];
+  useLocationSearchParams?: boolean;
 };
+
+export function resolveNavigationRuntimeSearchParams(
+  snapshot: NavigationRuntimeSnapshot,
+  locationSearch: string,
+): URLSearchParams {
+  return new URLSearchParams(
+    snapshot.useLocationSearchParams === true ? locationSearch : snapshot.searchParams,
+  );
+}
 
 export type NavigationRuntimeRscChunk = string | [3, string];
 

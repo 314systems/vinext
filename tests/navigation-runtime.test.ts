@@ -5,6 +5,7 @@ import {
   hasAppNavigationRuntime,
   registerNavigationRuntimeBootstrap,
   registerNavigationRuntimeFunctions,
+  resolveNavigationRuntimeSearchParams,
   subscribeNavigationRuntimeRscChunk,
   type NavigationRuntime,
   type NavigationRuntimeBootstrap,
@@ -25,6 +26,19 @@ afterEach(() => {
 });
 
 describe("navigation runtime contract", () => {
+  it("uses the current location query for query-invariant static fallback HTML", () => {
+    const searchParams = resolveNavigationRuntimeSearchParams(
+      {
+        pathname: "/search",
+        searchParams: [["value", "cached"]],
+        useLocationSearchParams: true,
+      },
+      "?value=current",
+    );
+
+    expect(searchParams.get("value")).toBe("current");
+  });
+
   it("merges bootstrap data without clobbering independently registered RSC payloads", () => {
     Reflect.set(globalThis, "window", {});
 

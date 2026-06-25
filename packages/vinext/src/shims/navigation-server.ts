@@ -19,6 +19,7 @@ export {
   getBfcacheSegmentIdContext,
   getLayoutSegmentContext,
   getNavigationContext,
+  isStaticGenerationNavigationContext,
   registerServerInsertedHTMLCallback,
   renderServerInsertedHTML,
   setNavigationContext,

@@ -15,6 +15,7 @@ import {
   getBfcacheIdMapContext,
   registerServerInsertedHTMLCallback,
   renderServerInsertedHTML,
+  isStaticGenerationNavigationContext,
   setNavigationContext,
 } from "vinext/shims/navigation-server";
 import { runWithNavigationContext } from "vinext/shims/navigation-state";
@@ -307,6 +308,9 @@ function buildHeadInjectionHtml(
   const navPayload = {
     pathname: navContext.pathname,
     searchParams: [...navContext.searchParams.entries()],
+    ...(isStaticGenerationNavigationContext(navContext) && navContext.isForceStatic !== true
+      ? { useLocationSearchParams: true }
+      : {}),
   };
   const rscMetadataScript = createInlineScriptTag(
     createNavigationRuntimeRscMetadataScript(navContext.params, navPayload),

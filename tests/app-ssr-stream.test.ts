@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vite-plus/test";
 import {
+  createNavigationRuntimeRscMetadataScript,
   createRscEmbedTransform,
   createTickBufferedTransform,
   fixFlightHints,
@@ -7,6 +8,19 @@ import {
 } from "../packages/vinext/src/server/app-ssr-stream.js";
 
 describe("App SSR stream helpers", () => {
+  it("marks static bailout hydration metadata to read search params from location", () => {
+    expect(
+      createNavigationRuntimeRscMetadataScript(
+        {},
+        {
+          pathname: "/search",
+          searchParams: [],
+          useLocationSearchParams: true,
+        },
+      ),
+    ).toContain('"useLocationSearchParams":true');
+  });
+
   describe("fixPreloadAs", () => {
     it('replaces as="stylesheet" with as="style" for preload links', () => {
       expect(

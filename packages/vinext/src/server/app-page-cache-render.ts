@@ -43,7 +43,7 @@ export type RenderAppPageCacheArtifactsOptions = {
   ) => ReadableStream<Uint8Array>;
   rootParams?: RootParams;
   route: AppPageCacheRoute;
-  isStaticGeneration: boolean;
+  isStaticGeneration: boolean | (() => boolean);
   waitForAllReady?: boolean;
 };
 
@@ -74,9 +74,9 @@ export async function renderAppPageCacheArtifacts(
   const navigationContext = options.getNavigationContext();
   const htmlResult = await ssrHandler.handleSsr(
     rscCapture.ssrStream,
-    navigationContext === null || options.isStaticGeneration !== true
+    navigationContext === null || options.isStaticGeneration === false
       ? navigationContext
-      : { ...navigationContext, isStaticGeneration: true },
+      : { ...navigationContext, isStaticGeneration: options.isStaticGeneration },
     {
       links: options.getFontLinks(),
       styles: options.getFontStyles(),

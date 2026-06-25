@@ -19,9 +19,14 @@ export type NavigationContext = {
   pathname: string;
   searchParams: URLSearchParams;
   params: Record<string, string | string[]>;
-  isStaticGeneration?: boolean;
+  isStaticGeneration?: boolean | (() => boolean);
   isForceStatic?: boolean;
 };
+
+export function isStaticGenerationNavigationContext(context: NavigationContext | null): boolean {
+  const value = context?.isStaticGeneration;
+  return typeof value === "function" ? value() : value === true;
+}
 
 type NavigationContextsGlobal = typeof globalThis & {
   [LAYOUT_SEGMENT_CONTEXT_KEY]?: React.Context<SegmentMap> | null;

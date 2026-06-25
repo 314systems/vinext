@@ -36,7 +36,11 @@ export function navigationRuntimeRscBootstrapExpression(): string {
 
 export function createNavigationRuntimeRscMetadataScript(
   params: Record<string, string | string[]>,
-  nav: { pathname: string; searchParams: [string, string][] },
+  nav: {
+    pathname: string;
+    searchParams: [string, string][];
+    useLocationSearchParams?: boolean;
+  },
 ): string {
   return (
     "Object.assign(" +

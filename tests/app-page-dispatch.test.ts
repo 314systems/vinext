@@ -6,6 +6,7 @@ import {
   AppElementsWire,
 } from "../packages/vinext/src/server/app-elements.js";
 import { dispatchAppPage } from "../packages/vinext/src/server/app-page-dispatch.js";
+import { shouldUseStaticGenerationNavigationSemantics } from "../packages/vinext/src/server/app-page-render.js";
 import { createClientReuseManifestHeaderFromVisibleAppState } from "../packages/vinext/src/server/app-browser-client-reuse-manifest.js";
 import type { AppLayoutParamAccessTracker } from "../packages/vinext/src/server/app-layout-param-observation.js";
 import {
@@ -36,7 +37,10 @@ import { connection } from "../packages/vinext/src/shims/server.js";
 import type { AppPageMiddlewareContext } from "../packages/vinext/src/server/app-page-response.js";
 import type { ISRCacheEntry } from "../packages/vinext/src/server/isr-cache.js";
 import type { CachedAppPageValue } from "../packages/vinext/src/shims/cache.js";
-import type { NavigationContext } from "../packages/vinext/src/shims/navigation.js";
+import {
+  isStaticGenerationNavigationContext,
+  type NavigationContext,
+} from "../packages/vinext/src/shims/navigation.js";
 import { markAppPprDynamicFallbackShellHtml } from "../packages/vinext/src/server/app-ppr-fallback-shell.js";
 import { appPagePprRuntime } from "../packages/vinext/src/server/app-page-ppr-runtime.js";
 import {
@@ -1410,8 +1414,8 @@ describe("app page dispatch", () => {
           }
           void captureOptions?.sideStream?.cancel().catch(() => {});
           return createStream([
-            navigationContext?.isStaticGeneration === true &&
-            navigationContext.isForceStatic !== true
+            navigationContext?.isStaticGeneration !== false &&
+            navigationContext?.isForceStatic !== true
               ? "<html>nearest search params fallback</html>"
               : "<html>search params content</html>",
           ]);
@@ -1434,13 +1438,15 @@ describe("app page dispatch", () => {
     await expect(response.text()).resolves.toBe("<html>nearest search params fallback</html>");
     await Promise.all(waitUntilPromises);
     expect(capturedWaitForAllReady).toBe(false);
-    expect(capturedNavigationContext).toEqual({
-      pathname: "/posts/hello",
-      searchParams: new URLSearchParams(),
-      params: { slug: "hello" },
-      isStaticGeneration: true,
-      isForceStatic: false,
-    });
+    expect(capturedNavigationContext).toEqual(
+      expect.objectContaining({
+        pathname: "/posts/hello",
+        searchParams: new URLSearchParams(),
+        params: { slug: "hello" },
+        isForceStatic: false,
+      }),
+    );
+    expect(isStaticGenerationNavigationContext(capturedNavigationContext)).toBe(true);
     expect(isrSet).toHaveBeenCalledWith(
       "html:/posts/hello",
       expect.objectContaining({
@@ -1451,6 +1457,27 @@ describe("app page dispatch", () => {
       expect.any(Array),
       undefined,
     );
+  });
+
+  it("classifies navigation bailout semantics from observed request APIs", () => {
+    expect(
+      shouldUseStaticGenerationNavigationSemantics({
+        dynamicFetches: [],
+        requestApis: ["searchParams"],
+      }),
+    ).toBe(true);
+    expect(
+      shouldUseStaticGenerationNavigationSemantics({
+        dynamicFetches: [],
+        requestApis: ["headers"],
+      }),
+    ).toBe(false);
+    expect(
+      shouldUseStaticGenerationNavigationSemantics({
+        dynamicFetches: ["https://example.test/dynamic"],
+        requestApis: [],
+      }),
+    ).toBe(false);
   });
 
   it("does not write query-invariant cache entries when loading-boundary render awaits searchParams", async () => {

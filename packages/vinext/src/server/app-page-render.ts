@@ -586,6 +586,16 @@ function wrapRscResponseForDevErrorReporting(
   });
 }
 
+export function shouldUseStaticGenerationNavigationSemantics(
+  observation: AppPageRenderObservationState | undefined,
+): boolean {
+  return (
+    observation === undefined ||
+    (observation.dynamicFetches.length === 0 &&
+      observation.requestApis.every((api) => api === "searchParams"))
+  );
+}
+
 export async function renderAppPageLifecycle(
   options: RenderAppPageLifecycleOptions,
 ): Promise<Response> {
@@ -900,7 +910,12 @@ export async function renderAppPageLifecycle(
         scriptNonce: options.scriptNonce,
         sideStream: rscCapture.sideStream,
         ssrHandler,
-        isStaticGeneration: shouldCaptureRscForCacheMetadata,
+        isStaticGeneration: shouldCaptureRscForCacheMetadata
+          ? options.isPrerender === true
+            ? true
+            : () =>
+                shouldUseStaticGenerationNavigationSemantics(options.peekRenderObservationState?.())
+          : false,
         waitForAllReady: options.isPrerender === true,
       });
     },
