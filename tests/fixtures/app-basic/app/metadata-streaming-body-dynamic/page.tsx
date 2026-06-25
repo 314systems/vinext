@@ -10,8 +10,17 @@ export async function generateMetadata() {
   };
 }
 
-export default async function MetadataStreamingBodyDynamicPage() {
+export default function MetadataStreamingBodyDynamicPage() {
+  return (
+    <main>
+      Body-only dynamic metadata page
+      <NestedDynamicComponent />
+    </main>
+  );
+}
+
+async function NestedDynamicComponent() {
   await new Promise((resolve) => setTimeout(resolve, 25));
   await headers();
-  return <main>Body-only dynamic metadata page</main>;
+  return <div>Nested dynamic component using headers</div>;
 }

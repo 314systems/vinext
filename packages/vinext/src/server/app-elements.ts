@@ -11,6 +11,7 @@ export {
   APP_INTERCEPTION_CONTEXT_KEY,
   APP_LAYOUT_IDS_KEY,
   APP_LAYOUT_FLAGS_KEY,
+  APP_PENDING_METADATA_KEY,
   APP_RENDER_OBSERVATION_KEY,
   APP_ROOT_LAYOUT_KEY,
   APP_ROUTE_KEY,
@@ -32,6 +33,7 @@ export {
   type AppElementsSlotBinding,
   type AppElements,
   type AppOutgoingElements,
+  type AppPendingMetadata,
   type AppWireElements,
   type LayoutFlags,
 } from "./app-elements-wire.js";

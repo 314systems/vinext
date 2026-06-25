@@ -6,6 +6,7 @@ import {
   normalizeAppElementsSlotBindings,
   type AppElements,
   type AppElementsInterception,
+  type AppPendingMetadata,
   type AppElementsSlotBinding,
 } from "./app-elements.js";
 import {
@@ -31,7 +32,6 @@ import { Children, ParallelSlot, Slot } from "vinext/shims/slot";
 import type { AppPageParams } from "./app-page-boundary.js";
 import type { AppLayoutParamAccessTracker } from "./app-layout-param-observation.js";
 import type { ThenableParamsObserver } from "vinext/shims/thenable-params";
-import { peekDynamicUsage } from "vinext/shims/headers";
 import {
   createAppRenderDependency,
   registerAppElementRenderDependencies,
@@ -205,9 +205,7 @@ type BuildAppPageRouteElementOptions<
   createPageElement?: (
     component: AppPageComponent,
     props: Readonly<Record<string, unknown>>,
-    completion?: AppRenderDependency,
   ) => ReactNode;
-  metadataPlacementDependencies?: readonly AppRenderDependency[];
   searchParams?: unknown;
   slotOverrides?: Readonly<Record<string, AppPageSlotOverride<TModule>>> | null;
 };
@@ -506,23 +504,13 @@ function createAppPageRouteHead(
   viewport: Viewport,
   pathname: string,
   metadataPlacement: "body" | "head" | "head-if-static",
-  metadataPlacementDependencies: readonly AppRenderDependency[],
   trailingSlash?: boolean,
 ): ReactNode {
-  async function StaticMetadataHead() {
-    await Promise.all(metadataPlacementDependencies.map((dependency) => dependency.promise));
-    return peekDynamicUsage() ? null : (
-      <MetadataHead metadata={metadata!} pathname={pathname} trailingSlash={trailingSlash} />
-    );
-  }
-
   return (
     <>
       <meta charSet="utf-8" />
       {metadata && metadataPlacement === "head" ? (
         <MetadataHead metadata={metadata} pathname={pathname} trailingSlash={trailingSlash} />
-      ) : metadata && metadataPlacement === "head-if-static" ? (
-        <StaticMetadataHead />
       ) : null}
       <ViewportHead viewport={viewport} />
     </>
@@ -534,9 +522,8 @@ export function createAppPageRouteBodyMetadata(
   pathname: string,
   metadataPlacement: "body" | "head" | "head-if-static",
   trailingSlash?: boolean,
-  metadataPlacementDependencies: readonly AppRenderDependency[] = [],
 ): ReactNode {
-  if (!metadata || metadataPlacement === "head") return null;
+  if (!metadata || metadataPlacement !== "body") return null;
 
   const metadataHtml = (
     <div
@@ -546,14 +533,7 @@ export function createAppPageRouteBodyMetadata(
       }}
     />
   );
-  if (metadataPlacement === "body") return metadataHtml;
-
-  async function DynamicMetadataBody() {
-    await Promise.all(metadataPlacementDependencies.map((dependency) => dependency.promise));
-    return peekDynamicUsage() ? metadataHtml : null;
-  }
-
-  return <DynamicMetadataBody />;
+  return metadataHtml;
 }
 
 export function buildAppPageElements<
@@ -575,9 +555,6 @@ export function buildAppPageElements<
   const templateEntries = createAppPageTemplateEntries(options.route);
   const errorEntries = createAppPageErrorEntries(options.route);
   const metadataPlacement = options.metadataPlacement ?? "head";
-  const metadataPlacementDependencies: AppRenderDependency[] = [
-    ...(options.metadataPlacementDependencies ?? []),
-  ];
   const layoutEntriesByTreePosition = new Map<number, AppPageLayoutEntry<TModule, TErrorModule>>();
   const templateEntriesByTreePosition = new Map<number, AppPageTemplateEntry<TModule>>();
   const errorEntriesByTreePosition = new Map<number, AppPageErrorEntry<TErrorModule>>();
@@ -633,6 +610,7 @@ export function buildAppPageElements<
     | ReactNode
     | string
     | null
+    | AppPendingMetadata
     | AppElementsInterception
     | readonly AppElementsSlotBinding[]
     | readonly string[]
@@ -644,6 +622,16 @@ export function buildAppPageElements<
       rootLayoutTreePath,
       routeId,
       sourcePage: createAppPageSourcePage(options.sourcePageSegments ?? routeSegments),
+      pendingMetadata:
+        metadataPlacement === "head-if-static" && options.resolvedMetadata
+          ? {
+              metadata: options.resolvedMetadata,
+              pathname: options.resolvedMetadataPathname ?? options.routePath,
+              ...(options.trailingSlash === undefined
+                ? {}
+                : { trailingSlash: options.trailingSlash }),
+            }
+          : null,
       slotBindings: createAppPageSlotBindings(options.route, layoutEntries, resolveSlotOverride, {
         interception: renderIdentity?.interception ?? options.interception ?? null,
         interceptionContext,
@@ -834,18 +822,10 @@ export function buildAppPageElements<
       Object.assign(slotProps, slotOverride.props);
     }
 
-    const slotCompletion =
-      metadataPlacement === "head-if-static" && options.createPageElement
-        ? createAppRenderDependency()
-        : undefined;
-    if (slotCompletion) {
-      metadataPlacementDependencies.push(slotCompletion);
-    }
     let slotElement: ReactNode = options.createPageElement
-      ? options.createPageElement(slotComponent, slotProps, slotCompletion)
+      ? options.createPageElement(slotComponent, slotProps)
       : (() => {
           const SlotComponent = slotComponent;
-          slotCompletion?.release();
           return <SlotComponent {...slotProps} />;
         })();
     const hasSlotTreeOverride =
@@ -1171,7 +1151,6 @@ export function buildAppPageElements<
         options.resolvedViewport,
         options.resolvedMetadataPathname ?? options.routePath,
         metadataPlacement,
-        metadataPlacementDependencies,
         options.trailingSlash,
       )}
       {routeChildren}
@@ -1180,7 +1159,6 @@ export function buildAppPageElements<
         options.resolvedMetadataPathname ?? options.routePath,
         metadataPlacement,
         options.trailingSlash,
-        metadataPlacementDependencies,
       )}
     </>
   );

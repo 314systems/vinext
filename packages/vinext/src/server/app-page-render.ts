@@ -38,6 +38,7 @@ import {
   type AppPageSsrHandler,
 } from "./app-page-stream.js";
 import type { AppRscRenderMode } from "./app-rsc-render-mode.js";
+import type { AppPendingMetadataPlacement } from "./app-pending-metadata.js";
 import {
   createArtifactCompatibilityEnvelope,
   createArtifactCompatibilityGraphVersion,
@@ -677,6 +678,7 @@ export async function renderAppPageLifecycle(
     renderObservation: payloadRenderObservation,
     skipDisposition: options.isRscRequest ? skipDisposition : undefined,
   });
+  const dynamicUsedBeforeRscRender = options.peekDynamicUsage?.() ?? false;
 
   const compileEnd = options.isProduction ? undefined : performance.now();
   const baseOnError = options.createRscOnErrorHandler(options.cleanPathname, options.routePattern);
@@ -705,6 +707,35 @@ export async function renderAppPageLifecycle(
       onError: rscErrorTracker.onRenderError,
     });
   });
+  let resolvePendingMetadataPlacement!: (placement: AppPendingMetadataPlacement) => void;
+  const pendingMetadataPlacement = new Promise<AppPendingMetadataPlacement>((resolve) => {
+    resolvePendingMetadataPlacement = resolve;
+  });
+  if (!options.isRscRequest && !options.pprFallbackShellSignal) {
+    const [renderStream, completionStream] = rscStream.tee();
+    rscStream = renderStream;
+    const completionReader = completionStream.getReader();
+    const drainCompletionStream = async (): Promise<void> => {
+      for (;;) {
+        const { done } = await completionReader.read();
+        if (done) return;
+      }
+    };
+    void drainCompletionStream().then(
+      () => {
+        resolvePendingMetadataPlacement(
+          dynamicUsedBeforeRscRender || options.peekDynamicUsage?.() ? "body" : "head",
+        );
+      },
+      () => {
+        resolvePendingMetadataPlacement(
+          dynamicUsedBeforeRscRender || options.peekDynamicUsage?.() ? "body" : "head",
+        );
+      },
+    );
+  } else {
+    resolvePendingMetadataPlacement("head");
+  }
 
   let pprFallbackShellRsc: Uint8Array | null = null;
   if (options.pprFallbackShellSignal) {
@@ -895,6 +926,7 @@ export async function renderAppPageLifecycle(
         reactMaxHeadersLength: options.reactMaxHeadersLength,
         rootParams: options.rootParams,
         pprFallbackShellSignal: options.pprFallbackShellSignal,
+        pendingMetadataPlacement,
         formState: options.formState ?? null,
         rscStream: rscForResponse,
         scriptNonce: options.scriptNonce,

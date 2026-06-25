@@ -1,7 +1,11 @@
 import { headers } from "next/headers";
 
-export default async function MetadataStreamingHeadersSlot() {
+export default function MetadataStreamingHeadersSlot() {
+  return <NestedHeadersSlot />;
+}
+
+async function NestedHeadersSlot() {
   await new Promise((resolve) => setTimeout(resolve, 25));
   await headers();
-  return <div>Dynamic parallel slot using headers</div>;
+  return <div>Nested dynamic parallel slot using headers</div>;
 }
