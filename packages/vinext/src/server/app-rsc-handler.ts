@@ -100,6 +100,7 @@ type AppRscMiddlewareContext = AppMiddlewareContext;
 type RunAppMiddlewareOptions = {
   cleanPathname: string;
   context: AppRscMiddlewareContext;
+  hadBasePath: boolean;
   isDataRequest: boolean;
   request: Request;
 };
@@ -602,6 +603,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     const middlewareResult = await options.runMiddleware({
       cleanPathname,
       context: middlewareContext,
+      hadBasePath,
       isDataRequest: isMiddlewareDataRequest,
       request: userlandRequest,
     });

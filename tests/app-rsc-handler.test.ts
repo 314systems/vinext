@@ -118,6 +118,7 @@ function createHandler(overrides: Partial<TestHandlerOptions> = {}) {
               basePath: "/docs",
               ...options,
               filePath: overrides.middlewareFilePath ?? undefined,
+              hadBasePath: options.hadBasePath,
               i18nConfig: overrides.i18nConfig ?? null,
               isProxy: overrides.isMiddlewareProxy ?? false,
               module: overrides.middlewareModule!,
