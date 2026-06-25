@@ -5,6 +5,10 @@ import {
   getVinextBrowserGlobal,
 } from "../packages/vinext/src/server/app-browser-stream.js";
 import {
+  chunksToReadableStream as chunksToDocumentReadableStream,
+  createProgressiveRscStream as createProgressiveDocumentRscStream,
+} from "../packages/vinext/src/server/app-browser-stream-document.js";
+import {
   NAVIGATION_RUNTIME_KEY,
   getNavigationRuntime,
   registerNavigationRuntimeBootstrap,
@@ -298,6 +302,68 @@ describe("App browser stream helpers", () => {
     expect(await readText(reader)).toEqual({ done: true, text: undefined });
 
     vi.runAllTimers();
+    expect(await readText(reader)).toEqual({ done: true, text: undefined });
+  });
+});
+
+describe("Document-only App browser stream helpers", () => {
+  beforeEach(() => {
+    resetBrowserGlobals();
+  });
+
+  afterEach(() => {
+    resetBrowserGlobals();
+    setGlobalDocument(originalDocument);
+  });
+
+  it("turns embedded binary chunks into exact readable bytes", async () => {
+    const reader = chunksToDocumentReadableStream(["text", [3, "/wABAgM="]]).getReader();
+
+    expect(await readText(reader)).toEqual({ done: false, text: "text" });
+    expect(await readBytes(reader)).toEqual({ done: false, bytes: [255, 0, 1, 2, 3] });
+    expect(await readBytes(reader)).toEqual({ done: true, bytes: undefined });
+  });
+
+  it("streams directly from the minimal navigation bootstrap", async () => {
+    const runtimeRsc = { rsc: ["shell"], done: false };
+    const runtimeWindow = {
+      [NAVIGATION_RUNTIME_KEY]: {
+        bootstrap: { rsc: runtimeRsc },
+      },
+    };
+    Reflect.set(globalThis, "window", runtimeWindow);
+    setGlobalDocument({
+      readyState: "loading",
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    } as unknown as Document);
+
+    const reader = createProgressiveDocumentRscStream().getReader();
+
+    expect(await readText(reader)).toEqual({ done: false, text: "shell" });
+    runtimeRsc.rsc.push("delta");
+    expect(await readText(reader)).toEqual({ done: false, text: "delta" });
+
+    runtimeRsc.done = true;
+    expect(await readText(reader)).toEqual({ done: true, text: undefined });
+  });
+
+  it("retains the legacy progressive bootstrap fallback", async () => {
+    setGlobalDocument({
+      readyState: "loading",
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    } as unknown as Document);
+    vinext.__VINEXT_RSC_CHUNKS__ = ["shell"];
+    vinext.__VINEXT_RSC_DONE__ = false;
+
+    const reader = createProgressiveDocumentRscStream().getReader();
+
+    expect(await readText(reader)).toEqual({ done: false, text: "shell" });
+    vinext.__VINEXT_RSC_CHUNKS__.push([3, "/wABAgM="]);
+    expect(await readBytes(reader)).toEqual({ done: false, bytes: [255, 0, 1, 2, 3] });
+
+    vinext.__VINEXT_RSC_DONE__ = true;
     expect(await readText(reader)).toEqual({ done: true, text: undefined });
   });
 });

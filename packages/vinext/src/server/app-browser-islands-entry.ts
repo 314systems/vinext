@@ -8,7 +8,7 @@ import {
   chunksToReadableStream,
   createProgressiveRscStream,
   getVinextBrowserGlobal,
-} from "./app-browser-stream.js";
+} from "./app-browser-stream-document.js";
 import { normalizeAppElements, type AppElements, type AppWireElements } from "./app-elements.js";
 import { readAppElementsRouteId } from "./app-elements-route.js";
 import { ElementsContext, Slot } from "virtual:vinext-app-slot-runtime";
