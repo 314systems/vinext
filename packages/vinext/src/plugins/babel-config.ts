@@ -5,15 +5,15 @@ import { pathToFileURL } from "node:url";
 import type { Plugin } from "vite";
 
 const BABEL_CONFIG_FILES = [
-  "babel.config.js",
-  "babel.config.cjs",
-  "babel.config.mjs",
-  "babel.config.json",
   ".babelrc",
-  ".babelrc.js",
-  ".babelrc.cjs",
-  ".babelrc.mjs",
   ".babelrc.json",
+  ".babelrc.js",
+  ".babelrc.mjs",
+  ".babelrc.cjs",
+  "babel.config.js",
+  "babel.config.json",
+  "babel.config.mjs",
+  "babel.config.cjs",
 ];
 
 type BabelCore = {
@@ -123,6 +123,8 @@ export function createBabelConfigPlugin(): Plugin {
         const result = await babelCore.transformAsync(code, {
           filename: canonicalFilename,
           cwd: canonicalRoot,
+          configFile: configPath,
+          babelrc: false,
           sourceMaps: true,
           sourceFileName: filename,
           caller: {
@@ -145,7 +147,7 @@ export function createBabelConfigPlugin(): Plugin {
           },
         });
 
-        if (!result?.code) return;
+        if (result?.code == null) return;
         return { code: result.code, map: result.map ?? undefined };
       },
     },

@@ -3181,10 +3181,17 @@ describe("Production build", () => {
         JSON.stringify({ presets: ["next/babel"], plugins: ["./replace-babel-sentinel.cjs"] }),
       );
       await fsp.writeFile(
+        path.join(tmpRoot, "babel.config.cjs"),
+        `throw new Error("babel.config.cjs must not override the selected .babelrc");\n`,
+      );
+      await fsp.writeFile(
         path.join(tmpRoot, "replace-babel-sentinel.cjs"),
         `module.exports = function () {
   return {
     visitor: {
+      Program(path, state) {
+        if (state.filename.endsWith("empty.js")) path.node.body = [];
+      },
       StringLiteral(path) {
         if (path.node.value === "BABEL_CONFIG_BEFORE") path.node.value = "BABEL_CONFIG_AFTER";
       },
@@ -3196,10 +3203,12 @@ describe("Production build", () => {
       await fsp.writeFile(
         path.join(tmpRoot, "pages", "index.jsx"),
         `import React from "react";
+import "../empty.js";
 export default class Page extends React.Component {
   render() { return <div>BABEL_CONFIG_BEFORE</div>; }
 }\n`,
       );
+      await fsp.writeFile(path.join(tmpRoot, "empty.js"), `console.log("EMPTY_MODULE_MARKER");\n`);
 
       await build({
         root: tmpRoot,
@@ -3222,6 +3231,7 @@ export default class Page extends React.Component {
       ).join("\n");
       expect(output).toContain("BABEL_CONFIG_AFTER");
       expect(output).not.toContain("BABEL_CONFIG_BEFORE");
+      expect(output).not.toContain("EMPTY_MODULE_MARKER");
     } finally {
       await fsp.rm(tmpRoot, { recursive: true, force: true });
     }
