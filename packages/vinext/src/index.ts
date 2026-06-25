@@ -131,6 +131,7 @@ import { asyncHooksStubPlugin } from "./plugins/async-hooks-stub.js";
 import { clientReferenceDedupPlugin } from "./plugins/client-reference-dedup.js";
 import { dataUrlCssPlugin } from "./plugins/css-data-url.js";
 import { createRscClientReferenceLoadersPlugin } from "./plugins/rsc-client-reference-loaders.js";
+import { createActionFreeFlightServerRuntimePlugin } from "./plugins/action-free-flight-server-runtime.js";
 import { createInstrumentationClientTransformPlugin } from "./plugins/instrumentation-client.js";
 import {
   generateInstrumentationClientInjectModule,
@@ -5735,6 +5736,7 @@ export const loadServerActionClient = ${
   // Append auto-injected RSC plugins if applicable
   if (rscPluginPromise) {
     plugins.push(rscPluginPromise);
+    plugins.push(createActionFreeFlightServerRuntimePlugin());
     plugins.push(
       createRscClientReferenceLoadersPlugin({
         internalRoot: path.resolve(__dirname),
@@ -5761,6 +5763,9 @@ export const loadServerActionClient = ${
         ],
         onClientRouterRuntimeAnalysis(required) {
           clientRouterRuntimeRequired = required;
+        },
+        useActionFreeFlightServerRuntime() {
+          return !nextConfig.cacheComponents;
         },
         rewriteClientReferenceImportId(importId, { hasServerActions }) {
           if (

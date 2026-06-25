@@ -3,6 +3,7 @@ import {
   clientReferencesRequireRouterRuntime,
   rewriteClientReferenceServerRuntimeImport,
 } from "../packages/vinext/src/plugins/rsc-client-reference-loaders.js";
+import { ACTION_FREE_FLIGHT_SERVER_RUNTIME_ID } from "../packages/vinext/src/plugins/action-free-flight-server-runtime.js";
 
 function createSourceReader(entries: Record<string, string[] | null>) {
   return async (id: string) => entries[id] ?? null;
@@ -104,5 +105,19 @@ describe("client reference server runtime import", () => {
         'import { createFromReadableStream } from "@vitejs/plugin-rsc/react/rsc";',
       ),
     ).toBeNull();
+  });
+
+  it("can target the action-free Flight server runtime", () => {
+    const code = [
+      'import * as $$ReactServer from "/repo/node_modules/@vitejs/plugin-rsc/dist/react/rsc.js";',
+      "export const Counter = $$ReactServer.registerClientReference(() => {}, 'counter', 'Counter');",
+    ].join("\n");
+
+    expect(
+      rewriteClientReferenceServerRuntimeImport(
+        code,
+        `import * as $$ReactServer from ${JSON.stringify(ACTION_FREE_FLIGHT_SERVER_RUNTIME_ID)};`,
+      ),
+    ).toContain(ACTION_FREE_FLIGHT_SERVER_RUNTIME_ID);
   });
 });

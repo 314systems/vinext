@@ -1096,10 +1096,31 @@ describe("App Router entry templates", () => {
     const code = generateRscEntry("/tmp/test/app", minimalAppRoutes, null, [], null, "", false, {
       hasServerActions: false,
     });
+    const cacheComponentsCode = generateRscEntry(
+      "/tmp/test/app",
+      minimalAppRoutes,
+      null,
+      [],
+      null,
+      "",
+      false,
+      {
+        cacheComponents: true,
+        hasServerActions: false,
+      },
+    );
 
-    expect(code).toContain('from "@vitejs/plugin-rsc/vendor/react-server-dom/server.edge"');
-    expect(code).toContain('from "@vitejs/plugin-rsc/core/rsc"');
+    expect(code).toContain('from "virtual:vinext-action-free-flight-server-runtime"');
+    expect(code).toContain("createClientManifest as _createClientManifest");
+    expect(code).not.toContain('from "@vitejs/plugin-rsc/core/rsc"');
     expect(code).toContain("_rawRenderToReadableStream(model, _createClientManifest(), options)");
+    expect(cacheComponentsCode).toContain(
+      'from "@vitejs/plugin-rsc/vendor/react-server-dom/server.edge"',
+    );
+    expect(cacheComponentsCode).not.toContain(
+      'from "virtual:vinext-action-free-flight-server-runtime"',
+    );
+    expect(cacheComponentsCode).toContain('from "@vitejs/plugin-rsc/core/rsc"');
     expect(code).not.toContain('from "@vitejs/plugin-rsc/react/rsc"');
     expect(code).not.toContain("app-server-action-execution.js");
     expect(code).not.toContain("decodeAction,");

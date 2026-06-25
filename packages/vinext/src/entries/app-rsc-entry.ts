@@ -14,6 +14,7 @@ import {
 } from "../build/app-response-cache-capabilities.js";
 import type { AppPageChunkLoader } from "../build/app-page-chunk-groups.js";
 import { appRoutesCanUseSimpleRouteHandlerRuntime } from "../build/app-route-handler-capabilities.js";
+import { ACTION_FREE_FLIGHT_SERVER_RUNTIME_ID } from "../plugins/action-free-flight-server-runtime.js";
 import { buildAppRscManifestCode } from "./app-rsc-manifest.js";
 import { resolveEntryPath } from "./runtime-entry-module.js";
 import { normalizePathSeparators } from "../utils/path.js";
@@ -266,6 +267,7 @@ export function generateRscEntry(
   const hasGoogleFonts = config?.hasGoogleFonts !== false;
   const hasLocalFonts = config?.hasLocalFonts !== false;
   const hasFetchCacheRuntime = config?.hasFetchCacheRuntime !== false;
+  const useActionFreeFlightServerRuntime = !hasServerActions && !cacheComponents;
   const hasIsrRuntime = cacheComponents || appRoutesNeedResponseCache(routes);
   const i18nConfig = config?.i18n ?? null;
   const hasPagesDir = config?.hasPagesDir ?? false;
@@ -316,13 +318,14 @@ ${
   loadServerAction,
   createTemporaryReferenceSet,
 } from "@vitejs/plugin-rsc/rsc";`
-    : `import { renderToReadableStream as _rawRenderToReadableStream } from "@vitejs/plugin-rsc/vendor/react-server-dom/server.edge";`
+    : useActionFreeFlightServerRuntime
+      ? `import {
+  createClientManifest as _createClientManifest,
+  renderToReadableStream as _rawRenderToReadableStream,
+} from ${JSON.stringify(ACTION_FREE_FLIGHT_SERVER_RUNTIME_ID)};`
+      : `import { renderToReadableStream as _rawRenderToReadableStream } from "@vitejs/plugin-rsc/vendor/react-server-dom/server.edge";`
 }
-${
-  !hasServerActions || cacheComponents
-    ? 'import { createClientManifest as _createClientManifest } from "@vitejs/plugin-rsc/core/rsc";'
-    : ""
-}
+${cacheComponents ? 'import { createClientManifest as _createClientManifest } from "@vitejs/plugin-rsc/core/rsc";' : ""}
 ${cacheComponents ? 'import { prerender as _prerender } from "@vitejs/plugin-rsc/vendor/react-server-dom/static.edge";' : ""}
 import { createRscPrerenderer, createRscRenderer } from ${JSON.stringify(rscStreamHintsPath)};
 ${hasFetchCacheRuntime ? 'import "vinext/shims/fetch-cache";' : ""}

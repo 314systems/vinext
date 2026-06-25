@@ -4,6 +4,7 @@ import { parseAst, type Plugin } from "vite";
 import type { PluginApi } from "@vitejs/plugin-rsc";
 import { forEachAstChild, isAstRecord, nodeArray } from "./ast-utils.js";
 import { normalizePathSeparators } from "../utils/path.js";
+import { ACTION_FREE_FLIGHT_SERVER_RUNTIME_ID } from "./action-free-flight-server-runtime.js";
 
 const CLIENT_REFERENCES_ID = "\0virtual:vite-rsc/client-references";
 const RESOLVED_ID_PROXY_PREFIX = "virtual:vite-rsc/resolved-id/";
@@ -39,6 +40,7 @@ type RscClientReferenceLoadersPluginOptions = {
   ) => string;
   routerRuntimeImportSpecifiers?: readonly string[];
   routerRuntimeModuleIds?: readonly string[];
+  useActionFreeFlightServerRuntime?: () => boolean;
 };
 
 function cleanModuleId(id: string): string {
@@ -213,12 +215,12 @@ function generateDirectClientReferenceLoaders(
   return `export default {\n${entries}\n};\n`;
 }
 
-export function rewriteClientReferenceServerRuntimeImport(code: string): string | null {
+export function rewriteClientReferenceServerRuntimeImport(
+  code: string,
+  runtimeImport = SERVER_REFERENCE_RUNTIME_IMPORT,
+): string | null {
   if (!code.includes("$$ReactServer.registerClientReference")) return null;
-  const rewritten = code.replace(
-    CLIENT_REFERENCE_RUNTIME_IMPORT_RE,
-    () => SERVER_REFERENCE_RUNTIME_IMPORT,
-  );
+  const rewritten = code.replace(CLIENT_REFERENCE_RUNTIME_IMPORT_RE, () => runtimeImport);
   return rewritten === code ? null : rewritten;
 }
 
@@ -239,7 +241,20 @@ export function createRscClientReferenceLoadersPlugin(
     },
     transform(code, id) {
       if (id !== CLIENT_REFERENCES_ID) {
-        const rewritten = rewriteClientReferenceServerRuntimeImport(code);
+        const manager = rscApi?.manager;
+        const useActionFreeRuntime =
+          manager !== undefined &&
+          !manager.isScanBuild &&
+          Object.keys(manager.serverReferenceMetaMap).length === 0 &&
+          options.useActionFreeFlightServerRuntime?.() === true;
+        const rewritten = rewriteClientReferenceServerRuntimeImport(
+          code,
+          useActionFreeRuntime
+            ? `import * as $$ReactServer from ${JSON.stringify(
+                ACTION_FREE_FLIGHT_SERVER_RUNTIME_ID,
+              )};`
+            : SERVER_REFERENCE_RUNTIME_IMPORT,
+        );
         return rewritten === null ? null : { code: rewritten, map: null };
       }
 
