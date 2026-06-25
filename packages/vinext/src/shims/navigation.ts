@@ -246,6 +246,7 @@ export type PrefetchCacheEntry = {
   mountedSlotsHeader?: string | null;
   onInvalidateCallbacks?: Set<() => void>;
   optimisticRouteShell?: boolean;
+  instantShell?: boolean;
   partialSuspenseShell?: boolean;
   outcome: "pending" | "cache-seeded";
   snapshot?: CachedRscResponse;
@@ -576,7 +577,7 @@ function addPrefetchInvalidationCallback(
   entry.onInvalidateCallbacks.add(onInvalidate);
 }
 
-function attachPrefetchInvalidationCallback(
+export function attachPrefetchInvalidationCallback(
   cacheKey: string,
   onInvalidate: (() => void) | undefined,
 ): void {
@@ -730,7 +731,11 @@ export function prefetchRscResponse(
   interceptionContext: string | null = null,
   mountedSlotsHeader: string | null = null,
   options?: PrefetchOptions,
-  behavior: { cacheForNavigation?: boolean; optimisticRouteShell?: boolean } = {},
+  behavior: {
+    cacheForNavigation?: boolean;
+    instantShell?: boolean;
+    optimisticRouteShell?: boolean;
+  } = {},
 ): void {
   const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
   const cache = getPrefetchCache();
@@ -739,6 +744,7 @@ export function prefetchRscResponse(
 
   const entry: PrefetchCacheEntry = {
     cacheForNavigation: behavior.cacheForNavigation ?? true,
+    instantShell: behavior.instantShell === true,
     mountedSlotsHeader,
     optimisticRouteShell: behavior.optimisticRouteShell === true,
     outcome: "pending",

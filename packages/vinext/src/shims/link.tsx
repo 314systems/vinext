@@ -44,6 +44,7 @@ import {
 } from "../server/app-rsc-cache-busting.js";
 import {
   APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
+  APP_RSC_RENDER_MODE_PREFETCH_INSTANT_SHELL,
   APP_RSC_RENDER_MODE_PREFETCH_SUSPENSE_SHELL,
 } from "../server/app-rsc-render-mode.js";
 import { VINEXT_MOUNTED_SLOTS_HEADER } from "../server/headers.js";
@@ -335,11 +336,22 @@ function getLinkPrefetchRouterMode(): LinkPrefetchRouterMode {
 
 function resolveMatchedAutoAppRoutePrefetch(route: VinextLinkPrefetchRoute): {
   cacheForNavigation: boolean;
+  prefetchInstantShell: boolean;
   prefetchSuspenseShell: boolean;
   prefetchShellFirst: boolean;
   shouldPrefetch: boolean;
 } {
   const hasLoadingShell = route.canPrefetchLoadingShell;
+  if (route.hasInstant) {
+    return {
+      cacheForNavigation: true,
+      prefetchInstantShell: true,
+      prefetchSuspenseShell: true,
+      prefetchShellFirst: false,
+      shouldPrefetch: true,
+    };
+  }
+
   return {
     // Vinext does not yet have Next.js's per-segment runtime-prefetch hints.
     // Routes with loading boundaries prefetch a shell first so navigation can
@@ -347,6 +359,7 @@ function resolveMatchedAutoAppRoutePrefetch(route: VinextLinkPrefetchRoute): {
     // fallbacks are treated as exact-URL full prefetches; the prefetch cache is
     // keyed by the concrete RSC URL, so this cannot reuse data across params.
     cacheForNavigation: !hasLoadingShell,
+    prefetchInstantShell: false,
     prefetchSuspenseShell: route.isDynamic && !hasLoadingShell,
     prefetchShellFirst: !route.isDynamic,
     shouldPrefetch: true,
@@ -370,6 +383,7 @@ export function canAutoPrefetchFullAppRoute(href: string): boolean {
 
 export function resolveAutoAppRoutePrefetch(href: string): {
   cacheForNavigation: boolean;
+  prefetchInstantShell: boolean;
   prefetchShellFirst: boolean;
   prefetchSuspenseShell: boolean;
   shouldPrefetch: boolean;
@@ -377,6 +391,7 @@ export function resolveAutoAppRoutePrefetch(href: string): {
   if (typeof window === "undefined") {
     return {
       cacheForNavigation: false,
+      prefetchInstantShell: false,
       prefetchShellFirst: false,
       prefetchSuspenseShell: false,
       shouldPrefetch: false,
@@ -387,6 +402,7 @@ export function resolveAutoAppRoutePrefetch(href: string): {
   if (!routes) {
     return {
       cacheForNavigation: false,
+      prefetchInstantShell: false,
       prefetchShellFirst: false,
       prefetchSuspenseShell: false,
       shouldPrefetch: false,
@@ -397,6 +413,7 @@ export function resolveAutoAppRoutePrefetch(href: string): {
   if (routeHref === null) {
     return {
       cacheForNavigation: false,
+      prefetchInstantShell: false,
       prefetchShellFirst: false,
       prefetchSuspenseShell: false,
       shouldPrefetch: false,
@@ -407,6 +424,7 @@ export function resolveAutoAppRoutePrefetch(href: string): {
   if (!match) {
     return {
       cacheForNavigation: false,
+      prefetchInstantShell: false,
       prefetchShellFirst: false,
       prefetchSuspenseShell: false,
       shouldPrefetch: false,
@@ -414,6 +432,32 @@ export function resolveAutoAppRoutePrefetch(href: string): {
   }
 
   return resolveMatchedAutoAppRoutePrefetch(match.route);
+}
+
+export function resolveAppRoutePrefetch(
+  href: string,
+  mode: LinkPrefetchMode,
+): ReturnType<typeof resolveAutoAppRoutePrefetch> {
+  if (mode === "disabled") {
+    return {
+      cacheForNavigation: false,
+      prefetchInstantShell: false,
+      prefetchShellFirst: false,
+      prefetchSuspenseShell: false,
+      shouldPrefetch: false,
+    };
+  }
+
+  const matched = resolveAutoAppRoutePrefetch(href);
+  if (mode === "auto" || matched.prefetchInstantShell) return matched;
+
+  return {
+    cacheForNavigation: true,
+    prefetchInstantShell: false,
+    prefetchShellFirst: true,
+    prefetchSuspenseShell: false,
+    shouldPrefetch: true,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -450,11 +494,14 @@ function prefetchUrl(href: string, mode: LinkPrefetchMode, priority: "low" | "hi
     return;
   }
 
-  const appAutoPrefetch =
-    hasAppNavigationRuntime() && mode === "auto" ? resolveAutoAppRoutePrefetch(prefetchHref) : null;
+  const appPrefetch = hasAppNavigationRuntime()
+    ? mode === "auto"
+      ? resolveAutoAppRoutePrefetch(prefetchHref)
+      : resolveAppRoutePrefetch(prefetchHref, mode)
+    : null;
 
   const schedule =
-    priority === "high" || appAutoPrefetch?.prefetchSuspenseShell === true
+    priority === "high" || appPrefetch?.prefetchSuspenseShell === true
       ? (fn: () => void) => {
           fn();
         }
@@ -474,15 +521,7 @@ function prefetchUrl(href: string, mode: LinkPrefetchMode, priority: "low" | "hi
         if (hybridOwner === "pages" || hybridOwner === "document") {
           return;
         }
-        const autoPrefetch =
-          mode === "auto"
-            ? (appAutoPrefetch ?? resolveAutoAppRoutePrefetch(prefetchHref))
-            : {
-                cacheForNavigation: true,
-                prefetchShellFirst: true,
-                prefetchSuspenseShell: false,
-                shouldPrefetch: true,
-              };
+        const autoPrefetch = appPrefetch ?? resolveAppRoutePrefetch(prefetchHref, mode);
         if (!autoPrefetch.shouldPrefetch) return;
 
         const interceptionContext = getPrefetchInterceptionContext(fullHref);
@@ -494,7 +533,9 @@ function prefetchUrl(href: string, mode: LinkPrefetchMode, priority: "low" | "hi
           renderMode: isOptimisticRouteShellPrefetch
             ? APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL
             : autoPrefetch.prefetchSuspenseShell
-              ? APP_RSC_RENDER_MODE_PREFETCH_SUSPENSE_SHELL
+              ? autoPrefetch.prefetchInstantShell
+                ? APP_RSC_RENDER_MODE_PREFETCH_INSTANT_SHELL
+                : APP_RSC_RENDER_MODE_PREFETCH_SUSPENSE_SHELL
               : undefined,
         });
         if (mountedSlotsHeader) {
@@ -578,6 +619,7 @@ function prefetchUrl(href: string, mode: LinkPrefetchMode, priority: "low" | "hi
           undefined,
           {
             cacheForNavigation: autoPrefetch.cacheForNavigation,
+            instantShell: autoPrefetch.prefetchInstantShell,
             optimisticRouteShell: isOptimisticRouteShellPrefetch,
           },
         );

@@ -22,6 +22,7 @@ import { notifyAppRouterTransitionStart } from "../client/instrumentation-client
 import {
   __basePath,
   appRouterInstance,
+  attachPrefetchInvalidationCallback,
   commitClientNavigationState,
   consumePrefetchResponseForNavigation,
   createCachedRscResponseSnapshot,
@@ -446,24 +447,38 @@ async function learnOptimisticRouteTemplateFromPrefetch(options: {
     createFromFetch<AppWireElements>(Promise.resolve(restoreRscResponse(options.entry.snapshot))),
   );
   const template = createOptimisticRouteTemplate({
-    allowLoadingShell: options.entry.optimisticRouteShell === true,
+    allowLoadingShell:
+      options.entry.optimisticRouteShell === true || options.entry.instantShell === true,
     basePath: __basePath,
     elements,
     href: options.entry.snapshot.url || source.rscUrl,
     interceptionContext: options.interceptionContext,
     mountedSlotsHeader: options.mountedSlotsHeader,
+    preservePageElements: options.entry.instantShell === true,
     routeManifest: options.routeManifest,
   });
   if (template === null) return false;
 
-  optimisticRouteTemplates.set(
-    getOptimisticRouteTemplateKey({
+  const templateKey = getOptimisticRouteTemplateKey({
+    concreteHrefKey: template.concreteHrefKey,
+    interceptionContext: options.interceptionContext,
+    mountedSlotsHeader: options.mountedSlotsHeader,
+    routeId: template.routeId,
+  });
+  optimisticRouteTemplates.set(templateKey, template);
+  if (options.entry.instantShell === true) {
+    const sourceKey = getOptimisticPrefetchSourceKey({
+      cacheKey: options.cacheKey,
       interceptionContext: options.interceptionContext,
       mountedSlotsHeader: options.mountedSlotsHeader,
-      routeId: template.routeId,
-    }),
-    template,
-  );
+    });
+    attachPrefetchInvalidationCallback(options.cacheKey, () => {
+      if (optimisticRouteTemplates.get(templateKey) === template) {
+        optimisticRouteTemplates.delete(templateKey);
+        optimisticRouteTemplateSources.delete(sourceKey);
+      }
+    });
+  }
   return true;
 }
 
