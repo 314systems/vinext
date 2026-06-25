@@ -10,7 +10,10 @@ import {
   VINEXT_RSC_COMPATIBILITY_ID_HEADER,
   VINEXT_RSC_VARY_HEADER,
 } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
-import { VINEXT_DYNAMIC_STALE_TIME_HEADER } from "../packages/vinext/src/server/headers.js";
+import {
+  VINEXT_DYNAMIC_STALE_TIME_HEADER,
+  VINEXT_RSC_PARTIAL_SHELL_HEADER,
+} from "../packages/vinext/src/server/headers.js";
 import { withEnvVar } from "./env-test-helpers.js";
 
 function createBody(text: string): ReadableStream {
@@ -404,6 +407,20 @@ describe("app page response helpers", () => {
     expect(response.headers.get("vary")).toBe(VINEXT_RSC_VARY_HEADER);
     expect(response.headers.get("x-vinext-timing")).toBe("10,5,-1");
     await expect(response.text()).resolves.toBe("flight");
+  });
+
+  it("does not allow middleware to mark a full RSC response as a partial shell", () => {
+    const response = buildAppPageRscResponse(createBody("flight"), {
+      middlewareContext: {
+        headers: new Headers({ [VINEXT_RSC_PARTIAL_SHELL_HEADER]: "1" }),
+        status: null,
+      },
+      partialShell: false,
+      policy: { cacheControl: "s-maxage=60" },
+    });
+
+    expect(response.headers.get(VINEXT_RSC_PARTIAL_SHELL_HEADER)).toBeNull();
+    expect(response.headers.get("cache-control")).toBe("s-maxage=60");
   });
 
   it("emits the `x-edge-runtime: 1` marker on RSC responses when the route opts into the edge runtime (issue #1531)", () => {
