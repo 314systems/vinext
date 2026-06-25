@@ -33,9 +33,10 @@ import {
   type Plugin,
   type PreprocessCSSResult,
   type ResolvedConfig,
+  type SassPreprocessorOptions,
 } from "vite";
 
-type AdditionalData = string | ((source: string, filename: string) => string | Promise<string>);
+type AdditionalData = NonNullable<SassPreprocessorOptions["additionalData"]>;
 type AdditionalDataFunction = Exclude<AdditionalData, string>;
 
 type VitePreprocessorOptions = {
@@ -109,10 +110,10 @@ function startsTildeCssImportTarget(statement: string, start: number): boolean {
   return end !== -1 && CSS_IMPORT_PATH_RE.test(statement.slice(index, end).trimEnd());
 }
 
-function isSassStatementStart(code: string, index: number): boolean {
+function isSassStatementStart(code: string, index: number, indentedSyntax: boolean): boolean {
   for (let current = index - 1; current >= 0; current--) {
     const char = code[current];
-    if (char === "\n" || char === "\r") return true;
+    if (indentedSyntax && (char === "\n" || char === "\r")) return true;
     if (/\s/.test(char)) continue;
     return char === "{" || char === ";" || char === "}";
   }
@@ -276,7 +277,7 @@ function rewriteSassTildeCssImportsWithReplacements(
     if (
       char === "@" &&
       code.slice(index, index + 7) === "@import" &&
-      isSassStatementStart(code, index)
+      isSassStatementStart(code, index, indentedSyntax)
     ) {
       const afterKeyword = code[index + 7];
       if (afterKeyword && /[\w-]/.test(afterKeyword)) {
@@ -377,7 +378,12 @@ export function wrapSassTildeAdditionalData(
 
   return async (source: string, filename: string) => {
     const combined = await additionalData(source, filename);
-    return rewriteSassTildeCssImports(combined, filename, root) ?? combined;
+    if (typeof combined === "string") {
+      return rewriteSassTildeCssImports(combined, filename, root) ?? combined;
+    }
+
+    const content = rewriteSassTildeCssImports(combined.content, filename, root);
+    return content ? { ...combined, content } : combined;
   };
 }
 

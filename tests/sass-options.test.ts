@@ -278,6 +278,7 @@ describe("rewriteSassTildeCssImports", () => {
     for (const source of [
       `@IMPORT '~package/uppercase.css';`,
       `.example { --raw: @import '~package/custom-property.css'; }`,
+      [`.example {`, `  --raw:`, `    @import '~package/multiline.css';`, `}`].join("\n"),
     ]) {
       expect(rewriteSassTildeCssImports(source, id, root)).toBeNull();
     }
@@ -374,6 +375,18 @@ describe("wrapSassTildeAdditionalData", () => {
     await expect(wrapped(`.page { color: red; }`, filename)).resolves.toBe(
       `@import '${path.join(root, "styles", "injected.css").replaceAll(path.sep, "/")}';\n.page { color: red; }`,
     );
+  });
+
+  it("preserves source maps returned by function additionalData", async () => {
+    const map = { version: 3, sources: [filename], names: [], mappings: "AAAA" };
+    const wrapped = wrapSassTildeAdditionalData(
+      (source) => ({ content: `@import '~package/injected.css';\n${source}`, map }),
+      root,
+    );
+    await expect(wrapped(`.page { color: red; }`, filename)).resolves.toEqual({
+      content: `@import 'package/injected.css';\n.page { color: red; }`,
+      map,
+    });
   });
 });
 
