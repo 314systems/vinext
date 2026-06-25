@@ -129,6 +129,14 @@ export type AppStaticExportOptions = {
   config: ResolvedNextConfig;
 };
 
+function hasInterceptionRoutes(routes: readonly AppRoute[]): boolean {
+  return routes.some(
+    (route) =>
+      route.siblingIntercepts.length > 0 ||
+      route.parallelSlots.some((slot) => slot.interceptingRoutes.length > 0),
+  );
+}
+
 /**
  * Run static export for App Router.
  *
@@ -137,6 +145,10 @@ export type AppStaticExportOptions = {
 export async function staticExportApp(
   options: AppStaticExportOptions,
 ): Promise<StaticExportResult> {
+  if (hasInterceptionRoutes(options.routes)) {
+    throw new Error("Intercepting routes are not supported with static export.");
+  }
+
   const metadataRoutes = options.appDir ? scanMetadataFiles(options.appDir) : [];
 
   const result = await prerenderApp({

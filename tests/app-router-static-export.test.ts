@@ -113,6 +113,52 @@ describe("App Router Static export", () => {
     }
   });
 
+  it("rejects interception routes with static export", async () => {
+    // Ported from Next.js: test/e2e/app-dir/interception-routes-output-export/interception-routes-output-export.test.ts
+    // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/interception-routes-output-export/interception-routes-output-export.test.ts
+    const { staticExportApp } = await import("../packages/vinext/src/build/static-export.js");
+    const { appRouter } = await import("../packages/vinext/src/routing/app-router.js");
+    const { resolveNextConfig } = await import("../packages/vinext/src/config/next-config.js");
+
+    const fixtureDir = path.resolve(APP_FIXTURE_DIR, "interception-export-fixture");
+    const appDir = path.join(fixtureDir, "app");
+    const tempDir = path.join(fixtureDir, "out");
+
+    try {
+      fs.mkdirSync(path.join(appDir, "@modal", "(.)page"), { recursive: true });
+      fs.mkdirSync(path.join(appDir, "page"), { recursive: true });
+      fs.writeFileSync(
+        path.join(appDir, "layout.tsx"),
+        "export default function Layout({ children, modal }) { return <html><body>{children}{modal}</body></html> }",
+      );
+      fs.writeFileSync(
+        path.join(appDir, "page.tsx"),
+        "export default function Page() { return null }",
+      );
+      fs.writeFileSync(
+        path.join(appDir, "@modal", "default.tsx"),
+        "export default function Default() { return null }",
+      );
+      fs.writeFileSync(
+        path.join(appDir, "@modal", "(.)page", "page.tsx"),
+        "export default function InterceptedPage() { return null }",
+      );
+      fs.writeFileSync(
+        path.join(appDir, "page", "page.tsx"),
+        "export default function TargetPage() { return null }",
+      );
+
+      const routes = await appRouter(appDir);
+      const config = await resolveNextConfig({ output: "export" });
+
+      await expect(
+        staticExportApp({ routes, appDir, rscBundlePath, outDir: tempDir, config }),
+      ).rejects.toThrow("Intercepting routes are not supported with static export.");
+    } finally {
+      fs.rmSync(fixtureDir, { recursive: true, force: true });
+    }
+  });
+
   it("skips route handlers with warning", async () => {
     const { staticExportApp } = await import("../packages/vinext/src/build/static-export.js");
     const { resolveNextConfig } = await import("../packages/vinext/src/config/next-config.js");
