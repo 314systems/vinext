@@ -92,6 +92,7 @@ import {
 import {
   createSupplementalRefreshCoordinator,
   resolveSupplementalRefreshes,
+  settleSuccessfulServerActionResult,
   shouldScheduleSupplementalRefreshRecovery,
 } from "./app-browser-supplemental-refresh.js";
 import {
@@ -772,34 +773,51 @@ async function commitSameUrlNavigatePayload(
     actionInitiation.href,
     actionInitiation.routerState.navigationSnapshot.params,
   );
-  try {
-    const result = await browserNavigationController.commitSameUrlNavigatePayload(
-      nextElements,
-      navigationSnapshot,
-      returnValue,
-      actionInitiation.routerState,
-      {
-        onDiscardedRevalidation() {
-          discardedServerActionRefreshScheduler.schedule();
+  const successfulReturnValue = returnValue?.ok ? returnValue.data : undefined;
+  const navigation = (async () => {
+    try {
+      const result = await browserNavigationController.commitSameUrlNavigatePayload(
+        nextElements,
+        navigationSnapshot,
+        returnValue?.ok ? undefined : returnValue,
+        actionInitiation.routerState,
+        {
+          onDiscardedRevalidation() {
+            discardedServerActionRefreshScheduler.schedule();
+          },
+          revalidation,
+          startedNavigationId: actionInitiation.navigationId,
+          targetHref: actionInitiation.href,
         },
-        revalidation,
-        startedNavigationId: actionInitiation.navigationId,
-        targetHref: actionInitiation.href,
-      },
-    );
-    if (
-      shouldScheduleSupplementalRefreshRecovery({
-        activeNavigationId: browserNavigationController.getActiveNavigationId(),
-        degraded: (await supplementalRefresh)?.degraded ?? false,
-        startedNavigationId: actionInitiation.navigationId,
-      })
-    ) {
-      discardedServerActionRefreshScheduler.schedule();
+      );
+      if (
+        shouldScheduleSupplementalRefreshRecovery({
+          activeNavigationId: browserNavigationController.getActiveNavigationId(),
+          degraded: (await supplementalRefresh)?.degraded ?? false,
+          startedNavigationId: actionInitiation.navigationId,
+        })
+      ) {
+        discardedServerActionRefreshScheduler.schedule();
+      }
+      return result;
+    } finally {
+      supplementalRefreshHandle?.finish();
     }
-    return result;
-  } finally {
-    supplementalRefreshHandle?.finish();
+  })();
+
+  if (returnValue?.ok) {
+    return settleSuccessfulServerActionResult({
+      navigation,
+      onNavigationFailure() {
+        if (browserNavigationController.getActiveNavigationId() === actionInitiation.navigationId) {
+          discardedServerActionRefreshScheduler.schedule();
+        }
+      },
+      value: successfulReturnValue,
+    });
   }
+
+  return navigation;
 }
 
 function evictVisitedResponseCacheIfNeeded(): void {
@@ -2133,19 +2151,21 @@ function bootstrapHydration(
           createFromFetch<AppWireElements>(Promise.resolve(reactResponse)),
         );
         if (persistedRefreshInterceptions.length > 0) {
-          const interceptedSlotPayloads = persistedRefreshInterceptions.map((interception) =>
-            fetchPersistedInterceptedSlotRefresh({
-              interceptionContext: interception.interceptionContext,
-              interceptionId: interception.interception.id,
-              mountedSlotsHeader,
-              signal: navigationAbortController.signal,
-              targetPathname: interception.targetPathname,
-            }),
-          );
-          rscPayload = Promise.all([rscPayload, ...interceptedSlotPayloads]).then(
-            ([currentElements, ...interceptedElements]) =>
-              interceptedElements.reduce(mergeRefreshedInterceptedSlot, currentElements),
-          );
+          rscPayload = resolveSupplementalRefreshes({
+            merge: mergeRefreshedInterceptedSlot,
+            primary: rscPayload,
+            signal: navigationAbortController.signal,
+            supplemental: persistedRefreshInterceptions.map(
+              (interception) => (signal) =>
+                fetchPersistedInterceptedSlotRefresh({
+                  interceptionContext: interception.interceptionContext,
+                  interceptionId: interception.interception.id,
+                  mountedSlotsHeader,
+                  signal,
+                  targetPathname: interception.targetPathname,
+                }),
+            ),
+          }).then((result) => result.value);
         }
 
         if (!browserNavigationController.isCurrentNavigation(navId)) return;

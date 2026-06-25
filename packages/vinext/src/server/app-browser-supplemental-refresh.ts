@@ -44,6 +44,17 @@ export function shouldScheduleSupplementalRefreshRecovery(options: {
   return options.degraded && options.activeNavigationId === options.startedNavigationId;
 }
 
+export function settleSuccessfulServerActionResult<T>(options: {
+  navigation: Promise<unknown>;
+  onNavigationFailure: () => void;
+  value: T;
+}): Promise<T> {
+  void options.navigation.catch(() => {
+    options.onNavigationFailure();
+  });
+  return Promise.resolve(options.value);
+}
+
 export async function resolveSupplementalRefreshes<T>(options: {
   merge: (current: Awaited<T>, supplemental: Awaited<T>) => Awaited<T>;
   primary: Promise<T>;

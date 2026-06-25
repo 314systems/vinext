@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   createSupplementalRefreshCoordinator,
   resolveSupplementalRefreshes,
+  settleSuccessfulServerActionResult,
   shouldScheduleSupplementalRefreshRecovery,
 } from "../packages/vinext/src/server/app-browser-supplemental-refresh.js";
 
@@ -71,6 +72,49 @@ describe("server action supplemental refreshes", () => {
 
     await vi.advanceTimersByTimeAsync(25);
     await expect(resultPromise).resolves.toEqual({ degraded: true, value: "children" });
+  });
+
+  it("settles a successful action value before a hanging supplemental navigation", async () => {
+    const navigation = new Promise<never>(() => {});
+    const onNavigationFailure = vi.fn();
+
+    await expect(
+      settleSuccessfulServerActionResult({
+        navigation,
+        onNavigationFailure,
+        value: "action-value",
+      }),
+    ).resolves.toBe("action-value");
+    expect(onNavigationFailure).not.toHaveBeenCalled();
+  });
+
+  it("keeps degraded recovery bounded and atomic when a supplemental fails", async () => {
+    const result = await resolveSupplementalRefreshes({
+      merge: (current, supplemental) => [...current, ...supplemental],
+      primary: Promise.resolve(["children"]),
+      signal: new AbortController().signal,
+      supplemental: [
+        async () => ["modal"],
+        async () => {
+          throw new Error("drawer failed");
+        },
+      ],
+    });
+
+    expect(result).toEqual({ degraded: true, value: ["children"] });
+  });
+
+  it("recovers from detached navigation failure after settling the action", async () => {
+    const onNavigationFailure = vi.fn();
+
+    await expect(
+      settleSuccessfulServerActionResult({
+        navigation: Promise.reject(new Error("supplemental failed")),
+        onNavigationFailure,
+        value: "action-value",
+      }),
+    ).resolves.toBe("action-value");
+    await vi.waitFor(() => expect(onNavigationFailure).toHaveBeenCalledTimes(1));
   });
 
   it("stops waiting when a newer navigation supersedes the action", async () => {
