@@ -216,6 +216,7 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
   it("omits client reuse transport when the browser router runtime is unused", () => {
     const code = generateRscEntry("/tmp/test/app", minimalRoutes, null, [], null, "", false, {
       hasClientRouterRuntime: false,
+      hasAppPageSpecialErrorRuntime: false,
     });
 
     expect(code).not.toContain("client-reuse-manifest");
@@ -230,8 +231,22 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
     const code = generateRscEntry("/tmp/test/app", minimalRoutes, null, [], null, "", false);
 
     expect(code).toContain("app-layout-param-observation");
+    expect(code).toContain("app-page-probe");
+    expect(code).toContain("app-hook-warning-suppression");
     expect(code).toContain("layoutObservationRuntime:");
     expect(code).toContain("createTracker: __createAppLayoutParamAccessTracker");
+    expect(code).toContain("probeBeforeRender: __probeAppPageBeforeRender");
+  });
+
+  it("keeps special-error probing without the client router", () => {
+    const code = generateRscEntry("/tmp/test/app", minimalRoutes, null, [], null, "", false, {
+      hasClientRouterRuntime: false,
+      hasAppPageSpecialErrorRuntime: true,
+    });
+
+    expect(code).toContain("app-page-probe");
+    expect(code).toContain("app-hook-warning-suppression");
+    expect(code).toContain("probeBeforeRender: __probeAppPageBeforeRender");
   });
 
   it("omits unused App Router font registries", () => {

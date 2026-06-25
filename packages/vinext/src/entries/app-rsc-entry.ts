@@ -203,6 +203,8 @@ type AppRouterConfig = {
   hasFetchCacheRuntime?: boolean;
   /** Whether the module graph imports next/image or next/legacy/image. Defaults to true. */
   hasImageRuntime?: boolean;
+  /** Whether page/layout preflight is needed for special navigation errors. Defaults to true. */
+  hasAppPageSpecialErrorRuntime?: boolean;
   /** Internationalization routing config for middleware matcher locale handling. */
   i18n?: NextI18nConfig | null;
   imageConfig?: ImageConfig;
@@ -277,6 +279,8 @@ export function generateRscEntry(
   const hasImageRuntime = config?.hasImageRuntime !== false;
   const useActionFreeFlightServerRuntime = !hasServerActions && !cacheComponents;
   const hasIsrRuntime = cacheComponents || appRoutesNeedResponseCache(routes);
+  const hasAppPageProbeRuntime =
+    hasClientRouterRuntime || hasIsrRuntime || config?.hasAppPageSpecialErrorRuntime !== false;
   const i18nConfig = config?.i18n ?? null;
   const hasPagesDir = config?.hasPagesDir ?? false;
   const hasPrerenderEndpoint = hasPagesDir || appRoutesNeedStaticParamsEndpoint(routes);
@@ -426,11 +430,20 @@ import {
   createAppPayloadRouteId as __createAppPayloadRouteId,
 } from ${JSON.stringify(appElementsPath)};
 import {
-  probeAppPageLayoutWithTracking as __probeAppPageLayoutWithTracking,
   resolveAppPageChildSegments as __resolveAppPageChildSegments,
 } from ${JSON.stringify(appPageRouteWiringPath)};
 import { buildPageElements as __buildPageElements } from ${JSON.stringify(appPageElementBuilderPath)};
-import { buildAppPageProbes as __buildAppPageProbes } from ${JSON.stringify(appPageProbePath)};
+${
+  hasAppPageProbeRuntime
+    ? `import {
+  buildAppPageProbes as __buildAppPageProbes,
+  probeAppPageBeforeRender as __probeAppPageBeforeRender,
+} from ${JSON.stringify(appPageProbePath)};
+import {
+  probeAppPageLayoutWithTracking as __probeAppPageLayoutWithTracking,
+} from ${JSON.stringify(appPageRouteWiringPath)};`
+    : ""
+}
 import {
   dispatchAppPage as __dispatchAppPage,
 } from ${JSON.stringify(appPageDispatchPath)};
@@ -529,11 +542,15 @@ import {
     : ""
 }
 
-// Suppress expected "Invalid hook call" dev warning when layout/page
+${
+  hasAppPageProbeRuntime
+    ? `// Suppress expected "Invalid hook call" dev warning when layout/page
 // components are probed outside React's render cycle. The import patches
 // console.error once at module load (side-effect) and exposes the ALS
 // so per-route dispatch can opt into suppression via .run(true, ...).
-import { suppressHookWarningAls } from ${JSON.stringify(appHookWarningSuppressionPath)};
+import { suppressHookWarningAls } from ${JSON.stringify(appHookWarningSuppressionPath)};`
+    : ""
+}
 import { clearAppRequestContext as __clearRequestContext, setAppNavigationContext as setNavigationContext } from ${JSON.stringify(appRequestContextPath)};
 
 __configureMemoryCacheHandler({ cacheMaxMemorySize: ${JSON.stringify(cacheMaxMemorySize)} });
@@ -1040,11 +1057,14 @@ export default createAppRscHandler({
       pprFallbackCacheShells,
       pprFallbackShell,
       pprRuntime: ${cacheComponents ? "__appPagePprRuntime" : "undefined"},
+      ${hasAppPageProbeRuntime ? "probeBeforeRender: __probeAppPageBeforeRender," : ""}
       renderedConcreteUrlPaths,
       skipStaticParamsValidation,
       staticParamsValidationParams,
       rootParams,
-      probeLayoutAt(li, layoutParamAccess) {
+      ${
+        hasAppPageProbeRuntime
+          ? `probeLayoutAt(li, layoutParamAccess) {
         return __probeAppPageLayoutWithTracking({
           layoutIndex: li,
           layoutParamAccess,
@@ -1074,7 +1094,14 @@ export default createAppRscHandler({
           matchedParams: params,
           makeThenableParams,
         }));
+      },`
+          : `probeLayoutAt() {
+        return null;
       },
+      probePage() {
+        return null;
+      },`
+      }
       renderErrorBoundaryPage(renderErr) {
         const __activeIntercept = findIntercept(cleanPathname, interceptionContext);
         return __fallbackRenderer.renderErrorBoundary(route, renderErr, isRscRequest, request, params, scriptNonce, middlewareContext, {
@@ -1108,7 +1135,7 @@ export default createAppRscHandler({
       rootUnauthorizedModule,
       route,
       runWithSuppressedHookWarning(probe) {
-        return suppressHookWarningAls.run(true, probe);
+        return ${hasAppPageProbeRuntime ? "suppressHookWarningAls.run(true, probe)" : "probe()"};
       },
       scheduleBackgroundRegeneration(key, renderFn, errorContext) {
         __triggerBackgroundRegeneration(key, renderFn, errorContext);

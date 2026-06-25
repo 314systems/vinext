@@ -21,6 +21,7 @@ import {
 import type { LayoutClassificationOptions } from "../packages/vinext/src/server/app-page-execution.js";
 import { createClientReuseManifestHeaderFromVisibleAppState } from "../packages/vinext/src/server/app-browser-client-reuse-manifest.js";
 import { createAppLayoutParamAccessTracker } from "../packages/vinext/src/server/app-layout-param-observation.js";
+import { probeAppPageBeforeRender } from "../packages/vinext/src/server/app-page-probe.js";
 import { renderAppPageLifecycle } from "../packages/vinext/src/server/app-page-render.js";
 import {
   parseClientReuseManifestHeader,
@@ -190,6 +191,7 @@ function createCommonOptions() {
       },
       navigationParams: { slug: "post" },
       params: { slug: "post" },
+      probeBeforeRender: probeAppPageBeforeRender,
       probeLayoutAt() {
         return null;
       },
@@ -1215,6 +1217,7 @@ describe("layoutFlags injection into RSC payload", () => {
       middlewareContext: { headers: null, status: null },
       navigationParams: {},
       params: {},
+      probeBeforeRender: probeAppPageBeforeRender,
       probeLayoutAt: overrides.probeLayoutAt ?? (() => null),
       probePage: () => null,
       revalidateSeconds: null,

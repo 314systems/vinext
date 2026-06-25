@@ -1002,6 +1002,10 @@ describe("App Router entry templates", () => {
         null,
         "",
         false,
+        {
+          hasAppPageSpecialErrorRuntime: false,
+          hasClientRouterRuntime: false,
+        },
       );
       const withPageCache = generateRscEntry(
         "/tmp/test/app",
@@ -1017,6 +1021,9 @@ describe("App Router entry templates", () => {
       expect(withoutPageCache).not.toContain("appPageCacheRuntime:");
       expect(withoutPageCache).not.toContain("app-prerender-endpoints.js");
       expect(withoutPageCache).not.toContain("handlePrerenderEndpoint:");
+      expect(withoutPageCache).not.toContain("app-page-probe.js");
+      expect(withoutPageCache).not.toContain("app-hook-warning-suppression.js");
+      expect(withoutPageCache).not.toContain("probeBeforeRender:");
       expect(withPageCache).toContain("app-page-cache-runtime.js");
       expect(withPageCache).toContain("appPageCacheRuntime: __appPageCacheRuntime");
       expect(withPageCache).toContain("app-prerender-endpoints.js");

@@ -388,12 +388,12 @@ export function buildAppPageProbes(options: {
   return probes.map((probe) => Promise.resolve(probe));
 }
 
-type ProbeAppPageBeforeRenderResult = {
+export type ProbeAppPageBeforeRenderResult = {
   response: Response | null;
   layoutFlags: LayoutFlags;
 };
 
-type ProbeAppPageBeforeRenderOptions = {
+export type ProbeAppPageBeforeRenderOptions = {
   hasLoadingBoundary: boolean;
   skipProbes?: boolean;
   layoutCount: number;

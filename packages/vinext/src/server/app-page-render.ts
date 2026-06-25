@@ -24,7 +24,10 @@ import {
   type AppPageSpecialError,
   type LayoutClassificationOptions,
 } from "./app-page-execution.js";
-import { probeAppPageBeforeRender } from "./app-page-probe.js";
+import type {
+  ProbeAppPageBeforeRenderOptions,
+  ProbeAppPageBeforeRenderResult,
+} from "./app-page-probe.js";
 import {
   buildAppPageHtmlResponse,
   buildAppPageRscResponse,
@@ -149,6 +152,9 @@ type RenderAppPageLifecycleOptions = {
   pprFallbackShellSignal?: AbortSignal;
   pprFallbackShellReactSignal?: AbortSignal;
   abortPprFallbackShell?: () => void;
+  probeBeforeRender?: (
+    options: ProbeAppPageBeforeRenderOptions,
+  ) => Promise<ProbeAppPageBeforeRenderResult>;
   rootParams?: RootParams;
   peekRenderObservationState?: () => AppPageRenderObservationState;
   probeLayoutAt: (layoutIndex: number) => unknown;
@@ -342,28 +348,30 @@ function wrapRscResponseForDevErrorReporting(
 export async function renderAppPageLifecycle(
   options: RenderAppPageLifecycleOptions,
 ): Promise<Response> {
-  const preRenderResult = await probeAppPageBeforeRender({
-    hasLoadingBoundary: options.hasLoadingBoundary,
-    skipProbes: options.pprFallbackShellSignal !== undefined,
-    layoutCount: options.layoutCount,
-    probeLayoutAt(layoutIndex) {
-      return options.probeLayoutAt(layoutIndex);
-    },
-    probePage() {
-      return options.probePage();
-    },
-    renderLayoutSpecialError(specialError, layoutIndex) {
-      return options.renderLayoutSpecialError(specialError, layoutIndex);
-    },
-    renderPageSpecialError(specialError) {
-      return options.renderPageSpecialError(specialError);
-    },
-    resolveSpecialError: resolveAppPageSpecialError,
-    runWithSuppressedHookWarning(probe) {
-      return options.runWithSuppressedHookWarning(probe);
-    },
-    classification: options.classification,
-  });
+  const preRenderResult = options.probeBeforeRender
+    ? await options.probeBeforeRender({
+        hasLoadingBoundary: options.hasLoadingBoundary,
+        skipProbes: options.pprFallbackShellSignal !== undefined,
+        layoutCount: options.layoutCount,
+        probeLayoutAt(layoutIndex) {
+          return options.probeLayoutAt(layoutIndex);
+        },
+        probePage() {
+          return options.probePage();
+        },
+        renderLayoutSpecialError(specialError, layoutIndex) {
+          return options.renderLayoutSpecialError(specialError, layoutIndex);
+        },
+        renderPageSpecialError(specialError) {
+          return options.renderPageSpecialError(specialError);
+        },
+        resolveSpecialError: resolveAppPageSpecialError,
+        runWithSuppressedHookWarning(probe) {
+          return options.runWithSuppressedHookWarning(probe);
+        },
+        classification: options.classification,
+      })
+    : { response: null, layoutFlags: {} };
   if (preRenderResult.response) {
     return preRenderResult.response;
   }

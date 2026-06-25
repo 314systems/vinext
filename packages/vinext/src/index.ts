@@ -1070,6 +1070,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   let localFontRuntimeRequired = false;
   let fetchCacheRuntimeRequired = false;
   let imageRuntimeRequired = false;
+  let appPageSpecialErrorRuntimeRequired = false;
 
   function canUseDocumentOnlyClientRuntime(hasServerActions: boolean | null): boolean {
     return (
@@ -2963,6 +2964,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             this.environment.config,
             imageRuntimeRequired,
           );
+          const hasAppPageSpecialErrorRuntime = await resolveDetectedBuildCapability(
+            this.environment.config,
+            appPageSpecialErrorRuntimeRequired,
+          );
           // Check for global-error.tsx at app root
           const globalErrorPath = findFileWithExts(appDir, "global-error", fileMatcher);
           // Check for global-not-found.tsx at app root (Next.js 16+ feature)
@@ -3009,6 +3014,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               hasLocalFonts,
               hasFetchCacheRuntime,
               hasImageRuntime,
+              hasAppPageSpecialErrorRuntime,
               i18n: nextConfig?.i18n,
               imageConfig: {
                 deviceSizes: nextConfig?.images?.deviceSizes,
@@ -4876,7 +4882,7 @@ export const loadServerActionClient = ${
       },
     } as Plugin & { _dimCache: Map<string, { width: number; height: number }> },
     {
-      name: "vinext:detect-fetch-cache-runtime",
+      name: "vinext:detect-app-runtime-capabilities",
       transform: {
         filter: {
           id: {
@@ -4885,7 +4891,12 @@ export const loadServerActionClient = ${
           },
         },
         handler(code, id) {
-          if (fetchCacheRuntimeRequired || this.environment?.name !== "rsc") return null;
+          if (
+            (fetchCacheRuntimeRequired && appPageSpecialErrorRuntimeRequired) ||
+            this.environment?.name !== "rsc"
+          ) {
+            return null;
+          }
 
           const cleanId = stripViteModuleQuery(id);
           if (
@@ -4896,19 +4907,28 @@ export const loadServerActionClient = ${
           }
           // A relative import can escape Vite's root in a monorepo. Treat
           // those modules as uncertain rather than silently omitting fetch
-          // patching for code the project scan cannot classify locally.
+          // patching or special-error probing for code the project scan cannot
+          // classify locally.
           if (!isInsideDirectory(root, cleanId)) {
             fetchCacheRuntimeRequired = true;
+            appPageSpecialErrorRuntimeRequired = true;
             return null;
           }
 
           if (
+            !fetchCacheRuntimeRequired &&
             /\bfetch\b|["']use cache(?::[^"']*)?["']|\bunstable_cache\b|["']next\/cache["']|["']vinext\/cache-runtime["']/.test(
               code,
             )
           ) {
             fetchCacheRuntimeRequired = true;
-            return null;
+          }
+
+          if (
+            !appPageSpecialErrorRuntimeRequired &&
+            /["']next\/(?:navigation(?:\.js)?|dist\/client\/components\/navigation)["']/.test(code)
+          ) {
+            appPageSpecialErrorRuntimeRequired = true;
           }
 
           const importPattern =
@@ -4930,6 +4950,7 @@ export const loadServerActionClient = ${
               continue;
             }
             fetchCacheRuntimeRequired = true;
+            appPageSpecialErrorRuntimeRequired = true;
             break;
           }
 

@@ -17,6 +17,7 @@ import {
   buildPageElements,
   type AppPageBuildRoute,
 } from "../packages/vinext/src/server/app-page-element-builder.js";
+import { probeAppPageBeforeRender } from "../packages/vinext/src/server/app-page-probe.js";
 import {
   resolveAppPageSegmentParamScopeKeys,
   resolveAppPageSegmentParams,
@@ -391,6 +392,7 @@ function createDispatchOptions(overrides: CreateDispatchOptionsOverrides = {}) {
     params,
     pprFallbackCacheShells: overrides.pprFallbackCacheShells,
     pprRuntime: overrides.pprRuntime,
+    probeBeforeRender: probeAppPageBeforeRender,
     probeLayoutAt: overrides.probeLayoutAt ?? createLayoutParamProbe(route, params, []),
     probePage: overrides.probePage ?? (() => null),
     renderedConcreteUrlPaths: overrides.renderedConcreteUrlPaths,

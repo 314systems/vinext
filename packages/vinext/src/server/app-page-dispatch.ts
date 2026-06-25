@@ -45,6 +45,10 @@ import {
   type AppPageSpecialError,
   type LayoutClassificationOptions,
 } from "./app-page-execution.js";
+import type {
+  ProbeAppPageBeforeRenderOptions,
+  ProbeAppPageBeforeRenderResult,
+} from "./app-page-probe.js";
 import { resolveAppPageMethodResponse } from "./app-page-method.js";
 import { resolveAppPageNavigationParams } from "./app-page-element-builder.js";
 import {
@@ -294,6 +298,9 @@ export type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
     routePattern: string;
   };
   pprRuntime?: AppPagePprRuntime<TRoute>;
+  probeBeforeRender?: (
+    options: ProbeAppPageBeforeRenderOptions,
+  ) => Promise<ProbeAppPageBeforeRenderResult>;
   /**
    * Set of concrete URL paths that were pre-rendered at build time for this
    * route. When the exact cache entry for a known pregenerated path is absent
@@ -914,6 +921,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     params: options.params,
     pprFallbackShellSignal,
     pprFallbackShellReactSignal,
+    probeBeforeRender: options.probeBeforeRender,
     abortPprFallbackShell: activeFallbackShellState
       ? () => {
           options.pprRuntime!.beginFinalRender(activeFallbackShellState);
