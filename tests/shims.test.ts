@@ -10627,6 +10627,13 @@ describe("matchRedirect locale-static index", () => {
     }));
   }
 
+  it("preserves terminal-slash source semantics in the linear fallback", async () => {
+    const { matchRedirect } = await import("../packages/vinext/src/config/config-matchers.js");
+    const redirects = [{ source: "/old/", destination: "/new", permanent: false }];
+    expect(matchRedirect("/old/", redirects, emptyCtx)?.destination).toBe("/new");
+    expect(matchRedirect("/old", redirects, emptyCtx)).toBeNull();
+  });
+
   it("matches a locale-prefixed pathname (locale present)", async () => {
     const { matchRedirect } = await import("../packages/vinext/src/config/config-matchers.js");
     const redirects = makeLocaleRules(["/security", "/advisory-board"]);

@@ -955,6 +955,7 @@ export function matchRedirect(
 ): { destination: string; permanent: boolean } | null {
   if (redirects.length === 0) return null;
 
+  const originalPathname = pathname;
   // Strip trailing slash so the locale-static fast path (Map.get on the
   // pathname) matches keys derived from slash-free source patterns. The
   // linear fallback also passes through `matchConfigPattern` which strips
@@ -1051,7 +1052,7 @@ export function matchRedirect(
       break;
     }
     if (!shouldEvaluateRule(redirect.basePath, basePathState)) continue;
-    const params = matchConfigPattern(pathname, redirect.source);
+    const params = matchConfigPattern(originalPathname, redirect.source);
     if (params) {
       const conditionParams =
         redirect.has || redirect.missing
