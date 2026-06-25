@@ -835,6 +835,19 @@ describe("next/navigation shim", () => {
         [historyTraversalIndexKey]: 7,
         next: true,
       });
+
+      win.history.pushState(
+        {
+          [historyPreviousNextUrlKey]: "/photo/1?filter=done",
+          [historyTraversalIndexKey]: 8,
+        },
+        "",
+        "/photo/1?filter=replayed",
+      );
+      expect(win.history.state).toEqual({
+        [historyPreviousNextUrlKey]: "/photo/1?filter=done",
+        [historyTraversalIndexKey]: 8,
+      });
     } finally {
       vi.resetModules();
       if (previousWindow === undefined) {
