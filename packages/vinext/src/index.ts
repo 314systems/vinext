@@ -170,6 +170,7 @@ import {
   createSassTildeCssImportPlugin,
   createSassTildeImporter,
   createSassAwareFileSystemLoader,
+  wrapSassTildeAdditionalData,
 } from "./plugins/sass.js";
 import {
   createClientFileNameConfig,
@@ -2233,6 +2234,14 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               // Base options shared by both .scss and .sass preprocessors.
               const baseOpts: SassPreprocessorOptions = {
                 ...sassPreprocessorOptions,
+                ...(sassPreprocessorOptions?.additionalData
+                  ? {
+                      additionalData: wrapSassTildeAdditionalData(
+                        sassPreprocessorOptions.additionalData,
+                        root,
+                      ),
+                    }
+                  : {}),
                 // Merge user-supplied importers (from sassOptions) with the
                 // tilde importer. Tilde goes first so it gets first crack at
                 // ~ prefixed URLs; other importers follow; Vite's own internal

@@ -26,6 +26,7 @@ import {
   buildSassPreprocessorOptions,
   normalizeSassTildeCssImport,
   rewriteSassTildeCssImports,
+  wrapSassTildeAdditionalData,
   createSassTildeImporter,
 } from "../packages/vinext/src/plugins/sass.js";
 import { fileURLToPath } from "node:url";
@@ -303,6 +304,18 @@ describe("rewriteSassTildeCssImports", () => {
     }
   });
 
+  it("does not mistake URL protocols outside imports for Sass line comments", () => {
+    const source = `.example { background: url(http://example.com/base.png); } @import '~package/next.css';`;
+    expect(rewriteSassTildeCssImports(source, id, root)).toBe(
+      `.example { background: url(http://example.com/base.png); } @import 'package/next.css';`,
+    );
+  });
+
+  it("does not rewrite strings in import conditions", () => {
+    const source = `@import 'theme.css' supports(selector(a[href="~package/token.css"]));`;
+    expect(rewriteSassTildeCssImports(source, id, root)).toBeNull();
+  });
+
   it("leaves Sass imports and ordinary CSS imports unchanged", () => {
     expect(
       rewriteSassTildeCssImports(
@@ -311,6 +324,28 @@ describe("rewriteSassTildeCssImports", () => {
         root,
       ),
     ).toBeNull();
+  });
+});
+
+describe("wrapSassTildeAdditionalData", () => {
+  const root = path.join(path.sep, "project");
+  const filename = path.join(root, "styles", "global.scss");
+
+  it("rewrites tilde CSS imports injected by string additionalData", async () => {
+    const wrapped = wrapSassTildeAdditionalData(`@import '~package/injected.css';\n`, root);
+    await expect(wrapped(`.page { color: red; }`, filename)).resolves.toBe(
+      `@import 'package/injected.css';\n.page { color: red; }`,
+    );
+  });
+
+  it("rewrites tilde CSS imports returned by function additionalData", async () => {
+    const wrapped = wrapSassTildeAdditionalData(
+      (source) => `@import '~/styles/injected.css';\n${source}`,
+      root,
+    );
+    await expect(wrapped(`.page { color: red; }`, filename)).resolves.toBe(
+      `@import '${path.join(root, "styles", "injected.css").replaceAll(path.sep, "/")}';\n.page { color: red; }`,
+    );
   });
 });
 
@@ -353,9 +388,15 @@ describe("vinext config hook threads sassOptions into css.preprocessorOptions", 
       `export default { sassOptions: { additionalData: '$var: red;' } };`,
     );
     // oxlint-disable-next-line typescript/no-explicit-any
-    expect((css as any)?.preprocessorOptions?.scss?.additionalData).toBe("$var: red;");
+    const scssAdditionalData = (css as any)?.preprocessorOptions?.scss?.additionalData;
     // oxlint-disable-next-line typescript/no-explicit-any
-    expect((css as any)?.preprocessorOptions?.sass?.additionalData).toBe("$var: red;");
+    const sassAdditionalData = (css as any)?.preprocessorOptions?.sass?.additionalData;
+    await expect(scssAdditionalData(".page {}", "/project/page.scss")).resolves.toBe(
+      "$var: red;.page {}",
+    );
+    await expect(sassAdditionalData(".page", "/project/page.sass")).resolves.toBe(
+      "$var: red;.page",
+    );
   }, 15000);
 
   it("aliases includePaths into loadPaths in css.preprocessorOptions.scss", async () => {

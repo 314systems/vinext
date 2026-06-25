@@ -35,6 +35,7 @@ import {
 } from "vite";
 
 type AdditionalData = string | ((source: string, filename: string) => string | Promise<string>);
+type AdditionalDataFunction = Exclude<AdditionalData, string>;
 
 type VitePreprocessorOptions = {
   additionalData?: AdditionalData;
@@ -62,6 +63,7 @@ export function normalizeSassTildeCssImport(
 function rewriteImportStatement(statement: string, id: string, root: string): string {
   let output = "";
   let parentheses = 0;
+  let expectsTarget = true;
 
   for (let index = 0; index < statement.length; ) {
     const char = statement[index];
@@ -94,15 +96,17 @@ function rewriteImportStatement(statement: string, id: string, root: string): st
         end++;
       }
       const value = statement.slice(index + 1, end);
-      const normalized = CSS_IMPORT_PATH_RE.test(value)
-        ? normalizeSassTildeCssImport(value, id, root)
-        : null;
+      const normalized =
+        expectsTarget && CSS_IMPORT_PATH_RE.test(value)
+          ? normalizeSassTildeCssImport(value, id, root)
+          : null;
       output += normalized ? `${char}${normalized}${char}` : statement.slice(index, end + 1);
+      if (expectsTarget) expectsTarget = false;
       index = Math.min(end + 1, statement.length);
       continue;
     }
 
-    if (statement.slice(index, index + 4).toLowerCase() === "url(") {
+    if (expectsTarget && statement.slice(index, index + 4).toLowerCase() === "url(") {
       const valueStart = index + 4;
       let contentStart = valueStart;
       while (/\s/.test(statement[contentStart] ?? "")) contentStart++;
@@ -119,6 +123,7 @@ function rewriteImportStatement(statement: string, id: string, root: string): st
             : null;
           if (normalized) {
             output += `${statement.slice(index, contentStart)}${normalized}${statement.slice(contentEnd, close + 1)}`;
+            expectsTarget = false;
             index = close + 1;
             continue;
           }
@@ -128,6 +133,7 @@ function rewriteImportStatement(statement: string, id: string, root: string): st
 
     if (char === "(") parentheses++;
     if (char === ")") parentheses = Math.max(0, parentheses - 1);
+    if (char === "," && parentheses === 0) expectsTarget = true;
 
     output += char;
     index++;
@@ -140,6 +146,7 @@ export function rewriteSassTildeCssImports(code: string, id: string, root: strin
   let output = "";
   let changed = false;
   const indentedSyntax = /\.sass(?:$|[?#])/.test(id);
+  let parentheses = 0;
 
   for (let index = 0; index < code.length; ) {
     const char = code[index];
@@ -153,7 +160,7 @@ export function rewriteSassTildeCssImports(code: string, id: string, root: strin
       continue;
     }
 
-    if (char === "/" && next === "/") {
+    if (char === "/" && next === "/" && parentheses === 0 && code[index - 1] !== ":") {
       const end = code.indexOf("\n", index + 2);
       const nextIndex = end === -1 ? code.length : end;
       output += code.slice(index, nextIndex);
@@ -175,6 +182,9 @@ export function rewriteSassTildeCssImports(code: string, id: string, root: strin
       index = Math.min(end + 1, code.length);
       continue;
     }
+
+    if (char === "(") parentheses++;
+    if (char === ")") parentheses = Math.max(0, parentheses - 1);
 
     if (char === "@" && code.slice(index, index + 7).toLowerCase() === "@import") {
       const afterKeyword = code[index + 7];
@@ -250,6 +260,19 @@ export function rewriteSassTildeCssImports(code: string, id: string, root: strin
   }
 
   return changed ? output : null;
+}
+
+export function wrapSassTildeAdditionalData(
+  additionalData: AdditionalData,
+  root: string,
+): AdditionalDataFunction {
+  return async (source, filename) => {
+    const combined =
+      typeof additionalData === "function"
+        ? await additionalData(source, filename)
+        : `${additionalData}${source}`;
+    return rewriteSassTildeCssImports(combined, filename, root) ?? combined;
+  };
 }
 
 export function createSassTildeCssImportPlugin(): Plugin {
