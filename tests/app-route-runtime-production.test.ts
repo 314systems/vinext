@@ -34,7 +34,13 @@ describe("App route NEXT_RUNTIME production parity", () => {
     await fs.mkdir(path.join(root, "app", "fake-edge"), { recursive: true });
     await fs.writeFile(
       path.join(root, "app", "layout.tsx"),
-      `export default function Layout({ children }) { return <html><body>{children}</body></html> }`,
+      `
+        globalThis.__vinextRootLayoutEvaluations =
+          (globalThis.__vinextRootLayoutEvaluations ?? 0) + 1
+        export default function Layout({ children }) {
+          return <html><body><span id="root-layout-evaluations">{globalThis.__vinextRootLayoutEvaluations}</span>{children}</body></html>
+        }
+      `,
     );
     await fs.writeFile(
       path.join(root, "app", "shared", "client.tsx"),
@@ -67,7 +73,7 @@ describe("App route NEXT_RUNTIME production parity", () => {
     );
     await fs.writeFile(
       path.join(root, "app", "edge", "layout.tsx"),
-      `export { default } from "../layout"`,
+      `export default function EdgeLayout({ children }) { return <section>{children}</section> }`,
     );
     await fs.writeFile(
       path.join(root, "app", "edge", "page.tsx"),
@@ -168,6 +174,23 @@ describe("App route NEXT_RUNTIME production parity", () => {
     const response = await handler(new Request("http://localhost/edge-layout"));
     expect(response).toBeInstanceOf(Response);
     expect(await (response as Response).text()).toBe("nodejs");
+  });
+
+  it("evaluates the eager root layout only once for edge routes", async () => {
+    const beforeRequest = Number(
+      (globalThis as { __vinextRootLayoutEvaluations?: number }).__vinextRootLayoutEvaluations ?? 0,
+    );
+    const response = await handler(new Request("http://localhost/edge"));
+    expect(response).toBeInstanceOf(Response);
+    expect(await (response as Response).text()).toContain(
+      `id="root-layout-evaluations">${beforeRequest}`,
+    );
+    expect(
+      Number(
+        (globalThis as { __vinextRootLayoutEvaluations?: number }).__vinextRootLayoutEvaluations ??
+          0,
+      ),
+    ).toBe(beforeRequest);
   });
 
   it("keeps client modules on the browser runtime value", async () => {

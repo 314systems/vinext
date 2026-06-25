@@ -86,6 +86,7 @@ function rootRouteBoundaryPath(
 
 type ImportAllocator = {
   getImportVar(filePath: string): string;
+  getEagerLoaderVar(filePath: string): string;
   /**
    * Emit a `const load_N = () => import(path)` lazy loader thunk for a module
    * that should be code-split out of the RSC entry's top-level evaluation
@@ -100,6 +101,7 @@ type ImportAllocator = {
 function createImportAllocator(): ImportAllocator {
   const imports: string[] = [];
   const importMap = new Map<string, string>();
+  const eagerLoaderMap = new Map<string, string>();
   const lazyMap = new Map<string, string>();
   let importIdx = 0;
   let lazyIdx = 0;
@@ -115,6 +117,16 @@ function createImportAllocator(): ImportAllocator {
       const absPath = normalizePathSeparators(filePath);
       imports.push(`import * as ${varName} from ${JSON.stringify(absPath)};`);
       importMap.set(filePath, varName);
+      return varName;
+    },
+    getEagerLoaderVar(filePath) {
+      const existing = eagerLoaderMap.get(filePath);
+      if (existing) return existing;
+
+      const importVar = this.getImportVar(filePath);
+      const varName = `load_${lazyIdx++}`;
+      imports.push(`const ${varName} = () => Promise.resolve(${importVar});`);
+      eagerLoaderMap.set(filePath, varName);
       return varName;
     },
     getLazyLoaderVar(filePath, runtime) {
@@ -138,7 +150,11 @@ function createImportAllocator(): ImportAllocator {
   };
 }
 
-function registerRouteModules(routes: AppRoute[], imports: ImportAllocator): void {
+function registerRouteModules(
+  routes: AppRoute[],
+  imports: ImportAllocator,
+  canonicalRuntimePaths: ReadonlySet<string>,
+): void {
   for (const route of routes) {
     // All page modules are lazy-loaded so route modules — including dynamic
     // routes and routes nested under a dynamic segment — stay out of the RSC
@@ -153,7 +169,10 @@ function registerRouteModules(routes: AppRoute[], imports: ImportAllocator): voi
     // export generateStaticParams for prerendering, but vinext does not wire
     // that into the map yet — a separate gap, unaffected by lazy loading.)
     if (route.routePath) imports.getLazyLoaderVar(route.routePath);
-    for (const layout of route.layouts) imports.getLazyLoaderVar(layout);
+    for (const layout of route.layouts) {
+      if (canonicalRuntimePaths.has(layout)) imports.getEagerLoaderVar(layout);
+      else imports.getLazyLoaderVar(layout);
+    }
     for (const tmpl of route.templates) imports.getLazyLoaderVar(tmpl);
     if (route.loadingPath) imports.getLazyLoaderVar(route.loadingPath);
     if (route.errorPath) imports.getLazyLoaderVar(route.errorPath);
@@ -224,13 +243,19 @@ function lazyLoaderArray(
   return `[${filePaths.map((filePath) => (filePath ? imports.getLazyLoaderVar(filePath) : "null")).join(", ")}]`;
 }
 
-function buildRouteEntries(routes: AppRoute[], imports: ImportAllocator): string[] {
+function buildRouteEntries(
+  routes: AppRoute[],
+  imports: ImportAllocator,
+  canonicalRuntimePaths: ReadonlySet<string>,
+): string[] {
   return routes.map((route, routeIdx) => {
     const routeRuntime = resolveAppRouteBuildRuntime(route);
     const runtimeImports: ImportAllocator = {
       ...imports,
       getLazyLoaderVar: (filePath) =>
-        imports.getLazyLoaderVar(filePath, routeRuntime === "edge" ? "edge" : undefined),
+        canonicalRuntimePaths.has(filePath)
+          ? imports.getEagerLoaderVar(filePath)
+          : imports.getLazyLoaderVar(filePath, routeRuntime === "edge" ? "edge" : undefined),
     };
     // Pre-compute static-sibling segment names for the matched route's
     // dynamic URL levels. The client router uses this to decide if a cached
@@ -438,6 +463,7 @@ function buildGenerateStaticParamsEntries(
   routes: AppRoute[],
   imports: ImportAllocator,
   namesByPattern: Map<string, string[]>,
+  canonicalRuntimePaths: ReadonlySet<string>,
 ): string[] {
   const sourcesByPattern = new Map<string, string[]>();
 
@@ -449,7 +475,7 @@ function buildGenerateStaticParamsEntries(
         sourcesByPattern,
         createRoutePatternPrefix(route.routeSegments, route.layoutTreePositions[index] ?? 0)
           ?.pattern ?? null,
-        `{ load: ${imports.getLazyLoaderVar(layoutPath)} }`,
+        `{ load: ${canonicalRuntimePaths.has(layoutPath) ? imports.getEagerLoaderVar(layoutPath) : imports.getLazyLoaderVar(layoutPath)} }`,
       );
     }
 
@@ -485,9 +511,6 @@ export function buildAppRscManifestCode(
   const imports = createImportAllocator();
   const metadataRoutes = options.metadataRoutes ?? [];
 
-  registerRouteModules(options.routes, imports);
-  const routeEntries = buildRouteEntries(options.routes, imports);
-
   const rootRoute = findRootBoundaryRoute(options.routes);
   const rootNotFoundPath = rootRouteBoundaryPath(
     rootRoute,
@@ -504,14 +527,23 @@ export function buildAppRscManifestCode(
     rootRoute?.unauthorizedPaths,
     rootRoute?.unauthorizedPath,
   );
+  const rootLayoutPaths = rootRouteLayoutPaths(rootRoute);
+  const canonicalRuntimePaths = new Set<string>([
+    ...rootLayoutPaths,
+    ...(rootNotFoundPath ? [rootNotFoundPath] : []),
+    ...(rootForbiddenPath ? [rootForbiddenPath] : []),
+    ...(rootUnauthorizedPath ? [rootUnauthorizedPath] : []),
+  ]);
+
   const rootNotFoundVar = rootNotFoundPath ? imports.getImportVar(rootNotFoundPath) : null;
   const rootForbiddenVar = rootForbiddenPath ? imports.getImportVar(rootForbiddenPath) : null;
   const rootUnauthorizedVar = rootUnauthorizedPath
     ? imports.getImportVar(rootUnauthorizedPath)
     : null;
-  const rootLayoutVars = rootRouteLayoutPaths(rootRoute).map((layoutPath) =>
-    imports.getImportVar(layoutPath),
-  );
+  const rootLayoutVars = rootLayoutPaths.map((layoutPath) => imports.getImportVar(layoutPath));
+
+  registerRouteModules(options.routes, imports, canonicalRuntimePaths);
+  const routeEntries = buildRouteEntries(options.routes, imports, canonicalRuntimePaths);
   const globalErrorVar = options.globalErrorPath
     ? imports.getImportVar(options.globalErrorPath)
     : null;
@@ -537,6 +569,7 @@ export function buildAppRscManifestCode(
       options.routes,
       imports,
       namesByPattern,
+      canonicalRuntimePaths,
     ),
     rootParamNameEntries: buildRootParamNameEntries(namesByPattern),
     rootNotFoundVar,

@@ -407,10 +407,10 @@ describe("App Router generated manifest construction", () => {
     });
 
     const imports = manifest.imports.join("\n");
-    // The root layout stays eager (`import * as`, always needed for every
-    // render) and is additionally referenced by a lazy loader for the route's
-    // `layouts` array, so its path appears in both an eager and a lazy import.
-    expect(imports.match(/\/tmp\/test\/app\/layout\.tsx/g)).toHaveLength(2);
+    // Root boundaries stay eager and their route loader resolves the same
+    // namespace object, avoiding a second evaluated module instance.
+    expect(imports.match(/\/tmp\/test\/app\/layout\.tsx/g)).toHaveLength(1);
+    expect(imports).toMatch(/const load_\d+ = \(\) => Promise\.resolve\(mod_\d+\);/);
     // Every per-route module — pages, route handlers, layouts, templates,
     // boundaries and intercepting pages/layouts — is emitted as a lazy `() =>
     // import()` loader. Only the always-needed root boundaries (root layout,
