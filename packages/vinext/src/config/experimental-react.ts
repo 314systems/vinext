@@ -20,11 +20,20 @@ export function needsExperimentalReact(experimental: Record<string, unknown> | u
 }
 
 export function resolveExperimentalReactAliases(root: string): ExperimentalReactAliases {
-  const projectRequire = createRequire(path.join(root, "package.json"));
-  let nextPackagePath: string;
-  try {
-    nextPackagePath = projectRequire.resolve("next/package.json");
-  } catch (cause) {
+  const requireRoots = [root, process.cwd()];
+  let nextPackagePath: string | undefined;
+  let cause: unknown;
+  for (const requireRoot of requireRoots) {
+    try {
+      nextPackagePath = createRequire(path.join(requireRoot, "package.json")).resolve(
+        "next/package.json",
+      );
+      break;
+    } catch (error) {
+      cause = error;
+    }
+  }
+  if (!nextPackagePath) {
     throw new Error(
       "[vinext] React's experimental channel requires the project's installed `next` package.",
       { cause },

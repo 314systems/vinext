@@ -60,6 +60,16 @@ describe("experimental React channel", () => {
     });
   });
 
+  it("falls back to the running workspace for isolated fixtures without Next.js", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-experimental-react-fixture-"));
+    tempDirs.push(root);
+    fs.writeFileSync(path.join(root, "package.json"), "{}");
+
+    const packages = resolveExperimentalReactAliases(root);
+
+    expect(packages.react).toContain("/next/dist/compiled/react-experimental");
+  });
+
   it("resolves package exports using environment-specific React conditions", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-experimental-react-"));
     tempDirs.push(root);
