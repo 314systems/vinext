@@ -511,6 +511,90 @@ test.describe("Intercepting Routes", () => {
     );
   });
 
+  // Ported from Next.js:
+  // test/e2e/app-dir/parallel-routes-revalidation/parallel-routes-revalidation.test.ts
+  // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/parallel-routes-revalidation/parallel-routes-revalidation.test.ts
+  for (const fixture of [
+    {
+      basePath: "/refreshing",
+      label: "regular",
+      modalTestId: "refreshing-login-modal",
+      modalTokenTestId: "refreshing-modal-token",
+      otherTokenTestId: "refreshing-other-token",
+      pageTokenTestId: "refreshing-page-token",
+      searchPrefix: "refreshing",
+    },
+    {
+      basePath: "/dynamic-refresh/foo",
+      label: "dynamic",
+      modalTestId: "dynamic-refresh-login-modal",
+      modalTokenTestId: "dynamic-refresh-modal-token",
+      otherTokenTestId: "dynamic-refresh-other-token",
+      pageTokenTestId: "dynamic-refresh-page-token",
+      searchPrefix: "dynamic-refresh",
+    },
+  ]) {
+    for (const withSearchParams of [false, true]) {
+      test(`router.refresh (${fixture.label}) - searchParams: ${withSearchParams} refreshes intercepted and source slots`, async ({
+        page,
+      }) => {
+        await page.goto(`${BASE}${fixture.basePath}`);
+        await waitForAppRouterHydration(page);
+
+        if (withSearchParams) {
+          await page
+            .getByRole("button", { name: `Update ${fixture.searchPrefix}-page search params` })
+            .click();
+          await expect(
+            page.getByTestId(`${fixture.searchPrefix}-page-search-params`),
+          ).toContainText("0.");
+        }
+
+        const pageToken = await page.getByTestId(fixture.pageTokenTestId).textContent();
+        await page.getByRole("link", { name: /Open .*refreshing login/ }).click();
+        await expect(page.getByTestId(fixture.modalTestId)).toBeVisible();
+        const modalToken = await page.getByTestId(fixture.modalTokenTestId).textContent();
+
+        await page
+          .getByTestId(fixture.modalTestId)
+          .getByRole("button", { name: "Refresh", exact: true })
+          .click();
+
+        await expect(page.getByTestId(fixture.pageTokenTestId)).not.toHaveText(pageToken ?? "");
+        await expect(page.getByTestId(fixture.modalTokenTestId)).not.toHaveText(modalToken ?? "");
+        await expect(page.getByTestId(fixture.modalTestId)).toBeVisible();
+      });
+
+      test(`server revalidation (${fixture.label}) - searchParams: ${withSearchParams} refreshes persisted and active slots`, async ({
+        page,
+      }) => {
+        await page.goto(`${BASE}${fixture.basePath}`);
+        await waitForAppRouterHydration(page);
+
+        if (withSearchParams) {
+          await page
+            .getByRole("button", { name: `Update ${fixture.searchPrefix}-page search params` })
+            .click();
+          await expect(
+            page.getByTestId(`${fixture.searchPrefix}-page-search-params`),
+          ).toContainText("0.");
+        }
+
+        await page.getByRole("link", { name: /Open .*refreshing login/ }).click();
+        await expect(page.getByTestId(fixture.modalTestId)).toBeVisible();
+        await page.getByRole("link", { name: /Go to (Dynamic )?Other Page/ }).click();
+        const modalToken = await page.getByTestId(fixture.modalTokenTestId).textContent();
+        const otherToken = await page.getByTestId(fixture.otherTokenTestId).textContent();
+
+        await page.getByRole("main").getByRole("button", { name: "Revalidate" }).click();
+
+        await expect(page.getByTestId(fixture.modalTokenTestId)).not.toHaveText(modalToken ?? "");
+        await expect(page.getByTestId(fixture.otherTokenTestId)).not.toHaveText(otherToken ?? "");
+        await expect(page.getByTestId(fixture.modalTestId)).toBeVisible();
+      });
+    }
+  }
+
   test("sibling (..) intercepted navigation mounts the modal slot", async ({ page }) => {
     // Ported from the sibling-interception behavior covered by Next.js:
     // test/e2e/app-dir/parallel-routes-and-interception/parallel-routes-and-interception.test.ts

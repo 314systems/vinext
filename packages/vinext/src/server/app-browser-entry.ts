@@ -722,6 +722,35 @@ async function commitSameUrlNavigatePayload(
   returnValue?: ServerActionResult["returnValue"],
   revalidation: ServerActionRevalidationKind = "none",
 ): Promise<unknown> {
+  if (revalidation !== "none") {
+    const refreshUrl = new URL(actionInitiation.href);
+    const requestInterceptionContext = resolveInterceptionContextFromPreviousNextUrl(
+      actionInitiation.routerState.previousNextUrl,
+      __basePath,
+    );
+    const persistedRefreshInterceptions = resolvePersistedRefreshInterceptions(
+      actionInitiation.routerState,
+      getBrowserRouteManifest(),
+      refreshUrl,
+      requestInterceptionContext,
+    );
+    if (persistedRefreshInterceptions.length > 0) {
+      const mountedSlotsHeader = getMountedSlotIdsHeader(actionInitiation.routerState.elements);
+      const interceptedSlotPayloads = persistedRefreshInterceptions.map((interception) =>
+        fetchPersistedInterceptedSlotRefresh({
+          interceptionContext: interception.interceptionContext,
+          interceptionId: interception.interception.id,
+          mountedSlotsHeader,
+          signal: new AbortController().signal,
+          targetPathname: interception.targetPathname,
+        }),
+      );
+      nextElements = Promise.all([nextElements, ...interceptedSlotPayloads]).then(
+        ([currentElements, ...interceptedElements]) =>
+          interceptedElements.reduce(mergeRefreshedInterceptedSlot, currentElements),
+      );
+    }
+  }
   const navigationSnapshot = createClientNavigationRenderSnapshot(
     actionInitiation.href,
     actionInitiation.routerState.navigationSnapshot.params,
