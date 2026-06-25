@@ -2042,7 +2042,7 @@ function bootstrapHydration(
     clearNavigationCaches: clearClientNavigationCaches,
     commitExternalHistoryNavigation: (callerState, href, historyUpdateMode) => {
       const targetHref = new URL(href ?? window.location.href, window.location.href).href;
-      // bootstrapHydration registers this seam before BrowserRoot's layout
+      // bootstrapHydration registers this seam before BrowserRoot's insertion
       // effect publishes committed router state. Preserve native History API
       // behavior during that brief window instead of throwing from the router
       // state getter.
