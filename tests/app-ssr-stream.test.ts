@@ -139,6 +139,7 @@ describe("createRscEmbedTransform raw buffer (#981)", () => {
     expect(finalScripts).toContain(
       '<script nonce="test-nonce">self.__next_f.push([1,"chunk2"])</script>',
     );
+    expect(finalScripts).toContain('<script nonce="test-nonce">self.__next_f.length=0</script>');
     expect(finalScripts.match(/self\.__next_f=self\.__next_f\|\|\[\]/g)).toHaveLength(1);
   });
 

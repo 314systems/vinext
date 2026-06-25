@@ -71,6 +71,10 @@ function createNextFlightChunkScript(chunk: RscEmbeddedChunk): string {
   return "self.__next_f.push(" + safeJsonStringify(nextChunk) + ")";
 }
 
+function createNextFlightCleanupScript(): string {
+  return "self.__next_f.length=0";
+}
+
 /**
  * Fix invalid preload "as" values in RSC Flight hint lines before they reach
  * the client. React Flight emits HL hints with as="stylesheet" for CSS, but
@@ -159,6 +163,9 @@ export function createRscEmbedTransform(
     async finalize(): Promise<string> {
       await pumpPromise;
       let scripts = this.flush();
+      if (options.mirrorNextFlight && mirroredNextFlightBootstrap) {
+        scripts += createInlineScriptTag(createNextFlightCleanupScript(), options.scriptNonce);
+      }
       scripts += createInlineScriptTag(createNavigationRuntimeRscDoneScript(), options.scriptNonce);
       return scripts;
     },

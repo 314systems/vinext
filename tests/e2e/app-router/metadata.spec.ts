@@ -74,6 +74,26 @@ test.describe("Dynamic Metadata (generateMetadata)", () => {
     const ogDescription = page.locator('meta[property="og:description"]');
     await expect(ogDescription).toHaveAttribute("content", "Dynamic OG Description");
   });
+
+  test("generateMetadata notFound hydrates the local boundary without retaining mirrored Flight", async ({
+    page,
+  }) => {
+    await page.goto(`${BASE}/nextjs-compat/generate-metadata-not-found`);
+
+    await expect(page.locator("h2")).toHaveText("Local found boundary");
+    await expect(page).toHaveTitle("Local not found");
+    await expect(page.locator('meta[name="description"]')).toHaveAttribute(
+      "content",
+      "Local not found description",
+    );
+    await expect(page.locator('meta[name="keywords"]')).toHaveAttribute("content", "parent");
+    await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", "noindex");
+    await expect
+      .poll(() =>
+        page.evaluate(() => (window as Window & { __next_f?: unknown[] }).__next_f?.length ?? 0),
+      )
+      .toBe(0);
+  });
 });
 
 test.describe("Metadata Routes", () => {
