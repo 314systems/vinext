@@ -109,7 +109,7 @@ const dynamicValue = require(name);`,
     );
 
     const load = plugin.load as (id: string) => string | null;
-    expect(load(resolvedProxyId ?? "")).toContain(')("external-pkg")');
+    expect(load(resolvedProxyId ?? "")).toContain('createRequire(import.meta.url)("external-pkg")');
   });
 
   it("preserves falsy client module defaults", async () => {

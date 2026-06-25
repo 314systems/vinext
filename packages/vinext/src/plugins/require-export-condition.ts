@@ -1,6 +1,5 @@
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import path from "node:path";
 import MagicString from "magic-string";
 import { parseAst, type Plugin } from "vite";
 import {
@@ -23,15 +22,11 @@ type StaticRequire = {
 export function createRequireExportConditionPlugin(): Plugin {
   const clientRequireModules = new Map<string, string>();
   const externalRequireModules = new Map<string, string>();
-  let projectRoot = process.cwd();
 
   return {
     name: "vinext:require-export-condition",
     enforce: "pre",
     sharedDuringBuild: true,
-    configResolved(config) {
-      projectRoot = config.root;
-    },
     transform: {
       filter: {
         id: /\.(?:[cm]?[jt]s|[jt]sx)(?:\?.*)?$/i,
@@ -108,7 +103,7 @@ export default value;
       const specifier = externalRequireModules.get(id);
       if (!specifier) return null;
       return `import { createRequire } from "node:module";
-const value = createRequire(${JSON.stringify(path.join(projectRoot, "package.json"))})(${JSON.stringify(specifier)});
+const value = createRequire(import.meta.url)(${JSON.stringify(specifier)});
 export default value;
 `;
     },
