@@ -343,14 +343,14 @@ export async function buildPageElements<
     const ServerPageComponent = PageComponent as unknown as (
       props: Readonly<Record<string, unknown>>,
     ) => ReturnType<typeof createElement> | Promise<unknown> | string | number | null;
-    const PageInvoker = async () => {
+    const PageInvoker = () => {
       const invocationProps = { ...props };
       if (searchParams) {
         invocationProps.searchParams = observePageSearchParamsAccess
           ? makeObservedAppPageSearchParamsThenable(pageSearchParams)
           : makeThenableParams(pageSearchParams);
       }
-      return await ServerPageComponent(invocationProps);
+      return ServerPageComponent(invocationProps);
     };
     return createElement(PageInvoker as unknown as AppPageComponent);
   };
