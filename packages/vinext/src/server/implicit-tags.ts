@@ -59,6 +59,7 @@ export function buildPageCacheTags(
   routeSegments: string[],
   leafKind: AppCacheLeafKind,
 ): string[] {
+  if (pathname.length > 1 && pathname.endsWith("/")) pathname = pathname.slice(0, -1);
   const tags = [pathname, `${NEXT_CACHE_IMPLICIT_TAG_ID}${pathname}`];
   if (pathname === "/") appendUnique(tags, `${NEXT_CACHE_IMPLICIT_TAG_ID}/index`);
   if (pathname === "/index") appendUnique(tags, `${NEXT_CACHE_IMPLICIT_TAG_ID}/`);

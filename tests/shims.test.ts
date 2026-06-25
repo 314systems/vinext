@@ -10352,6 +10352,13 @@ describe("matchConfigPattern", () => {
     expect(matchConfigPattern("/123/", "/:id(\\d+)")).toEqual({ id: "123" });
   });
 
+  it("matches a trailing-slash config source against the canonical pathname", async () => {
+    const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
+    expect(matchConfigPattern("/en/", "/:lang(en|es)/")).toEqual({ lang: "en" });
+    expect(matchConfigPattern("/en", "/:lang(en|es)/")).toEqual({ lang: "en" });
+    expect(matchConfigPattern("/fr/", "/:lang(en|es)/")).toBeNull();
+  });
+
   it("preserves the root path and catch-all semantics under trailing slash", async () => {
     const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
     // The root pathname "/" stays "/" — never stripped to "".

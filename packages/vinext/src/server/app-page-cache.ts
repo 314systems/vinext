@@ -126,6 +126,7 @@ function recordAppPageCacheOutcome(
 }
 
 export function buildAppPageCacheTags(pathname: string, extraTags: readonly string[]): string[] {
+  if (pathname.length > 1 && pathname.endsWith("/")) pathname = pathname.slice(0, -1);
   const tags = [pathname, `_N_T_${pathname}`, "_N_T_/layout"];
   const segments = pathname.split("/");
   let built = "";
