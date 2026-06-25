@@ -213,6 +213,7 @@ export default function Page() {
       expect(rscBundleCode).not.toContain("twitter:player");
       expect(clientBundleCode).not.toContain("targetHoistedInHead");
       expect(clientBundleCode).not.toContain("CP_CACHE_ENTRY_PROOF_MISSING");
+      expect(clientBundleCode).not.toContain("clientNavigationRenderContext");
       expect(ssrBundleCode).not.toContain("targetHoistedInHead");
       for (const bundleCode of [clientBundleCode, ssrBundleCode]) {
         expect(bundleCode).toContain(
