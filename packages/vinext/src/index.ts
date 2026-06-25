@@ -1184,7 +1184,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     // Next.js honors a root Babel config before compiling JSX. Vite 8's React
     // plugin uses OXC and no longer loads Babel configs, so run the project's
     // configured Babel transform first when one is present.
-    createBabelConfigPlugin(),
+    createBabelConfigPlugin(() => ({
+      forceSwcTransforms: nextConfig?.forceSwcTransforms ?? false,
+      transpilePackages: nextConfig?.transpilePackages ?? [],
+    })),
     // React Fast Refresh + JSX transform for client components.
     reactPluginPromise,
     // Next.js ignores requests without any statically known path component

@@ -35,6 +35,11 @@ type BabelCore = {
   } | null>;
 };
 
+type BabelConfigPluginOptions = {
+  forceSwcTransforms: boolean;
+  transpilePackages: string[];
+};
+
 function findBabelConfig(root: string): string | null {
   for (const file of BABEL_CONFIG_FILES) {
     const configPath = path.join(root, file);
@@ -51,19 +56,52 @@ function resolveBabelCore(root: string): string | null {
 
   try {
     const nextRequire = createRequire(projectRequire.resolve("next/package.json"));
-    return nextRequire.resolve("@babel/core");
+    return nextRequire.resolve("next/dist/compiled/babel/core");
   } catch {}
 
   return null;
 }
 
-export function createBabelConfigPlugin(): Plugin {
+function isPathInPackage(filename: string, packageName: string): boolean {
+  const packagePath = packageName.replaceAll("/", path.sep);
+  return filename.includes(`${path.sep}node_modules${path.sep}${packagePath}${path.sep}`);
+}
+
+function resolvePackageRoot(root: string, packageName: string): string | null {
+  const projectRequire = createRequire(path.join(root, "package.json"));
+  let currentDir: string;
+  try {
+    currentDir = path.dirname(projectRequire.resolve(packageName));
+  } catch {
+    return null;
+  }
+
+  while (currentDir !== path.dirname(currentDir)) {
+    const packageJsonPath = path.join(currentDir, "package.json");
+    try {
+      const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+        name?: unknown;
+      };
+      if (packageJson.name === packageName) return tryRealpathSync(currentDir) ?? currentDir;
+    } catch {}
+    currentDir = path.dirname(currentDir);
+  }
+  return null;
+}
+
+export function createBabelConfigPlugin(
+  getOptions: () => BabelConfigPluginOptions = () => ({
+    forceSwcTransforms: false,
+    transpilePackages: [],
+  }),
+): Plugin {
   let root = process.cwd();
   let canonicalRoot = fs.realpathSync.native(root);
   let babelCorePromise: Promise<BabelCore> | null = null;
   let configPath: string | null = null;
   let srcDir = canonicalRoot;
   let pagesDir = path.join(canonicalRoot, "src", "pages");
+  let transpilePackageRoots = new Map<string, string | null>();
 
   return {
     name: "vinext:babel-config",
@@ -72,6 +110,7 @@ export function createBabelConfigPlugin(): Plugin {
       root = config.root;
       canonicalRoot = fs.realpathSync.native(root);
       configPath = findBabelConfig(root);
+      transpilePackageRoots = new Map();
       srcDir = fs.existsSync(path.join(canonicalRoot, "src"))
         ? path.join(canonicalRoot, "src")
         : canonicalRoot;
@@ -99,12 +138,30 @@ export function createBabelConfigPlugin(): Plugin {
         id: /\.[cm]?[jt]sx?(?:\?.*)?$/,
       },
       async handler(code, id) {
-        if (!configPath || id.startsWith("\0") || id.includes("/node_modules/")) return;
+        const options = getOptions();
+        if (!configPath || options.forceSwcTransforms || id.startsWith("\0")) return;
 
         const filename = id.replace(/\?.*$/, "");
         if (!path.isAbsolute(filename)) return;
         const canonicalFilename = tryRealpathSync(filename) ?? filename;
-        if (!relativeWithinRoot(canonicalRoot, canonicalFilename)) return;
+        const isProjectFile = relativeWithinRoot(canonicalRoot, canonicalFilename);
+        const isTranspiledPackage = options.transpilePackages.some((packageName) => {
+          if (isPathInPackage(filename, packageName)) return true;
+
+          let packageRoot = transpilePackageRoots.get(packageName);
+          if (packageRoot === undefined) {
+            packageRoot = resolvePackageRoot(root, packageName);
+            transpilePackageRoots.set(packageName, packageRoot);
+          }
+
+          return packageRoot !== null && relativeWithinRoot(packageRoot, canonicalFilename);
+        });
+        if (
+          (!isProjectFile || filename.includes(`${path.sep}node_modules${path.sep}`)) &&
+          !isTranspiledPackage
+        ) {
+          return;
+        }
 
         if (!babelCorePromise) {
           const babelCorePath = resolveBabelCore(root);
