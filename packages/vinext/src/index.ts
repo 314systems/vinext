@@ -3431,14 +3431,20 @@ export const loadServerActionClient = ${
       name: "vinext:instrumentation-client-inject",
       enforce: "pre",
 
-      resolveId(id) {
-        if (id !== VIRTUAL_INSTRUMENTATION_CLIENT) return null;
-        return clientInjectModule !== null ? RESOLVED_INSTRUMENTATION_CLIENT : null;
+      resolveId: {
+        filter: { id: new RegExp(`^${escapeRegExp(VIRTUAL_INSTRUMENTATION_CLIENT)}$`) },
+        handler(id) {
+          if (id !== VIRTUAL_INSTRUMENTATION_CLIENT) return null;
+          return clientInjectModule !== null ? RESOLVED_INSTRUMENTATION_CLIENT : null;
+        },
       },
 
-      load(id) {
-        if (id !== RESOLVED_INSTRUMENTATION_CLIENT) return null;
-        return clientInjectModule;
+      load: {
+        filter: { id: new RegExp(`^${escapeRegExp(RESOLVED_INSTRUMENTATION_CLIENT)}$`) },
+        handler(id) {
+          if (id !== RESOLVED_INSTRUMENTATION_CLIENT) return null;
+          return clientInjectModule;
+        },
       },
     },
     // Dedup client references from RSC proxy modules — see src/plugins/client-reference-dedup.ts
@@ -3493,20 +3499,26 @@ export const loadServerActionClient = ${
       name: "vinext:react-canary",
       enforce: "pre",
 
-      resolveId(id) {
-        if (id === "virtual:vinext-react-canary") return "\0virtual:vinext-react-canary";
+      resolveId: {
+        filter: { id: /^virtual:vinext-react-canary$/ },
+        handler(id) {
+          if (id === "virtual:vinext-react-canary") return "\0virtual:vinext-react-canary";
+        },
       },
 
-      load(id) {
-        if (id === "\0virtual:vinext-react-canary") {
-          return [
-            `export * from "react";`,
-            `export { default } from "react";`,
-            `import * as _React from "react";`,
-            `export const ViewTransition = _React.ViewTransition || function ViewTransition({ children }) { return children; };`,
-            `export const addTransitionType = _React.addTransitionType || function addTransitionType() {};`,
-          ].join("\n");
-        }
+      load: {
+        filter: { id: new RegExp(`^${String.fromCharCode(0)}virtual:vinext-react-canary$`) },
+        handler(id) {
+          if (id === "\0virtual:vinext-react-canary") {
+            return [
+              `export * from "react";`,
+              `export { default } from "react";`,
+              `import * as _React from "react";`,
+              `export const ViewTransition = _React.ViewTransition || function ViewTransition({ children }) { return children; };`,
+              `export const addTransitionType = _React.addTransitionType || function addTransitionType() {};`,
+            ].join("\n");
+          }
+        },
       },
 
       transform: {

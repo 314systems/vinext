@@ -165,17 +165,23 @@ export function dataUrlCssPlugin(): Plugin {
       },
     },
 
-    resolveId(id) {
-      // Claim the synthetic ids so Vite's resolver doesn't try (and fail)
-      // to find them on disk. Returning the id as-is lets `load` see it.
-      if (id.startsWith(VIRTUAL_PREFIX)) return id;
-      return null;
+    resolveId: {
+      filter: { id: new RegExp(`^${VIRTUAL_PREFIX}`) },
+      handler(id) {
+        // Claim the synthetic ids so Vite's resolver doesn't try (and fail)
+        // to find them on disk. Returning the id as-is lets `load` see it.
+        if (id.startsWith(VIRTUAL_PREFIX)) return id;
+        return null;
+      },
     },
 
-    load(id) {
-      const entry = entries.get(id);
-      if (!entry) return null;
-      return entry.css;
+    load: {
+      filter: { id: new RegExp(`^${VIRTUAL_PREFIX}`) },
+      handler(id) {
+        const entry = entries.get(id);
+        if (!entry) return null;
+        return entry.css;
+      },
     },
   };
 }
