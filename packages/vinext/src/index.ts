@@ -76,6 +76,12 @@ import {
   type ResolvedNextConfig,
 } from "./config/next-config.js";
 import { mergeServerExternalPackages } from "./config/server-external-packages.js";
+import {
+  createExperimentalReactEnvironmentAliases,
+  resolveExperimentalReactAliases,
+  type ExperimentalReactAliasEntry,
+  type ExperimentalReactEnvironment,
+} from "./config/experimental-react.js";
 
 import { findMiddlewareFile, isProxyFile, runMiddleware } from "./server/middleware.js";
 import { isNextDataPathname, parseNextDataPathname } from "./server/pages-data-route.js";
@@ -882,6 +888,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   let hasAppDir = false;
   let hasPagesDir = false;
   let nextConfig: ResolvedNextConfig;
+  let experimentalReactAliases: Record<
+    ExperimentalReactEnvironment,
+    ExperimentalReactAliasEntry[]
+  > | null = null;
+  let experimentalReactFlightDir: string | null = null;
   let fileMatcher: ReturnType<typeof createValidFileMatcher>;
   let middlewarePath: string | null = null;
   let instrumentationPath: string | null = null;
@@ -1182,6 +1193,35 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     ...(viteMajorVersion >= 8 ? [] : [loadVite7TsconfigPathsPlugin(earlyBaseDir)]),
     // React Fast Refresh + JSX transform for client components.
     reactPluginPromise,
+    {
+      name: "vinext:experimental-react-channel",
+      enforce: "pre",
+      resolveId(id) {
+        const environment = this.environment?.name;
+        if (
+          !experimentalReactAliases ||
+          (environment !== "rsc" && environment !== "ssr" && environment !== "client")
+        ) {
+          return null;
+        }
+        const alias = experimentalReactAliases[environment].find(({ find }) => find.test(id));
+        return alias?.replacement ?? null;
+      },
+      transform: {
+        filter: { code: "globalThis.__next_require__" },
+        handler(code, id) {
+          const cleanId = normalizePathSeparators(id.split("?", 1)[0]);
+          if (
+            !experimentalReactFlightDir ||
+            !cleanId.startsWith(`${experimentalReactFlightDir}/`) ||
+            !code.includes("globalThis.__next_require__")
+          ) {
+            return null;
+          }
+          return code.replaceAll("globalThis.__next_require__", "__vite_rsc_require__");
+        },
+      },
+    },
     // Next.js ignores requests without any statically known path component
     // during graph analysis and leaves a deterministic runtime failure.
     createIgnoreDynamicRequestsPlugin(() => nextConfig?.turbopackTranspilePackages ?? []),
@@ -1411,6 +1451,18 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           if (sharedBuildId && sharedBuildId.length > 0) {
             nextConfig = { ...nextConfig, buildId: sharedBuildId };
           }
+
+          if (hasAppDir && nextConfig.useExperimentalReact) {
+            const packages = resolveExperimentalReactAliases(root);
+            experimentalReactAliases = {
+              rsc: createExperimentalReactEnvironmentAliases(packages, "rsc"),
+              ssr: createExperimentalReactEnvironmentAliases(packages, "ssr"),
+              client: createExperimentalReactEnvironmentAliases(packages, "client"),
+            };
+            experimentalReactFlightDir = normalizePathSeparators(
+              packages["react-server-dom-webpack"],
+            );
+          }
         }
         // RSC-compat ID coordination across plugin instances — same rationale as
         // the build ID above. createRscCompatibilityId() falls back to a random
@@ -1463,6 +1515,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           // and it would silently override the value we just set above.
           if (key === "NODE_ENV") continue;
           defines[`process.env.${key}`] = JSON.stringify(value);
+        }
+        if (experimentalReactAliases) {
+          defines["process.env.__NEXT_EXPERIMENTAL_REACT"] = JSON.stringify("true");
         }
         // Expose basePath to client-side code
         defines["process.env.__NEXT_ROUTER_BASEPATH"] = JSON.stringify(nextConfig.basePath);
