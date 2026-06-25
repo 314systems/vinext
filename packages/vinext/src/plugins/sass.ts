@@ -26,6 +26,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import remapping, { type SourceMapInput } from "@jridgewell/remapping";
 import MagicString from "magic-string";
 import {
   normalizePath,
@@ -127,13 +128,9 @@ function isSassStatementStart(code: string, index: number, indentedSyntax: boole
     }
 
     const lineStart = code.lastIndexOf("\n", current) + 1;
-    if (
-      code
-        .slice(lineStart, current + 1)
-        .trimStart()
-        .startsWith("//")
-    ) {
-      current = lineStart - 1;
+    const lineComment = code.lastIndexOf("//", current);
+    if (lineComment >= lineStart && code[lineComment - 1] !== ":") {
+      current = lineComment - 1;
       continue;
     }
 
@@ -376,6 +373,24 @@ function rewriteSassTildeCssImportsWithReplacements(
   return changed ? { code: output, replacements } : null;
 }
 
+function renderSassTildeRewrite(
+  code: string,
+  id: string,
+  root: string,
+): { code: string; map: ReturnType<MagicString["generateMap"]> } | null {
+  const rewritten = rewriteSassTildeCssImportsWithReplacements(code, id, root);
+  if (!rewritten) return null;
+
+  const output = new MagicString(code);
+  for (const replacement of rewritten.replacements) {
+    output.overwrite(replacement.start, replacement.end, replacement.value);
+  }
+  return {
+    code: output.toString(),
+    map: output.generateMap({ hires: "boundary", source: id, includeContent: true }),
+  };
+}
+
 export function rewriteSassTildeCssImports(code: string, id: string, root: string): string | null {
   return rewriteSassTildeCssImportsWithReplacements(code, id, root)?.code ?? null;
 }
@@ -405,15 +420,34 @@ export function wrapSassTildeAdditionalData(
     return rewriteSassTildeCssImports(additionalData, syntheticFilename, root) ?? additionalData;
   }
 
-  return async (source: string, filename: string) => {
+  const wrapped: AdditionalDataFunction = async (source: string, filename: string) => {
     const combined = await additionalData(source, filename);
     if (typeof combined === "string") {
       return rewriteSassTildeCssImports(combined, filename, root) ?? combined;
     }
 
-    const content = rewriteSassTildeCssImports(combined.content, filename, root);
-    return content ? { ...combined, content } : combined;
+    const rewritten = renderSassTildeRewrite(combined.content, filename, root);
+    if (!rewritten) return combined;
+
+    const map = combined.map
+      ? JSON.parse(
+          remapping(
+            [
+              JSON.parse(rewritten.map.toString()) as SourceMapInput,
+              combined.map as SourceMapInput,
+            ],
+            () => null,
+          ).toString(),
+        )
+      : JSON.parse(rewritten.map.toString());
+
+    return {
+      ...combined,
+      content: rewritten.code,
+      map,
+    };
   };
+  return wrapped;
 }
 
 export function createSassTildeCssImportPlugin(): Plugin {
@@ -430,17 +464,9 @@ export function createSassTildeCssImportPlugin(): Plugin {
     transform: {
       filter: { id: SASS_STYLESHEET_RE, code: "@import" },
       handler(code, id) {
-        const rewritten = rewriteSassTildeCssImportsWithReplacements(code, id, root);
+        const rewritten = renderSassTildeRewrite(code, id, root);
         if (!rewritten) return null;
-
-        const output = new MagicString(code);
-        for (const replacement of rewritten.replacements) {
-          output.overwrite(replacement.start, replacement.end, replacement.value);
-        }
-        return {
-          code: output.toString(),
-          map: output.generateMap({ hires: "boundary", source: id, includeContent: true }),
-        };
+        return rewritten;
       },
     },
   };

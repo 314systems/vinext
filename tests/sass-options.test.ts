@@ -268,6 +268,7 @@ describe("rewriteSassTildeCssImports", () => {
     for (const source of [
       [`/* banner */`, `@import '~package/theme.css';`].join("\n"),
       [`// banner`, `@import '~package/theme.css';`].join("\n"),
+      [`$value: 1; // trailing`, `@import '~package/theme.css';`].join("\n"),
       `/* banner */ @import '~package/theme.css';`,
     ]) {
       expect(rewriteSassTildeCssImports(source, id, root)).toBe(source.replace("'~", "'"));
@@ -404,10 +405,13 @@ describe("wrapSassTildeAdditionalData", () => {
       (source) => ({ content: `@import '~package/injected.css';\n${source}`, map }),
       root,
     );
-    await expect(wrapped(`.page { color: red; }`, filename)).resolves.toEqual({
+    const result = await wrapped(`.page { color: red; }`, filename);
+    expect(result).toMatchObject({
       content: `@import 'package/injected.css';\n.page { color: red; }`,
-      map,
+      map: { version: 3, sources: [filename] },
     });
+    expect(typeof result).toBe("object");
+    if (typeof result === "object") expect(result.map).not.toBe(map);
   });
 });
 
