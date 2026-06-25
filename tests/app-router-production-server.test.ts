@@ -1252,6 +1252,20 @@ describe("App Router Production server (startProdServer)", () => {
     );
   });
 
+  it("keeps static metadata in body when active parallel slots use dynamic APIs", async () => {
+    const response = await fetch(`${baseUrl}/metadata-streaming-parallel-dynamic`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-vinext-cache")).toBeNull();
+    const html = await response.text();
+    expect(getDocumentSection(html, "head")).not.toContain("<title>");
+    expect(getDocumentSection(html, "body")).toContain(
+      "<title>Parallel slot dynamic streamed metadata</title>",
+    );
+    expect(html).toContain("Dynamic parallel slot using headers");
+    expect(html).toContain("Dynamic parallel slot using cookies");
+    expect(html).toContain("Dynamic parallel slot using connection");
+  });
+
   it("page ISR + searchParams: RSC requests stay dynamic instead of serving cached query data", async () => {
     const res1 = await fetch(`${baseUrl}/isr-dynamic-search.rsc?filter=crimson`, {
       headers: { Accept: "text/x-component", RSC: "1" },

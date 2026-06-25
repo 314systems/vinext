@@ -918,6 +918,12 @@ export function buildAppPageElements<
       );
     }
 
+    if (metadataPlacement === "head-if-static" && overrideOrPageComponent) {
+      const slotCompletion = createAppRenderDependency();
+      metadataPlacementDependencies.push(slotCompletion);
+      slotElement = renderWithAppDependencyBarrier(slotElement, slotCompletion);
+    }
+
     elements[slotId] = renderAfterAppDependencies(
       slotElement,
       targetIndex >= 0 ? (slotDependenciesByLayoutIndex[targetIndex] ?? []) : [],
