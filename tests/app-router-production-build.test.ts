@@ -201,7 +201,13 @@ export default function Page() {
       await builder.buildApp();
 
       const clientBundleCode = readAllJs(path.join(tmpDir, "dist", "client"));
+      const rscBundleCode =
+        fs.readFileSync(path.join(tmpDir, "dist", "server", "index.js"), "utf-8") +
+        readAllJs(path.join(tmpDir, "dist", "server", "_next", "static"));
       const ssrBundleCode = readAllJs(path.join(tmpDir, "dist", "server", "ssr"));
+      expect(rscBundleCode).not.toContain("react.temporary.reference");
+      expect(rscBundleCode).not.toContain("writtenServerReferences");
+      expect(rscBundleCode).not.toContain("react.server.reference");
       for (const bundleCode of [clientBundleCode, ssrBundleCode]) {
         expect(bundleCode).toContain(
           "Unexpected server reference in an action-free React Flight payload.",

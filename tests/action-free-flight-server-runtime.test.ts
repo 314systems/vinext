@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   createActionFreeFlightClientRuntimeSource,
   createActionFreeFlightServerRuntimeSource,
+  pruneActionFreeFlightReferenceSerialization,
 } from "../packages/vinext/src/plugins/action-free-flight-server-runtime.js";
 
 const flightSource = `/**
@@ -73,6 +74,72 @@ describe("action-free Flight server runtime", () => {
 
   it("falls back when React changes the expected source shape", () => {
     expect(createActionFreeFlightServerRuntimeSource("export function render() {}")).toBeNull();
+  });
+
+  it("removes unreachable action-free reference serialization", () => {
+    const source = `var CLIENT_REFERENCE_TAG$1 = Symbol.for("react.client.reference"),
+  SERVER_REFERENCE_TAG = Symbol.for("react.server.reference");
+var FunctionBind = Function.prototype.bind,
+  ArraySlice = Array.prototype.slice;
+function bind() {}
+var serverReferenceToString = {},
+  PROMISE_PROTOTYPE = Promise.prototype,
+  deepProxyHandlers = {};
+var supportsRequestStorage = true,
+  requestStorage = null,
+  TEMPORARY_REFERENCE_TAG = Symbol.for("react.temporary.reference"),
+  proxyHandlers = {};
+function createTemporaryReference() {}
+function noop() {}
+function RequestInstance(
+  identifierPrefix,
+  temporaryReferences
+) {
+  this.writtenServerReferences = new Map();
+  this.temporaryReferences = temporaryReferences;
+  this.taintCleanupQueue = [];
+}
+function renderModelDestructive(request, value, elementReference) {
+  if (
+      void 0 !== request.temporaryReferences &&
+      ((elementReference = request.temporaryReferences.get(value)),
+      void 0 !== elementReference)
+    )
+      return "$T" + elementReference;
+  if (value.$$typeof === SERVER_REFERENCE_TAG)
+    return request.writtenServerReferences.get(value);
+  if (
+      void 0 !== request.temporaryReferences &&
+      request.temporaryReferences.get(value)
+    )
+      return "$T";
+  if (value.$$typeof === TEMPORARY_REFERENCE_TAG)
+    throw Error("temporary");
+  if (/^on[A-Z]/.test(parentPropertyName)) throw Error("event");
+}
+if (
+    "function" === typeof type &&
+    type.$$typeof !== CLIENT_REFERENCE_TAG$1 &&
+    type.$$typeof !== TEMPORARY_REFERENCE_TAG
+  )
+  renderFunctionComponent(type);
+new RequestInstance(
+    options ? options.identifierPrefix : void 0,
+    options ? options.temporaryReferences : void 0
+);`;
+
+    const result = pruneActionFreeFlightReferenceSerialization(source);
+
+    expect(result).not.toBeNull();
+    expect(result).not.toContain("temporaryReferences");
+    expect(result).not.toContain("SERVER_REFERENCE_TAG");
+    expect(result).not.toContain("TEMPORARY_REFERENCE_TAG");
+    expect(result).not.toContain("writtenServerReferences");
+    expect(result).toContain("if (/^on[A-Z]/.test(parentPropertyName))");
+  });
+
+  it("keeps the existing action-free runtime when reference markers change", () => {
+    expect(pruneActionFreeFlightReferenceSerialization("function noop() {}")).toBeNull();
   });
 });
 
