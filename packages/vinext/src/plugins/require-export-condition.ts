@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
+import { createRequire, isBuiltin } from "node:module";
 import MagicString from "magic-string";
 import { parseAst, type Plugin } from "vite";
 import {
@@ -58,10 +59,11 @@ export function createRequireExportConditionPlugin(): Plugin {
           if (!resolved || isVirtualId(resolved.id)) continue;
 
           output ??= new MagicString(code);
+          const proxyId = createRequireProxyId(requireCall.specifier, id);
           output.overwrite(
             requireCall.argument.start,
             requireCall.argument.end,
-            JSON.stringify(REQUIRE_PROXY_PREFIX + encodeURIComponent(requireCall.specifier)),
+            JSON.stringify(proxyId),
           );
           output.appendRight(requireCall.call.end, ".__vinextRequireValue");
         }
@@ -76,9 +78,9 @@ export function createRequireExportConditionPlugin(): Plugin {
     },
     async resolveId(id, importer) {
       const cleanId = id.startsWith("\0") ? id.slice(1) : id;
-      if (!cleanId.startsWith(REQUIRE_PROXY_PREFIX) || !importer) return null;
+      const specifier = parseRequireProxySpecifier(cleanId);
+      if (!specifier || !importer) return null;
 
-      const specifier = decodeURIComponent(cleanId.slice(REQUIRE_PROXY_PREFIX.length));
       const resolved = await this.resolve(specifier, importer, {
         skipSelf: true,
         kind: "require-call",
@@ -93,7 +95,7 @@ export function createRequireExportConditionPlugin(): Plugin {
       let requireResolvedId = resolved.id;
       if (isNodeModulesId(resolved.id)) {
         try {
-          requireResolvedId = createRequire(importer).resolve(specifier);
+          requireResolvedId = createRequire(cleanModuleId(importer)).resolve(specifier);
         } catch {}
       }
       if (!(await hasLeadingUseClientDirective(requireResolvedId))) {
@@ -132,6 +134,26 @@ export { value as __vinextRequireValue };
 `;
     },
   };
+}
+
+function createRequireProxyId(specifier: string, importer: string): string {
+  const importerHash = createHash("sha256").update(importer).digest("hex").slice(0, 16);
+  return `${REQUIRE_PROXY_PREFIX}${importerHash}:${encodeURIComponent(specifier)}`;
+}
+
+function parseRequireProxySpecifier(id: string): string | null {
+  if (!id.startsWith(REQUIRE_PROXY_PREFIX)) return null;
+  const separator = id.indexOf(":", REQUIRE_PROXY_PREFIX.length);
+  if (separator === -1) return null;
+  try {
+    return decodeURIComponent(id.slice(separator + 1));
+  } catch {
+    return null;
+  }
+}
+
+function cleanModuleId(id: string): string {
+  return id.split("?", 1)[0] ?? id;
 }
 
 function isVirtualId(id: string): boolean {
@@ -292,7 +314,7 @@ function isPackageSpecifier(specifier: string): boolean {
     !specifier.startsWith(".") &&
     !specifier.startsWith("/") &&
     !specifier.startsWith("\\") &&
-    !specifier.startsWith("node:") &&
+    !isBuiltin(specifier) &&
     !specifier.includes("\0")
   );
 }

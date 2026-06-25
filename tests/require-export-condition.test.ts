@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -26,6 +27,15 @@ function getTransform(plugin: ReturnType<typeof createRequireExportConditionPlug
   };
 }
 
+function proxyId(specifier: string, importer = "/app/page.tsx"): string {
+  const importerHash = createHash("sha256").update(importer).digest("hex").slice(0, 16);
+  return `virtual:vinext-require-condition:${importerHash}:${encodeURIComponent(specifier)}`;
+}
+
+function expectedResolvedProxyId(specifier: string, importer = "/app/page.tsx"): string {
+  return `\0${proxyId(specifier, importer)}.vinext-require.js`;
+}
+
 describe("require export conditions", () => {
   it("rewrites client package requires using require-condition resolution", async () => {
     await withModule(`'use client'; module.exports = () => 'client';`, async (moduleId) => {
@@ -44,7 +54,7 @@ const dynamicValue = require(name);`,
       );
 
       expect(result?.code).toContain(
-        'require("virtual:vinext-require-condition:client-pkg").__vinextRequireValue',
+        `require(${JSON.stringify(proxyId("client-pkg"))}).__vinextRequireValue`,
       );
       expect(result?.code).toContain('require("./relative.js")');
       expect(result?.code).toContain("require(name)");
@@ -55,8 +65,8 @@ const dynamicValue = require(name);`,
         importer: string,
       ) => Promise<unknown>;
       await expect(
-        resolveId.call({ resolve }, "virtual:vinext-require-condition:client-pkg", "/app/page.tsx"),
-      ).resolves.toBe("\0virtual:vinext-require-condition:client-pkg.vinext-require.js");
+        resolveId.call({ resolve }, proxyId("client-pkg"), "/app/page.tsx"),
+      ).resolves.toBe(expectedResolvedProxyId("client-pkg"));
       expect(resolve).toHaveBeenCalledWith("client-pkg", "/app/page.tsx", {
         skipSelf: true,
         kind: "require-call",
@@ -82,22 +92,18 @@ const dynamicValue = require(name);`,
       ) => Promise<unknown>;
       const serverProxyId = await resolveId.call(
         { resolve },
-        "virtual:vinext-require-condition:server-pkg",
+        proxyId("server-pkg"),
         "/app/page.tsx",
       );
-      expect(serverProxyId).toBe("\0virtual:vinext-require-condition:server-pkg.vinext-require.js");
+      expect(serverProxyId).toBe(expectedResolvedProxyId("server-pkg"));
       const load = plugin.load as (id: string) => string | null;
       expect(load(String(serverProxyId))).not.toContain("'use client'");
       expect(load(String(serverProxyId))).toContain("export { value as __vinextRequireValue };");
       await expect(
-        resolveId.call({ resolve }, "virtual:vinext-require-condition:server-pkg", "/app/page.tsx"),
+        resolveId.call({ resolve }, proxyId("server-pkg"), "/app/page.tsx"),
       ).resolves.toBe(serverProxyId);
       await expect(
-        resolveId.call(
-          { resolve },
-          "virtual:vinext-require-condition:server-only",
-          "/app/page.tsx",
-        ),
+        resolveId.call({ resolve }, proxyId("server-only"), "/app/page.tsx"),
       ).resolves.toEqual({ id: "\0virtual:vite-rsc/validate-imports/valid/server-only" });
     });
   });
@@ -112,12 +118,8 @@ const dynamicValue = require(name);`,
     ) => Promise<unknown>;
 
     await expect(
-      resolveId.call(
-        { resolve },
-        "virtual:vinext-require-condition:next%2Fheaders",
-        "/app/page.tsx",
-      ),
-    ).resolves.toBe("\0virtual:vinext-require-condition:next%2Fheaders.vinext-require.js");
+      resolveId.call({ resolve }, proxyId("next/headers"), "/app/page.tsx"),
+    ).resolves.toBe(expectedResolvedProxyId("next/headers"));
   });
 
   it("loads external packages through createRequire at runtime", async () => {
@@ -130,12 +132,10 @@ const dynamicValue = require(name);`,
     ) => Promise<string | null>;
     const resolvedProxyId = await resolveId.call(
       { resolve },
-      "virtual:vinext-require-condition:external-pkg",
+      proxyId("external-pkg"),
       "/app/page.tsx",
     );
-    expect(resolvedProxyId).toBe(
-      "\0virtual:vinext-require-condition:external-pkg.vinext-require.js",
-    );
+    expect(resolvedProxyId).toBe(expectedResolvedProxyId("external-pkg"));
 
     const load = plugin.load as (id: string) => string | null;
     expect(load(resolvedProxyId ?? "")).toContain('createRequire(import.meta.url)("external-pkg")');
@@ -152,7 +152,7 @@ const dynamicValue = require(name);`,
       ) => Promise<string | null>;
       const resolvedProxyId = await resolveId.call(
         { environment: { name: "rsc" }, resolve },
-        "virtual:vinext-require-condition:client-pkg",
+        proxyId("client-pkg"),
         "/app/page.tsx",
       );
       const load = plugin.load as (id: string) => string | null;
@@ -180,6 +180,70 @@ const dynamicValue = require(name);`,
       ),
     ).resolves.toBeNull();
     expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("leaves bare Node builtins alone", async () => {
+    const plugin = createRequireExportConditionPlugin();
+    const resolve = vi.fn();
+
+    await expect(
+      getTransform(plugin).handler.call(
+        { environment: { name: "rsc" }, resolve },
+        `const fs = require("fs");
+const path = require("node:path");`,
+        "/app/page.tsx",
+      ),
+    ).resolves.toBeNull();
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("keeps proxy modules distinct for different importers", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "vinext-require-importers-"));
+    const firstModule = path.join(root, "first.js");
+    const secondModule = path.join(root, "second.js");
+    fs.writeFileSync(firstModule, `module.exports = "first";`);
+    fs.writeFileSync(secondModule, `module.exports = "second";`);
+    try {
+      const plugin = createRequireExportConditionPlugin();
+      const resolve = vi.fn().mockImplementation(async (_specifier: string, importer: string) => ({
+        id: importer.includes("first") ? firstModule : secondModule,
+      }));
+      const transform = getTransform(plugin);
+      const firstImporter = "/app/first/page.tsx";
+      const secondImporter = "/app/second/page.tsx";
+      await transform.handler.call(
+        { environment: { name: "rsc" }, resolve },
+        `const value = require("pkg");`,
+        firstImporter,
+      );
+      await transform.handler.call(
+        { environment: { name: "rsc" }, resolve },
+        `const value = require("pkg");`,
+        secondImporter,
+      );
+      const resolveId = plugin.resolveId as unknown as (
+        this: { resolve: typeof resolve },
+        id: string,
+        importer: string,
+      ) => Promise<string | null>;
+      const firstProxy = await resolveId.call(
+        { resolve },
+        proxyId("pkg", firstImporter),
+        firstImporter,
+      );
+      const secondProxy = await resolveId.call(
+        { resolve },
+        proxyId("pkg", secondImporter),
+        secondImporter,
+      );
+
+      expect(firstProxy).not.toBe(secondProxy);
+      const load = plugin.load as (id: string) => string | null;
+      expect(load(firstProxy ?? "")).toContain(firstModule);
+      expect(load(secondProxy ?? "")).toContain(secondModule);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("does not rewrite requires outside the RSC environment", async () => {
