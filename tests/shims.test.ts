@@ -11793,8 +11793,9 @@ describe("matchRewrite with external URLs", () => {
 
   it("encodes path params substituted into rewrite query values", async () => {
     const { matchRewrite } = await import("../packages/vinext/src/config/config-matchers.js");
-    // Matches the final Next.js URL behavior while also encoding query-key
-    // placeholders as defense-in-depth when vinext accepts unusual syntax.
+    // Next.js retains the encoded source capture through destination
+    // interpolation. Vinext receives a decoded pathname here, so it must
+    // re-encode the query substitution to produce the same wire URL.
     // https://github.com/vercel/next.js/blob/v16.2.9/packages/next/src/shared/lib/router/utils/prepare-destination.ts
     const result = matchRewrite(
       "/search/foo&admin=true",
@@ -11948,8 +11949,9 @@ describe("matchRedirect destination param substitution", () => {
 
   it("encodes path params substituted into redirect query values", async () => {
     const { matchRedirect } = await import("../packages/vinext/src/config/config-matchers.js");
-    // Matches the final Next.js URL behavior while protecting every accepted
-    // query-component placeholder from creating new query syntax.
+    // Next.js retains the encoded source capture through destination
+    // interpolation. Vinext receives a decoded pathname here, so it must
+    // re-encode the query substitution to produce the same Location value.
     // https://github.com/vercel/next.js/blob/v16.2.9/packages/next/src/shared/lib/router/utils/prepare-destination.ts
     const redirects = [
       {

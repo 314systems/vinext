@@ -1127,9 +1127,12 @@ export function matchesRewriteSource(
  * Substitute all matched route params into a redirect/rewrite destination.
  *
  * Handles repeated params (e.g. `/api/:id/:id`) and catch-all suffix forms
- * (`:path*`, `:path+`) in a single pass. Params interpolated anywhere in the
- * query component are URI-encoded so decoded separators cannot create new
- * query keys or values. Unknown params are left intact.
+ * (`:path*`, `:path+`) in a single pass. Vinext matches config routes against
+ * an already-decoded pathname, unlike Next.js's config-route matcher which
+ * retains encoded source captures through destination interpolation. Re-encode
+ * params used in the query component so `%26` and `%3D` retain the same wire
+ * representation instead of becoming new query syntax. Unknown params are left
+ * intact.
  */
 function substituteDestinationParams(destination: string, params: Record<string, string>): string {
   const keys = Object.keys(params);
@@ -1164,11 +1167,11 @@ function substituteDestinationParams(destination: string, params: Record<string,
 /**
  * Check whether a destination param starts inside the query component.
  *
- * Encoding both query keys and values is deliberate defense-in-depth: although
- * Next.js config validation normally limits placeholder placement, vinext's
- * runtime matcher must not let a decoded `&` or `=` create query syntax in any
- * accepted destination form. The pathname, hostname, and fragment retain their
- * existing substitution behavior.
+ * Encoding both query keys and values is deliberate because vinext accepts the
+ * decoded `cleanPathname` at this layer. Next.js preserves percent-encoded route
+ * captures until after destination query interpolation; without compensating
+ * here, vinext turns encoded `&` and `=` path data into query delimiters. The
+ * pathname, hostname, and fragment retain their existing substitution behavior.
  */
 function isDestinationQueryOffset(destination: string, offset: number): boolean {
   const queryStart = destination.indexOf("?");
