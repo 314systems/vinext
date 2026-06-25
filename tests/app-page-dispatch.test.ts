@@ -2195,6 +2195,7 @@ describe("app page dispatch", () => {
       ...options,
       findIntercept() {
         return {
+          interceptionId: "interception:modal",
           matchedParams: { id: "123" },
           page: { default: "modal-page" },
           slotKey: "modal@app/feed/@modal",
@@ -2259,6 +2260,7 @@ describe("app page dispatch", () => {
       ...options,
       findIntercept() {
         return {
+          interceptionId: "interception:modal",
           matchedParams: { id: "123" },
           page: { default: "modal-page" },
           slotKey: "modal@app/feed/@modal",
@@ -2307,6 +2309,7 @@ describe("app page dispatch", () => {
         ...options,
         findIntercept() {
           return {
+            interceptionId: "interception:modal",
             matchedParams: { id: "123" },
             page: { default: "modal-page" },
             slotKey: "modal@app/feed/@modal",
