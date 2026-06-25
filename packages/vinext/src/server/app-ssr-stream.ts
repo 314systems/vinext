@@ -72,7 +72,7 @@ function createNextFlightChunkScript(chunk: RscEmbeddedChunk): string {
 }
 
 function createNextFlightCleanupScript(): string {
-  return "self.__next_f.length=0";
+  return 'self.addEventListener("DOMContentLoaded",()=>{if(self.__next_f?.push===Array.prototype.push)self.__next_f.length=0},{once:true})';
 }
 
 /**
@@ -152,13 +152,11 @@ export function createRscEmbedTransform(
               createNextFlightBootstrapScript(),
               options.scriptNonce,
             );
+            scripts += createInlineScriptTag(createNextFlightCleanupScript(), options.scriptNonce);
             mirroredNextFlightBootstrap = true;
           }
           scripts += createInlineScriptTag(createNextFlightChunkScript(chunk), options.scriptNonce);
         }
-      }
-      if (options.mirrorNextFlight) {
-        scripts += createInlineScriptTag(createNextFlightCleanupScript(), options.scriptNonce);
       }
       return scripts;
     },

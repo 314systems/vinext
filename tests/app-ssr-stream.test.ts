@@ -1,3 +1,4 @@
+import { createContext, runInContext } from "node:vm";
 import { describe, it, expect } from "vite-plus/test";
 import {
   createRscEmbedTransform,
@@ -139,7 +140,9 @@ describe("createRscEmbedTransform raw buffer (#981)", () => {
     expect(finalScripts).toContain(
       '<script nonce="test-nonce">self.__next_f.push([1,"chunk2"])</script>',
     );
-    expect(finalScripts).toContain('<script nonce="test-nonce">self.__next_f.length=0</script>');
+    expect(finalScripts).toContain(
+      '<script nonce="test-nonce">self.addEventListener("DOMContentLoaded",()=>{if(self.__next_f?.push===Array.prototype.push)self.__next_f.length=0},{once:true})</script>',
+    );
     expect(finalScripts.match(/self\.__next_f=self\.__next_f\|\|\[\]/g)).toHaveLength(1);
   });
 
@@ -151,7 +154,7 @@ describe("createRscEmbedTransform raw buffer (#981)", () => {
     expect(finalScripts).not.toContain("self.__next_f");
   });
 
-  it("cleans mirrored chunks from a progressive batch before a later stream error", async () => {
+  it("schedules cleanup for an unclaimed progressive buffer before a later stream error", async () => {
     let streamController!: ReadableStreamDefaultController<Uint8Array>;
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -164,10 +167,55 @@ describe("createRscEmbedTransform raw buffer (#981)", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     const progressiveScripts = transform.flush();
     expect(progressiveScripts).toContain('self.__next_f.push([1,"partial"])');
-    expect(progressiveScripts).toContain("self.__next_f.length=0");
+    expect(progressiveScripts).toContain('self.addEventListener("DOMContentLoaded"');
 
     streamController.error(new Error("stream broke"));
     await expect(transform.finalize()).rejects.toThrow("stream broke");
+  });
+
+  it("preserves progressive chunks until a deferred Next.js consumer claims the buffer", async () => {
+    let streamController!: ReadableStreamDefaultController<Uint8Array>;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        streamController = controller;
+        controller.enqueue(new TextEncoder().encode("first"));
+      },
+    });
+    const transform = createRscEmbedTransform(stream, { mirrorNextFlight: true });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const firstScripts = transform.flush();
+    streamController.enqueue(new TextEncoder().encode("second"));
+    streamController.close();
+    const finalScripts = await transform.finalize();
+
+    const listeners = new Map<string, () => void>();
+    const self = {
+      __next_f: undefined as undefined | Array<unknown>,
+      addEventListener(name: string, listener: () => void) {
+        listeners.set(name, listener);
+      },
+    };
+    const context = createContext({ self });
+    const runScripts = (html: string) => {
+      for (const match of html.matchAll(/<script>(.*?)<\/script>/g)) {
+        runInContext(match[1]!, context);
+      }
+    };
+
+    runScripts(firstScripts);
+    const received = [...self.__next_f!];
+    self.__next_f!.length = 0;
+    self.__next_f!.push = (segment) => {
+      received.push(segment);
+      return received.length;
+    };
+    runScripts(finalScripts);
+    listeners.get("DOMContentLoaded")!();
+
+    expect(received).toEqual([[0], [1, "first"], [1, "second"]]);
+    expect(self.__next_f).toHaveLength(0);
+    expect(self.__next_f!.push).not.toBe(Array.prototype.push);
   });
 
   it("rejects getRawBuffer when the stream errors (#1002)", async () => {
