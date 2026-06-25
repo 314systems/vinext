@@ -1979,6 +1979,8 @@ describe("detectNextIntlConfig", () => {
       serverActionsAllowedOrigins: [],
       optimizePackageImports: [],
       transpilePackages: [],
+      externalDir: false,
+      forceSwcTransforms: false,
       turbopackTranspilePackages: ["geist"],
       inlineCss: false,
       serverActionsBodySizeLimit: 1 * 1024 * 1024,
