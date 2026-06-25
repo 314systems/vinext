@@ -43,7 +43,7 @@ export type RenderAppPageCacheArtifactsOptions = {
   ) => ReadableStream<Uint8Array>;
   rootParams?: RootParams;
   route: AppPageCacheRoute;
-  isStaticGeneration: boolean | (() => boolean);
+  isStaticGeneration: boolean;
   waitForAllReady?: boolean;
 };
 

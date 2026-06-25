@@ -19,13 +19,12 @@ export type NavigationContext = {
   pathname: string;
   searchParams: URLSearchParams;
   params: Record<string, string | string[]>;
-  isStaticGeneration?: boolean | (() => boolean);
+  isStaticGeneration?: boolean;
   isForceStatic?: boolean;
 };
 
 export function isStaticGenerationNavigationContext(context: NavigationContext | null): boolean {
-  const value = context?.isStaticGeneration;
-  return typeof value === "function" ? value() : value === true;
+  return context?.isStaticGeneration === true;
 }
 
 type NavigationContextsGlobal = typeof globalThis & {

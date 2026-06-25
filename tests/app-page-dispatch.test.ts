@@ -1480,6 +1480,46 @@ describe("app page dispatch", () => {
     ).toBe(false);
   });
 
+  it("finalizes RSC observations before deciding search params bailout semantics", async () => {
+    let currentNavigationContext: NavigationContext | null = null;
+    let capturedNavigationContext: NavigationContext | null = null;
+    const { options } = createDispatchOptions({
+      getNavigationContext: () => currentNavigationContext,
+      isProduction: true,
+      isrGet: vi.fn(async () => null),
+      loadSsrHandler: async () => ({
+        async handleSsr(_rscStream, navigationContext, _fontData, captureOptions) {
+          capturedNavigationContext = navigationContext;
+          void captureOptions?.sideStream?.cancel().catch(() => {});
+          return createStream(["<html>dynamic content</html>"]);
+        },
+      }),
+      revalidateSeconds: 60,
+      renderToReadableStream() {
+        let emitted = false;
+        return new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (emitted) {
+              controller.close();
+              return;
+            }
+            emitted = true;
+            markRenderRequestApiUsage("headers");
+            controller.enqueue(new TextEncoder().encode("flight"));
+          },
+        });
+      },
+      setNavigationContext(context) {
+        currentNavigationContext = context;
+      },
+    });
+
+    const response = await dispatchAppPage(options);
+
+    await expect(response.text()).resolves.toBe("<html>dynamic content</html>");
+    expect(isStaticGenerationNavigationContext(capturedNavigationContext)).toBe(false);
+  });
+
   it("does not write query-invariant cache entries when loading-boundary render awaits searchParams", async () => {
     async function Page(props: Record<string, unknown>): Promise<React.ReactNode> {
       const query = isPromiseLike(props.searchParams) ? await props.searchParams : {};

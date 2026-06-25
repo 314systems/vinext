@@ -748,6 +748,7 @@ export async function renderAppPageLifecycle(
       }
     : teeAppPageRscStreamForCapture(rscStream, shouldCaptureRscForCacheMetadata);
   const rscForResponse = rscCapture.ssrStream;
+  let rscSideStream = rscCapture.sideStream;
 
   // When the fused tee (#981) is active, the sideStream carries both the embed
   // transform AND the raw RSC byte accumulation. For RSC requests, we consume
@@ -755,8 +756,17 @@ export async function renderAppPageLifecycle(
   // transform from it and fills capturedRscDataRef. The ref object is threaded
   // through so .value is read lazily after handleSsr completes.
   const capturedRscDataRef: { value: Promise<ArrayBuffer> | null } = { value: null };
-  if (rscCapture.sideStream && options.isRscRequest) {
-    capturedRscDataRef.value = readAppPageBinaryStream(rscCapture.sideStream);
+  if (rscSideStream && options.isRscRequest) {
+    capturedRscDataRef.value = readAppPageBinaryStream(rscSideStream);
+  } else if (
+    rscSideStream &&
+    options.isProduction &&
+    options.isPrerender !== true &&
+    shouldCaptureRscForCacheMetadata
+  ) {
+    const [observationStream, embedStream] = rscSideStream.tee();
+    await settleCapturedRscRenderForCacheMetadata(readAppPageBinaryStream(observationStream));
+    rscSideStream = embedStream;
   }
 
   if (options.isRscRequest) {
@@ -908,13 +918,12 @@ export async function renderAppPageLifecycle(
         formState: options.formState ?? null,
         rscStream: rscForResponse,
         scriptNonce: options.scriptNonce,
-        sideStream: rscCapture.sideStream,
+        sideStream: rscSideStream,
         ssrHandler,
         isStaticGeneration: shouldCaptureRscForCacheMetadata
           ? options.isPrerender === true
             ? true
-            : () =>
-                shouldUseStaticGenerationNavigationSemantics(options.peekRenderObservationState?.())
+            : shouldUseStaticGenerationNavigationSemantics(options.peekRenderObservationState?.())
           : false,
         waitForAllReady: options.isPrerender === true,
       });
