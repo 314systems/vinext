@@ -133,6 +133,7 @@ import DefaultGlobalError from "vinext/shims/default-global-error";
 import { AppRouterContext } from "vinext/shims/internal/app-router-context";
 import { BfcacheStateKeyMapContext, ElementsContext, Slot } from "vinext/shims/slot";
 import type { RouteManifest } from "../routing/app-route-graph.js";
+import { MetadataHead } from "vinext/shims/metadata";
 import {
   createDevOnCaughtError,
   createOnUncaughtError,
@@ -958,6 +959,7 @@ function BrowserRoot({
     throw unresolvedMpaNavigation;
   }
   const treeState = isRouterStatePromise(treeStateValue) ? use(treeStateValue) : treeStateValue;
+  const treeMetadata = AppElementsWire.readMetadata(treeState.elements);
   // Keep the latest router state in a ref so external callers (navigate(),
   // server actions, HMR) always read the current state. Safe: those readers
   // run from events/effects, never from React render itself.
@@ -1045,6 +1047,13 @@ function BrowserRoot({
   const routeTree = createElement(
     RedirectBoundary,
     null,
+    treeMetadata.pendingMetadata
+      ? createElement(MetadataHead, {
+          metadata: treeMetadata.pendingMetadata.metadata,
+          pathname: treeMetadata.pendingMetadata.pathname,
+          trailingSlash: treeMetadata.pendingMetadata.trailingSlash,
+        })
+      : null,
     createElement(
       NavigationCommitSignal,
       { renderId: treeState.renderId },

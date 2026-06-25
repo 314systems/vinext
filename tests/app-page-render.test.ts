@@ -426,6 +426,43 @@ describe("clearRequestContext timing — issue #660", () => {
     await response.body?.cancel();
     expect(clearRequestContext).toHaveBeenCalledTimes(1);
   });
+
+  it("finalizes Flight rendering once when SSR setup fails without recovery", async () => {
+    const common = createCommonOptions();
+    const requestAbortController = new AbortController();
+    const clearRequestContext = vi.fn();
+    const removeEventListener = vi.spyOn(requestAbortController.signal, "removeEventListener");
+    const renderAborted = vi.fn();
+    const setupError = new Error("SSR setup failed");
+
+    await expect(
+      renderAppPageLifecycle({
+        ...common.options,
+        clearRequestContext,
+        requestSignal: requestAbortController.signal,
+        loadSsrHandler: async () => {
+          throw setupError;
+        },
+        renderErrorBoundaryResponse: async () => null,
+        renderToReadableStream(_element, { signal }) {
+          signal?.addEventListener("abort", renderAborted, { once: true });
+          return new ReadableStream<Uint8Array>({
+            pull() {},
+          });
+        },
+      }),
+    ).rejects.toBe(setupError);
+
+    expect(renderAborted).toHaveBeenCalledTimes(1);
+    expect(removeEventListener).toHaveBeenCalledTimes(1);
+    expect(removeEventListener).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(clearRequestContext).toHaveBeenCalledTimes(1);
+
+    requestAbortController.abort("late request abort");
+    expect(renderAborted).toHaveBeenCalledTimes(1);
+    expect(removeEventListener).toHaveBeenCalledTimes(1);
+    expect(clearRequestContext).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("SSR shell error recovery", () => {

@@ -707,10 +707,14 @@ export async function renderAppPageLifecycle(
       externalRscSignal.addEventListener("abort", onExternalRscAbort, { once: true });
     }
   }
-  let requestContextCleared = false;
-  const clearRequestContext = () => {
-    if (requestContextCleared) return;
-    requestContextCleared = true;
+  let renderLifecycleFinalized = false;
+  const finalizeRenderLifecycle = (abortReason?: unknown) => {
+    if (renderLifecycleFinalized) return;
+    renderLifecycleFinalized = true;
+    if (abortReason !== undefined) {
+      abortRscRender(abortReason);
+    }
+    options.requestSignal?.removeEventListener("abort", onRequestAbort);
     externalRscSignal?.removeEventListener("abort", onExternalRscAbort);
     options.clearRequestContext();
   };
@@ -720,8 +724,7 @@ export async function renderAppPageLifecycle(
     }
   };
   const onRequestAbort = () => {
-    abortRscRender(options.requestSignal?.reason);
-    clearRequestContext();
+    finalizeRenderLifecycle(options.requestSignal?.reason);
   };
   if (options.requestSignal) {
     if (options.requestSignal.aborted) {
@@ -931,49 +934,53 @@ export async function renderAppPageLifecycle(
   const fontLinkHeader = buildAppPageFontLinkHeader(fontData.preloads);
   let renderEnd: number | undefined;
 
-  const htmlRender = await renderAppPageHtmlStreamWithRecovery({
-    onShellRendered() {
-      if (!options.isProduction) {
-        renderEnd = performance.now();
-      }
-    },
-    renderErrorBoundaryResponse(error) {
-      const capturedRscError = rscErrorTracker.getCapturedError();
-      return options.renderErrorBoundaryResponse(
-        capturedRscError ?? error,
-        capturedRscError === null ? "ssr" : "rsc",
-      );
-    },
-    async renderHtmlStream() {
-      const ssrHandler = await options.loadSsrHandler();
-      return renderAppPageHtmlStream({
-        capturedRscDataRef,
-        fontData,
-        hasCustomGlobalError: options.hasCustomGlobalError,
-        navigationContext: options.getNavigationContext(),
-        basePath: options.basePath,
-        clientTraceMetadata: options.clientTraceMetadata,
-        reactMaxHeadersLength: options.reactMaxHeadersLength,
-        rootParams: options.rootParams,
-        pprFallbackShellSignal: options.pprFallbackShellSignal,
-        pendingMetadataPlacement,
-        formState: options.formState ?? null,
-        rscStream: rscForResponse,
-        scriptNonce: options.scriptNonce,
-        sideStream: rscCapture.sideStream,
-        ssrHandler,
-        waitForAllReady: options.isPrerender === true,
-      });
-    },
-    renderSpecialErrorResponse(specialError) {
-      return options.renderPageSpecialError(specialError);
-    },
-    resolveSpecialError: resolveAppPageSpecialError,
-  });
+  let htmlRender;
+  try {
+    htmlRender = await renderAppPageHtmlStreamWithRecovery({
+      onShellRendered() {
+        if (!options.isProduction) {
+          renderEnd = performance.now();
+        }
+      },
+      renderErrorBoundaryResponse(error) {
+        const capturedRscError = rscErrorTracker.getCapturedError();
+        return options.renderErrorBoundaryResponse(
+          capturedRscError ?? error,
+          capturedRscError === null ? "ssr" : "rsc",
+        );
+      },
+      async renderHtmlStream() {
+        const ssrHandler = await options.loadSsrHandler();
+        return renderAppPageHtmlStream({
+          capturedRscDataRef,
+          fontData,
+          hasCustomGlobalError: options.hasCustomGlobalError,
+          navigationContext: options.getNavigationContext(),
+          basePath: options.basePath,
+          clientTraceMetadata: options.clientTraceMetadata,
+          reactMaxHeadersLength: options.reactMaxHeadersLength,
+          rootParams: options.rootParams,
+          pprFallbackShellSignal: options.pprFallbackShellSignal,
+          pendingMetadataPlacement,
+          formState: options.formState ?? null,
+          rscStream: rscForResponse,
+          scriptNonce: options.scriptNonce,
+          sideStream: rscCapture.sideStream,
+          ssrHandler,
+          waitForAllReady: options.isPrerender === true,
+        });
+      },
+      renderSpecialErrorResponse(specialError) {
+        return options.renderPageSpecialError(specialError);
+      },
+      resolveSpecialError: resolveAppPageSpecialError,
+    });
+  } catch (error) {
+    finalizeRenderLifecycle(error);
+    throw error;
+  }
   if (htmlRender.response) {
-    abortRscRender(new Error("App page HTML render returned an alternate response"));
-    options.requestSignal?.removeEventListener("abort", onRequestAbort);
-    clearRequestContext();
+    finalizeRenderLifecycle(new Error("App page HTML render returned an alternate response"));
     return htmlRender.response;
   }
   let htmlStream = htmlRender.htmlStream;
@@ -1009,10 +1016,8 @@ export async function renderAppPageLifecycle(
     if (captured) {
       const specialError = resolveAppPageSpecialError(captured);
       if (specialError) {
-        abortRscRender(specialError);
         void htmlStream.cancel().catch(() => {});
-        options.requestSignal?.removeEventListener("abort", onRequestAbort);
-        clearRequestContext();
+        finalizeRenderLifecycle(specialError);
         return options.renderPageSpecialError(specialError);
       }
     }
@@ -1043,8 +1048,7 @@ export async function renderAppPageLifecycle(
     () => {
       dynamicUsedBeforeContextCleanup =
         dynamicUsedBeforeContextCleanup || options.consumeDynamicUsage();
-      options.requestSignal?.removeEventListener("abort", onRequestAbort);
-      clearRequestContext();
+      finalizeRenderLifecycle();
     },
     (reason) => {
       abortRscRender(reason);
