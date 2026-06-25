@@ -1,4 +1,4 @@
-export const APP_BROWSER_SUPPLEMENTAL_REFRESH_TIMEOUT_MS = 10_000;
+const APP_BROWSER_SUPPLEMENTAL_REFRESH_TIMEOUT_MS = 10_000;
 
 export type SupplementalRefreshResult<T> = {
   degraded: boolean;
