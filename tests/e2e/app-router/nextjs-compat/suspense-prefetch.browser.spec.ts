@@ -107,7 +107,12 @@ export default async function Page({ params }: { params: Promise<{ param: string
 
 export function middleware(request: NextRequest) {
   if (request.headers.get("x-vinext-rsc-render-mode")?.startsWith("prefetch-")) {
-    return NextResponse.next();
+    const response = NextResponse.next();
+    response.headers.set("Cache-Control", "s-maxage=30");
+    response.headers.set("CDN-Cache-Control", "s-maxage=30");
+    response.headers.set("Cloudflare-CDN-Cache-Control", "s-maxage=30");
+    response.headers.set("Cache-Tag", "partial-shell");
+    return response;
   }
   const destination = request.nextUrl.searchParams.get("mismatch-rewrite");
   return destination ? NextResponse.rewrite(new URL(destination, request.url)) : NextResponse.next();
@@ -187,6 +192,9 @@ test("prefetches a fallback from a user Suspense boundary", async ({ page }) => 
     const response = await prefetchResponse;
     expect(response.ok()).toBe(true);
     expect(response.headers()["cache-control"]).toBe("no-store, must-revalidate");
+    expect(response.headers()["cdn-cache-control"]).toBeUndefined();
+    expect(response.headers()["cloudflare-cdn-cache-control"]).toBeUndefined();
+    expect(response.headers()["cache-tag"]).toBeUndefined();
     expect(response.headers()["x-vinext-cache"]).toBeUndefined();
     await expect
       .poll(() =>

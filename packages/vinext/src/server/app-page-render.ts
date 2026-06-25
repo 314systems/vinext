@@ -842,6 +842,12 @@ export async function renderAppPageLifecycle(
         responseKind: "rsc",
       }),
     });
+    if (prefetchSuspenseShellWasAborted) {
+      rscResponse.headers.set("Cache-Control", NO_STORE_CACHE_CONTROL);
+      rscResponse.headers.delete("CDN-Cache-Control");
+      rscResponse.headers.delete("Cloudflare-CDN-Cache-Control");
+      rscResponse.headers.delete("Cache-Tag");
+    }
 
     // In dev mode, wrap the RSC response body to forward invalid dynamic usage
     // errors after the stream is consumed. This mirrors Next.js behavior where
