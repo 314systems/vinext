@@ -3319,6 +3319,15 @@ export default function Page() { return <div>{externalSentinel}</div>; }\n`,
     }
   });
 
+  it("skips Vite resource-query modules in the Babel transform", async () => {
+    const { isViteSpecialQuery } = await import("../packages/vinext/src/plugins/babel-config.js");
+    expect(isViteSpecialQuery("/app/source.js?raw")).toBe(true);
+    expect(isViteSpecialQuery("/app/source.js?url&inline")).toBe(true);
+    expect(isViteSpecialQuery("/app/source.js?worker")).toBe(true);
+    expect(isViteSpecialQuery("/app/source.js?sharedworker")).toBe(true);
+    expect(isViteSpecialQuery("/app/source.js?__rsc")).toBe(false);
+  });
+
   it("runMiddleware in generated pages prod entry executes named proxy export", async () => {
     const tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vinext-pages-proxy-"));
     const rootNodeModules = path.resolve(import.meta.dirname, "../node_modules");

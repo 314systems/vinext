@@ -16,6 +16,11 @@ const BABEL_CONFIG_FILES = [
   "babel.config.mjs",
   "babel.config.cjs",
 ];
+const VITE_SPECIAL_QUERY_RE = /[?&](?:worker|sharedworker|raw|url)\b/;
+
+export function isViteSpecialQuery(id: string): boolean {
+  return VITE_SPECIAL_QUERY_RE.test(id);
+}
 
 type BabelCore = {
   transformAsync(
@@ -148,7 +153,14 @@ export function createBabelConfigPlugin(
       },
       async handler(code, id) {
         const options = getOptions();
-        if (!configPath || options.forceSwcTransforms || id.startsWith("\0")) return;
+        if (
+          !configPath ||
+          options.forceSwcTransforms ||
+          id.startsWith("\0") ||
+          isViteSpecialQuery(id)
+        ) {
+          return;
+        }
 
         const filename = id.replace(/\?.*$/, "");
         if (!path.isAbsolute(filename)) return;
