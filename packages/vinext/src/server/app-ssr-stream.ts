@@ -157,15 +157,15 @@ export function createRscEmbedTransform(
           scripts += createInlineScriptTag(createNextFlightChunkScript(chunk), options.scriptNonce);
         }
       }
+      if (options.mirrorNextFlight) {
+        scripts += createInlineScriptTag(createNextFlightCleanupScript(), options.scriptNonce);
+      }
       return scripts;
     },
 
     async finalize(): Promise<string> {
       await pumpPromise;
       let scripts = this.flush();
-      if (options.mirrorNextFlight && mirroredNextFlightBootstrap) {
-        scripts += createInlineScriptTag(createNextFlightCleanupScript(), options.scriptNonce);
-      }
       scripts += createInlineScriptTag(createNavigationRuntimeRscDoneScript(), options.scriptNonce);
       return scripts;
     },

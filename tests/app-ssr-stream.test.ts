@@ -151,6 +151,25 @@ describe("createRscEmbedTransform raw buffer (#981)", () => {
     expect(finalScripts).not.toContain("self.__next_f");
   });
 
+  it("cleans mirrored chunks from a progressive batch before a later stream error", async () => {
+    let streamController!: ReadableStreamDefaultController<Uint8Array>;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        streamController = controller;
+        controller.enqueue(new TextEncoder().encode("partial"));
+      },
+    });
+    const transform = createRscEmbedTransform(stream, { mirrorNextFlight: true });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const progressiveScripts = transform.flush();
+    expect(progressiveScripts).toContain('self.__next_f.push([1,"partial"])');
+    expect(progressiveScripts).toContain("self.__next_f.length=0");
+
+    streamController.error(new Error("stream broke"));
+    await expect(transform.finalize()).rejects.toThrow("stream broke");
+  });
+
   it("rejects getRawBuffer when the stream errors (#1002)", async () => {
     const errorStream = new ReadableStream({
       start(controller) {
