@@ -33,6 +33,19 @@ it("requires parent webpack rule conditions before matching nested loaders", () 
   expect(collectMatchingWebpackLoaderRules(rules, "/app/page.tsx")).not.toContain(nestedRule);
 });
 
+it("matches resource query and issuer conditions", () => {
+  const queryRule = { test: /\.svg$/, resourceQuery: /react/, use: ["query-loader"] };
+  const issuerRule = { test: /\.svg$/, issuer: /page\.tsx$/, use: ["issuer-loader"] };
+  const rules = [queryRule, issuerRule];
+
+  expect(
+    collectMatchingWebpackLoaderRules(rules, "/app/icon.svg", "?react", "/app/page.tsx"),
+  ).toEqual(expect.arrayContaining([queryRule, issuerRule]));
+  expect(
+    collectMatchingWebpackLoaderRules(rules, "/app/icon.svg", "?url", "/app/layout.tsx"),
+  ).toEqual([]);
+});
+
 it("leaves Next.js framework loader rules to Vite", async () => {
   const plugin = createWebpackLoaderCompatPlugin(
     () => ({
@@ -90,6 +103,62 @@ it("keeps custom loaders from mixed framework loader chains", async () => {
   expect(resolved).toBeTypeOf("string");
   const output = await load.call(context, resolved as string, {} as never);
   expect(output).toBe('export default "custom-output"');
+});
+
+it("runs custom loaders whose paths contain mdx", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-webpack-loader-custom-mdx-"));
+  roots.push(root);
+  const loaderPath = path.join(root, "mdx-frontmatter-loader.cjs");
+  fs.writeFileSync(loaderPath, `module.exports = () => 'export default "custom-mdx-output"'`);
+  fs.writeFileSync(path.join(root, "value.txt"), "source");
+
+  const plugin = createWebpackLoaderCompatPlugin(
+    () => ({ client: [], server: [{ test: /\.txt$/, use: [loaderPath] }] }),
+    () => root,
+  );
+  const context = {
+    environment: { name: "rsc", mode: "build" },
+    resolve: async () => ({ id: path.join(root, "value.txt") }),
+  } as never;
+  const resolved = await (plugin.resolveId as Function).call(
+    context,
+    "./value.txt",
+    path.join(root, "page.tsx"),
+    {},
+  );
+  const output = await (plugin.load as Function).call(context, resolved, {});
+  expect(output).toBe('export default "custom-mdx-output"');
+});
+
+it("preserves resource queries for matching loaders", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-webpack-loader-query-"));
+  roots.push(root);
+  const loaderPath = path.join(root, "query-loader.cjs");
+  fs.writeFileSync(
+    loaderPath,
+    `module.exports = function () { return 'export default ' + JSON.stringify(this.resourceQuery) }`,
+  );
+  fs.writeFileSync(path.join(root, "icon.svg"), "source");
+
+  const plugin = createWebpackLoaderCompatPlugin(
+    () => ({
+      client: [],
+      server: [{ test: /\.svg$/, resourceQuery: /react/, use: [loaderPath] }],
+    }),
+    () => root,
+  );
+  const context = {
+    environment: { name: "rsc", mode: "build" },
+    resolve: async () => ({ id: `${path.join(root, "icon.svg")}?react` }),
+  } as never;
+  const resolved = await (plugin.resolveId as Function).call(
+    context,
+    "./icon.svg?react",
+    path.join(root, "page.tsx"),
+    {},
+  );
+  const output = await (plugin.load as Function).call(context, resolved, {});
+  expect(output).toBe('export default "?react"');
 });
 
 it("waits for async loader callbacks instead of using sync returns", async () => {

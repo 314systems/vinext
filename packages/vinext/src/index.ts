@@ -4810,6 +4810,8 @@ export const loadServerActionClient = ${
                   ? nextConfig.webpackLoaderRules.client
                   : nextConfig.webpackLoaderRules.server,
                 absImagePath,
+                resolvedImage.slice(absImagePath.length),
+                id,
               ).length > 0
             ) {
               continue;

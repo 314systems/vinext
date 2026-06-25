@@ -1944,7 +1944,7 @@ function invokeLoaderSideEffects(rules: any[], root: string): void {
       // outside webpack's loader runtime.
       if (
         loaderPath.includes("next-babel-loader") ||
-        loaderPath.includes("mdx") ||
+        isMdxLoader(loaderPath) ||
         loaderPath.startsWith("next/dist/build/webpack")
       ) {
         return;

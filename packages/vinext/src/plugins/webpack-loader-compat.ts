@@ -11,7 +11,23 @@ export type WebpackLoaderRules = {
 
 const WEBPACK_LOADER_PREFIX = "\0vinext-webpack-loader:";
 
+function encodeLoaderResource(resource: string, issuer: string): string {
+  return `${WEBPACK_LOADER_PREFIX}${Buffer.from(JSON.stringify({ resource, issuer })).toString("base64url")}`;
+}
+
+function decodeLoaderResource(id: string): { resource: string; issuer: string } | null {
+  try {
+    return JSON.parse(
+      Buffer.from(id.slice(WEBPACK_LOADER_PREFIX.length), "base64url").toString("utf8"),
+    );
+  } catch {
+    return null;
+  }
+}
+
 type LoaderContext = {
+  addContextDependency(path: string): void;
+  addDependency(path: string): void;
   async(): (error: Error | null, result?: string | Buffer) => void;
   callback(error: Error | null, result?: string | Buffer): void;
   cacheable(): void;
@@ -23,6 +39,7 @@ type LoaderContext = {
   query: unknown;
   resource: string;
   resourcePath: string;
+  resourceQuery: string;
   rootContext: string;
 };
 
@@ -58,17 +75,26 @@ function matchesCondition(condition: unknown, value: string): boolean {
   return false;
 }
 
-function matchesRule(rule: WebpackLoaderRule, resourcePath: string): boolean {
+function matchesRule(
+  rule: WebpackLoaderRule,
+  resourcePath: string,
+  resourceQuery: string,
+  issuer: string,
+): boolean {
   return (
     matchesCondition(rule.test, resourcePath) &&
     matchesCondition(rule.include, resourcePath) &&
-    (rule.exclude === undefined || !matchesCondition(rule.exclude, resourcePath))
+    (rule.exclude === undefined || !matchesCondition(rule.exclude, resourcePath)) &&
+    matchesCondition(rule.resourceQuery, resourceQuery) &&
+    matchesCondition(rule.issuer, issuer)
   );
 }
 
 export function collectMatchingWebpackLoaderRules(
   rules: WebpackLoaderRule[],
   resourcePath: string,
+  resourceQuery: string = "",
+  issuer: string = "",
 ): WebpackLoaderRule[] {
   const matches: WebpackLoaderRule[] = [];
   const visit = (rule: unknown, parentMatches: boolean = true): void => {
@@ -78,14 +104,14 @@ export function collectMatchingWebpackLoaderRules(
       return;
     }
     const record = rule as WebpackLoaderRule;
-    const ruleMatches = parentMatches && matchesRule(record, resourcePath);
+    const ruleMatches = parentMatches && matchesRule(record, resourcePath, resourceQuery, issuer);
     if (!ruleMatches) return;
     if (Array.isArray(record.oneOf)) {
       const match = record.oneOf.find(
         (child) =>
           child !== null &&
           typeof child === "object" &&
-          matchesRule(child as WebpackLoaderRule, resourcePath),
+          matchesRule(child as WebpackLoaderRule, resourcePath, resourceQuery, issuer),
       );
       if (match) visit(match, ruleMatches);
     }
@@ -108,7 +134,11 @@ function loaderEntries(rule: WebpackLoaderRule): unknown[] {
 function isFrameworkLoader(loaderPath: string): boolean {
   return (
     loaderPath.includes("next-babel-loader") ||
-    loaderPath.includes("mdx") ||
+    (loaderPath.includes("mdx") &&
+      (loaderPath.includes("@next") ||
+        loaderPath.includes("@mdx-js") ||
+        loaderPath.includes("mdx-js-loader") ||
+        loaderPath.includes("next-mdx"))) ||
     loaderPath.startsWith("next/dist/build/webpack")
   );
 }
@@ -151,6 +181,7 @@ async function runLoader(
   source: string | Buffer,
   options: unknown,
   resourcePath: string,
+  resourceQuery: string,
   root: string,
   mode: "development" | "production",
 ): Promise<string | Buffer> {
@@ -164,6 +195,8 @@ async function runLoader(
       else resolve(result ?? source);
     };
     const context: LoaderContext = {
+      addContextDependency: () => {},
+      addDependency: () => {},
       async: () => {
         asyncRequested = true;
         return complete;
@@ -171,13 +204,14 @@ async function runLoader(
       callback: complete,
       cacheable: () => {},
       context: path.dirname(resourcePath),
-      emitError: reject,
+      emitError: (error) => console.error(error),
       emitWarning: (warning) => console.warn(warning),
       getOptions: () => options ?? {},
       mode,
       query: options ?? {},
-      resource: resourcePath,
+      resource: `${resourcePath}${resourceQuery}`,
       resourcePath,
+      resourceQuery,
       rootContext: root,
     };
     try {
@@ -237,18 +271,32 @@ export function createWebpackLoaderCompatPlugin(
       if (source.startsWith(WEBPACK_LOADER_PREFIX) || source.startsWith("\0")) return null;
       const resolved = await this.resolve(source, importer, { skipSelf: true });
       if (!resolved || resolved.external) return null;
-      const resourcePath = resolved.id.split("?", 1)[0];
+      const queryIndex = resolved.id.indexOf("?");
+      const resourcePath = queryIndex === -1 ? resolved.id : resolved.id.slice(0, queryIndex);
+      const resourceQuery = queryIndex === -1 ? "" : resolved.id.slice(queryIndex);
       if (resourcePath.startsWith("\0")) return null;
-      const matchingRules = collectMatchingWebpackLoaderRules(configuredRules, resourcePath);
+      const matchingRules = collectMatchingWebpackLoaderRules(
+        configuredRules,
+        resourcePath,
+        resourceQuery,
+        importer ?? "",
+      );
       if (!resolveMatchingLoaders(matchingRules, getRoot())) return null;
-      return `${WEBPACK_LOADER_PREFIX}${resourcePath}`;
+      return encodeLoaderResource(resolved.id, importer ?? "");
     },
     async load(id) {
       if (!id.startsWith(WEBPACK_LOADER_PREFIX)) return null;
-      const resourcePath = id.slice(WEBPACK_LOADER_PREFIX.length);
+      const decoded = decodeLoaderResource(id);
+      if (!decoded) return null;
+      const { resource, issuer } = decoded;
+      const queryIndex = resource.indexOf("?");
+      const resourcePath = queryIndex === -1 ? resource : resource.slice(0, queryIndex);
+      const resourceQuery = queryIndex === -1 ? "" : resource.slice(queryIndex);
       const rules = collectMatchingWebpackLoaderRules(
         rulesForEnvironment(this.environment?.name),
         resourcePath,
+        resourceQuery,
+        issuer,
       );
       if (rules.length === 0) return null;
 
@@ -263,6 +311,7 @@ export function createWebpackLoaderCompatPlugin(
           source,
           entry.options,
           resourcePath,
+          resourceQuery,
           root,
           this.environment?.mode === "dev" ? "development" : "production",
         );
