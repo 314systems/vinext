@@ -63,8 +63,8 @@ function resolveBabelCore(root: string): string | null {
 }
 
 function isPathInPackage(filename: string, packageName: string): boolean {
-  const packagePath = packageName.replaceAll("/", path.sep);
-  return filename.includes(`${path.sep}node_modules${path.sep}${packagePath}${path.sep}`);
+  const normalizedFilename = filename.replaceAll("\\", "/");
+  return normalizedFilename.includes(`/node_modules/${packageName}/`);
 }
 
 function resolvePackageRoot(root: string, packageName: string): string | null {
@@ -143,6 +143,7 @@ export function createBabelConfigPlugin(
 
         const filename = id.replace(/\?.*$/, "");
         if (!path.isAbsolute(filename)) return;
+        const normalizedFilename = filename.replaceAll("\\", "/");
         const canonicalFilename = tryRealpathSync(filename) ?? filename;
         const isProjectFile = relativeWithinRoot(canonicalRoot, canonicalFilename);
         const isTranspiledPackage = options.transpilePackages.some((packageName) => {
@@ -157,7 +158,7 @@ export function createBabelConfigPlugin(
           return packageRoot !== null && relativeWithinRoot(packageRoot, canonicalFilename);
         });
         if (
-          (!isProjectFile || filename.includes(`${path.sep}node_modules${path.sep}`)) &&
+          (!isProjectFile || normalizedFilename.includes("/node_modules/")) &&
           !isTranspiledPackage
         ) {
           return;
