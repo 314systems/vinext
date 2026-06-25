@@ -467,6 +467,9 @@ function prefetchUrl(href: string, mode: LinkPrefetchMode, priority: "low" | "hi
         // Distinguish the same visible URL when it is prefetched from different
         // request contexts such as /feed vs /gallery or different mounted slots.
         const rscUrl = await createRscRequestUrl(fullHref, headers);
+        if (getNavigationRuntime()?.functions.hasRestorableHistoryTarget?.(fullHref) === true) {
+          return;
+        }
         const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
         const prefetched = getPrefetchedUrls();
         if (prefetched.has(cacheKey)) {

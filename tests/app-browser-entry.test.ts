@@ -5885,6 +5885,31 @@ describe("app browser entry bfcacheId helpers", () => {
 });
 
 describe("createPopstateRestoreHandler", () => {
+  it("does not fetch when a history snapshot restores synchronously", () => {
+    const navigate = vi.fn();
+    const setPendingNavigation = vi.fn();
+    const historyState = { __vinext_historyIndex: 1 };
+
+    stubWindow("https://example.com/feed");
+
+    const handler = createPopstateRestoreHandler({
+      getActiveNavigationId: () => 1,
+      getNavigate: () => navigate,
+      getPendingNavigation: () => null,
+      isCurrentNavigation: () => true,
+      notifyAppRouterTransitionStart: () => {},
+      restorePopstateScrollPosition: () => {},
+      setPendingNavigation,
+      shouldSkipScrollRestore: () => false,
+      tryRestoreHistorySnapshot: (state) => state === historyState,
+    });
+
+    handler({ state: historyState } as PopStateEvent);
+
+    expect(navigate).not.toHaveBeenCalled();
+    expect(setPendingNavigation).toHaveBeenCalledWith(null);
+  });
+
   it("guards synchronous popstate scroll retry to the active navigation", () => {
     const scrollState = { __vinext_scrollY: 10 };
     let activeNavigationId = 3;

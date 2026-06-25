@@ -1676,6 +1676,14 @@ export async function navigateClientSide(
     return;
   }
 
+  if (
+    mode === "push" &&
+    getNavigationRuntime()?.functions.navigateRestorableHistoryTarget?.(fullHref) === true
+  ) {
+    clearAppNavigationFailureTarget(fullHref);
+    return;
+  }
+
   // Next.js treats a streamed redirect meta tag as an MPA-navigation marker.
   // A soft RSC redirect would leave the source document alive long enough for
   // the delayed meta refresh to fire and render the target a second time.

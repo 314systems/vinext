@@ -240,7 +240,7 @@ export function createBasePathStrippedPathAndSearch(url: URL, basePath: string):
   return query === "" ? pathname : `${pathname}?${query}`;
 }
 
-function isSnapshotTargetHref(
+export function isSnapshotTargetHref(
   basePath: string,
   snapshot: ClientNavigationRenderSnapshot,
   targetHref: string,

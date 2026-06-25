@@ -54,7 +54,7 @@ const linkPrefetchRoutes = [
   { canPrefetchLoadingShell: false, patternParts: ["clothing", ":product"], isDynamic: true },
 ] satisfies VinextLinkPrefetchRoute[];
 
-function createTestNavigationRuntime(navigate: unknown) {
+function createTestNavigationRuntime(navigate: unknown, functions: Record<string, unknown> = {}) {
   return {
     bootstrap: {
       routeManifest: null,
@@ -62,6 +62,7 @@ function createTestNavigationRuntime(navigate: unknown) {
     },
     functions: {
       navigate,
+      ...functions,
     },
   };
 }
@@ -1124,6 +1125,7 @@ async function renderIsolatedLink(options: {
   nodeEnv: string;
   props?: Record<string, unknown>;
   requireRef?: boolean;
+  runtimeFunctions?: Record<string, unknown>;
   windowOverrides?: Record<string, unknown>;
 }) {
   vi.resetModules();
@@ -1161,11 +1163,14 @@ async function renderIsolatedLink(options: {
     search: "",
   };
   const navigationRuntime =
-    options.appNavigation === false ? undefined : createTestNavigationRuntime(navigate);
+    options.appNavigation === false
+      ? undefined
+      : createTestNavigationRuntime(navigate, options.runtimeFunctions);
 
   vi.stubGlobal("fetch", fetch);
   vi.stubGlobal("document", {
     createElement: vi.fn(() => ({})),
+    documentElement: { scrollTop: 0 },
     head: {
       appendChild: vi.fn((node: CapturedPrefetchLinkElement) => {
         pagePrefetchLinks.push(node);
@@ -1208,7 +1213,11 @@ async function renderIsolatedLink(options: {
       throw new Error("Expected rendered Link anchor to expose a ref");
     }
 
-    const anchor = { href: options.href } as HTMLAnchorElement;
+    const anchor = {
+      hasAttribute: () => false,
+      href: options.href,
+      target: "",
+    } as unknown as HTMLAnchorElement;
     capturedAnchorProps.ref?.(anchor);
 
     for (const effect of effects) {
@@ -1655,6 +1664,79 @@ describe("Link prefetch scheduling", () => {
       await flushPrefetchTasks();
 
       expect(result.fetch).not.toHaveBeenCalled();
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("does not prefetch a target retained by browser history", async () => {
+    const observer = stubIntersectionObserver();
+    const hasRestorableHistoryTarget = vi.fn(() => true);
+    const result = await renderIsolatedLink({
+      href: "/intent-prefetch-target",
+      nodeEnv: "production",
+      runtimeFunctions: { hasRestorableHistoryTarget },
+    });
+
+    try {
+      observer.dispatchIntersectingEntry(result.anchor);
+      await flushPrefetchTasks();
+
+      expect(hasRestorableHistoryTarget).toHaveBeenCalledWith("/intent-prefetch-target");
+      expect(result.fetch).not.toHaveBeenCalled();
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("traverses to a retained history target instead of fetching it again", async () => {
+    const navigateRestorableHistoryTarget = vi.fn(() => true);
+    const result = await renderIsolatedLink({
+      href: "/intent-prefetch-target",
+      nodeEnv: "production",
+      runtimeFunctions: { navigateRestorableHistoryTarget },
+    });
+
+    try {
+      await result.capturedAnchorProps.onClick?.({
+        button: 0,
+        currentTarget: result.anchor,
+        defaultPrevented: false,
+        preventDefault() {
+          this.defaultPrevented = true;
+        },
+      });
+      await flushPrefetchTasks();
+
+      expect(navigateRestorableHistoryTarget).toHaveBeenCalledWith("/intent-prefetch-target");
+      expect(result.fetch).not.toHaveBeenCalled();
+      expect(result.navigate).not.toHaveBeenCalled();
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("uses normal navigation when a retained history target cannot be traversed", async () => {
+    const navigateRestorableHistoryTarget = vi.fn(() => false);
+    const result = await renderIsolatedLink({
+      href: "/intent-prefetch-target",
+      nodeEnv: "production",
+      runtimeFunctions: { navigateRestorableHistoryTarget },
+    });
+
+    try {
+      await result.capturedAnchorProps.onClick?.({
+        button: 0,
+        currentTarget: result.anchor,
+        defaultPrevented: false,
+        preventDefault() {
+          this.defaultPrevented = true;
+        },
+      });
+      await flushPrefetchTasks();
+
+      expect(navigateRestorableHistoryTarget).toHaveBeenCalledWith("/intent-prefetch-target");
+      expect(result.navigate).toHaveBeenCalledOnce();
     } finally {
       result.restoreNodeEnv();
     }

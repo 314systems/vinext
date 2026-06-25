@@ -52,6 +52,8 @@ export type NavigationRuntimeFunctions = {
     historyUpdateMode: NavigationRuntimeHistoryUpdateMode,
   ) => Promise<void>;
   navigate?: NavigationRuntimeNavigate;
+  hasRestorableHistoryTarget?: (href: string) => boolean;
+  navigateRestorableHistoryTarget?: (href: string) => boolean;
   /**
    * Called at the start of every App Router navigation so the <Link> shim can
    * reset any link that is still showing a `useLinkStatus()` pending state but
@@ -111,6 +113,8 @@ function isNavigationRuntimeFunctions(value: unknown): value is NavigationRuntim
   return (
     isOptionalRuntimeFunction(Reflect.get(value, "clearNavigationCaches")) &&
     isOptionalRuntimeFunction(Reflect.get(value, "commitHashNavigation")) &&
+    isOptionalRuntimeFunction(Reflect.get(value, "hasRestorableHistoryTarget")) &&
+    isOptionalRuntimeFunction(Reflect.get(value, "navigateRestorableHistoryTarget")) &&
     isOptionalRuntimeFunction(Reflect.get(value, "navigateExternal")) &&
     isOptionalRuntimeFunction(Reflect.get(value, "navigate")) &&
     isOptionalRuntimeFunction(Reflect.get(value, "notifyLinkNavigationStart")) &&

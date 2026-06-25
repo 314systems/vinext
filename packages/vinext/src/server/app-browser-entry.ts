@@ -73,6 +73,7 @@ import {
   clearHardNavigationLoopGuard,
   createAppBrowserNavigationController,
   createBasePathStrippedPathAndSearch,
+  isSnapshotTargetHref,
   createSnapshotPathAndSearch,
   type HistoryUpdateMode,
   type NavigationPayloadOutcome,
@@ -2036,6 +2037,27 @@ function bootstrapHydration(
     clearNavigationCaches: clearClientNavigationCaches,
     commitHashNavigation: (href, historyUpdateMode, scroll) =>
       historyController.commitHashOnlyNavigation(href, historyUpdateMode, scroll),
+    hasRestorableHistoryTarget: (href) => {
+      const targetHistoryIndex = historyController.findRestorableSnapshotIndex((state) =>
+        isSnapshotTargetHref(__basePath, state.navigationSnapshot, href),
+      );
+      const currentHistoryIndex = historyController.currentHistoryTraversalIndex;
+      return (
+        targetHistoryIndex !== null &&
+        currentHistoryIndex !== null &&
+        targetHistoryIndex === currentHistoryIndex + 1
+      );
+    },
+    navigateRestorableHistoryTarget: (href) => {
+      const targetHistoryIndex = historyController.findRestorableSnapshotIndex((state) =>
+        isSnapshotTargetHref(__basePath, state.navigationSnapshot, href),
+      );
+      const currentHistoryIndex = historyController.currentHistoryTraversalIndex;
+      if (targetHistoryIndex === null || currentHistoryIndex === null) return false;
+      if (targetHistoryIndex !== currentHistoryIndex + 1) return false;
+      window.history.forward();
+      return true;
+    },
     navigate: navigateRsc,
   });
 
@@ -2061,6 +2083,23 @@ function bootstrapHydration(
       window.__VINEXT_RSC_PENDING__ = pendingNavigation;
     },
     shouldSkipScrollRestore: (navId) => synchronousPopstateScrollRestoreNavigationId === navId,
+    tryRestoreHistorySnapshot: (historyState) => {
+      browserNavigationController.beginNavigation();
+      if (!restoreHistoryStateSnapshot(historyState)) return false;
+
+      restoreSynchronousPopstateScrollPosition(
+        {
+          getActiveNavigationId: () => browserNavigationController.getActiveNavigationId(),
+          isCurrentNavigation: (navId) => browserNavigationController.isCurrentNavigation(navId),
+          markScrollRestoreConsumed: (navId) => {
+            synchronousPopstateScrollRestoreNavigationId = navId;
+          },
+          restorePopstateScrollPosition,
+        },
+        historyState,
+      );
+      return true;
+    },
   });
 
   window.addEventListener("popstate", (event) => {
@@ -2078,38 +2117,6 @@ function bootstrapHydration(
       return;
     }
     handlePopstate(event);
-    // Synchronous snapshot restore supersedes the in-flight async RSC traverse.
-    //
-    // handlePopstate calls navigate() which starts an async RSC traversal:
-    // renderNavigationPayload captures startedState (visibleCommitVersion N)
-    // and awaits nextElements, yielding at least one microtask.
-    //
-    // restoreHistoryStateSnapshot runs synchronously (flushSync, no await) in
-    // the same task, commits the cached history snapshot, and bumps
-    // visibleCommitVersion to N+1.
-    //
-    // When the async traverse resolves,
-    // resolvePendingNavigationCommitDispositionDecision sees
-    // startedVisibleCommitVersion (N) !== currentState.visibleCommitVersion
-    // (N+1) and returns staleOperation → no-commit, discarding the fresh
-    // RSC payload in favor of the cached client snapshot.
-    //
-    // This matches Next's in-memory bfcache behaviour (no refetch on back).
-    // The ordering is deterministic only because restoreHistoryStateSnapshot
-    // is synchronous while the async traverse always yields.
-    if (restoreHistoryStateSnapshot(event.state)) {
-      restoreSynchronousPopstateScrollPosition(
-        {
-          getActiveNavigationId: () => browserNavigationController.getActiveNavigationId(),
-          isCurrentNavigation: (navId) => browserNavigationController.isCurrentNavigation(navId),
-          markScrollRestoreConsumed: (navId) => {
-            synchronousPopstateScrollRestoreNavigationId = navId;
-          },
-          restorePopstateScrollPosition,
-        },
-        event.state,
-      );
-    }
   });
 
   if (import.meta.env.DEV && import.meta.hot) {

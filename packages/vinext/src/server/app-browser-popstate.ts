@@ -20,6 +20,7 @@ type BrowserPopstateRestoreDeps = {
   restorePopstateScrollPosition: RestoreScrollPosition;
   setPendingNavigation: (pendingNavigation: Promise<void> | null) => void;
   shouldSkipScrollRestore: (navId: number) => boolean;
+  tryRestoreHistorySnapshot?: (state: unknown) => boolean;
 };
 
 type SynchronousPopstateScrollRestoreDeps = {
@@ -66,6 +67,11 @@ export function createPopstateRestoreHandler(
 ): (event: PopStateEvent) => void {
   return (event) => {
     deps.notifyAppRouterTransitionStart(window.location.href);
+    if (deps.tryRestoreHistorySnapshot?.(event.state)) {
+      deps.setPendingNavigation(null);
+      return;
+    }
+
     const navigate = deps.getNavigate();
     const pendingNavigation =
       navigate?.(
