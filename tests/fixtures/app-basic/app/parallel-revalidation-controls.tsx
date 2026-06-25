@@ -18,6 +18,7 @@ export function SerializedRevalidateControl() {
   return (
     <>
       <button
+        aria-label="Run serialized revalidation"
         data-testid="serialized-revalidate"
         onClick={async () => {
           await revalidateParallelSlots("A");

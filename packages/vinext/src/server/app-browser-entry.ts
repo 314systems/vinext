@@ -1543,55 +1543,54 @@ function registerServerActionCallback(): void {
       const releaseCacheInvalidationGuard = historyController.beginCacheInvalidationGuard();
       const actionInitiation = createActionInitiationSnapshot();
       let completion: Promise<unknown> | null = null;
-      const value = loadServerActionClient!()
-        .then(({ invokeClientServerAction }) =>
-          invokeClientServerAction(id, args, actionInitiation, {
-            basePath: __basePath,
-            clearClientNavigationCaches,
-            clientRscCompatibilityId: CLIENT_RSC_COMPATIBILITY_ID,
-            commitSameUrlNavigatePayload(...commitArgs) {
-              const result = commitSameUrlNavigatePayload(...commitArgs);
-              completion = result.completion;
-              return result.value;
-            },
-            navigationPlanner,
-            performHardNavigation: (url, historyMode) =>
-              browserNavigationController.performHardNavigation(url, historyMode),
-            renderRedirectPayload(elements, target, actionInitiation) {
-              const hashIdx = target.href.indexOf("#");
-              const hash = hashIdx !== -1 ? target.href.slice(hashIdx) : "";
-              const actionScrollIntent = beginAppRouterScrollIntent(hash || null);
-              if (target.type === "push") saveScrollPosition();
-              completion = renderNavigationPayload(
-                Promise.resolve(elements),
-                createClientNavigationRenderSnapshot(
-                  target.href,
-                  actionInitiation.routerState.navigationSnapshot.params,
-                ),
+      const value = loadServerActionClient!().then(({ invokeClientServerAction }) =>
+        invokeClientServerAction(id, args, actionInitiation, {
+          basePath: __basePath,
+          clearClientNavigationCaches,
+          clientRscCompatibilityId: CLIENT_RSC_COMPATIBILITY_ID,
+          commitSameUrlNavigatePayload(...commitArgs) {
+            const result = commitSameUrlNavigatePayload(...commitArgs);
+            completion = result.completion;
+            return result.value;
+          },
+          navigationPlanner,
+          performHardNavigation: (url, historyMode) =>
+            browserNavigationController.performHardNavigation(url, historyMode),
+          renderRedirectPayload(elements, target, actionInitiation) {
+            const hashIdx = target.href.indexOf("#");
+            const hash = hashIdx !== -1 ? target.href.slice(hashIdx) : "";
+            const actionScrollIntent = beginAppRouterScrollIntent(hash || null);
+            if (target.type === "push") saveScrollPosition();
+            completion = renderNavigationPayload(
+              Promise.resolve(elements),
+              createClientNavigationRenderSnapshot(
                 target.href,
-                actionInitiation.navigationId,
-                target.type === "push" ? "push" : "replace",
-                {},
-                null,
-                null,
-                FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
-                target.type === "push" ? "navigate" : "replace",
-                "server-action",
-                null,
-                actionScrollIntent,
-              ).catch(() => browserNavigationController.performHardNavigation(target.href));
-            },
-            syncCurrentHistoryState: (previousNextUrl, bfcacheIds) =>
-              historyController.syncCurrentHistoryStatePreviousNextUrl(previousNextUrl, bfcacheIds),
-            syncServerActionHttpFallbackHead,
-          }),
-        )
-        .finally(releaseCacheInvalidationGuard);
+                actionInitiation.routerState.navigationSnapshot.params,
+              ),
+              target.href,
+              actionInitiation.navigationId,
+              target.type === "push" ? "push" : "replace",
+              {},
+              null,
+              null,
+              FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
+              target.type === "push" ? "navigate" : "replace",
+              "server-action",
+              null,
+              actionScrollIntent,
+            ).catch(() => browserNavigationController.performHardNavigation(target.href));
+          },
+          syncCurrentHistoryState: (previousNextUrl, bfcacheIds) =>
+            historyController.syncCurrentHistoryStatePreviousNextUrl(previousNextUrl, bfcacheIds),
+          syncServerActionHttpFallbackHead,
+        }),
+      );
+      const actionCompletion = value.then(
+        () => completion ?? undefined,
+        () => completion ?? undefined,
+      );
       return {
-        completion: value.then(
-          () => completion ?? undefined,
-          () => completion ?? undefined,
-        ),
+        completion: actionCompletion.finally(releaseCacheInvalidationGuard),
         value,
       };
     }),

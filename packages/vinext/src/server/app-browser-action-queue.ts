@@ -1,4 +1,4 @@
-export type BrowserActionExecution<T> = {
+type BrowserActionExecution<T> = {
   completion: Promise<unknown>;
   value: Promise<T>;
 };

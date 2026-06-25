@@ -1,3 +1,4 @@
+import Link from "next/link";
 import {
   RefreshControl,
   RevalidateControl,
@@ -11,6 +12,7 @@ export default function Page() {
       <RefreshControl />
       <RevalidateControl />
       <SerializedRevalidateControl />
+      <Link href="/refreshing">Go to Refreshing Page</Link>
     </main>
   );
 }

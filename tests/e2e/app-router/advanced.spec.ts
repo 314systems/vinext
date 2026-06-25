@@ -644,6 +644,68 @@ test.describe("Intercepting Routes", () => {
     await expect(page.getByTestId("refreshing-other-page")).toBeVisible();
   });
 
+  test("recovers a preempted revalidating action before continuing the queued action", async ({
+    page,
+  }) => {
+    // Ported from Next.js's discarded revalidating action coverage, extended to
+    // cover a queued action behind the detached commit:
+    // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/actions/app-action.test.ts
+    await page.goto(`${BASE}/refreshing`);
+    await waitForAppRouterHydration(page);
+    await page.getByRole("link", { name: "Open refreshing login" }).click();
+    await expect(page.getByTestId("refreshing-login-modal")).toBeVisible();
+    await page.getByRole("link", { name: "Go to Other Page" }).click();
+    await expect(page.getByTestId("refreshing-other-page")).toBeVisible();
+
+    const supplementalRequested = deferred();
+    const releaseSupplemental = deferred();
+    const navigationRequested = deferred();
+    const releaseNavigation = deferred();
+    const recoveryRequested = deferred();
+    const releaseRecovery = deferred();
+    let actionPosts = 0;
+    let refreshingRequests = 0;
+    await page.route("**/*", async (route) => {
+      const request = route.request();
+      if (request.method() === "POST") actionPosts++;
+
+      if (isAppRouterRscRequestForPath(request, "/refreshing/login")) {
+        supplementalRequested.resolve();
+        await releaseSupplemental.promise;
+      } else if (isAppRouterRscRequestForPath(request, "/refreshing")) {
+        refreshingRequests++;
+        if (refreshingRequests === 1) {
+          navigationRequested.resolve();
+          await releaseNavigation.promise;
+        } else if (refreshingRequests === 2) {
+          recoveryRequested.resolve();
+          await releaseRecovery.promise;
+        }
+      }
+      await route.continue();
+    });
+
+    await page.getByTestId("serialized-revalidate").click();
+    await supplementalRequested.promise;
+    await expect(page.getByTestId("serialized-revalidate-status")).toHaveText("A resolved");
+    expect(actionPosts).toBe(1);
+
+    await page.getByRole("link", { name: "Go to Refreshing Page" }).click();
+    await navigationRequested.promise;
+    releaseSupplemental.resolve();
+    releaseNavigation.resolve();
+
+    await recoveryRequested.promise;
+    await expect(page.getByTestId("refreshing-page-token")).toBeVisible();
+    const recoveryToken = await page.getByTestId("refreshing-page-token").textContent();
+    expect(actionPosts).toBe(1);
+
+    releaseRecovery.resolve();
+    await expect.poll(() => actionPosts).toBe(2);
+    await expect(page.getByTestId("refreshing-page-token")).not.toHaveText(recoveryToken ?? "");
+    expect(refreshingRequests).toBe(2);
+  });
+
   test("sibling (..) intercepted navigation mounts the modal slot", async ({ page }) => {
     // Ported from the sibling-interception behavior covered by Next.js:
     // test/e2e/app-dir/parallel-routes-and-interception/parallel-routes-and-interception.test.ts
