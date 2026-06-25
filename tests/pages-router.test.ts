@@ -3165,6 +3165,65 @@ describe("Production build", () => {
     expect(entryContent).toContain("/ssr");
   });
 
+  it("honors a project Babel config before the JSX transform", async () => {
+    const tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vinext-pages-babel-config-"));
+    const fixtureOutDir = path.join(tmpRoot, "dist");
+
+    try {
+      await fsp.symlink(
+        path.resolve(import.meta.dirname, "../node_modules"),
+        path.join(tmpRoot, "node_modules"),
+        "junction",
+      );
+      await fsp.mkdir(path.join(tmpRoot, "pages"), { recursive: true });
+      await fsp.writeFile(
+        path.join(tmpRoot, ".babelrc"),
+        JSON.stringify({ plugins: ["./replace-babel-sentinel.cjs"] }),
+      );
+      await fsp.writeFile(
+        path.join(tmpRoot, "replace-babel-sentinel.cjs"),
+        `module.exports = function () {
+  return {
+    visitor: {
+      StringLiteral(path) {
+        if (path.node.value === "BABEL_CONFIG_BEFORE") path.node.value = "BABEL_CONFIG_AFTER";
+      },
+    },
+  };
+};
+`,
+      );
+      await fsp.writeFile(
+        path.join(tmpRoot, "pages", "index.jsx"),
+        `export default function Page() { return "BABEL_CONFIG_BEFORE"; }\n`,
+      );
+
+      await build({
+        root: tmpRoot,
+        configFile: false,
+        plugins: [vinext()],
+        logLevel: "silent",
+        build: {
+          outDir: path.join(fixtureOutDir, "server"),
+          ssr: "virtual:vinext-server-entry",
+        },
+      });
+
+      const outputFiles = await fsp.readdir(path.join(fixtureOutDir, "server"));
+      const output = (
+        await Promise.all(
+          outputFiles
+            .filter((file) => /\.[cm]?js$/.test(file))
+            .map((file) => fsp.readFile(path.join(fixtureOutDir, "server", file), "utf8")),
+        )
+      ).join("\n");
+      expect(output).toContain("BABEL_CONFIG_AFTER");
+      expect(output).not.toContain("BABEL_CONFIG_BEFORE");
+    } finally {
+      await fsp.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
   it("runMiddleware in generated pages prod entry executes named proxy export", async () => {
     const tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vinext-pages-proxy-"));
     const rootNodeModules = path.resolve(import.meta.dirname, "../node_modules");
