@@ -64,6 +64,16 @@ function resolveBabelCore(root: string): string | null {
   return null;
 }
 
+function resolveReactRefreshPlugin(root: string): string | null {
+  const projectRequire = createRequire(path.join(root, "package.json"));
+  try {
+    const nextRequire = createRequire(projectRequire.resolve("next/package.json"));
+    return nextRequire.resolve("next/dist/compiled/react-refresh/babel");
+  } catch {
+    return null;
+  }
+}
+
 function isPathInPackage(filename: string, packageName: string): boolean {
   const normalizedFilename = filename.replaceAll("\\", "/");
   return normalizedFilename.includes(`/node_modules/${packageName}/`);
@@ -95,6 +105,7 @@ export function createBabelConfigPlugin(
   let root = process.cwd();
   let canonicalRoot = tryRealpathSync(root) ?? root;
   let babelCorePromise: Promise<BabelCore> | null = null;
+  let reactRefreshPluginPath: string | null = null;
   let configPath: string | null = null;
   let srcDir = canonicalRoot;
   let pagesDir = path.join(canonicalRoot, "src", "pages");
@@ -107,6 +118,7 @@ export function createBabelConfigPlugin(
       root = config.root;
       canonicalRoot = tryRealpathSync(root) ?? root;
       configPath = findBabelConfig(canonicalRoot);
+      reactRefreshPluginPath = resolveReactRefreshPlugin(root);
       transpilePackageRoots = new Map();
       srcDir = fs.existsSync(path.join(canonicalRoot, "src"))
         ? path.join(canonicalRoot, "src")
@@ -192,6 +204,10 @@ export function createBabelConfigPlugin(
           babelrc: false,
           sourceMaps: true,
           sourceFileName: filename,
+          plugins:
+            isDev && !isServer && reactRefreshPluginPath
+              ? [[reactRefreshPluginPath, { skipEnvCheck: true }]]
+              : undefined,
           caller: {
             name: "next-babel-turbo-loader",
             supportsStaticESM: true,
