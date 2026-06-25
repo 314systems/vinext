@@ -566,11 +566,16 @@ function isNextBabelLoadableGenerated(property: AstRecord): boolean {
   const modulesProperty = findObjectProperty(value, "modules");
   const modules = modulesProperty?.value;
   if (!isRecord(modules) || getString(modules, "type") !== "ArrayExpression") return false;
-  return getArray(modules, "elements").some((element) => {
-    if (!isRecord(element)) return false;
-    if (getString(element, "type") === "BinaryExpression") return true;
-    return (nodeStringValue(element) ?? "").includes(" -> ");
-  });
+  return getArray(modules, "elements").some(isNextBabelModuleElement);
+}
+
+function isNextBabelModuleElement(element: unknown): boolean {
+  if (!isRecord(element)) return false;
+  const stringValue = nodeStringValue(element);
+  if (stringValue !== null) return stringValue.includes(" -> ");
+  if (getString(element, "type") !== "BinaryExpression" || element.operator !== "+") return false;
+  const prefix = nodeStringValue(element.left);
+  return prefix !== null && prefix.endsWith(" -> ") && nodeStringValue(element.right) !== null;
 }
 
 function isNextBabelWebpackCallback(value: unknown): boolean {

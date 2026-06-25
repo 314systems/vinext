@@ -1583,6 +1583,24 @@ describe("next/dynamic preload metadata transform", () => {
     expect(result).toBeNull();
   });
 
+  it("preserves custom binary-expression loadableGenerated metadata", async () => {
+    const code = [
+      `import dynamic from "next/dynamic";`,
+      `const prefix = "custom:";`,
+      `const Widget = dynamic(() => import("./dynamic-widget"), {`,
+      `  loadableGenerated: { modules: [prefix + "dynamic-widget"] },`,
+      `});`,
+    ].join("\n");
+    const result = await _transformNextDynamicPreloadMetadata(
+      code,
+      importer,
+      root,
+      resolveDynamicImport,
+    );
+
+    expect(result).toBeNull();
+  });
+
   it("supports the object loader form", async () => {
     const result = await _transformNextDynamicPreloadMetadata(
       [
