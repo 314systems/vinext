@@ -71,22 +71,15 @@ function isPathInPackage(filename: string, packageName: string): boolean {
 
 function resolvePackageRoot(root: string, packageName: string): string | null {
   const projectRequire = createRequire(path.join(root, "package.json"));
-  let currentDir: string;
-  try {
-    currentDir = path.dirname(projectRequire.resolve(packageName));
-  } catch {
-    return null;
-  }
-
-  while (currentDir !== path.dirname(currentDir)) {
-    const packageJsonPath = path.join(currentDir, "package.json");
+  for (const searchPath of projectRequire.resolve.paths(packageName) ?? []) {
+    const packageRoot = path.join(searchPath, packageName);
+    const packageJsonPath = path.join(packageRoot, "package.json");
     try {
       const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
         name?: unknown;
       };
-      if (packageJson.name === packageName) return tryRealpathSync(currentDir) ?? currentDir;
+      if (packageJson.name === packageName) return tryRealpathSync(packageRoot) ?? packageRoot;
     } catch {}
-    currentDir = path.dirname(currentDir);
   }
   return null;
 }
@@ -150,6 +143,7 @@ export function createBabelConfigPlugin(
         const normalizedFilename = filename.replaceAll("\\", "/");
         const canonicalFilename = tryRealpathSync(filename) ?? filename;
         const isProjectFile = relativeWithinRoot(canonicalRoot, canonicalFilename);
+        const includesExternalDirs = options.externalDir || options.transpilePackages.length > 0;
         const isTranspiledPackage = options.transpilePackages.some((packageName) => {
           if (isPathInPackage(filename, packageName)) return true;
 
@@ -162,7 +156,7 @@ export function createBabelConfigPlugin(
           return packageRoot !== null && relativeWithinRoot(packageRoot, canonicalFilename);
         });
         if (
-          ((!isProjectFile && !options.externalDir) ||
+          ((!isProjectFile && !includesExternalDirs) ||
             normalizedFilename.includes("/node_modules/")) &&
           !isTranspiledPackage
         ) {

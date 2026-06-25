@@ -3294,7 +3294,7 @@ export default function Page() { return <div>{externalSentinel}</div>; }\n`,
       );
       await fsp.writeFile(
         path.join(externalRoot, "next.config.mjs"),
-        `export default { experimental: { externalDir: true } };\n`,
+        `export default { transpilePackages: ["unused-package"] };\n`,
       );
       const externalOutput = await buildFixture(externalRoot);
       expect(externalOutput).toContain("PACKAGE_BABEL_AFTER");
