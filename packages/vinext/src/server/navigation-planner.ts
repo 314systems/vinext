@@ -156,6 +156,7 @@ export type NavigationDecision =
 export type FlightResult = {
   cacheEntryReuseProof?: CacheEntryReuseProof;
   href: string;
+  restoredHistorySnapshot?: boolean;
   targetSnapshot: RouteSnapshot;
 };
 
@@ -1284,7 +1285,7 @@ function createCacheEntryProposalFields(
 function validateInterceptedPreservation(options: {
   currentSnapshot: RouteSnapshot;
   currentTopology: RouteTopologySnapshot;
-  lane: OperationLane;
+  restoredHistorySnapshot: boolean;
   routeManifest: RouteManifest | null;
   targetSnapshot: RouteSnapshot;
   targetTopology: RouteTopologySnapshot;
@@ -1306,7 +1307,7 @@ function validateInterceptedPreservation(options: {
 
   const sourceIdentity = getVisibleInterceptionSourceIdentity(options.currentSnapshot);
   if (
-    options.lane !== "traverse" &&
+    !options.restoredHistorySnapshot &&
     (proof.sourceMatchedUrl !== sourceIdentity.matchedUrl ||
       proof.sourceRouteId !== sourceIdentity.routeId)
   ) {
@@ -1466,7 +1467,7 @@ function planFlightResponseArrived(options: {
     const validation = validateInterceptedPreservation({
       currentSnapshot: options.state.visibleSnapshot,
       currentTopology: currentTopology.topology,
-      lane: options.event.token.lane,
+      restoredHistorySnapshot: options.event.result.restoredHistorySnapshot === true,
       routeManifest: options.routeManifest,
       targetSnapshot,
       targetTopology: targetTopology.topology,
