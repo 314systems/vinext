@@ -29,6 +29,12 @@ type SynchronousPopstateScrollRestoreDeps = {
   restorePopstateScrollPosition: RestoreScrollPosition;
 };
 
+type ExternalPopstateSnapshotRestoreDeps = {
+  notifyAppRouterTransitionStart: (href: string) => void;
+  restoreHistoryStateSnapshot: (state: unknown) => boolean;
+  restorePopstateScrollPosition: RestoreScrollPosition;
+};
+
 function hasSavedScrollPosition(state: unknown): boolean {
   return Boolean(state && typeof state === "object" && "__vinext_scrollY" in state);
 }
@@ -42,6 +48,18 @@ export function restoreSynchronousPopstateScrollPosition(
   deps.restorePopstateScrollPosition(state, {
     shouldContinue: () => deps.isCurrentNavigation(navId),
   });
+}
+
+export function restoreExternalPopstateSnapshot(
+  deps: ExternalPopstateSnapshotRestoreDeps,
+  href: string,
+  state: unknown,
+): boolean {
+  if (!deps.restoreHistoryStateSnapshot(state)) return false;
+
+  deps.notifyAppRouterTransitionStart(href);
+  deps.restorePopstateScrollPosition(state);
+  return true;
 }
 
 function scheduleAfterFrame(callback: () => void): void {

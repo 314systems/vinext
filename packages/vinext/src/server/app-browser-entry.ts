@@ -133,6 +133,7 @@ import {
 } from "./app-visited-response-cache.js";
 import {
   createPopstateRestoreHandler,
+  restoreExternalPopstateSnapshot,
   restoreSynchronousPopstateScrollPosition,
 } from "./app-browser-popstate.js";
 import {
@@ -2383,11 +2384,19 @@ function bootstrapHydration(
       return;
     }
     if (isExternalHistoryState(event.state)) {
-      notifyAppRouterTransitionStart(href, "traverse");
-      if (restoreHistoryStateSnapshot(event.state)) {
-        restorePopstateScrollPosition(event.state);
+      if (
+        restoreExternalPopstateSnapshot(
+          {
+            notifyAppRouterTransitionStart: (targetHref) =>
+              notifyAppRouterTransitionStart(targetHref, "traverse"),
+            restoreHistoryStateSnapshot,
+            restorePopstateScrollPosition,
+          },
+          href,
+          event.state,
+        )
+      )
         return;
-      }
     }
     const snapshotNavigationId = browserNavigationController.beginNavigation();
     if (
