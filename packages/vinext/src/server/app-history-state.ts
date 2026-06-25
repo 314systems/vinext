@@ -6,6 +6,7 @@ const VINEXT_PREVIOUS_NEXT_URL_HISTORY_STATE_KEY = "__vinext_previousNextUrl";
 const VINEXT_HISTORY_INDEX_HISTORY_STATE_KEY = "__vinext_historyIndex";
 const VINEXT_BFCACHE_IDS_HISTORY_STATE_KEY = "__vinext_bfcacheIds";
 const VINEXT_BFCACHE_VERSION_HISTORY_STATE_KEY = "__vinext_bfcacheVersion";
+const VINEXT_EXTERNAL_HISTORY_STATE_KEY = "__vinext_externalHistory";
 
 type HistoryStateRecord = {
   [key: string]: unknown;
@@ -252,16 +253,20 @@ export function createExternalHistoryStatePreservingMetadata(
   const bfcacheIds = readHistoryStateBfcacheIds(currentHistoryState);
   const bfcacheVersion = readHistoryStateBfcacheVersion(currentHistoryState);
 
-  if (previousNextUrl === null && traversalIndex === null && bfcacheIds === null) {
-    return callerState;
-  }
-
-  return createHistoryStateWithNavigationMetadata(callerState, {
+  const nextState = createHistoryStateWithNavigationMetadata(callerState, {
     bfcacheIds,
     bfcacheVersion: bfcacheIds === null ? undefined : bfcacheVersion,
     previousNextUrl,
     traversalIndex,
   });
+  return {
+    ...nextState,
+    [VINEXT_EXTERNAL_HISTORY_STATE_KEY]: true,
+  };
+}
+
+export function isExternalHistoryState(state: unknown): boolean {
+  return readHistoryStateRecord(state)?.[VINEXT_EXTERNAL_HISTORY_STATE_KEY] === true;
 }
 
 export function readHistoryStatePreviousNextUrl(state: unknown): string | null {

@@ -758,6 +758,7 @@ describe("next/navigation shim", () => {
     const previousWindow = (globalThis as any).window;
     const historyPreviousNextUrlKey = "__vinext_previousNextUrl";
     const historyTraversalIndexKey = "__vinext_historyIndex";
+    const externalHistoryStateKey = "__vinext_externalHistory";
     const win = {
       location: {
         pathname: "/photo/1",
@@ -800,6 +801,7 @@ describe("next/navigation shim", () => {
 
       win.history.pushState({ myData: { foo: "bar" } }, "", "/photo/1?filter=active");
       expect(win.history.state).toEqual({
+        [externalHistoryStateKey]: true,
         [historyPreviousNextUrlKey]: "/feed",
         [historyTraversalIndexKey]: 4,
         myData: { foo: "bar" },
@@ -807,18 +809,21 @@ describe("next/navigation shim", () => {
 
       win.history.pushState(null, "", "/photo/1?filter=pending");
       expect(win.history.state).toEqual({
+        [externalHistoryStateKey]: true,
         [historyPreviousNextUrlKey]: "/feed",
         [historyTraversalIndexKey]: 4,
       });
 
       win.history.replaceState(null, "", "/photo/1?filter=archived");
       expect(win.history.state).toEqual({
+        [externalHistoryStateKey]: true,
         [historyPreviousNextUrlKey]: "/feed",
         [historyTraversalIndexKey]: 4,
       });
 
       win.history.replaceState(undefined, "", "/photo/1?filter=all");
       expect(win.history.state).toEqual({
+        [externalHistoryStateKey]: true,
         [historyPreviousNextUrlKey]: "/feed",
         [historyTraversalIndexKey]: 4,
       });
@@ -826,6 +831,7 @@ describe("next/navigation shim", () => {
       win.history.state = { [historyTraversalIndexKey]: 7 };
       win.history.pushState({ next: true }, "", "/photo/1?filter=done");
       expect(win.history.state).toEqual({
+        [externalHistoryStateKey]: true,
         [historyTraversalIndexKey]: 7,
         next: true,
       });

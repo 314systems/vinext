@@ -86,6 +86,7 @@ import {
   type PendingBrowserRouterState,
 } from "./app-browser-navigation-controller.js";
 import { AppBrowserMpaNavigationScheduler } from "./app-browser-mpa-navigation.js";
+import { isExternalHistoryState } from "./app-history-state.js";
 import {
   resolveManifestNavigationInterceptionContext,
   resolveMiddlewareRewriteNavigationInterceptionContext,
@@ -2362,6 +2363,13 @@ function bootstrapHydration(
     if (isSameAppRoutePopstateTarget(href)) {
       notifyAppRouterTransitionStart(href, "traverse");
       historyController.commitTraversalIndexFromHistoryState(event.state);
+      commitClientNavigationState();
+      restorePopstateScrollPosition(event.state);
+      return;
+    }
+    if (isExternalHistoryState(event.state)) {
+      notifyAppRouterTransitionStart(href, "traverse");
+      commitClientNavigationState();
       restorePopstateScrollPosition(event.state);
       return;
     }
