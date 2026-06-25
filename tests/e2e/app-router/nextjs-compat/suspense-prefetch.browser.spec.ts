@@ -112,6 +112,7 @@ export function middleware(request: NextRequest) {
     response.headers.set("CDN-Cache-Control", "s-maxage=30");
     response.headers.set("Cloudflare-CDN-Cache-Control", "s-maxage=30");
     response.headers.set("Cache-Tag", "partial-shell");
+    response.headers.set("X-Vinext-Rsc-Partial-Shell", "0");
     return response;
   }
   const destination = request.nextUrl.searchParams.get("mismatch-rewrite");

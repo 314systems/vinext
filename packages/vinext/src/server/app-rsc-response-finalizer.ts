@@ -29,10 +29,11 @@ type FinalizeAppRscResponseOptions = {
   requestContext: RequestContext;
 };
 
-function lockPartialShellCacheHeaders(response: Response): void {
-  if (response.headers.get(VINEXT_RSC_PARTIAL_SHELL_HEADER) !== "1") return;
+function lockPartialShellCacheHeaders(response: Response, isPartialShell: boolean): void {
+  if (!isPartialShell) return;
 
-  response.headers.set("Cache-Control", NO_STORE_CACHE_CONTROL);
+  response.headers.set(VINEXT_RSC_PARTIAL_SHELL_HEADER, "1");
+  applyCdnResponseHeaders(response.headers, { cacheControl: NO_STORE_CACHE_CONTROL });
   response.headers.delete("CDN-Cache-Control");
   response.headers.delete("Cloudflare-CDN-Cache-Control");
   response.headers.delete("Cache-Tag");
@@ -60,6 +61,7 @@ export function finalizeAppRscResponse(
   if (response.status >= 300 && response.status < 400) {
     return response;
   }
+  const isPartialShell = response.headers.get(VINEXT_RSC_PARTIAL_SHELL_HEADER) === "1";
 
   if (!response.headers.has(VINEXT_STATIC_FILE_HEADER)) {
     const varyHeader = response.headers.get("Vary");
@@ -83,7 +85,7 @@ export function finalizeAppRscResponse(
   }
 
   if (!options.configHeaders.length) {
-    lockPartialShellCacheHeaders(response);
+    lockPartialShellCacheHeaders(response, isPartialShell);
     return response;
   }
 
@@ -120,7 +122,7 @@ export function finalizeAppRscResponse(
     requestContext: options.requestContext,
     basePathState: { basePath: options.basePath, hadBasePath },
   });
-  lockPartialShellCacheHeaders(response);
+  lockPartialShellCacheHeaders(response, isPartialShell);
 
   return response;
 }

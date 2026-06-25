@@ -2,6 +2,11 @@ import { describe, expect, it } from "vite-plus/test";
 import { VINEXT_RSC_VARY_HEADER } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
 import { finalizeAppRscResponse } from "../packages/vinext/src/server/app-rsc-response-finalizer.js";
 import { VINEXT_RSC_PARTIAL_SHELL_HEADER } from "../packages/vinext/src/server/headers.js";
+import {
+  DefaultCdnCacheAdapter,
+  setCdnCacheAdapter,
+  type CdnCacheAdapter,
+} from "../packages/vinext/src/shims/cdn-cache.js";
 import type { RequestContext } from "../packages/vinext/src/config/config-matchers.js";
 
 function makeRequestContext(headers: Headers = new Headers()): RequestContext {
@@ -87,6 +92,7 @@ describe("finalizeAppRscResponse — config header application", () => {
             { key: "CDN-Cache-Control", value: "s-maxage=30" },
             { key: "Cloudflare-CDN-Cache-Control", value: "s-maxage=30" },
             { key: "Cache-Tag", value: "partial-shell" },
+            { key: VINEXT_RSC_PARTIAL_SHELL_HEADER, value: "0" },
           ],
         },
       ],
@@ -98,6 +104,45 @@ describe("finalizeAppRscResponse — config header application", () => {
     expect(response.headers.get("cdn-cache-control")).toBeNull();
     expect(response.headers.get("cloudflare-cdn-cache-control")).toBeNull();
     expect(response.headers.get("cache-tag")).toBeNull();
+    expect(response.headers.get(VINEXT_RSC_PARTIAL_SHELL_HEADER)).toBe("1");
+  });
+
+  it("uses the active CDN adapter to clear custom cache headers", () => {
+    const adapter: CdnCacheAdapter = {
+      ownsBackgroundRevalidation: false,
+      async get() {
+        return null;
+      },
+      async set() {},
+      buildResponseHeaders(input) {
+        return {
+          "Cache-Control": input.cacheControl,
+          "Surrogate-Control": null,
+        };
+      },
+      async revalidateTag() {},
+    };
+    setCdnCacheAdapter(adapter);
+    try {
+      const response = new Response("shell", {
+        headers: {
+          [VINEXT_RSC_PARTIAL_SHELL_HEADER]: "1",
+          "Surrogate-Control": "max-age=30",
+        },
+      });
+
+      finalizeAppRscResponse(response, new Request("http://example.com/about"), {
+        basePath: "",
+        configHeaders: [],
+        i18nConfig: null,
+        requestContext: makeRequestContext(),
+      });
+
+      expect(response.headers.get("cache-control")).toBe("no-store, must-revalidate");
+      expect(response.headers.get("surrogate-control")).toBeNull();
+    } finally {
+      setCdnCacheAdapter(new DefaultCdnCacheAdapter());
+    }
   });
 });
 
