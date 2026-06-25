@@ -1548,6 +1548,24 @@ describe("next/dynamic preload metadata transform", () => {
     expect(result).toBeNull();
   });
 
+  it("replaces next/babel loadableGenerated metadata", async () => {
+    const code = [
+      `import dynamic from "next/dynamic";`,
+      `const Widget = dynamic(() => import("./dynamic-widget"), {`,
+      `  loadableGenerated: { webpack: () => [require.resolveWeak("./dynamic-widget")] },`,
+      `});`,
+    ].join("\n");
+    const result = await _transformNextDynamicPreloadMetadata(
+      code,
+      importer,
+      root,
+      resolveDynamicImport,
+    );
+
+    expect(result?.code).toContain(`loadableGenerated: { modules: ["app/dynamic-widget.tsx"] }`);
+    expect(result?.code).not.toContain("resolveWeak");
+  });
+
   it("supports the object loader form", async () => {
     const result = await _transformNextDynamicPreloadMetadata(
       [

@@ -561,9 +561,26 @@ async function resolveManifestModuleIds(
   return resolvedIds;
 }
 
-function shouldSkipCall(firstArg: unknown, secondArg: unknown): boolean {
-  if (hasObjectProperty(firstArg, "loadableGenerated")) return true;
-  return hasObjectProperty(secondArg, "loadableGenerated");
+function isNextBabelLoadableGenerated(property: AstRecord): boolean {
+  const value = property.value;
+  if (!isRecord(value) || getString(value, "type") !== "ObjectExpression") return false;
+  if (hasObjectProperty(value, "webpack")) return true;
+
+  const modulesProperty = findObjectProperty(value, "modules");
+  const modules = modulesProperty?.value;
+  if (!isRecord(modules) || getString(modules, "type") !== "ArrayExpression") return false;
+  return getArray(modules, "elements").some((element) => {
+    if (!isRecord(element)) return false;
+    if (getString(element, "type") === "BinaryExpression") return true;
+    return (nodeStringValue(element) ?? "").includes(" -> ");
+  });
+}
+
+function findLoadableGeneratedProperty(firstArg: unknown, secondArg: unknown): AstRecord | null {
+  return (
+    findObjectProperty(firstArg, "loadableGenerated") ??
+    findObjectProperty(secondArg, "loadableGenerated")
+  );
 }
 
 function applyLoadableGenerated(
@@ -576,9 +593,18 @@ function applyLoadableGenerated(
   const firstArg = args[0];
   const secondArg = args[1];
   if (!isRecord(firstArg)) return false;
-  if (shouldSkipCall(firstArg, secondArg)) return false;
 
   const property = `loadableGenerated: { modules: ${JSON.stringify(moduleIds)} }`;
+  const existingProperty = findLoadableGeneratedProperty(firstArg, secondArg);
+  if (existingProperty) {
+    if (!isNextBabelLoadableGenerated(existingProperty)) return false;
+    const start = getNumber(existingProperty, "start");
+    const end = getNumber(existingProperty, "end");
+    if (start === null || end === null) return false;
+    output.overwrite(start, end, property);
+    return true;
+  }
+
   const firstArgIsObject = getString(firstArg, "type") === "ObjectExpression";
   if (firstArgIsObject) {
     return appendObjectProperty(output, firstArg, property);
