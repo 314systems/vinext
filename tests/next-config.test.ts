@@ -424,6 +424,24 @@ describe("loadNextConfig with CJS globals in next.config.ts", () => {
     },
   );
 
+  it.each(["ts", "mts"])(
+    "preserves require used in a default parameter in next.config.%s",
+    async (extension) => {
+      tmpDir = makeTempDir();
+      fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify({ type: "module" }));
+      fs.writeFileSync(path.join(tmpDir, "data.json"), `{"value":"parameter-default"}`);
+      fs.writeFileSync(
+        path.join(tmpDir, `next.config.${extension}`),
+        `export default function config(_phase, _options, data = require("./data.json")) {\n` +
+          `  return { env: { VALUE: data.value } };\n` +
+          `}\n`,
+      );
+
+      const config = await loadNextConfig(tmpDir);
+      expect(config?.env?.VALUE).toBe("parameter-default");
+    },
+  );
+
   it("loads a pure-ESM next.config.ts without injecting CJS shims", async () => {
     // No __filename / __dirname / require / module / exports references —
     // the injector transform should short-circuit. We only assert
@@ -621,6 +639,8 @@ describe("loadNextConfig with tsconfig path aliases", () => {
       fs.writeFileSync(
         path.join(tmpDir, `next.config.${extension}`),
         `await Promise.resolve();\n` +
+          `interface module { value: string }\n` +
+          `type require = string;\n` +
           `const note = "module exports require"; // require is mentioned in a comment\n` +
           `export default async function config() {\n` +
           `  const { foo } = await import("./foo.ts");\n` +

@@ -789,6 +789,21 @@ function isConfigIdentifierReference(node: AstRecord, parent: AstRecord | null):
   ].includes(parent.type);
 }
 
+function isErasedTypeScriptNode(node: AstRecord): boolean {
+  if (!node.type.startsWith("TS")) return false;
+  return ![
+    "TSAsExpression",
+    "TSSatisfiesExpression",
+    "TSNonNullExpression",
+    "TSInstantiationExpression",
+    "TSParameterProperty",
+    "TSExportAssignment",
+    "TSModuleDeclaration",
+    "TSModuleBlock",
+    "TSEnumDeclaration",
+  ].includes(node.type);
+}
+
 async function referencesUnboundCjsGlobals(source: string): Promise<boolean> {
   if (!referencesCjsGlobals(source)) return false;
 
@@ -807,11 +822,15 @@ async function referencesUnboundCjsGlobals(source: string): Promise<boolean> {
 
   function visit(node: AstRecord, parent: AstRecord | null, parentScope: AstScope): void {
     if (found) return;
+    if (isErasedTypeScriptNode(node)) return;
     if (isFunctionNode(node)) {
       const parameterScope = createAstScope(parentScope);
       collectBindingNames(node.id, parameterScope.bindings);
       for (const parameter of nodeArray(node.params)) {
         collectBindingNames(parameter, parameterScope.bindings);
+      }
+      for (const parameter of nodeArray(node.params)) {
+        if (isAstRecord(parameter)) visit(parameter, node, parameterScope);
       }
       if (isAstRecord(node.body)) {
         if (node.body.type === "BlockStatement") {
