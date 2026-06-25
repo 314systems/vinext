@@ -4808,6 +4808,12 @@ export const loadServerActionClient = ${
           code: /typeof\s+window/,
         },
         handler(code, id) {
+          if (
+            this.environment.config.command === "build" &&
+            this.environment.config.consumer === "client"
+          ) {
+            return null;
+          }
           const cacheDirPrefix = getCacheDirPrefix(this.environment.config.cacheDir);
           if (normalizePathSeparators(id).startsWith(cacheDirPrefix)) {
             return null;
