@@ -42,7 +42,10 @@ import {
   stripRscCacheBustingSearchParam,
   stripRscSuffix,
 } from "../server/app-rsc-cache-busting.js";
-import { APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL } from "../server/app-rsc-render-mode.js";
+import {
+  APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
+  APP_RSC_RENDER_MODE_PREFETCH_SUSPENSE_SHELL,
+} from "../server/app-rsc-render-mode.js";
 import { VINEXT_MOUNTED_SLOTS_HEADER } from "../server/headers.js";
 import { isDangerousScheme, reportBlockedDangerousNavigation } from "./url-safety.js";
 import {
@@ -332,6 +335,7 @@ function getLinkPrefetchRouterMode(): LinkPrefetchRouterMode {
 
 function resolveMatchedAutoAppRoutePrefetch(route: VinextLinkPrefetchRoute): {
   cacheForNavigation: boolean;
+  prefetchSuspenseShell: boolean;
   prefetchShellFirst: boolean;
   shouldPrefetch: boolean;
 } {
@@ -343,6 +347,7 @@ function resolveMatchedAutoAppRoutePrefetch(route: VinextLinkPrefetchRoute): {
     // fallbacks are treated as exact-URL full prefetches; the prefetch cache is
     // keyed by the concrete RSC URL, so this cannot reuse data across params.
     cacheForNavigation: !hasLoadingShell,
+    prefetchSuspenseShell: route.isDynamic && !hasLoadingShell,
     prefetchShellFirst: !route.isDynamic,
     shouldPrefetch: true,
   };
@@ -366,25 +371,46 @@ export function canAutoPrefetchFullAppRoute(href: string): boolean {
 export function resolveAutoAppRoutePrefetch(href: string): {
   cacheForNavigation: boolean;
   prefetchShellFirst: boolean;
+  prefetchSuspenseShell: boolean;
   shouldPrefetch: boolean;
 } {
   if (typeof window === "undefined") {
-    return { cacheForNavigation: false, prefetchShellFirst: false, shouldPrefetch: false };
+    return {
+      cacheForNavigation: false,
+      prefetchShellFirst: false,
+      prefetchSuspenseShell: false,
+      shouldPrefetch: false,
+    };
   }
 
   const routes = window.__VINEXT_LINK_PREFETCH_ROUTES__;
   if (!routes) {
-    return { cacheForNavigation: false, prefetchShellFirst: false, shouldPrefetch: false };
+    return {
+      cacheForNavigation: false,
+      prefetchShellFirst: false,
+      prefetchSuspenseShell: false,
+      shouldPrefetch: false,
+    };
   }
 
   const routeHref = toSameOriginRouteHref(href);
   if (routeHref === null) {
-    return { cacheForNavigation: false, prefetchShellFirst: false, shouldPrefetch: false };
+    return {
+      cacheForNavigation: false,
+      prefetchShellFirst: false,
+      prefetchSuspenseShell: false,
+      shouldPrefetch: false,
+    };
   }
 
   const match = matchRouteWithTrie(routeHref, routes, linkPrefetchRouteTrieCache);
   if (!match) {
-    return { cacheForNavigation: false, prefetchShellFirst: false, shouldPrefetch: false };
+    return {
+      cacheForNavigation: false,
+      prefetchShellFirst: false,
+      prefetchSuspenseShell: false,
+      shouldPrefetch: false,
+    };
   }
 
   return resolveMatchedAutoAppRoutePrefetch(match.route);
@@ -425,7 +451,7 @@ function prefetchUrl(href: string, mode: LinkPrefetchMode, priority: "low" | "hi
   }
 
   const schedule =
-    priority === "high"
+    priority === "high" || hasAppNavigationRuntime()
       ? (fn: () => void) => {
           fn();
         }
@@ -448,7 +474,12 @@ function prefetchUrl(href: string, mode: LinkPrefetchMode, priority: "low" | "hi
         const autoPrefetch =
           mode === "auto"
             ? resolveAutoAppRoutePrefetch(prefetchHref)
-            : { cacheForNavigation: true, prefetchShellFirst: true, shouldPrefetch: true };
+            : {
+                cacheForNavigation: true,
+                prefetchShellFirst: true,
+                prefetchSuspenseShell: false,
+                shouldPrefetch: true,
+              };
         if (!autoPrefetch.shouldPrefetch) return;
 
         const interceptionContext = getPrefetchInterceptionContext(fullHref);
@@ -459,7 +490,9 @@ function prefetchUrl(href: string, mode: LinkPrefetchMode, priority: "low" | "hi
           interceptionContext,
           renderMode: isOptimisticRouteShellPrefetch
             ? APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL
-            : undefined,
+            : autoPrefetch.prefetchSuspenseShell
+              ? APP_RSC_RENDER_MODE_PREFETCH_SUSPENSE_SHELL
+              : undefined,
         });
         if (mountedSlotsHeader) {
           headers.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);

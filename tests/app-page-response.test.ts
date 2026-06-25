@@ -452,6 +452,16 @@ describe("app page response helpers", () => {
     expect(response.headers.get(VINEXT_DYNAMIC_STALE_TIME_HEADER)).toBe("60");
   });
 
+  it("marks partial Suspense shell RSC responses", () => {
+    const response = buildAppPageRscResponse(createBody("shell"), {
+      middlewareContext: { headers: null, status: null },
+      partialShell: true,
+      policy: {},
+    });
+
+    expect(response.headers.get("x-vinext-rsc-partial-shell")).toBe("1");
+  });
+
   it("keeps the framework compatibility ID when middleware sets the internal header", () => {
     const middlewareHeaders = new Headers({
       [VINEXT_RSC_COMPATIBILITY_ID_HEADER]: "middleware-compat",

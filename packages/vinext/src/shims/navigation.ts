@@ -40,6 +40,7 @@ import {
   VINEXT_DYNAMIC_STALE_TIME_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_PARAMS_HEADER,
+  VINEXT_RSC_PARTIAL_SHELL_HEADER,
 } from "../server/headers.js";
 import {
   isAbsoluteOrProtocolRelativeUrl,
@@ -739,6 +740,10 @@ export function prefetchRscResponse(
   entry.pending = fetchPromise
     .then(async (response) => {
       if (response.ok) {
+        if (response.headers.get(VINEXT_RSC_PARTIAL_SHELL_HEADER) === "1") {
+          entry.cacheForNavigation = false;
+          entry.optimisticRouteShell = true;
+        }
         entry.snapshot = await snapshotRscResponse(response);
         entry.expiresAt = resolveCachedRscResponseExpiresAt(
           entry.timestamp,

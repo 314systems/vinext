@@ -21,6 +21,10 @@ import {
 } from "./app-page-execution.js";
 import { probeAppPageBeforeRender } from "./app-page-probe.js";
 import {
+  createPrefetchSuspenseShellState,
+  runWithPrefetchSuspenseShellState,
+} from "vinext/shims/prefetch-suspense-shell";
+import {
   buildAppPageHtmlResponse,
   buildAppPageRscResponse,
   resolveAppPageHtmlResponsePolicy,
@@ -37,7 +41,10 @@ import {
   renderAppPageHtmlStreamWithRecovery,
   type AppPageSsrHandler,
 } from "./app-page-stream.js";
-import type { AppRscRenderMode } from "./app-rsc-render-mode.js";
+import {
+  APP_RSC_RENDER_MODE_PREFETCH_SUSPENSE_SHELL,
+  type AppRscRenderMode,
+} from "./app-rsc-render-mode.js";
 import {
   createArtifactCompatibilityEnvelope,
   createArtifactCompatibilityGraphVersion,
@@ -689,6 +696,20 @@ export async function renderAppPageLifecycle(
   // an outer runWithRequestContext / runWithFetchDedupe scope keeping the ALS
   // store alive across that consumption.
   let rscStream = await runWithFetchDedupe(async () => {
+    if (
+      options.renderMode === APP_RSC_RENDER_MODE_PREFETCH_SUSPENSE_SHELL &&
+      options.prerenderToReadableStream
+    ) {
+      const shellState = createPrefetchSuspenseShellState(options.cleanPathname);
+      const pendingResult = runWithPrefetchSuspenseShellState(shellState, () =>
+        options.prerenderToReadableStream!(outgoingElement, {
+          onError: rscErrorTracker.onRenderError,
+          signal: shellState.reactAbortController.signal,
+        }),
+      );
+      return (await pendingResult).prelude;
+    }
+
     if (options.pprFallbackShellSignal && options.prerenderToReadableStream) {
       const reactSignal = options.pprFallbackShellReactSignal ?? options.pprFallbackShellSignal;
       const pendingResult = options.prerenderToReadableStream(outgoingElement, {
@@ -796,6 +817,9 @@ export async function renderAppPageLifecycle(
       middlewareContext: options.middlewareContext,
       mountedSlotsHeader: options.mountedSlotsHeader,
       params: options.navigationParams,
+      partialShell:
+        options.renderMode === APP_RSC_RENDER_MODE_PREFETCH_SUSPENSE_SHELL &&
+        dynamicUsedDuringBuild,
       policy: rscResponsePolicy,
       timing: buildResponseTiming({
         compileEnd,
