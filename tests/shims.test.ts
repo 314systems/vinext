@@ -10634,6 +10634,24 @@ describe("matchRedirect locale-static index", () => {
     expect(matchRedirect("/old", redirects, emptyCtx)).toBeNull();
   });
 
+  it("preserves terminal-slash source semantics for locale-static redirects", async () => {
+    const { matchRedirect } = await import("../packages/vinext/src/config/config-matchers.js");
+    const redirects = [
+      {
+        source: "/:locale(en|fr)?/security/",
+        destination: "/:locale/security-dest",
+        permanent: false,
+      },
+    ];
+
+    expect(matchRedirect("/en/security/", redirects, emptyCtx)?.destination).toBe(
+      "/en/security-dest",
+    );
+    expect(matchRedirect("/security/", redirects, emptyCtx)?.destination).toBe("/security-dest");
+    expect(matchRedirect("/en/security", redirects, emptyCtx)).toBeNull();
+    expect(matchRedirect("/security", redirects, emptyCtx)).toBeNull();
+  });
+
   it("matches a locale-prefixed pathname (locale present)", async () => {
     const { matchRedirect } = await import("../packages/vinext/src/config/config-matchers.js");
     const redirects = makeLocaleRules(["/security", "/advisory-board"]);
@@ -11208,6 +11226,29 @@ describe("matchHeaders", () => {
 
     const apiMatched = matchHeaders("/api/users/", rules, makeCtx());
     expect(apiMatched).toEqual([{ key: "x-api-header", value: "1" }]);
+  });
+
+  it("preserves terminal-slash source semantics for headers", async () => {
+    const { matchHeaders } = await import("../packages/vinext/src/config/config-matchers.js");
+    const rules: any[] = [
+      {
+        source: "/blog/",
+        headers: [{ key: "x-static-header", value: "1" }],
+      },
+      {
+        source: "/api/:path*/",
+        headers: [{ key: "x-api-header", value: "1" }],
+      },
+    ];
+
+    expect(matchHeaders("/blog/", rules, makeCtx())).toEqual([
+      { key: "x-static-header", value: "1" },
+    ]);
+    expect(matchHeaders("/api/users/", rules, makeCtx())).toEqual([
+      { key: "x-api-header", value: "1" },
+    ]);
+    expect(matchHeaders("/blog", rules, makeCtx())).toEqual([]);
+    expect(matchHeaders("/api/users", rules, makeCtx())).toEqual([]);
   });
 });
 
