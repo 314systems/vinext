@@ -778,11 +778,13 @@ export function matchConfigPattern(
   pathname: string,
   pattern: string,
 ): Record<string, string> | null {
-  // Next.js accepts config sources with or without a terminal slash under the
-  // canonical trailing-slash request form. Normalize both sides so a source
-  // such as `/:lang(en|es)/` matches `/en/`, while preserving the root path.
+  // Next.js accepts config sources with or without a terminal slash when the
+  // incoming pathname is in canonical trailing-slash form. Normalize the
+  // source only for slash-bearing requests so `/:lang(en|es)/` matches `/en/`
+  // without making `/old/` match a slashless `/old` request.
+  const hadTrailingSlash = pathname.length > 1 && pathname.endsWith("/");
   pathname = stripTrailingSlashForConfigMatch(pathname);
-  pattern = stripTrailingSlashForConfigMatch(pattern);
+  if (hadTrailingSlash) pattern = stripTrailingSlashForConfigMatch(pattern);
 
   // If the pattern contains regex groups like (\d+) or (.*), use regex matching.
   // Also enter this branch when a catch-all parameter (:param* or :param+) is

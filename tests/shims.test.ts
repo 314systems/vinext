@@ -10355,7 +10355,7 @@ describe("matchConfigPattern", () => {
   it("matches a trailing-slash config source against the canonical pathname", async () => {
     const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
     expect(matchConfigPattern("/en/", "/:lang(en|es)/")).toEqual({ lang: "en" });
-    expect(matchConfigPattern("/en", "/:lang(en|es)/")).toEqual({ lang: "en" });
+    expect(matchConfigPattern("/en", "/:lang(en|es)/")).toBeNull();
     expect(matchConfigPattern("/fr/", "/:lang(en|es)/")).toBeNull();
   });
 
