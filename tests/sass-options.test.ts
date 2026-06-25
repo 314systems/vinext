@@ -316,6 +316,11 @@ describe("rewriteSassTildeCssImports", () => {
     expect(rewriteSassTildeCssImports(source, id, root)).toBeNull();
   });
 
+  it("does not treat media-query commas as import separators", () => {
+    const source = `@import "theme.css" screen, (foo: "~package/token.css");`;
+    expect(rewriteSassTildeCssImports(source, id, root)).toBeNull();
+  });
+
   it("leaves Sass imports and ordinary CSS imports unchanged", () => {
     expect(
       rewriteSassTildeCssImports(
@@ -331,11 +336,9 @@ describe("wrapSassTildeAdditionalData", () => {
   const root = path.join(path.sep, "project");
   const filename = path.join(root, "styles", "global.scss");
 
-  it("rewrites tilde CSS imports injected by string additionalData", async () => {
+  it("rewrites tilde CSS imports injected by string additionalData", () => {
     const wrapped = wrapSassTildeAdditionalData(`@import '~package/injected.css';\n`, root);
-    await expect(wrapped(`.page { color: red; }`, filename)).resolves.toBe(
-      `@import 'package/injected.css';\n.page { color: red; }`,
-    );
+    expect(wrapped).toBe(`@import 'package/injected.css';\n`);
   });
 
   it("rewrites tilde CSS imports returned by function additionalData", async () => {
@@ -391,12 +394,8 @@ describe("vinext config hook threads sassOptions into css.preprocessorOptions", 
     const scssAdditionalData = (css as any)?.preprocessorOptions?.scss?.additionalData;
     // oxlint-disable-next-line typescript/no-explicit-any
     const sassAdditionalData = (css as any)?.preprocessorOptions?.sass?.additionalData;
-    await expect(scssAdditionalData(".page {}", "/project/page.scss")).resolves.toBe(
-      "$var: red;.page {}",
-    );
-    await expect(sassAdditionalData(".page", "/project/page.sass")).resolves.toBe(
-      "$var: red;.page",
-    );
+    expect(scssAdditionalData).toBe("$var: red;");
+    expect(sassAdditionalData).toBe("$var: red;");
   }, 15000);
 
   it("aliases includePaths into loadPaths in css.preprocessorOptions.scss", async () => {

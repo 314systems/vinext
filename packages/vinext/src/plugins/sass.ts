@@ -64,6 +64,7 @@ function rewriteImportStatement(statement: string, id: string, root: string): st
   let output = "";
   let parentheses = 0;
   let expectsTarget = true;
+  let hasTargetConditions = false;
 
   for (let index = 0; index < statement.length; ) {
     const char = statement[index];
@@ -101,7 +102,10 @@ function rewriteImportStatement(statement: string, id: string, root: string): st
           ? normalizeSassTildeCssImport(value, id, root)
           : null;
       output += normalized ? `${char}${normalized}${char}` : statement.slice(index, end + 1);
-      if (expectsTarget) expectsTarget = false;
+      if (expectsTarget) {
+        expectsTarget = false;
+        hasTargetConditions = false;
+      }
       index = Math.min(end + 1, statement.length);
       continue;
     }
@@ -124,6 +128,7 @@ function rewriteImportStatement(statement: string, id: string, root: string): st
           if (normalized) {
             output += `${statement.slice(index, contentStart)}${normalized}${statement.slice(contentEnd, close + 1)}`;
             expectsTarget = false;
+            hasTargetConditions = false;
             index = close + 1;
             continue;
           }
@@ -131,9 +136,16 @@ function rewriteImportStatement(statement: string, id: string, root: string): st
       }
     }
 
+    if (!expectsTarget && parentheses === 0) {
+      if (char === "," && !hasTargetConditions) {
+        expectsTarget = true;
+      } else if (!/\s/.test(char) && char !== ";") {
+        hasTargetConditions = true;
+      }
+    }
+
     if (char === "(") parentheses++;
     if (char === ")") parentheses = Math.max(0, parentheses - 1);
-    if (char === "," && parentheses === 0) expectsTarget = true;
 
     output += char;
     index++;
@@ -262,15 +274,26 @@ export function rewriteSassTildeCssImports(code: string, id: string, root: strin
   return changed ? output : null;
 }
 
+export function wrapSassTildeAdditionalData(additionalData: string, root: string): string;
+export function wrapSassTildeAdditionalData(
+  additionalData: AdditionalDataFunction,
+  root: string,
+): AdditionalDataFunction;
 export function wrapSassTildeAdditionalData(
   additionalData: AdditionalData,
   root: string,
-): AdditionalDataFunction {
-  return async (source, filename) => {
-    const combined =
-      typeof additionalData === "function"
-        ? await additionalData(source, filename)
-        : `${additionalData}${source}`;
+): AdditionalData;
+export function wrapSassTildeAdditionalData(
+  additionalData: AdditionalData,
+  root: string,
+): AdditionalData {
+  if (typeof additionalData === "string") {
+    const syntheticFilename = path.join(root, "__vinext_additional_data.scss");
+    return rewriteSassTildeCssImports(additionalData, syntheticFilename, root) ?? additionalData;
+  }
+
+  return async (source: string, filename: string) => {
+    const combined = await additionalData(source, filename);
     return rewriteSassTildeCssImports(combined, filename, root) ?? combined;
   };
 }
