@@ -1150,7 +1150,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
 
         let ast: ReturnType<typeof parseAst>;
         try {
-          ast = parseAst(code, { lang: sourceId.endsWith(".ts") ? "ts" : "tsx" });
+          ast = parseAst(code, { lang: /\.(?:[cm]?ts)$/.test(sourceId) ? "ts" : "tsx" });
         } catch {
           return null;
         }
@@ -2175,10 +2175,17 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           },
           worker: {
             ...config.worker,
-            plugins: () => [
-              ...((config.worker?.plugins?.() as PluginOption[] | undefined) ?? []),
-              createWorkerImageImportPlugin(),
-            ],
+            plugins: () => {
+              const configuredWorkerPlugins = config.worker?.plugins;
+              const userWorkerPlugins =
+                typeof configuredWorkerPlugins === "function"
+                  ? configuredWorkerPlugins()
+                  : configuredWorkerPlugins;
+              return [
+                ...((userWorkerPlugins as PluginOption[] | undefined) ?? []),
+                createWorkerImageImportPlugin(),
+              ];
+            },
             ...(viteMajorVersion >= 8
               ? {
                   rolldownOptions: {

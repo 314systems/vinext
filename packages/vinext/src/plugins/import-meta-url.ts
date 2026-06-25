@@ -191,7 +191,9 @@ function rewriteCanonicalSourceIdentity(
 ): RewriteResult | null {
   let ast: unknown;
   try {
-    ast = parseAst(code);
+    ast = parseAst(code, {
+      lang: /\.(?:[cm]?ts)$/.test(canonicalId) ? "ts" : "tsx",
+    });
   } catch {
     return null;
   }

@@ -68,6 +68,21 @@ describe("vinext:import-meta-url plugin", () => {
     expect(result?.code).toContain(`const url = "file:///ROOT/pages/index.tsx"`);
   });
 
+  it.each(["ts", "mts", "cts"])("parses .%s sources as TypeScript", async (extension) => {
+    const sourcePath = path.join(realRoot, "workers", `worker.${extension}`);
+    await fsp.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fsp.writeFile(sourcePath, `const sourceUrl: string = import.meta.url;\n`);
+
+    const result = rewriteImportMetaUrl(
+      `const sourceUrl: string = import.meta.url;\n`,
+      sourcePath,
+      linkedRoot,
+      "client",
+    );
+
+    expect(result?.code).toContain(`"file:///ROOT/workers/worker.${extension}"`);
+  });
+
   it("preserves import.meta?.url as the base argument in new URL asset expressions", () => {
     const result = rewriteImportMetaUrl(
       `const asset = new URL("./font.ttf", import.meta?.url);\nconst url = import.meta?.url;\n`,

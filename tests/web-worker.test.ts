@@ -10,6 +10,12 @@ import { createBuilder, type InlineConfig } from "vite";
 import vinext from "../packages/vinext/src/index.js";
 
 const temporaryDirectories: string[] = [];
+let builtWorkerFixture: Promise<{
+  root: string;
+  workerFiles: string[];
+  pageCode: string;
+  workerCode: string;
+}> | null = null;
 
 async function createWorkerFixture(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-web-worker-"));
@@ -34,6 +40,9 @@ async function createWorkerFixture(): Promise<string> {
 +    new Worker(new URL("./worker", import.meta.url), { type: "module" });
 +    new Worker(new URL("./classic-worker", import.meta.url));
 +    new Worker(new URL("./png-worker", import.meta.url), { type: "module" });
++    new Worker(new URL("./wasm-worker", import.meta.url), { type: "module" });
++    const sharedWorker = new SharedWorker(new URL("./shared-worker", import.meta.url), { type: "module" });
++    sharedWorker.port.start();
 +    new Worker("/docs/unbundled-worker.js");
 +  }}>start</button>;
 +}`.replaceAll("\n+", "\n"),
@@ -52,6 +61,21 @@ async function createWorkerFixture(): Promise<string> {
     'import("./test-image.png").then(({ default: image }) => self.postMessage(image));',
   );
   await fs.writeFile(
+    path.join(root, "app", "shared-worker.ts"),
+    'self.addEventListener("connect", (event: MessageEvent) => { const port = event.ports[0]; import("./worker-dep").then(({ default: dependency }) => port.postMessage(`shared-worker.ts:${dependency}`)); });',
+  );
+  await fs.writeFile(
+    path.join(root, "app", "wasm-worker.ts"),
+    'const wasmUrl: URL = new URL("./add.wasm", import.meta.url); fetch(wasmUrl).then((response) => response.arrayBuffer()).then((buffer) => WebAssembly.instantiate(buffer)).then(({ instance }) => self.postMessage((instance.exports.add_one as (value: number) => number)(41)));',
+  );
+  await fs.writeFile(
+    path.join(root, "app", "add.wasm"),
+    Buffer.from(
+      "AGFzbQEAAAABCQJgAABgAX8BfwMDAgABBAUBcAEBAQUDAQAQBhkDfwFBgIDAAAt/AEGAgMAAC38AQYCAwAALBy8EBm1lbW9yeQIAC19faGVhcF9iYXNlAwEKX19kYXRhX2VuZAMCB2FkZF9vbmUAAQoMAgIACwcAIABBAWoL",
+      "base64",
+    ),
+  );
+  await fs.writeFile(
     path.join(root, "app", "test-image.png"),
     Buffer.from(
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -65,56 +89,8 @@ async function createWorkerFixture(): Promise<string> {
   return root;
 }
 
-afterAll(async () => {
-  await Promise.all(
-    temporaryDirectories.map((directory) => fs.rm(directory, { recursive: true, force: true })),
-  );
-});
-
-describe("web worker production output", () => {
-  it("preserves user worker output settings while namespacing worker files", async () => {
-    const root = await createWorkerFixture();
-    const plugins = vinext({
-      appDir: root,
-      nextConfig: { deploymentId: "worker-deploy-123" },
-    }) as Array<{
-      name: string;
-      config?: (config: unknown, env: { command: string }) => Promise<unknown>;
-    }>;
-    const configPlugin = plugins.find((plugin) => plugin.name === "vinext:config");
-    const config = (await configPlugin?.config?.(
-      {
-        root,
-        build: {},
-        plugins: [],
-        worker: {
-          plugins: () => [{ name: "user-worker-plugin" }],
-          rolldownOptions: {
-            output: { exports: "named", sourcemap: true },
-          },
-        },
-      },
-      { command: "build" },
-    )) as {
-      worker: {
-        plugins: () => Array<{ name: string }>;
-        rolldownOptions: { output: Record<string, unknown> };
-      };
-    };
-
-    expect(config.worker.rolldownOptions.output).toMatchObject({
-      exports: "named",
-      sourcemap: true,
-      entryFileNames: "_next/static/workers/[name]-[hash].js",
-      chunkFileNames: "_next/static/workers/[name]-[hash].js",
-    });
-    expect(config.worker.plugins().map((plugin) => plugin.name)).toEqual([
-      "user-worker-plugin",
-      "vinext:worker-image-imports",
-    ]);
-  });
-
-  it("versions bundled worker graphs and leaves string workers unbundled", async () => {
+async function getBuiltWorkerFixture() {
+  builtWorkerFixture ??= (async () => {
     const root = await createWorkerFixture();
     const config: InlineConfig = {
       root,
@@ -133,8 +109,6 @@ describe("web worker production output", () => {
       path.join(root, "dist", "client", "docs", "_next", "static", "workers"),
     );
     const workerFiles = files.filter((file) => file.endsWith(".js"));
-    expect(workerFiles).toHaveLength(3);
-
     const clientFiles = await fs.readdir(
       path.join(root, "dist", "client", "docs", "_next", "static", "chunks"),
     );
@@ -144,13 +118,6 @@ describe("web worker production output", () => {
       path.join(root, "dist", "client", "docs", "_next", "static", "chunks", pageFile!),
       "utf8",
     );
-    for (const workerFile of workerFiles) {
-      expect(pageCode).toContain(`/docs/_next/static/workers/${workerFile}?dpl=worker-deploy-123`);
-    }
-    expect(pageCode).toContain("globalThis.location.href");
-    expect(pageCode).not.toContain("file:///ROOT/");
-    expect(pageCode).toContain("new Worker(`/docs/unbundled-worker.js`)");
-
     const workerCode = (
       await Promise.all(
         workerFiles.map((workerFile) =>
@@ -161,6 +128,77 @@ describe("web worker production output", () => {
         ),
       )
     ).join("\n");
+
+    return { root, workerFiles, pageCode, workerCode };
+  })();
+  return builtWorkerFixture;
+}
+
+afterAll(async () => {
+  await Promise.all(
+    temporaryDirectories.map((directory) => fs.rm(directory, { recursive: true, force: true })),
+  );
+});
+
+describe("web worker production output", () => {
+  it("supports legacy worker plugin arrays and callable plugin factories", async () => {
+    const root = await createWorkerFixture();
+    const plugins = vinext({
+      appDir: root,
+      nextConfig: { deploymentId: "worker-deploy-123" },
+    }) as Array<{
+      name: string;
+      config?: (config: unknown, env: { command: string }) => Promise<unknown>;
+    }>;
+    const configPlugin = plugins.find((plugin) => plugin.name === "vinext:config");
+    for (const userPlugins of [
+      [{ name: "user-worker-plugin" }],
+      () => [{ name: "user-worker-plugin" }],
+    ]) {
+      const config = (await configPlugin?.config?.(
+        {
+          root,
+          build: {},
+          plugins: [],
+          worker: {
+            plugins: userPlugins,
+            rolldownOptions: {
+              output: { exports: "named", sourcemap: true },
+            },
+          },
+        },
+        { command: "build" },
+      )) as {
+        worker: {
+          plugins: () => Array<{ name: string }>;
+          rolldownOptions: { output: Record<string, unknown> };
+        };
+      };
+
+      expect(config.worker.rolldownOptions.output).toMatchObject({
+        exports: "named",
+        sourcemap: true,
+        entryFileNames: "_next/static/workers/[name]-[hash].js",
+        chunkFileNames: "_next/static/workers/[name]-[hash].js",
+      });
+      expect(config.worker.plugins().map((plugin) => plugin.name)).toEqual([
+        "user-worker-plugin",
+        "vinext:worker-image-imports",
+      ]);
+    }
+  });
+
+  it("versions bundled worker graphs and leaves string workers unbundled", async () => {
+    const { root, workerFiles, pageCode, workerCode } = await getBuiltWorkerFixture();
+    expect(workerFiles).toHaveLength(5);
+
+    for (const workerFile of workerFiles) {
+      expect(pageCode).toContain(`/docs/_next/static/workers/${workerFile}?dpl=worker-deploy-123`);
+    }
+    expect(pageCode).toContain("globalThis.location.href");
+    expect(pageCode).not.toContain("file:///ROOT/");
+    expect(pageCode).toContain("new Worker(`/docs/unbundled-worker.js`)");
+
     expect(workerCode).toContain("worker-deploy-123");
     expect(workerCode).toContain("worker-dep");
     expect(workerCode).toContain("test-image-");
@@ -169,5 +207,28 @@ describe("web worker production output", () => {
     expect(
       await fs.readFile(path.join(root, "dist", "client", "unbundled-worker.js"), "utf8"),
     ).toBe('self.postMessage("unbundled")');
+  }, 30_000);
+
+  it("bundles SharedWorker graphs with dynamic imports", async () => {
+    const { pageCode, workerCode } = await getBuiltWorkerFixture();
+
+    expect(pageCode).toContain("new SharedWorker");
+    expect(workerCode).toContain("shared-worker.ts:");
+    expect(workerCode).toContain("worker-dep");
+  }, 30_000);
+
+  it("resolves WASM relative to the worker import.meta.url", async () => {
+    const { root, workerCode } = await getBuiltWorkerFixture();
+    const staticFiles = await fs.readdir(
+      path.join(root, "dist", "client", "docs", "_next", "static"),
+    );
+    const wasmFile = staticFiles.find((file) => file.startsWith("add-") && file.endsWith(".wasm"));
+
+    expect(wasmFile).toBeDefined();
+    expect(workerCode).toContain("WebAssembly.instantiate");
+    expect(workerCode).toContain(
+      `new URL(\`/docs/_next/static/${wasmFile}?dpl=worker-deploy-123\`,\`\`+self.location.href)`,
+    );
+    expect(workerCode).not.toContain("file:///ROOT/");
   }, 30_000);
 });
