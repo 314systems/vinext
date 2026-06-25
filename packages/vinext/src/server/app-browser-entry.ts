@@ -2077,19 +2077,17 @@ function bootstrapHydration(
       activeNavigationAbortController?.abort();
       activeNavigationAbortController = null;
       const navId = browserNavigationController.beginNavigation();
-      flushSync(() => {
-        browserNavigationController.restoreHistorySnapshotVisibleState({
-          allowUnclassifiedRestore: true,
-          navId,
-          state: {
-            ...currentState,
-            navigationSnapshot: createClientNavigationRenderSnapshot(
-              targetHref,
-              currentState.navigationSnapshot.params,
-            ),
-          },
-          targetHref,
-        });
+      browserNavigationController.restoreHistorySnapshotVisibleState({
+        allowUnclassifiedRestore: true,
+        navId,
+        state: {
+          ...currentState,
+          navigationSnapshot: createClientNavigationRenderSnapshot(
+            targetHref,
+            currentState.navigationSnapshot.params,
+          ),
+        },
+        targetHref,
       });
     },
     commitHashNavigation: (href, historyUpdateMode, scroll) =>

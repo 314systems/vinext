@@ -1,6 +1,6 @@
 // Ported from Next.js: test/e2e/app-dir/shallow-routing/shallow-routing.test.ts
 // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/shallow-routing/shallow-routing.test.ts
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../../fixtures";
 import { waitForAppRouterHydration } from "../../helpers";
 
 const BASE = "http://localhost:4174";
