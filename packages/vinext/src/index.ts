@@ -173,7 +173,6 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import commonjs from "vite-plugin-commonjs";
-import { createIgnoreDynamicRequestsPlugin } from "./plugins/ignore-dynamic-requests.js";
 import { normalizePathSeparators, stripJsExtension, stripViteModuleQuery } from "./utils/path.js";
 import { escapeRegExp } from "./utils/regex.js";
 import {
@@ -770,6 +769,117 @@ function createCommonjsPlugin(isEnabled: () => boolean): Plugin {
   return plugin;
 }
 
+function skipBuildRequestWhitespaceAndComments(code: string, index: number): number {
+  while (index < code.length) {
+    if (/\s/.test(code[index])) {
+      index++;
+      continue;
+    }
+    if (code.startsWith("/*", index)) {
+      const end = code.indexOf("*/", index + 2);
+      if (end === -1) return index;
+      index = end + 2;
+      continue;
+    }
+    if (code.startsWith("//", index)) {
+      index += 2;
+      while (index < code.length && code[index] !== "\n" && code[index] !== "\r") index++;
+      continue;
+    }
+    break;
+  }
+  return index;
+}
+
+function skipBuildRequestQuotedString(code: string, index: number): number {
+  const quote = code[index];
+  index++;
+  while (index < code.length) {
+    const char = code[index];
+    if (char === "\\") {
+      index += 2;
+      continue;
+    }
+    if (char === quote) return index + 1;
+    index++;
+  }
+  return -1;
+}
+
+function skipBuildRequestStaticTemplate(code: string, index: number): number {
+  index++;
+  while (index < code.length) {
+    const char = code[index];
+    if (char === "\\") {
+      index += 2;
+      continue;
+    }
+    if (char === "$" && code[index + 1] === "{") return -1;
+    if (char === "`") return index + 1;
+    index++;
+  }
+  return -1;
+}
+
+function mayContainVeryDynamicRequest(code: string): boolean {
+  let index = -1;
+  while ((index = code.search(/\b(?:require|import)\b/)) >= 0) {
+    const match = code.slice(index).match(/^\b(?:require|import)\b/);
+    if (!match) return true;
+    const tokenEnd = index + match[0].length;
+    let cursor = skipBuildRequestWhitespaceAndComments(code, tokenEnd);
+    if (code[cursor] !== "(") {
+      code = code.slice(tokenEnd);
+      continue;
+    }
+
+    cursor = skipBuildRequestWhitespaceAndComments(code, cursor + 1);
+    const start = code[cursor];
+    const literalEnd =
+      start === '"' || start === "'"
+        ? skipBuildRequestQuotedString(code, cursor)
+        : start === "`"
+          ? skipBuildRequestStaticTemplate(code, cursor)
+          : -1;
+    if (literalEnd === -1) return true;
+
+    cursor = skipBuildRequestWhitespaceAndComments(code, literalEnd);
+    if (code[cursor] !== ")" && code[cursor] !== ",") return true;
+    code = code.slice(cursor + 1);
+  }
+  return false;
+}
+
+function createLazyIgnoreDynamicRequestsPlugin(
+  getTranspiledPackages: () => readonly string[],
+): Plugin {
+  let delegatePromise: Promise<Plugin> | null = null;
+  const loadDelegate = () =>
+    (delegatePromise ??= import("./plugins/ignore-dynamic-requests.js").then((mod) =>
+      mod.createIgnoreDynamicRequestsPlugin(getTranspiledPackages),
+    ));
+
+  return {
+    name: "vinext:ignore-dynamic-requests",
+    enforce: "pre",
+    transform: {
+      filter: {
+        id: {
+          include: /\.(?:[cm]?[jt]s|[jt]sx)(?:\?.*)?$/,
+        },
+        code: /\b(?:require|import)\b/,
+      },
+      async handler(code, id) {
+        if (!mayContainVeryDynamicRequest(code)) return null;
+        const delegate = await loadDelegate();
+        const transform = delegate.transform;
+        if (!transform || typeof transform === "function") return null;
+        return Reflect.apply(transform.handler, this, [code, id]);
+      },
+    },
+  };
+}
+
 function getClientOutputConfigForVite(
   viteMajorVersion: number,
   assetsDir: string,
@@ -1245,7 +1355,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     reactPluginPromise,
     // Next.js ignores requests without any statically known path component
     // during graph analysis and leaves a deterministic runtime failure.
-    createIgnoreDynamicRequestsPlugin(() => nextConfig?.turbopackTranspilePackages ?? []),
+    createLazyIgnoreDynamicRequestsPlugin(() => nextConfig?.turbopackTranspilePackages ?? []),
     // Transform CJS require()/module.exports to ESM before other plugins
     // analyze imports (RSC directive scanning, shim resolution, etc.)
     createCommonjsPlugin(() => commonjsCompatibilityEnabled),
