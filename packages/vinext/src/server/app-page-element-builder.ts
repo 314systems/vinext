@@ -23,6 +23,7 @@ import type { MetadataFileRoute } from "./metadata-routes.js";
 import { APP_RSC_RENDER_MODE_NAVIGATION, type AppRscRenderMode } from "./app-rsc-render-mode.js";
 import type { AppLayoutParamAccessTracker } from "./app-layout-param-observation.js";
 import { createAppPageRenderIdentity } from "./app-page-render-identity.js";
+import { peekDynamicUsage } from "vinext/shims/headers";
 import {
   createAppPageSearchParamsObserver,
   makeObservedAppPageSearchParamsThenable,
@@ -102,7 +103,7 @@ export type AppPagePageRequest<TModule extends AppPageModule = AppPageModule> = 
   /** Observe page metadata `searchParams` access for cache-safety classification. */
   observeMetadataSearchParamsAccess?: boolean;
   /** Force resolved metadata into the document head for blocking static renders. */
-  metadataPlacement?: "body" | "head";
+  metadataPlacement?: "body" | "head" | "head-if-static";
 };
 
 export type BuildPageElementsOptions<
@@ -359,15 +360,20 @@ export async function buildPageElements<
   const mountedSlotIds = mountedSlotsHeader ? new Set(mountedSlotsHeader.split(" ")) : null;
 
   const slotOverrides = buildSlotOverrides(route, params, routePath, opts);
-  const metadataPlacement =
-    requestedMetadataPlacement ??
-    (hasDynamicMetadata &&
+  const defaultMetadataPlacement =
+    hasDynamicMetadata &&
     shouldServeStreamingMetadata(
       pageRequest.request.headers.get("user-agent") ?? "",
       options.htmlLimitedBots,
     )
       ? "body"
-      : "head");
+      : "head";
+  const metadataPlacement =
+    requestedMetadataPlacement === "head-if-static"
+      ? peekDynamicUsage()
+        ? defaultMetadataPlacement
+        : "head"
+      : (requestedMetadataPlacement ?? defaultMetadataPlacement);
 
   // For sibling intercepts, wrap the intercepting page in any layouts that
   // live under the interception marker directory (interceptLayouts). In Next.js
