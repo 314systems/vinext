@@ -29,6 +29,7 @@ import {
 } from "./app-page-search-params-observation.js";
 import { shouldServeStreamingMetadata } from "./streaming-metadata.js";
 import { resolveAppPageBranchParams } from "./app-page-params.js";
+import { createAppRenderDependency, type AppRenderDependency } from "./app-render-dependency.js";
 
 function resolveInterceptLayoutParams(
   branchSegments: readonly string[],
@@ -327,8 +328,10 @@ export async function buildPageElements<
   const createPageElement = (
     PageComponent: AppPageComponent,
     props: Readonly<Record<string, unknown>>,
+    completion?: AppRenderDependency,
   ) => {
     if (isReactOwnedPageComponent(PageComponent)) {
+      completion?.release();
       const invocationProps = { ...props };
       if (searchParams) {
         invocationProps.searchParams = observePageSearchParamsAccess
@@ -343,14 +346,18 @@ export async function buildPageElements<
     const ServerPageComponent = PageComponent as unknown as (
       props: Readonly<Record<string, unknown>>,
     ) => ReturnType<typeof createElement> | Promise<unknown> | string | number | null;
-    const PageInvoker = () => {
+    const PageInvoker = async () => {
       const invocationProps = { ...props };
       if (searchParams) {
         invocationProps.searchParams = observePageSearchParamsAccess
           ? makeObservedAppPageSearchParamsThenable(pageSearchParams)
           : makeThenableParams(pageSearchParams);
       }
-      return ServerPageComponent(invocationProps);
+      try {
+        return await ServerPageComponent(invocationProps);
+      } finally {
+        completion?.release();
+      }
     };
     return createElement(PageInvoker as unknown as AppPageComponent);
   };
@@ -368,6 +375,10 @@ export async function buildPageElements<
       ? "body"
       : "head";
   const metadataPlacement = requestedMetadataPlacement ?? defaultMetadataPlacement;
+  const pageCompletion =
+    metadataPlacement === "head-if-static" && EffectivePageComponent
+      ? createAppRenderDependency()
+      : undefined;
 
   // For sibling intercepts, wrap the intercepting page in any layouts that
   // live under the interception marker directory (interceptLayouts). In Next.js
@@ -377,7 +388,7 @@ export async function buildPageElements<
   // so a layout.tsx adjacent to the (.) / (..) / (...) marker dir is respected.
   let siblingInterceptElement: ReturnType<typeof createElement> | null =
     isSiblingIntercept && EffectivePageComponent
-      ? createPageElement(EffectivePageComponent, pageProps)
+      ? createPageElement(EffectivePageComponent, pageProps, pageCompletion)
       : null;
   if (isSiblingIntercept && siblingInterceptElement !== null && opts?.interceptLayouts?.length) {
     for (let i = opts.interceptLayouts.length - 1; i >= 0; i--) {
@@ -407,7 +418,7 @@ export async function buildPageElements<
     element: isSiblingIntercept
       ? siblingInterceptElement
       : EffectivePageComponent
-        ? createPageElement(EffectivePageComponent, pageProps)
+        ? createPageElement(EffectivePageComponent, pageProps, pageCompletion)
         : null,
     createPageElement,
     // Fall back to vinext's built-in default global error module so that
@@ -422,6 +433,7 @@ export async function buildPageElements<
     makeThenableParams,
     matchedParams: params,
     metadataPlacement,
+    metadataPlacementDependencies: pageCompletion ? [pageCompletion] : [],
     resolvedMetadata,
     resolvedMetadataPathname: routePath,
     resolvedViewport,

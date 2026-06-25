@@ -205,7 +205,9 @@ type BuildAppPageRouteElementOptions<
   createPageElement?: (
     component: AppPageComponent,
     props: Readonly<Record<string, unknown>>,
+    completion?: AppRenderDependency,
   ) => ReactNode;
+  metadataPlacementDependencies?: readonly AppRenderDependency[];
   searchParams?: unknown;
   slotOverrides?: Readonly<Record<string, AppPageSlotOverride<TModule>>> | null;
 };
@@ -573,7 +575,9 @@ export function buildAppPageElements<
   const templateEntries = createAppPageTemplateEntries(options.route);
   const errorEntries = createAppPageErrorEntries(options.route);
   const metadataPlacement = options.metadataPlacement ?? "head";
-  const metadataPlacementDependencies: AppRenderDependency[] = [];
+  const metadataPlacementDependencies: AppRenderDependency[] = [
+    ...(options.metadataPlacementDependencies ?? []),
+  ];
   const layoutEntriesByTreePosition = new Map<number, AppPageLayoutEntry<TModule, TErrorModule>>();
   const templateEntriesByTreePosition = new Map<number, AppPageTemplateEntry<TModule>>();
   const errorEntriesByTreePosition = new Map<number, AppPageErrorEntry<TErrorModule>>();
@@ -697,13 +701,6 @@ export function buildAppPageElements<
 
   if (isPrefetchLoadingShell) {
     elements[pageId] = null;
-  } else if (metadataPlacement === "head-if-static") {
-    const pageCompletion = createAppRenderDependency();
-    metadataPlacementDependencies.push(pageCompletion);
-    elements[pageId] = renderAfterAppDependencies(
-      renderWithAppDependencyBarrier(options.element, pageCompletion),
-      pageDependencies,
-    );
   } else {
     elements[pageId] = renderAfterAppDependencies(options.element, pageDependencies);
   }
@@ -837,10 +834,18 @@ export function buildAppPageElements<
       Object.assign(slotProps, slotOverride.props);
     }
 
+    const slotCompletion =
+      metadataPlacement === "head-if-static" && options.createPageElement
+        ? createAppRenderDependency()
+        : undefined;
+    if (slotCompletion) {
+      metadataPlacementDependencies.push(slotCompletion);
+    }
     let slotElement: ReactNode = options.createPageElement
-      ? options.createPageElement(slotComponent, slotProps)
+      ? options.createPageElement(slotComponent, slotProps, slotCompletion)
       : (() => {
           const SlotComponent = slotComponent;
+          slotCompletion?.release();
           return <SlotComponent {...slotProps} />;
         })();
     const hasSlotTreeOverride =
@@ -916,12 +921,6 @@ export function buildAppPageElements<
           {slotElement}
         </ErrorBoundary>
       );
-    }
-
-    if (metadataPlacement === "head-if-static" && overrideOrPageComponent) {
-      const slotCompletion = createAppRenderDependency();
-      metadataPlacementDependencies.push(slotCompletion);
-      slotElement = renderWithAppDependencyBarrier(slotElement, slotCompletion);
     }
 
     elements[slotId] = renderAfterAppDependencies(

@@ -71,7 +71,7 @@ function createBaseOptions(overrides?: {
   opts?: Record<string, unknown> | null;
   searchParams?: URLSearchParams | null;
   mountedSlotsHeader?: string | null;
-  metadataPlacement?: "body" | "head";
+  metadataPlacement?: "body" | "head" | "head-if-static";
 }) {
   return {
     route:

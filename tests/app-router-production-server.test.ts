@@ -1266,6 +1266,21 @@ describe("App Router Production server (startProdServer)", () => {
     expect(html).toContain("Dynamic parallel slot using connection");
   });
 
+  it("keeps static metadata in body when an active default slot uses a dynamic API", async () => {
+    // Next.js v16.2.6 treats defaultPage as the active page component for a
+    // parallel branch while attaching MetadataOutlet only to the primary
+    // children branch in create-component-tree.tsx.
+    const response = await fetch(`${baseUrl}/metadata-streaming-default-dynamic`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-vinext-cache")).toBeNull();
+    const html = await response.text();
+    expect(getDocumentSection(html, "head")).not.toContain("<title>");
+    expect(getDocumentSection(html, "body")).toContain(
+      "<title>Default slot dynamic streamed metadata</title>",
+    );
+    expect(html).toContain("Dynamic active default slot using cookies");
+  });
+
   it("page ISR + searchParams: RSC requests stay dynamic instead of serving cached query data", async () => {
     const res1 = await fetch(`${baseUrl}/isr-dynamic-search.rsc?filter=crimson`, {
       headers: { Accept: "text/x-component", RSC: "1" },

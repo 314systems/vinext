@@ -11,6 +11,7 @@ export async function generateMetadata() {
 }
 
 export default async function MetadataStreamingBodyDynamicPage() {
+  await new Promise((resolve) => setTimeout(resolve, 25));
   await headers();
   return <main>Body-only dynamic metadata page</main>;
 }
