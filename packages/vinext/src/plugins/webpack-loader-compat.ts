@@ -123,8 +123,7 @@ function resolveLoader(
     } catch {
       return null;
     }
-  }
-  else if (entry && typeof entry === "object") {
+  } else if (entry && typeof entry === "object") {
     const record = entry as Record<string, unknown>;
     options = record.options;
     if (typeof record.loader === "function") loader = record.loader;
@@ -218,9 +217,7 @@ export function createWebpackLoaderCompatPlugin(
     const loaders = rules
       .flatMap(loaderEntries)
       .map((entry) => resolveLoader(entry, requireFromRoot));
-    return loaders.length > 0 && loaders.every((entry) => entry !== null)
-      ? loaders
-      : null;
+    return loaders.length > 0 && loaders.every((entry) => entry !== null) ? loaders : null;
   };
 
   return {
