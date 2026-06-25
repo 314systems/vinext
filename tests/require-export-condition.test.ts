@@ -91,6 +91,24 @@ const dynamicValue = require(name);`,
     });
   });
 
+  it("preserves package aliases resolved outside node_modules", async () => {
+    const plugin = createRequireExportConditionPlugin();
+    const resolve = vi.fn().mockResolvedValue({ id: "/vinext/shims/headers.ts" });
+    const resolveId = plugin.resolveId as unknown as (
+      this: { resolve: typeof resolve },
+      id: string,
+      importer: string,
+    ) => Promise<unknown>;
+
+    await expect(
+      resolveId.call(
+        { resolve },
+        "virtual:vinext-require-condition:next%2Fheaders",
+        "/app/page.tsx",
+      ),
+    ).resolves.toEqual({ id: "/vinext/shims/headers.ts" });
+  });
+
   it("loads external packages through createRequire at runtime", async () => {
     const plugin = createRequireExportConditionPlugin();
     const resolve = vi.fn().mockResolvedValue({ id: "external-pkg", external: true });

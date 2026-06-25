@@ -79,9 +79,11 @@ export function createRequireExportConditionPlugin(): Plugin {
       }
 
       let requireResolvedId = resolved.id;
-      try {
-        requireResolvedId = createRequire(importer).resolve(specifier);
-      } catch {}
+      if (isNodeModulesId(resolved.id)) {
+        try {
+          requireResolvedId = createRequire(importer).resolve(specifier);
+        } catch {}
+      }
       if (!(await hasLeadingUseClientDirective(requireResolvedId))) {
         return { ...resolved, id: requireResolvedId };
       }
@@ -112,6 +114,10 @@ export default value;
 
 function isVirtualId(id: string): boolean {
   return id.startsWith("\0") || id.startsWith("virtual:");
+}
+
+function isNodeModulesId(id: string): boolean {
+  return id.replaceAll("\\", "/").includes("/node_modules/");
 }
 
 async function hasLeadingUseClientDirective(id: string): Promise<boolean> {
