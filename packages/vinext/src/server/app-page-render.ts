@@ -35,6 +35,7 @@ import {
   deferUntilStreamConsumed,
   renderAppPageHtmlStream,
   renderAppPageHtmlStreamWithRecovery,
+  trackStreamCompletion,
   type AppPageSsrHandler,
 } from "./app-page-stream.js";
 import type { AppRscRenderMode } from "./app-rsc-render-mode.js";
@@ -164,6 +165,7 @@ type RenderAppPageLifecycleOptions = {
   params: Record<string, unknown>;
   pprFallbackShellSignal?: AbortSignal;
   pprFallbackShellReactSignal?: AbortSignal;
+  requestSignal?: AbortSignal;
   abortPprFallbackShell?: () => void;
   rootParams?: RootParams;
   peekRenderObservationState?: () => AppPageRenderObservationState;
@@ -690,12 +692,50 @@ export async function renderAppPageLifecycle(
   // standalone call would establish here is only effective if the caller has
   // an outer runWithRequestContext / runWithFetchDedupe scope keeping the ALS
   // store alive across that consumption.
+  const rscAbortController = new AbortController();
+  const rscRenderSignal = rscAbortController.signal;
+  const externalRscSignal = options.pprFallbackShellReactSignal ?? options.pprFallbackShellSignal;
+  const onExternalRscAbort = () => {
+    if (!rscAbortController.signal.aborted) {
+      rscAbortController.abort(externalRscSignal?.reason);
+    }
+  };
+  if (externalRscSignal) {
+    if (externalRscSignal.aborted) {
+      onExternalRscAbort();
+    } else {
+      externalRscSignal.addEventListener("abort", onExternalRscAbort, { once: true });
+    }
+  }
+  let requestContextCleared = false;
+  const clearRequestContext = () => {
+    if (requestContextCleared) return;
+    requestContextCleared = true;
+    externalRscSignal?.removeEventListener("abort", onExternalRscAbort);
+    options.clearRequestContext();
+  };
+  const abortRscRender = (reason: unknown) => {
+    if (!rscAbortController.signal.aborted) {
+      rscAbortController.abort(reason);
+    }
+  };
+  const onRequestAbort = () => {
+    abortRscRender(options.requestSignal?.reason);
+    clearRequestContext();
+  };
+  if (options.requestSignal) {
+    if (options.requestSignal.aborted) {
+      onRequestAbort();
+    } else {
+      options.requestSignal.addEventListener("abort", onRequestAbort, { once: true });
+    }
+  }
+
   let rscStream = await runWithFetchDedupe(async () => {
     if (options.pprFallbackShellSignal && options.prerenderToReadableStream) {
-      const reactSignal = options.pprFallbackShellReactSignal ?? options.pprFallbackShellSignal;
       const pendingResult = options.prerenderToReadableStream(outgoingElement, {
         onError: rscErrorTracker.onRenderError,
-        signal: reactSignal,
+        signal: rscRenderSignal,
       });
       if (options.abortPprFallbackShell) {
         setTimeout(options.abortPprFallbackShell, 0);
@@ -705,6 +745,7 @@ export async function renderAppPageLifecycle(
 
     return options.renderToReadableStream(outgoingElement, {
       onError: rscErrorTracker.onRenderError,
+      signal: rscRenderSignal,
     });
   });
   let resolvePendingMetadataPlacement!: (placement: AppPendingMetadataPlacement) => void;
@@ -712,27 +753,16 @@ export async function renderAppPageLifecycle(
     resolvePendingMetadataPlacement = resolve;
   });
   if (!options.isRscRequest && !options.pprFallbackShellSignal) {
-    const [renderStream, completionStream] = rscStream.tee();
-    rscStream = renderStream;
-    const completionReader = completionStream.getReader();
-    const drainCompletionStream = async (): Promise<void> => {
-      for (;;) {
-        const { done } = await completionReader.read();
-        if (done) return;
-      }
-    };
-    void drainCompletionStream().then(
-      () => {
-        resolvePendingMetadataPlacement(
-          dynamicUsedBeforeRscRender || options.peekDynamicUsage?.() ? "body" : "head",
-        );
-      },
-      () => {
-        resolvePendingMetadataPlacement(
-          dynamicUsedBeforeRscRender || options.peekDynamicUsage?.() ? "body" : "head",
-        );
-      },
-    );
+    let resolveFlightCompletion!: () => void;
+    const flightCompletion = new Promise<void>((resolve) => {
+      resolveFlightCompletion = resolve;
+    });
+    rscStream = trackStreamCompletion(rscStream, resolveFlightCompletion);
+    void flightCompletion.then(() => {
+      resolvePendingMetadataPlacement(
+        dynamicUsedBeforeRscRender || options.peekDynamicUsage?.() ? "body" : "head",
+      );
+    });
   } else {
     resolvePendingMetadataPlacement("head");
   }
@@ -941,6 +971,9 @@ export async function renderAppPageLifecycle(
     resolveSpecialError: resolveAppPageSpecialError,
   });
   if (htmlRender.response) {
+    abortRscRender(new Error("App page HTML render returned an alternate response"));
+    options.requestSignal?.removeEventListener("abort", onRequestAbort);
+    clearRequestContext();
     return htmlRender.response;
   }
   let htmlStream = htmlRender.htmlStream;
@@ -976,7 +1009,10 @@ export async function renderAppPageLifecycle(
     if (captured) {
       const specialError = resolveAppPageSpecialError(captured);
       if (specialError) {
+        abortRscRender(specialError);
         void htmlStream.cancel().catch(() => {});
+        options.requestSignal?.removeEventListener("abort", onRequestAbort);
+        clearRequestContext();
         return options.renderPageSpecialError(specialError);
       }
     }
@@ -1002,11 +1038,18 @@ export async function renderAppPageLifecycle(
   // Clearing the context synchronously here would race those executions, causing
   // headers()/cookies() to see a null context on warm (module-cached) requests.
   // See: https://github.com/cloudflare/vinext/issues/660
-  const safeHtmlStream = deferUntilStreamConsumed(htmlStream, () => {
-    dynamicUsedBeforeContextCleanup =
-      dynamicUsedBeforeContextCleanup || options.consumeDynamicUsage();
-    options.clearRequestContext();
-  });
+  const safeHtmlStream = deferUntilStreamConsumed(
+    htmlStream,
+    () => {
+      dynamicUsedBeforeContextCleanup =
+        dynamicUsedBeforeContextCleanup || options.consumeDynamicUsage();
+      options.requestSignal?.removeEventListener("abort", onRequestAbort);
+      clearRequestContext();
+    },
+    (reason) => {
+      abortRscRender(reason);
+    },
+  );
 
   const htmlResponsePolicy = resolveAppPageHtmlResponsePolicy({
     dynamicUsedDuringRender,

@@ -10,6 +10,7 @@ import { deferUntilStreamConsumed } from "./defer-until-stream-consumed.js";
 import type { AppPendingMetadataPlacement } from "./app-pending-metadata.js";
 
 export { deferUntilStreamConsumed } from "./defer-until-stream-consumed.js";
+export { trackStreamCompletion } from "./defer-until-stream-consumed.js";
 
 export type AppPageFontData = {
   links: string[];

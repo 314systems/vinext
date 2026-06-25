@@ -326,6 +326,106 @@ describe("clearRequestContext timing — issue #660", () => {
     // Context must be cleared after the stream is fully consumed.
     expect(contextCleared).toHaveLength(1);
   });
+
+  it("does not drain the Flight stream ahead of a slow HTML consumer", async () => {
+    const common = createCommonOptions();
+    let flightPulls = 0;
+    const htmlGate = createDeferred();
+
+    const response = await renderAppPageLifecycle({
+      ...common.options,
+      isRscRequest: false,
+      loadSsrHandler: async () => ({
+        async handleSsr() {
+          return new ReadableStream<Uint8Array>({
+            async pull(controller) {
+              await htmlGate.promise;
+              controller.enqueue(new TextEncoder().encode("<html>slow</html>"));
+              controller.close();
+            },
+          });
+        },
+      }),
+      renderToReadableStream() {
+        return new ReadableStream<Uint8Array>({
+          pull(controller) {
+            flightPulls++;
+            controller.enqueue(new Uint8Array(64 * 1024));
+          },
+        });
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(flightPulls).toBeLessThanOrEqual(2);
+
+    htmlGate.resolve();
+    await expect(response.text()).resolves.toBe("<html>slow</html>");
+  });
+
+  it("aborts Flight rendering and clears request context when HTML is cancelled", async () => {
+    const common = createCommonOptions();
+    const clearRequestContext = vi.fn();
+    const renderAborted = createDeferred();
+
+    const response = await renderAppPageLifecycle({
+      ...common.options,
+      clearRequestContext,
+      isRscRequest: false,
+      loadSsrHandler: async () => ({
+        async handleSsr() {
+          return new ReadableStream<Uint8Array>({
+            pull() {},
+          });
+        },
+      }),
+      renderToReadableStream(_element, { signal }) {
+        signal?.addEventListener("abort", () => renderAborted.resolve(), { once: true });
+        return new ReadableStream<Uint8Array>({
+          pull() {},
+        });
+      },
+    });
+
+    await response.body?.cancel("client disconnected");
+    await renderAborted.promise;
+
+    expect(clearRequestContext).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts Flight rendering and clears request context when the request aborts", async () => {
+    const common = createCommonOptions();
+    const requestAbortController = new AbortController();
+    const clearRequestContext = vi.fn();
+    const renderAborted = createDeferred();
+
+    const response = await renderAppPageLifecycle({
+      ...common.options,
+      clearRequestContext,
+      isRscRequest: false,
+      requestSignal: requestAbortController.signal,
+      loadSsrHandler: async () => ({
+        async handleSsr() {
+          return new ReadableStream<Uint8Array>({
+            pull() {},
+          });
+        },
+      }),
+      renderToReadableStream(_element, { signal }) {
+        signal?.addEventListener("abort", () => renderAborted.resolve(), { once: true });
+        return new ReadableStream<Uint8Array>({
+          pull() {},
+        });
+      },
+    });
+
+    requestAbortController.abort("request disconnected");
+    await renderAborted.promise;
+
+    expect(clearRequestContext).toHaveBeenCalledTimes(1);
+    await response.body?.cancel();
+    expect(clearRequestContext).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("SSR shell error recovery", () => {
