@@ -2785,6 +2785,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 // Client-scoped so RSC/SSR keep their normal asset handling
                 // unless the user configured Vite globally.
                 assetsInlineLimit: clientAssetsInlineLimit,
+                modulePreload: false,
                 ...withBuildBundlerOptions(viteMajorVersion, {
                   input: appClientInput,
                   output: getClientOutputConfigForVite(viteMajorVersion, clientAssetsDir, true),
