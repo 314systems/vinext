@@ -52,7 +52,7 @@ import {
   createBfcacheSegmentStateKeyMap,
   createInitialBfcacheIdMap,
 } from "./app-bfcache-identity.js";
-import { BfcacheStateKeyMapContext, ElementsContext, Slot } from "vinext/shims/slot";
+import { BfcacheStateKeyMapContext, ElementsContext, Slot } from "virtual:vinext-app-slot-runtime";
 import { AppRouterContext } from "vinext/shims/internal/app-router-context";
 import { createClientReferencePreloader } from "./app-client-reference-preloader.js";
 import { RSC_FORM_STATE_GLOBAL } from "./app-browser-hydration.js";

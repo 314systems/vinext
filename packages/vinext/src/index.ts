@@ -561,6 +561,7 @@ const VIRTUAL_APP_BROWSER_ENTRY = "virtual:vinext-app-browser-entry";
 const RESOLVED_APP_BROWSER_ENTRY = VIRTUAL_PREFIX + VIRTUAL_APP_BROWSER_ENTRY;
 const VIRTUAL_APP_CAPABILITIES = "virtual:vinext-app-capabilities";
 const RESOLVED_APP_CAPABILITIES = VIRTUAL_PREFIX + VIRTUAL_APP_CAPABILITIES;
+const VIRTUAL_APP_SLOT_RUNTIME = "virtual:vinext-app-slot-runtime";
 const RESOLVED_APP_ROUTE_MANIFEST = VIRTUAL_PREFIX + VIRTUAL_APP_ROUTE_MANIFEST;
 const VIRTUAL_ROOT_PARAMS = "virtual:vinext-root-params";
 const RESOLVED_ROOT_PARAMS = VIRTUAL_PREFIX + VIRTUAL_ROOT_PARAMS;
@@ -1064,6 +1065,16 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   let googleFontRuntimeRequired = false;
   let localFontRuntimeRequired = false;
   let fetchCacheRuntimeRequired = false;
+
+  function canUseDocumentOnlyClientRuntime(hasServerActions: boolean | null): boolean {
+    return (
+      clientRouterRuntimeRequired === false &&
+      !hasPagesDir &&
+      nextConfig.i18n === null &&
+      instrumentationClientPath === null &&
+      hasServerActions === false
+    );
+  }
 
   async function resolveHasClientRouterRuntime(
     config: Pick<ResolvedConfig, "command" | "plugins">,
@@ -2777,6 +2788,17 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
 
           if (isVercelOgImport(cleanId) && !isVinextOgShimImporter(importer)) {
             return resolveShimModulePath(_shimsDir, "og");
+          }
+
+          if (cleanId === VIRTUAL_APP_SLOT_RUNTIME) {
+            const useDocumentSlotRuntime =
+              this.environment?.config.command === "build" &&
+              !nextConfig.cacheComponents &&
+              canUseDocumentOnlyClientRuntime(serverActionRuntimeRequired);
+            return resolveShimModulePath(
+              _shimsDir,
+              useDocumentSlotRuntime ? "slot-document" : "slot",
+            );
           }
 
           const vinextShimPrefix = "vinext/shims/";
@@ -5782,15 +5804,16 @@ export const loadServerActionClient = ${
           return !nextConfig.cacheComponents;
         },
         rewriteClientReferenceImportId(importId, { hasServerActions }) {
-          if (
-            clientRouterRuntimeRequired === false &&
-            !hasPagesDir &&
-            nextConfig.i18n === null &&
-            instrumentationClientPath === null &&
-            !hasServerActions &&
-            importId === resolveShimModulePath(_shimsDir, "link")
-          ) {
+          const useDocumentOnlyRuntime = canUseDocumentOnlyClientRuntime(hasServerActions);
+          if (useDocumentOnlyRuntime && importId === resolveShimModulePath(_shimsDir, "link")) {
             return resolveShimModulePath(_shimsDir, "link-document");
+          }
+          if (
+            useDocumentOnlyRuntime &&
+            !nextConfig.cacheComponents &&
+            importId === resolveShimModulePath(_shimsDir, "slot")
+          ) {
+            return resolveShimModulePath(_shimsDir, "slot-document");
           }
           return importId;
         },

@@ -15,7 +15,7 @@ import {
   type AppElements,
   type AppWireElements,
 } from "./app-elements.js";
-import { ElementsContext, Slot } from "vinext/shims/slot";
+import { ElementsContext, Slot } from "virtual:vinext-app-slot-runtime";
 import { installWindowNext } from "../client/window-next.js";
 
 function decodeAppElementsPromise(payload: Promise<AppWireElements>): Promise<AppElements> {
