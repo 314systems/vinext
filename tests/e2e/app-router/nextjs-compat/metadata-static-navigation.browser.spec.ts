@@ -37,12 +37,14 @@ async function linkFixtureNodeModules(fixtureRoot: string): Promise<void> {
 async function writeFixture(fixtureRoot: string): Promise<void> {
   const appDir = path.join(fixtureRoot, "app");
   await fs.mkdir(path.join(appDir, "second"), { recursive: true });
+  await fs.mkdir(path.join(appDir, "dynamic"), { recursive: true });
   await linkFixtureNodeModules(fixtureRoot);
 
   await fs.writeFile(
     path.join(fixtureRoot, "package.json"),
     JSON.stringify({ name: "metadata-static-navigation", private: true, type: "module" }),
   );
+  await fs.writeFile(path.join(appDir, "favicon.ico"), Buffer.from([0, 0, 1, 0, 0, 0]));
   await fs.writeFile(
     path.join(appDir, "layout.tsx"),
     `export default function Layout({ children }: { children: React.ReactNode }) {
@@ -77,6 +79,23 @@ export const metadata: Metadata = {
 
 export default function Page() {
   return <main><h1>Static Two</h1><Link id="to-first" href="/">First</Link></main>;
+}
+`,
+  );
+  await fs.writeFile(
+    path.join(appDir, "dynamic", "page.tsx"),
+    `import Link from "next/link";
+import { headers } from "next/headers";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "Dynamic Body Metadata",
+  description: "dynamic body metadata description",
+};
+
+export default async function Page() {
+  await headers();
+  return <main><h1>Dynamic Body</h1><Link id="dynamic-to-second" href="/second">Second</Link></main>;
 }
 `,
   );
@@ -132,9 +151,62 @@ test.setTimeout(90_000);
 
 test.describe("static metadata production navigation", () => {
   // Ported from Next.js:
+  // test/e2e/app-dir/ppr-metadata-streaming/ppr-metadata-streaming.test.ts
+  // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/ppr-metadata-streaming/ppr-metadata-streaming.test.ts
+  test("hydrates body metadata without moving it into head until navigation", async ({
+    page,
+    consoleErrors,
+  }) => {
+    const app = await buildAndServeFixture();
+
+    try {
+      const response = await fetch(`${app.baseUrl}/dynamic`);
+      const html = await response.text();
+      const headHtml = html.match(/<head[^>]*>([\s\S]*?)<\/head>/i)?.[1] ?? "";
+      const bodyHtml = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i)?.[1] ?? "";
+      expect(headHtml).not.toContain("Dynamic Body Metadata");
+      expect(bodyHtml).toContain("<title>Dynamic Body Metadata</title>");
+      expect(bodyHtml).toContain(
+        '<meta name="description" content="dynamic body metadata description">',
+      );
+
+      await page.goto(`${app.baseUrl}/dynamic`, { waitUntil: "load" });
+      await waitForAppRouterHydration(page);
+      await expect(page).toHaveTitle("Dynamic Body Metadata");
+      await expect(page.locator("head > title")).toHaveCount(0);
+      await expect(page.locator('head > meta[name="description"]')).toHaveCount(0);
+      await expect(page.locator("body title")).toHaveCount(1);
+      await expect(page.locator('body meta[name="description"]')).toHaveAttribute(
+        "content",
+        "dynamic body metadata description",
+      );
+      expect(consoleErrors).toEqual([]);
+
+      await page.locator("#dynamic-to-second").click();
+      await expect(page.getByRole("heading", { name: "Static Two" })).toBeVisible();
+      await expect(page).toHaveTitle("Static Metadata Two");
+      await expect(page.locator("head > title")).toHaveCount(1);
+      await expect(page.locator('head > meta[name="description"]')).toHaveAttribute(
+        "content",
+        "static metadata two description",
+      );
+      await expect(page.locator("body title")).toHaveCount(0);
+      await expect(page.locator('body meta[name="description"]')).toHaveCount(0);
+      expect(consoleErrors).toEqual([]);
+    } finally {
+      await page.close();
+      await closeServer(app.server);
+      await fs.rm(app.fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  // Ported from Next.js:
   // test/e2e/app-dir/metadata-navigation/metadata-navigation.test.ts
   // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/metadata-navigation/metadata-navigation.test.ts#L95-L108
-  test("updates document metadata without duplicating the SSR head", async ({ page }) => {
+  test("updates document metadata without duplicating the SSR head", async ({
+    page,
+    consoleErrors,
+  }) => {
     const app = await buildAndServeFixture();
 
     try {
@@ -146,6 +218,7 @@ test.describe("static metadata production navigation", () => {
         "content",
         "static metadata one description",
       );
+      expect(consoleErrors).toEqual([]);
 
       await page.evaluate(() => {
         window.sessionStorage.setItem("metadata-navigation-document", "preserved");
@@ -172,6 +245,7 @@ test.describe("static metadata production navigation", () => {
         "content",
         "static metadata one description",
       );
+      expect(consoleErrors).toEqual([]);
     } finally {
       await page.close();
       await closeServer(app.server);

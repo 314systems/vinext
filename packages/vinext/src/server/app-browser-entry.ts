@@ -1030,8 +1030,11 @@ function BrowserRoot({
   useLayoutEffect(() => {
     setMountedSlotsHeader(getMountedSlotIdsHeader(stateRef.current.elements));
     removeStylesheetLinksCoveredByInlineCss();
+    if (treeState.renderId !== 0) {
+      document.querySelector('[data-vinext-pending-metadata="body"]')?.remove();
+    }
     getNavigationRuntime()?.functions.pingVisibleLinks?.();
-  }, [treeState.elements]);
+  }, [treeState.elements, treeState.renderId]);
 
   useLayoutEffect(() => {
     if (treeState.renderId !== 0) {
@@ -1047,7 +1050,7 @@ function BrowserRoot({
   const routeTree = createElement(
     RedirectBoundary,
     null,
-    treeMetadata.pendingMetadata
+    treeState.renderId !== 0 && treeMetadata.pendingMetadata
       ? createElement(MetadataHead, {
           metadata: treeMetadata.pendingMetadata.metadata,
           pathname: treeMetadata.pendingMetadata.pathname,

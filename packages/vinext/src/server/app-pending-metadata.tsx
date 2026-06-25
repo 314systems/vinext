@@ -25,6 +25,7 @@ export async function PendingAppMetadata({
   return (
     <div
       hidden
+      data-vinext-pending-metadata="body"
       dangerouslySetInnerHTML={{
         __html: renderMetadataToHtml(pendingMetadata.metadata, pendingMetadata.pathname, {
           trailingSlash: pendingMetadata.trailingSlash,
