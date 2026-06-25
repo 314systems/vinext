@@ -376,7 +376,10 @@ export type ResolvedNextConfig = {
   /** Explicit module aliases preserved from wrapped next.config plugins. */
   aliases: Record<string, string>;
   /** User webpack module rules retained for narrow loader compatibility. */
-  webpackLoaderRules: Record<string, unknown>[];
+  webpackLoaderRules: {
+    client: Record<string, unknown>[];
+    server: Record<string, unknown>[];
+  };
   /** Extra allowed origins for dev server access (from allowedDevOrigins). */
   allowedDevOrigins: string[];
   /** Extra allowed origins for server action CSRF validation (from experimental.serverActions.allowedOrigins). */
@@ -1345,7 +1348,7 @@ export async function resolveNextConfig(
       i18n: null,
       mdx: null,
       aliases: {},
-      webpackLoaderRules: [],
+      webpackLoaderRules: { client: [], server: [] },
       allowedDevOrigins: [],
       serverActionsAllowedOrigins: [],
       optimizePackageImports: [],
@@ -1579,7 +1582,8 @@ export async function resolveNextConfig(
       mdx ||
       Object.keys(webpackProbe.aliases).length > 0 ||
       webpackProbe.resolveExtensionsCustomized ||
-      webpackProbe.loaderRules.length > 0
+      webpackProbe.loaderRules.client.length > 0 ||
+      webpackProbe.loaderRules.server.length > 0
     ) {
       console.warn(
         '[vinext] next.config option "webpack" is only partially supported. ' +
@@ -1800,7 +1804,10 @@ async function probeWebpackConfig(
   resolveExtensions: string[] | null;
   serverResolveExtensions: string[] | null;
   resolveExtensionsCustomized: boolean;
-  loaderRules: Record<string, unknown>[];
+  loaderRules: {
+    client: Record<string, unknown>[];
+    server: Record<string, unknown>[];
+  };
 }> {
   if (typeof config.webpack !== "function") {
     return {
@@ -1809,7 +1816,7 @@ async function probeWebpackConfig(
       resolveExtensions: null,
       serverResolveExtensions: null,
       resolveExtensionsCustomized: false,
-      loaderRules: [],
+      loaderRules: { client: [], server: [] },
     };
   }
 
@@ -1835,7 +1842,7 @@ async function probeWebpackConfig(
       serverResolveExtensions: serverProbe.resolveExtensions,
       resolveExtensionsCustomized:
         clientProbe.resolveExtensions !== null || serverProbe.resolveExtensions !== null,
-      loaderRules: clientProbe.rules,
+      loaderRules: { client: clientProbe.rules, server: serverProbe.rules },
     };
   } catch {
     return {
@@ -1844,7 +1851,7 @@ async function probeWebpackConfig(
       resolveExtensions: null,
       serverResolveExtensions: null,
       resolveExtensionsCustomized: false,
-      loaderRules: [],
+      loaderRules: { client: [], server: [] },
     };
   }
 }

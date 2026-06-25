@@ -4,6 +4,7 @@ import path from "node:path";
 import { createBuilder } from "vite";
 import { afterEach, expect, it } from "vitest";
 import vinext from "../packages/vinext/src/index.js";
+import { collectMatchingWebpackLoaderRules } from "../packages/vinext/src/plugins/webpack-loader-compat.js";
 
 const roots: string[] = [];
 
@@ -19,6 +20,14 @@ function readJavaScript(dir: string): string {
 
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+});
+
+it("requires parent webpack rule conditions before matching nested loaders", () => {
+  const nestedRule = { use: ["nested-loader"] };
+  const rules = [{ test: /\.svg$/, rules: [nestedRule] }];
+
+  expect(collectMatchingWebpackLoaderRules(rules, "/app/icon.svg")).toContain(nestedRule);
+  expect(collectMatchingWebpackLoaderRules(rules, "/app/page.tsx")).not.toContain(nestedRule);
 });
 
 it("applies matching webpack loaders to App Router modules", async () => {
@@ -77,4 +86,61 @@ it("applies matching webpack loaders to App Router modules", async () => {
     if (previousEnv === undefined) delete process.env.TEST_THIS_THING;
     else process.env.TEST_THIS_THING = previousEnv;
   }
+});
+
+it("keeps client and server webpack loader rules environment-specific", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-webpack-loader-env-"));
+  roots.push(root);
+  fs.symlinkSync(
+    path.resolve(import.meta.dirname, "../node_modules"),
+    path.join(root, "node_modules"),
+  );
+  fs.mkdirSync(path.join(root, "app"));
+  fs.writeFileSync(
+    path.join(root, "client-loader.cjs"),
+    `module.exports = () => 'export default "client-loader-output"'`,
+  );
+  fs.writeFileSync(
+    path.join(root, "server-loader.cjs"),
+    `module.exports = () => 'export default "server-loader-output"'`,
+  );
+  fs.writeFileSync(
+    path.join(root, "next.config.cjs"),
+    `const { join } = require("node:path"); module.exports = { webpack(config, { isServer }) { config.module.rules.push({ test: /\\.txt$/, use: [join(__dirname, isServer ? "server-loader.cjs" : "client-loader.cjs")] }); return config } }`,
+  );
+  fs.writeFileSync(
+    path.join(root, "app", "layout.tsx"),
+    `export default function Layout({ children }) { return <html><body>{children}</body></html> }`,
+  );
+  fs.writeFileSync(
+    path.join(root, "app", "client.tsx"),
+    `"use client"; import value from "./value.txt"; export default function Client() { return <div>{value}</div> }`,
+  );
+  fs.writeFileSync(
+    path.join(root, "app", "page.tsx"),
+    `import Client from "./client"; import value from "./value.txt"; export default function Page() { return <><div>{value}</div><Client /></> }`,
+  );
+  fs.writeFileSync(path.join(root, "app", "value.txt"), "source");
+
+  const builder = await createBuilder({
+    root,
+    configFile: false,
+    logLevel: "silent",
+    plugins: [
+      vinext({
+        appDir: root,
+        rscOutDir: path.join(root, "dist/server"),
+        ssrOutDir: path.join(root, "dist/server/ssr"),
+        clientOutDir: path.join(root, "dist/client"),
+      }),
+    ],
+  });
+  await builder.buildApp();
+
+  const serverSource = readJavaScript(path.join(root, "dist/server"));
+  const clientSource = readJavaScript(path.join(root, "dist/client"));
+  expect(serverSource).toContain("server-loader-output");
+  expect(serverSource).not.toContain("client-loader-output");
+  expect(clientSource).toContain("client-loader-output");
+  expect(clientSource).not.toContain("server-loader-output");
 });

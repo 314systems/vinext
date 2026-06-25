@@ -4,6 +4,10 @@ import { createRequire } from "node:module";
 import type { Plugin } from "vite";
 
 export type WebpackLoaderRule = Record<string, unknown>;
+export type WebpackLoaderRules = {
+  client: WebpackLoaderRule[];
+  server: WebpackLoaderRule[];
+};
 
 const WEBPACK_LOADER_PREFIX = "\0vinext-webpack-loader:";
 
@@ -63,13 +67,15 @@ export function collectMatchingWebpackLoaderRules(
   resourcePath: string,
 ): WebpackLoaderRule[] {
   const matches: WebpackLoaderRule[] = [];
-  const visit = (rule: unknown): void => {
+  const visit = (rule: unknown, parentMatches: boolean = true): void => {
     if (!rule || typeof rule !== "object") return;
     if (Array.isArray(rule)) {
-      for (const child of rule) visit(child);
+      for (const child of rule) visit(child, parentMatches);
       return;
     }
     const record = rule as WebpackLoaderRule;
+    const ruleMatches = parentMatches && matchesRule(record, resourcePath);
+    if (!ruleMatches) return;
     if (Array.isArray(record.oneOf)) {
       const match = record.oneOf.find(
         (child) =>
@@ -77,11 +83,12 @@ export function collectMatchingWebpackLoaderRules(
           typeof child === "object" &&
           matchesRule(child as WebpackLoaderRule, resourcePath),
       );
-      if (match) visit(match);
-      return;
+      if (match) visit(match, ruleMatches);
     }
-    if (Array.isArray(record.rules)) for (const child of record.rules) visit(child);
-    if (matchesRule(record, resourcePath)) matches.push(record);
+    if (Array.isArray(record.rules)) {
+      for (const child of record.rules) visit(child, ruleMatches);
+    }
+    matches.push(record);
   };
   for (const rule of rules) visit(rule);
   return matches;
@@ -175,14 +182,17 @@ async function runLoader(
 }
 
 export function createWebpackLoaderCompatPlugin(
-  getRules: () => WebpackLoaderRule[],
+  getRules: () => WebpackLoaderRules,
   getRoot: () => string,
 ): Plugin {
+  const rulesForEnvironment = (environmentName: string | undefined): WebpackLoaderRule[] =>
+    environmentName === "client" ? getRules().client : getRules().server;
+
   return {
     name: "vinext:webpack-loader-compat",
     enforce: "pre",
     async resolveId(source, importer) {
-      const configuredRules = getRules();
+      const configuredRules = rulesForEnvironment(this.environment?.name);
       if (configuredRules.length === 0) return null;
       if (source.startsWith(WEBPACK_LOADER_PREFIX) || source.startsWith("\0")) return null;
       const resolved = await this.resolve(source, importer, { skipSelf: true });
@@ -196,7 +206,10 @@ export function createWebpackLoaderCompatPlugin(
     async load(id) {
       if (!id.startsWith(WEBPACK_LOADER_PREFIX)) return null;
       const resourcePath = id.slice(WEBPACK_LOADER_PREFIX.length);
-      const rules = collectMatchingWebpackLoaderRules(getRules(), resourcePath);
+      const rules = collectMatchingWebpackLoaderRules(
+        rulesForEnvironment(this.environment?.name),
+        resourcePath,
+      );
       if (rules.length === 0) return null;
 
       const root = getRoot();

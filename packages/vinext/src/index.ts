@@ -1187,7 +1187,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     // React Fast Refresh + JSX transform for client components.
     reactPluginPromise,
     createWebpackLoaderCompatPlugin(
-      () => nextConfig?.webpackLoaderRules ?? [],
+      () => nextConfig?.webpackLoaderRules ?? { client: [], server: [] },
       () => root,
     ),
     // Next.js ignores requests without any statically known path component
@@ -4805,8 +4805,12 @@ export const loadServerActionClient = ${
 
             if (!fs.existsSync(absImagePath)) continue;
             if (
-              collectMatchingWebpackLoaderRules(nextConfig.webpackLoaderRules, absImagePath)
-                .length > 0
+              collectMatchingWebpackLoaderRules(
+                this.environment?.name === "client"
+                  ? nextConfig.webpackLoaderRules.client
+                  : nextConfig.webpackLoaderRules.server,
+                absImagePath,
+              ).length > 0
             ) {
               continue;
             }
