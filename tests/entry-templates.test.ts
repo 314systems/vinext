@@ -950,6 +950,36 @@ describe("App Router entry templates", () => {
     expect(withFetchCache).toContain('import "vinext/shims/fetch-cache";');
   });
 
+  it("generateRscEntry only includes the image endpoint runtime when the build requires it", () => {
+    const withoutImageRuntime = generateRscEntry(
+      "/tmp/test/app",
+      minimalAppRoutes,
+      null,
+      [],
+      null,
+      "",
+      false,
+      { hasImageRuntime: false },
+    );
+    const withImageRuntime = generateRscEntry(
+      "/tmp/test/app",
+      minimalAppRoutes,
+      null,
+      [],
+      null,
+      "",
+      false,
+      { hasImageRuntime: true },
+    );
+
+    expect(withoutImageRuntime).not.toContain("server/image-optimization.js");
+    expect(withoutImageRuntime).not.toContain("handleImageOptimizationRequest:");
+    expect(withImageRuntime).toContain("server/image-optimization.js");
+    expect(withImageRuntime).toContain(
+      "handleImageOptimizationRequest: __handleImageOptimizationRequest",
+    );
+  });
+
   it("generateRscEntry only includes the App page cache runtime for cacheable routes", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-entry-page-cache-runtime-"));
     const layoutPath = path.join(tmpDir, "layout.tsx");

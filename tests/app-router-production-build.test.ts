@@ -73,7 +73,11 @@ describe("App Router Production build", () => {
 
     const rscEntryCode = fs.readFileSync(path.join(outDir, "server", "index.js"), "utf-8");
     const rscStaticDir = path.join(outDir, "server", "_next", "static");
-    expect(rscEntryCode + readAllJs(rscStaticDir)).toContain("twitter:player");
+    const rscBundleCode = rscEntryCode + readAllJs(rscStaticDir);
+    expect(rscBundleCode).toContain("twitter:player");
+    // app-basic imports next/image, so the completed RSC scan must retain the
+    // App image endpoint even though image-free builds compile it out.
+    expect(rscBundleCode).toContain("Invalid image optimization parameters");
     const groupedPageChunks = fs
       .readdirSync(rscStaticDir)
       .filter((file) => file.startsWith("route-pages-") && file.endsWith(".js"));

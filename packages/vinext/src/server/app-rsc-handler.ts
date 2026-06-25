@@ -64,13 +64,6 @@ import { notFoundResponse } from "./http-error-responses.js";
 import { getRenderedConcreteUrlPathsForRoute } from "./pregenerated-concrete-paths.js";
 import { getScriptNonceFromHeaderSources } from "./csp.js";
 import { buildPageCacheTags } from "./implicit-tags.js";
-import {
-  DEFAULT_DEVICE_SIZES,
-  DEFAULT_IMAGE_SIZES,
-  isImageOptimizationPath,
-  resolveDevImageRedirect,
-  type ImageConfig,
-} from "./image-optimization.js";
 import { runWithPrerenderWorkUnit } from "./prerender-work-unit-setup.js";
 import { buildPostMwRequestContext } from "./app-post-middleware-context.js";
 import type { AppRscRenderMode } from "./app-rsc-render-mode.js";
@@ -315,7 +308,7 @@ type CreateAppRscHandlerOptions<TRoute extends AppRscHandlerRoute> = {
     options: HandleServerActionRequestOptions,
   ) => Promise<Response | null>;
   i18nConfig: NextI18nConfig | null;
-  imageConfig?: ImageConfig;
+  handleImageOptimizationRequest?: (pathname: string, url: URL) => Response | null;
   isDev: boolean;
   loadPrerenderPagesRoutes?: () => Promise<unknown>;
   matchRoute: (pathname: string) => AppRscRouteMatch<TRoute> | null;
@@ -677,20 +670,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     }
   }
 
-  if (isImageOptimizationPath(cleanPathname)) {
-    const imageRedirect = resolveDevImageRedirect(
-      url,
-      [
-        ...(options.imageConfig?.deviceSizes ?? DEFAULT_DEVICE_SIZES),
-        ...(options.imageConfig?.imageSizes ?? DEFAULT_IMAGE_SIZES),
-      ],
-      options.imageConfig?.qualities,
-      { isDev: options.isDev },
-    );
-    if (!imageRedirect)
-      return new Response("Invalid image optimization parameters", { status: 400 });
-    return Response.redirect(new URL(imageRedirect, url.origin).href, 302);
-  }
+  const imageOptimizationResponse = options.handleImageOptimizationRequest?.(cleanPathname, url);
+  if (imageOptimizationResponse) return imageOptimizationResponse;
 
   if (options.handleMetadataRouteRequest) {
     const metadataRouteResponse = await options.handleMetadataRouteRequest(cleanPathname);

@@ -1069,6 +1069,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   let googleFontRuntimeRequired = false;
   let localFontRuntimeRequired = false;
   let fetchCacheRuntimeRequired = false;
+  let imageRuntimeRequired = false;
 
   function canUseDocumentOnlyClientRuntime(hasServerActions: boolean | null): boolean {
     return (
@@ -2958,6 +2959,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               this.environment.config,
               fetchCacheRuntimeRequired,
             ));
+          const hasImageRuntime = await resolveDetectedBuildCapability(
+            this.environment.config,
+            imageRuntimeRequired,
+          );
           // Check for global-error.tsx at app root
           const globalErrorPath = findFileWithExts(appDir, "global-error", fileMatcher);
           // Check for global-not-found.tsx at app root (Next.js 16+ feature)
@@ -3003,6 +3008,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               hasGoogleFonts,
               hasLocalFonts,
               hasFetchCacheRuntime,
+              hasImageRuntime,
               i18n: nextConfig?.i18n,
               imageConfig: {
                 deviceSizes: nextConfig?.images?.deviceSizes,
@@ -4923,6 +4929,25 @@ export const loadServerActionClient = ${
             break;
           }
 
+          return null;
+        },
+      },
+    },
+    {
+      name: "vinext:detect-image-runtime",
+      transform: {
+        filter: {
+          id: {
+            include: /\.(?:[cm]?[jt]sx?)(?:\?.*)?$/,
+            exclude: VIRTUAL_MODULE_ID_RE,
+          },
+          code: /next\/(?:legacy\/)?image/,
+        },
+        handler(code) {
+          if (imageRuntimeRequired || this.environment?.name !== "rsc") return null;
+          if (/["']next\/(?:legacy\/)?image(?:\.js)?["']/.test(code)) {
+            imageRuntimeRequired = true;
+          }
           return null;
         },
       },

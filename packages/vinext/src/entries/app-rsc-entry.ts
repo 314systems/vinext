@@ -135,6 +135,7 @@ const clientReuseManifestPath = resolveEntryPath(
   import.meta.url,
 );
 const skipCacheProofPath = resolveEntryPath("../server/skip-cache-proof.js", import.meta.url);
+const imageOptimizationPath = resolveEntryPath("../server/image-optimization.js", import.meta.url);
 
 /**
  * Resolved config options relevant to App Router request handling.
@@ -196,6 +197,8 @@ type AppRouterConfig = {
   hasLocalFonts?: boolean;
   /** Whether the server module graph uses fetch or cache APIs. Defaults to true. */
   hasFetchCacheRuntime?: boolean;
+  /** Whether the module graph imports next/image or next/legacy/image. Defaults to true. */
+  hasImageRuntime?: boolean;
   /** Internationalization routing config for middleware matcher locale handling. */
   i18n?: NextI18nConfig | null;
   imageConfig?: ImageConfig;
@@ -267,6 +270,7 @@ export function generateRscEntry(
   const hasGoogleFonts = config?.hasGoogleFonts !== false;
   const hasLocalFonts = config?.hasLocalFonts !== false;
   const hasFetchCacheRuntime = config?.hasFetchCacheRuntime !== false;
+  const hasImageRuntime = config?.hasImageRuntime !== false;
   const useActionFreeFlightServerRuntime = !hasServerActions && !cacheComponents;
   const hasIsrRuntime = cacheComponents || appRoutesNeedResponseCache(routes);
   const i18nConfig = config?.i18n ?? null;
@@ -365,6 +369,16 @@ import { createAppRscHandler } from "vinext/server/app-rsc-handler";
 import { registerConfiguredCacheAdapters as __registerConfiguredCacheAdapters } from "virtual:vinext-cache-adapters";
 import { decodePathParams as __decodePathParams } from ${JSON.stringify(normalizePathModulePath)};
 import { buildRequestHeadersFromMiddlewareResponse as __buildRequestHeadersFromMiddlewareResponse } from ${JSON.stringify(middlewareRequestHeadersPath)};
+${
+  hasImageRuntime
+    ? `import {
+  DEFAULT_DEVICE_SIZES as __DEFAULT_DEVICE_SIZES,
+  DEFAULT_IMAGE_SIZES as __DEFAULT_IMAGE_SIZES,
+  isImageOptimizationPath as __isImageOptimizationPath,
+  resolveDevImageRedirect as __resolveDevImageRedirect,
+} from ${JSON.stringify(imageOptimizationPath)};`
+    : ""
+}
 ${
   hasPagesDir
     ? `import {
@@ -796,6 +810,26 @@ const __expireTime = ${JSON.stringify(expireTime)};
 const __htmlLimitedBots = ${JSON.stringify(htmlLimitedBots)};
 const __clientTraceMetadata = ${JSON.stringify(clientTraceMetadata)};
 const __reactMaxHeadersLength = ${JSON.stringify(reactMaxHeadersLength)};
+${
+  hasImageRuntime
+    ? `function __handleImageOptimizationRequest(pathname, url) {
+  if (!__isImageOptimizationPath(pathname)) return null;
+  const imageRedirect = __resolveDevImageRedirect(
+    url,
+    [
+      ...(__imageConfig?.deviceSizes ?? __DEFAULT_DEVICE_SIZES),
+      ...(__imageConfig?.imageSizes ?? __DEFAULT_IMAGE_SIZES),
+    ],
+    __imageConfig?.qualities,
+    { isDev: process.env.NODE_ENV !== "production" },
+  );
+  if (!imageRedirect) {
+    return new Response("Invalid image optimization parameters", { status: 400 });
+  }
+  return Response.redirect(new URL(imageRedirect, url.origin).href, 302);
+}`
+    : ""
+}
 // Re-exported for the App Router prod-server to consume at startup —
 // mirrors the embedded \`__basePath\` pattern (and Pages Router's
 // \`vinextConfig\` export). Empty string when unset.
@@ -870,7 +904,7 @@ export default createAppRscHandler({
   }
   configRedirects: __configRedirects,
   configRewrites: __configRewrites,
-  imageConfig: __imageConfig,
+  ${hasImageRuntime ? "handleImageOptimizationRequest: __handleImageOptimizationRequest," : ""}
   ${hasPrerenderEndpoint ? "handlePrerenderEndpoint: __handleAppPrerenderEndpoint," : ""}
   isDev: process.env.NODE_ENV !== "production",
   draftModeSecret: __draftModeSecret,
