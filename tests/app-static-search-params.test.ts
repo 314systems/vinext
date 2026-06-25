@@ -95,6 +95,7 @@ export default function Page() {
     );
     expect(html).toContain("<p>search params suspense</p>");
     expect(html).not.toContain('<p id="value">missing</p>');
+    expect(html).toContain('"useLocationSearchParams":true');
 
     const forceStaticHtml = await fs.readFile(
       path.join(fixtureRoot, "dist", "server", "prerendered-routes", "force-static.html"),
@@ -102,5 +103,6 @@ export default function Page() {
     );
     expect(forceStaticHtml).not.toContain("<p>search params suspense</p>");
     expect(forceStaticHtml).toContain('<p id="value">missing</p>');
+    expect(forceStaticHtml).not.toContain('"useLocationSearchParams":true');
   }, 60_000);
 });

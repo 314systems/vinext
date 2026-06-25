@@ -19800,7 +19800,7 @@ describe("next/navigation enhancements", () => {
   });
 
   it("useSearchParams bails out to the nearest Suspense boundary during static generation", async () => {
-    const { isBailoutToCSRError, setNavigationContext, useSearchParams } =
+    const { getNavigationContext, isBailoutToCSRError, setNavigationContext, useSearchParams } =
       await import("../packages/vinext/src/shims/navigation.js");
 
     setNavigationContext({
@@ -19821,6 +19821,7 @@ describe("next/navigation enhancements", () => {
       } catch (error) {
         expect(isBailoutToCSRError(error)).toBe(true);
       }
+      expect(getNavigationContext()?.didSearchParamsBailout).toBe(true);
     } finally {
       setNavigationContext(null);
     }

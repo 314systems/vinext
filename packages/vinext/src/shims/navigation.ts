@@ -1331,10 +1331,11 @@ export function useSearchParams(): ReadonlyURLSearchParams {
   if (isServer) {
     markPprFallbackShellDynamicBoundary();
     const navigationContext = getNavigationContext();
-    if (
-      readStaticGenerationNavigationContext(navigationContext) &&
-      navigationContext?.isForceStatic !== true
-    ) {
+    if (navigationContext && readStaticGenerationNavigationContext(navigationContext)) {
+      if (navigationContext.isForceStatic === true) {
+        return getServerSearchParamsSnapshot();
+      }
+      navigationContext.didSearchParamsBailout = true;
       throw new BailoutToCSRError("useSearchParams()");
     }
     // During SSR for "use client" components, the navigation context may not be set.

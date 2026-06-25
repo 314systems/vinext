@@ -21,6 +21,7 @@ export type NavigationContext = {
   params: Record<string, string | string[]>;
   isStaticGeneration?: boolean | StaticGenerationNavigationDecision;
   isForceStatic?: boolean;
+  didSearchParamsBailout?: boolean;
 };
 
 export type StaticGenerationNavigationDecision = {
