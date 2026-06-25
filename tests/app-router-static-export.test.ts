@@ -117,7 +117,8 @@ describe("App Router Static export", () => {
     // Ported from Next.js: test/e2e/app-dir/interception-routes-output-export/interception-routes-output-export.test.ts
     // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/interception-routes-output-export/interception-routes-output-export.test.ts
     const { staticExportApp } = await import("../packages/vinext/src/build/static-export.js");
-    const { appRouter } = await import("../packages/vinext/src/routing/app-router.js");
+    const { appRouter, invalidateAppRouteCache } =
+      await import("../packages/vinext/src/routing/app-router.js");
     const { resolveNextConfig } = await import("../packages/vinext/src/config/next-config.js");
 
     const fixtureDir = path.resolve(APP_FIXTURE_DIR, "interception-export-fixture");
@@ -171,6 +172,7 @@ describe("App Router Static export", () => {
         "export default function TargetPage() { return null }",
       );
 
+      invalidateAppRouteCache();
       const siblingRoutes = await appRouter(appDir);
       await expect(
         staticExportApp({
@@ -182,6 +184,7 @@ describe("App Router Static export", () => {
         }),
       ).rejects.toThrow("Intercepting routes are not supported with static export.");
     } finally {
+      invalidateAppRouteCache();
       fs.rmSync(fixtureDir, { recursive: true, force: true });
     }
   });
