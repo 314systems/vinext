@@ -189,7 +189,7 @@ describe("app page request helpers", () => {
     const buildPageElementMock = vi.fn(async () => ({ type: "intercept-element" }));
     const renderInterceptResponse = vi.fn(async () => new Response("intercepted"));
     const currentRoute = { params: ["id"], pattern: "/photos/[id]" };
-    const sourceRoute = { params: [], pattern: "/feed" };
+    const sourceRoute = { params: ["locale", "tab"], pattern: "/[locale]/feed/[tab]" };
 
     const result = await resolveAppPageIntercept({
       buildPageElement: buildPageElementMock,
@@ -198,7 +198,8 @@ describe("app page request helpers", () => {
       findIntercept() {
         return {
           interceptionId: null,
-          matchedParams: { id: "123" },
+          matchedParams: { locale: "en", id: "123" },
+          sourceMatchedParams: { locale: "en", tab: "recent" },
           page: { default: "modal-page" },
           slotKey: "modal@app/feed/@modal",
           sourceRouteIndex: 0,
@@ -229,16 +230,21 @@ describe("app page request helpers", () => {
     expect(result.interceptOpts).toBeUndefined();
     expect(result.response).toBeInstanceOf(Response);
     expect(setNavigationContext).toHaveBeenCalledWith({
-      params: { id: "123", catchAll: ["photos", "123"] },
+      params: {
+        locale: "en",
+        tab: "recent",
+        id: "123",
+        catchAll: ["photos", "123"],
+      },
       pathname: "/photos/123",
       searchParams: new URLSearchParams("from=feed"),
     });
     expect(buildPageElementMock).toHaveBeenCalledWith(
       sourceRoute,
-      {},
+      { locale: "en", tab: "recent" },
       {
         interceptPage: { default: "modal-page" },
-        interceptParams: { id: "123" },
+        interceptParams: { locale: "en", id: "123" },
         interceptSlotKey: "modal@app/feed/@modal",
       },
       new URLSearchParams("from=feed"),
@@ -517,6 +523,7 @@ describe("resolveAppPageInterceptMatch", () => {
       findIntercept: () => ({
         interceptionId: null,
         matchedParams,
+        sourceMatchedParams: { category: "nature", tab: "recent" },
         page: { default: "modal-page" },
         slotKey: "modal@app/feed/[category]/@modal",
         sourceRouteIndex: 0,
@@ -652,19 +659,24 @@ describe("resolveAppPageActionRerenderTarget", () => {
   });
 
   it("rerenders the intercepted source route when an intercept match applies", async () => {
+    const descendantSourceRoute = {
+      params: ["locale", "tab"],
+      pattern: "/[locale]/feed/[tab]",
+    };
     const result = await resolveAppPageActionRerenderTarget({
       cleanPathname: "/photos/123",
       currentParams: { id: "123" },
       currentRoute,
       findIntercept: () => ({
         interceptionId: null,
-        matchedParams: { id: "123" },
+        matchedParams: { locale: "en", id: "123" },
+        sourceMatchedParams: { locale: "en", tab: "recent" },
         page: { default: "modal-page" },
         slotKey: "modal@app/feed/@modal",
         sourceRouteIndex: 0,
       }),
       getRouteParamNames: (route) => route.params,
-      getSourceRoute: () => sourceRoute,
+      getSourceRoute: () => descendantSourceRoute,
       isRscRequest: true,
       toInterceptOpts,
     });
@@ -672,12 +684,12 @@ describe("resolveAppPageActionRerenderTarget", () => {
     expect(result).toEqual({
       interceptOpts: {
         interceptPage: { default: "modal-page" },
-        interceptParams: { id: "123" },
+        interceptParams: { locale: "en", id: "123" },
         interceptSlotKey: "modal@app/feed/@modal",
       },
-      navigationParams: { id: "123" },
-      params: {},
-      route: sourceRoute,
+      navigationParams: { locale: "en", tab: "recent", id: "123" },
+      params: { locale: "en", tab: "recent" },
+      route: descendantSourceRoute,
     });
   });
 });
