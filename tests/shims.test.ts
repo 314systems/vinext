@@ -4650,6 +4650,33 @@ describe("next/server shim", () => {
     expect(ranAfterConnection).toBe(false);
   });
 
+  it("connection() suspends from shell state even when request headers omit the render mode", async () => {
+    const { createPrefetchSuspenseShellState, runWithPrefetchSuspenseShellState } =
+      await import("../packages/vinext/src/shims/prefetch-suspense-shell.js");
+    const { setHeadersContext } = await import("../packages/vinext/src/shims/headers.js");
+    const { connection } = await import("../packages/vinext/src/shims/server.js");
+    setHeadersContext({ headers: new Headers(), cookies: new Map() });
+    const state = createPrefetchSuspenseShellState("/suspense-prefetch");
+
+    try {
+      const pending = runWithPrefetchSuspenseShellState(state, connection);
+      let settled = false;
+      void pending
+        .catch(() => {})
+        .finally(() => {
+          settled = true;
+        });
+
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      state.dynamicAbortController.abort();
+      await expect(pending).rejects.toThrow("render was aborted");
+    } finally {
+      setHeadersContext(null);
+    }
+  });
+
   it("URLPattern is exported and available in Node 20+", async () => {
     const { URLPattern } = await import("../packages/vinext/src/shims/server.js");
     // Node 22+ has URLPattern globally; if available, test it works

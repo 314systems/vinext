@@ -1060,12 +1060,10 @@ export async function connection(): Promise<void> {
   markRenderRequestApiUsage("connection");
   throwIfInsideCacheScope("connection()");
   markDynamicUsage();
-  if (getHeadersContext()?.headers.get("x-vinext-rsc-render-mode") === "prefetch-suspense-shell") {
-    const { suspendPrefetchSuspenseShell } = await import("./prefetch-suspense-shell.js");
-    const pendingShell = suspendPrefetchSuspenseShell("connection()");
-    if (pendingShell) {
-      await pendingShell;
-    }
+  const { suspendPrefetchSuspenseShell } = await import("./prefetch-suspense-shell.js");
+  const pendingShell = suspendPrefetchSuspenseShell("connection()");
+  if (pendingShell) {
+    await pendingShell;
   }
   const pendingProbe = suspendConnectionProbe();
   if (pendingProbe) {

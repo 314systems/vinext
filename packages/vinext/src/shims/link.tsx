@@ -450,8 +450,11 @@ function prefetchUrl(href: string, mode: LinkPrefetchMode, priority: "low" | "hi
     return;
   }
 
+  const appAutoPrefetch =
+    hasAppNavigationRuntime() && mode === "auto" ? resolveAutoAppRoutePrefetch(prefetchHref) : null;
+
   const schedule =
-    priority === "high" || hasAppNavigationRuntime()
+    priority === "high" || appAutoPrefetch?.prefetchSuspenseShell === true
       ? (fn: () => void) => {
           fn();
         }
@@ -473,7 +476,7 @@ function prefetchUrl(href: string, mode: LinkPrefetchMode, priority: "low" | "hi
         }
         const autoPrefetch =
           mode === "auto"
-            ? resolveAutoAppRoutePrefetch(prefetchHref)
+            ? (appAutoPrefetch ?? resolveAutoAppRoutePrefetch(prefetchHref))
             : {
                 cacheForNavigation: true,
                 prefetchShellFirst: true,

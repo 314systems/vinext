@@ -1444,6 +1444,25 @@ describe("Link prefetch scheduling", () => {
     }
   });
 
+  it("keeps ordinary App Router viewport prefetches on the idle queue", async () => {
+    const observer = stubIntersectionObserver();
+    const idleCallback = vi.fn();
+    const result = await renderIsolatedLink({
+      href: "/viewport-prefetch-target",
+      nodeEnv: "production",
+      windowOverrides: { requestIdleCallback: idleCallback },
+    });
+
+    try {
+      observer.dispatchIntersectingEntry(result.anchor);
+
+      expect(idleCallback).toHaveBeenCalledTimes(1);
+      expect(result.fetch).not.toHaveBeenCalled();
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
   it("full-prefetches visible dynamic links without a loading shell boundary for client params", async () => {
     const observer = stubIntersectionObserver();
 
