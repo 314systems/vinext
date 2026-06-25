@@ -133,12 +133,11 @@ describe("resolveAppPageSegmentConfig", () => {
       }),
     ).toEqual({
       dynamicConfig: "force-static",
-      dynamicParamsConfig: false,
       revalidateSeconds: null,
     });
   });
 
-  it("defaults dynamicParams to false for static-only dynamic modes", () => {
+  it("defaults dynamicParams to false for dynamic error mode", () => {
     expect(
       resolveAppPageSegmentConfig({
         layouts: [{ dynamic: "error" }],
@@ -158,7 +157,6 @@ describe("resolveAppPageSegmentConfig", () => {
       }),
     ).toEqual({
       dynamicConfig: "force-static",
-      dynamicParamsConfig: false,
       revalidateSeconds: null,
     });
   });

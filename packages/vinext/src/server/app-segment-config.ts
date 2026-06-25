@@ -258,11 +258,10 @@ export function resolveAppPageSegmentConfig(
     }
   }
 
-  // Static-only dynamic modes change the default, but explicit dynamicParams wins.
-  if (
-    config.dynamicParamsConfig === undefined &&
-    (config.dynamicConfig === "error" || config.dynamicConfig === "force-static")
-  ) {
+  // `dynamic = "error"` changes the dynamicParams default to false. In
+  // contrast, `force-static` still permits blocking fallback renders unless a
+  // segment explicitly exports `dynamicParams = false`.
+  if (config.dynamicParamsConfig === undefined && config.dynamicConfig === "error") {
     config.dynamicParamsConfig = false;
   }
 
