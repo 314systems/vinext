@@ -90,6 +90,11 @@ import {
   type AppBrowserServerActionResult,
 } from "./app-browser-action-result.js";
 import {
+  createSupplementalRefreshCoordinator,
+  resolveSupplementalRefreshes,
+  shouldScheduleSupplementalRefreshRecovery,
+} from "./app-browser-supplemental-refresh.js";
+import {
   consumeInitialFormState,
   createVinextHydrateRootOptions,
   hydrateRootInTransition,
@@ -274,6 +279,7 @@ const discardedServerActionRefreshScheduler = hasServerActions
       markNavigationStart() {},
       schedule() {},
     };
+const serverActionSupplementalRefreshCoordinator = createSupplementalRefreshCoordinator();
 const NavigationCommitSignal = browserNavigationController.NavigationCommitSignal;
 const ACTION_HTTP_FALLBACK_ROBOTS_META_ATTR = "data-vinext-action-http-fallback";
 
@@ -722,6 +728,10 @@ async function commitSameUrlNavigatePayload(
   returnValue?: ServerActionResult["returnValue"],
   revalidation: ServerActionRevalidationKind = "none",
 ): Promise<unknown> {
+  let supplementalRefresh: Promise<{ degraded: boolean; value: AppElements }> | undefined;
+  let supplementalRefreshHandle: ReturnType<
+    typeof serverActionSupplementalRefreshCoordinator.begin
+  > | null = null;
   if (revalidation !== "none") {
     const refreshUrl = new URL(actionInitiation.href);
     const requestInterceptionContext = resolveInterceptionContextFromPreviousNextUrl(
@@ -735,40 +745,61 @@ async function commitSameUrlNavigatePayload(
       requestInterceptionContext,
     );
     if (persistedRefreshInterceptions.length > 0) {
+      supplementalRefreshHandle = serverActionSupplementalRefreshCoordinator.begin({
+        activeNavigationId: browserNavigationController.getActiveNavigationId(),
+        startedNavigationId: actionInitiation.navigationId,
+      });
       const mountedSlotsHeader = getMountedSlotIdsHeader(actionInitiation.routerState.elements);
-      const interceptedSlotPayloads = persistedRefreshInterceptions.map((interception) =>
-        fetchPersistedInterceptedSlotRefresh({
-          interceptionContext: interception.interceptionContext,
-          interceptionId: interception.interception.id,
-          mountedSlotsHeader,
-          signal: new AbortController().signal,
-          targetPathname: interception.targetPathname,
-        }),
-      );
-      nextElements = Promise.all([nextElements, ...interceptedSlotPayloads]).then(
-        ([currentElements, ...interceptedElements]) =>
-          interceptedElements.reduce(mergeRefreshedInterceptedSlot, currentElements),
-      );
+      supplementalRefresh = resolveSupplementalRefreshes({
+        merge: mergeRefreshedInterceptedSlot,
+        primary: nextElements,
+        signal: supplementalRefreshHandle.signal,
+        supplemental: persistedRefreshInterceptions.map(
+          (interception) => (signal) =>
+            fetchPersistedInterceptedSlotRefresh({
+              interceptionContext: interception.interceptionContext,
+              interceptionId: interception.interception.id,
+              mountedSlotsHeader,
+              signal,
+              targetPathname: interception.targetPathname,
+            }),
+        ),
+      });
+      nextElements = supplementalRefresh.then((result) => result.value);
     }
   }
   const navigationSnapshot = createClientNavigationRenderSnapshot(
     actionInitiation.href,
     actionInitiation.routerState.navigationSnapshot.params,
   );
-  return browserNavigationController.commitSameUrlNavigatePayload(
-    nextElements,
-    navigationSnapshot,
-    returnValue,
-    actionInitiation.routerState,
-    {
-      onDiscardedRevalidation() {
-        discardedServerActionRefreshScheduler.schedule();
+  try {
+    const result = await browserNavigationController.commitSameUrlNavigatePayload(
+      nextElements,
+      navigationSnapshot,
+      returnValue,
+      actionInitiation.routerState,
+      {
+        onDiscardedRevalidation() {
+          discardedServerActionRefreshScheduler.schedule();
+        },
+        revalidation,
+        startedNavigationId: actionInitiation.navigationId,
+        targetHref: actionInitiation.href,
       },
-      revalidation,
-      startedNavigationId: actionInitiation.navigationId,
-      targetHref: actionInitiation.href,
-    },
-  );
+    );
+    if (
+      shouldScheduleSupplementalRefreshRecovery({
+        activeNavigationId: browserNavigationController.getActiveNavigationId(),
+        degraded: (await supplementalRefresh)?.degraded ?? false,
+        startedNavigationId: actionInitiation.navigationId,
+      })
+    ) {
+      discardedServerActionRefreshScheduler.schedule();
+    }
+    return result;
+  } finally {
+    supplementalRefreshHandle?.finish();
+  }
 }
 
 function evictVisitedResponseCacheIfNeeded(): void {
@@ -1626,6 +1657,7 @@ function bootstrapHydration(
     scrollIntent?: AppRouterScrollIntent | null,
     visibleCommitMode: NavigationRuntimeVisibleCommitMode = "transition",
   ): Promise<void> {
+    serverActionSupplementalRefreshCoordinator.abortAll();
     activeNavigationAbortController?.abort();
     const navigationAbortController = new AbortController();
     activeNavigationAbortController = navigationAbortController;
