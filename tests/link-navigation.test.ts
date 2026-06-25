@@ -1496,7 +1496,7 @@ describe("Link prefetch scheduling", () => {
       const entry = Array.from(getPrefetchCache().values())[0];
       expect(entry).toBeDefined();
       entry!.cacheForNavigation = false;
-      entry!.optimisticRouteShell = true;
+      entry!.partialSuspenseShell = true;
       result.fetch.mockResolvedValue(
         new Response("shell", {
           headers: { [VINEXT_RSC_PARTIAL_SHELL_HEADER]: "1" },
@@ -1509,7 +1509,8 @@ describe("Link prefetch scheduling", () => {
 
       expect(Array.from(getPrefetchCache().values())[0]).toMatchObject({
         cacheForNavigation: false,
-        optimisticRouteShell: true,
+        optimisticRouteShell: false,
+        partialSuspenseShell: true,
       });
     } finally {
       result.restoreNodeEnv();

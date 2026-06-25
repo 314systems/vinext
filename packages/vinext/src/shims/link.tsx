@@ -508,7 +508,11 @@ function prefetchUrl(href: string, mode: LinkPrefetchMode, priority: "low" | "hi
           }
 
           const existing = getPrefetchCache().get(cacheKey);
-          if (existing?.cacheForNavigation === false && existing.optimisticRouteShell !== true) {
+          if (
+            existing?.cacheForNavigation === false &&
+            existing.optimisticRouteShell !== true &&
+            existing.partialSuspenseShell !== true
+          ) {
             existing.cacheForNavigation = true;
           }
         }
@@ -628,7 +632,7 @@ function promotePrefetchEntriesForNavigation(href: string): void {
   }
 
   for (const [cacheKey, entry] of getPrefetchCache()) {
-    if (entry.optimisticRouteShell === true) continue;
+    if (entry.optimisticRouteShell === true || entry.partialSuspenseShell === true) continue;
 
     const [rscUrl] = cacheKey.split("\0", 1);
     let cached: URL;

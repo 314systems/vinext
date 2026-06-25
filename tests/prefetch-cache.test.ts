@@ -342,7 +342,8 @@ describe("prefetch cache eviction", () => {
 
     expect(getPrefetchCache().get(rscUrl)).toMatchObject({
       cacheForNavigation: false,
-      optimisticRouteShell: true,
+      optimisticRouteShell: false,
+      partialSuspenseShell: true,
     });
     expect(consumePrefetchResponse(rscUrl)).toBeNull();
   });
