@@ -7,6 +7,10 @@ import { normalizePathSeparators } from "../utils/path.js";
 
 const CLIENT_REFERENCES_ID = "\0virtual:vite-rsc/client-references";
 const RESOLVED_ID_PROXY_PREFIX = "virtual:vite-rsc/resolved-id/";
+const CLIENT_REFERENCE_RUNTIME_IMPORT_RE =
+  /^import \* as \$\$ReactServer from (["'])(?:[^"']*\/)?@vitejs\/plugin-rsc\/dist\/react\/rsc\.js\1;$/m;
+const SERVER_REFERENCE_RUNTIME_IMPORT =
+  'import * as $$ReactServer from "@vitejs/plugin-rsc/vendor/react-server-dom/server.edge";';
 
 type RscClientReferenceMeta = PluginApi["manager"]["clientReferenceMetaMap"][string];
 
@@ -209,6 +213,15 @@ function generateDirectClientReferenceLoaders(
   return `export default {\n${entries}\n};\n`;
 }
 
+export function rewriteClientReferenceServerRuntimeImport(code: string): string | null {
+  if (!code.includes("$$ReactServer.registerClientReference")) return null;
+  const rewritten = code.replace(
+    CLIENT_REFERENCE_RUNTIME_IMPORT_RE,
+    () => SERVER_REFERENCE_RUNTIME_IMPORT,
+  );
+  return rewritten === code ? null : rewritten;
+}
+
 export function createRscClientReferenceLoadersPlugin(
   options: RscClientReferenceLoadersPluginOptions = {},
 ): Plugin {
@@ -224,8 +237,11 @@ export function createRscClientReferenceLoadersPlugin(
           | undefined
       )?.api;
     },
-    transform(_code, id) {
-      if (id !== CLIENT_REFERENCES_ID) return null;
+    transform(code, id) {
+      if (id !== CLIENT_REFERENCES_ID) {
+        const rewritten = rewriteClientReferenceServerRuntimeImport(code);
+        return rewritten === null ? null : { code: rewritten, map: null };
+      }
 
       const manager = rscApi?.manager;
       if (!manager || manager.isScanBuild) return null;

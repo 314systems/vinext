@@ -306,25 +306,33 @@ async function __loadPrerenderPagesRoutes() {
 
   return `
 import ${JSON.stringify(serverGlobalsPath)};
-import {
+${
+  hasServerActions
+    ? `import {
   renderToReadableStream as _renderToReadableStream,
-  ${
-    hasServerActions
-      ? `decodeAction,
+  decodeAction,
   decodeFormState,
   decodeReply,
   loadServerAction,
-  createTemporaryReferenceSet,`
-      : ""
-  }
-} from ${JSON.stringify(
-    hasServerActions ? "@vitejs/plugin-rsc/rsc" : "@vitejs/plugin-rsc/react/rsc",
-  )};
-${cacheComponents ? 'import { createClientManifest as _createClientManifest } from "@vitejs/plugin-rsc/core/rsc";' : ""}
+  createTemporaryReferenceSet,
+} from "@vitejs/plugin-rsc/rsc";`
+    : `import { renderToReadableStream as _rawRenderToReadableStream } from "@vitejs/plugin-rsc/vendor/react-server-dom/server.edge";`
+}
+${
+  !hasServerActions || cacheComponents
+    ? 'import { createClientManifest as _createClientManifest } from "@vitejs/plugin-rsc/core/rsc";'
+    : ""
+}
 ${cacheComponents ? 'import { prerender as _prerender } from "@vitejs/plugin-rsc/vendor/react-server-dom/static.edge";' : ""}
 import { createRscPrerenderer, createRscRenderer } from ${JSON.stringify(rscStreamHintsPath)};
 ${hasFetchCacheRuntime ? 'import "vinext/shims/fetch-cache";' : ""}
 
+${
+  hasServerActions
+    ? ""
+    : `const _renderToReadableStream = (model, options) =>
+  _rawRenderToReadableStream(model, _createClientManifest(), options);`
+}
 const renderToReadableStream = createRscRenderer(_renderToReadableStream);
 ${
   cacheComponents

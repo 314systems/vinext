@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
-import { clientReferencesRequireRouterRuntime } from "../packages/vinext/src/plugins/rsc-client-reference-loaders.js";
+import {
+  clientReferencesRequireRouterRuntime,
+  rewriteClientReferenceServerRuntimeImport,
+} from "../packages/vinext/src/plugins/rsc-client-reference-loaders.js";
 
 function createSourceReader(entries: Record<string, string[] | null>) {
   return async (id: string) => entries[id] ?? null;
@@ -77,5 +80,29 @@ describe("client reference router runtime analysis", () => {
         routerRuntimeModuleIds,
       }),
     ).resolves.toBe(true);
+  });
+});
+
+describe("client reference server runtime import", () => {
+  it("uses the server-only Flight runtime for generated client-reference proxies", () => {
+    const code = [
+      'import * as $$ReactServer from "/repo/node_modules/@vitejs/plugin-rsc/dist/react/rsc.js";',
+      "export const Counter = $$ReactServer.registerClientReference(() => {}, 'counter', 'Counter');",
+    ].join("\n");
+
+    expect(rewriteClientReferenceServerRuntimeImport(code)).toBe(
+      [
+        'import * as $$ReactServer from "@vitejs/plugin-rsc/vendor/react-server-dom/server.edge";',
+        "export const Counter = $$ReactServer.registerClientReference(() => {}, 'counter', 'Counter');",
+      ].join("\n"),
+    );
+  });
+
+  it("leaves regular modules unchanged", () => {
+    expect(
+      rewriteClientReferenceServerRuntimeImport(
+        'import { createFromReadableStream } from "@vitejs/plugin-rsc/react/rsc";',
+      ),
+    ).toBeNull();
   });
 });
