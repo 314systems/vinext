@@ -58,6 +58,7 @@ type TestRoute = {
   __buildTimeClassifications?: ReadonlyMap<number, "static" | "dynamic"> | null;
   error?: { default?: unknown } | null;
   errors?: readonly ({ default?: unknown } | null | undefined)[];
+  ancestorLoadings?: readonly ({ default?: unknown } | null | undefined)[];
   forbiddens?: readonly ({ default?: unknown } | null | undefined)[];
   isDynamic: boolean;
   layouts: readonly { default?: unknown; dynamic?: unknown; revalidate?: unknown }[];
@@ -1051,7 +1052,7 @@ describe("app page dispatch", () => {
     },
   );
 
-  it("does not reuse loading-boundary RSC when the page reads searchParams", async () => {
+  it("does not reuse ancestor-loading-boundary RSC when the page reads searchParams", async () => {
     async function Page(props: Record<string, unknown>): Promise<React.ReactNode> {
       const query = isPromiseLike(props.searchParams) ? await props.searchParams : {};
       return React.createElement(
@@ -1061,7 +1062,7 @@ describe("app page dispatch", () => {
       );
     }
     const route = createRoute({
-      loading: { default: () => null },
+      ancestorLoadings: [{ default: () => null }],
       pattern: "/rsc-loading-proof",
       routeSegments: ["rsc-loading-proof"],
     });
@@ -1095,8 +1096,10 @@ describe("app page dispatch", () => {
           searchParams,
         },
         route: {
+          ancestorLoadings: [{ default: () => null }],
+          ancestorLoadingTreePositions: [0],
           layouts: [],
-          loading: { default: () => null },
+          loading: null,
           page: { default: Page },
           pattern: "/rsc-loading-proof",
           routeSegments: ["rsc-loading-proof"],
@@ -1119,7 +1122,7 @@ describe("app page dispatch", () => {
         },
         params: {},
         probePage() {
-          throw new Error("loading.tsx should skip the eager page probe");
+          throw new Error("ancestor loading.tsx should skip the eager page probe");
         },
         renderToReadableStream: renderPagePayloadToStream,
         revalidateSeconds: 60,

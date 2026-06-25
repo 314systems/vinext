@@ -174,6 +174,7 @@ export type AppPageDispatchRoute = {
   __buildTimeReasons?: LayoutClassificationOptions["buildTimeReasons"];
   error?: AppPageModule | null;
   errors?: readonly (AppPageModule | null | undefined)[];
+  ancestorLoadings?: readonly (AppPageModule | null | undefined)[];
   forbidden?: AppPageModule | null;
   forbiddens?: readonly (AppPageModule | null | undefined)[];
   isDynamic: boolean;
@@ -554,7 +555,9 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     options.renderMode ?? APP_RSC_RENDER_MODE_NAVIGATION,
   )
     ? false
-    : Boolean(route.loading?.default);
+    : Boolean(
+        route.loading?.default || route.ancestorLoadings?.some((loading) => loading?.default),
+      );
 
   setCurrentFetchSoftTags(buildAppPageTags(options.cleanPathname, [], route.routeSegments));
   setCurrentFetchCacheMode(options.fetchCache ?? null);
@@ -898,10 +901,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
         );
       },
       async probePageSpecialError() {
-        if (
-          !shouldSuppressLoadingBoundaries(options.renderMode ?? APP_RSC_RENDER_MODE_NAVIGATION) &&
-          route.loading?.default
-        ) {
+        if (hasActiveLoadingBoundary) {
           return null;
         }
         const pageError = await probeAppPageThrownError({

@@ -45,4 +45,29 @@ test.describe("Loading boundaries (loading.tsx)", () => {
       timeout: 10_000,
     });
   });
+
+  test("parent loading boundary is included in initial HTML for a slow nested layout", async ({
+    request,
+  }) => {
+    // Ported from Next.js: test/e2e/app-dir/app/index.test.ts
+    // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/app/index.test.ts
+    const response = await request.get(`${BASE}/slow-layout-with-loading/slow`);
+    expect(response.status()).toBe(200);
+
+    const html = await response.text();
+    expect(html).toContain('<p id="loading-layout">Loading layout...</p>');
+  });
+
+  test("parent and leaf loading boundaries are included for a slow layout and page", async ({
+    request,
+  }) => {
+    // Ported from Next.js: test/e2e/app-dir/app/index.test.ts
+    // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/app/index.test.ts
+    const response = await request.get(`${BASE}/slow-layout-and-page-with-loading/slow`);
+    expect(response.status()).toBe(200);
+
+    const html = await response.text();
+    expect(html).toContain('<p id="loading-layout">Loading layout...</p>');
+    expect(html).toContain('<p id="loading-page">Loading page...</p>');
+  });
 });

@@ -134,6 +134,10 @@ export type AppRoute = {
   siblingIntercepts: InterceptingRoute[];
   /** Loading component path */
   loadingPath: string | null;
+  /** Ancestor loading component paths, ordered from root to leaf. */
+  ancestorLoadingPaths?: string[];
+  /** Tree position for each ancestor loading component. */
+  ancestorLoadingTreePositions?: number[];
   /** Error component path (leaf directory only) */
   errorPath: string | null;
   /**
@@ -1285,6 +1289,8 @@ function discoverSlotSubRoutes(
         templates: parentRoute.templates,
         parallelSlots: subSlots,
         loadingPath: parentRoute.loadingPath,
+        ancestorLoadingPaths: parentRoute.ancestorLoadingPaths,
+        ancestorLoadingTreePositions: parentRoute.ancestorLoadingTreePositions,
         errorPath: parentRoute.errorPath,
         layoutErrorPaths: parentRoute.layoutErrorPaths,
         notFoundPath: parentRoute.notFoundPath,
@@ -1511,6 +1517,7 @@ function directoryToAppRoute(
   // Discover loading, error in the route's directory.
   const routeDir = dir === "." ? appDir : path.posix.join(appDir, dir);
   const loadingPath = findFile(routeDir, "loading", matcher);
+  const ancestorLoadingEntries = discoverAncestorLoadings(segments, appDir, matcher);
   const errorPath = findFile(routeDir, "error", matcher);
 
   // Discover not-found/forbidden/unauthorized: walk from route directory up to root (nearest wins).
@@ -1547,6 +1554,8 @@ function directoryToAppRoute(
     templates,
     parallelSlots,
     loadingPath,
+    ancestorLoadingPaths: ancestorLoadingEntries.map((entry) => entry.path),
+    ancestorLoadingTreePositions: ancestorLoadingEntries.map((entry) => entry.treePosition),
     errorPath,
     layoutErrorPaths,
     errorPaths,
@@ -1752,6 +1761,30 @@ function discoverSegmentErrors(
   }
 
   return errors;
+}
+
+function discoverAncestorLoadings(
+  segments: string[],
+  appDir: string,
+  matcher: ValidFileMatcher,
+): { path: string; treePosition: number }[] {
+  const loadings: { path: string; treePosition: number }[] = [];
+  let currentDir = appDir;
+
+  const rootLoading = findFile(currentDir, "loading", matcher);
+  if (rootLoading && segments.length > 0) {
+    loadings.push({ path: rootLoading, treePosition: 0 });
+  }
+
+  for (let index = 0; index < segments.length - 1; index++) {
+    currentDir = path.join(currentDir, segments[index]);
+    const loading = findFile(currentDir, "loading", matcher);
+    if (loading) {
+      loadings.push({ path: loading, treePosition: index + 1 });
+    }
+  }
+
+  return loadings;
 }
 
 /**

@@ -343,6 +343,32 @@ function LayoutWithoutChildren() {
 }
 
 describe("app page route wiring helpers", () => {
+  it("wraps ancestor segments with their loading boundaries", () => {
+    function ParentLoading() {
+      return createElement("p", { id: "parent-loading" }, "Loading parent");
+    }
+
+    const elements = buildAppPageElements({
+      element: createElement("h1", null, "Page"),
+      makeThenableParams,
+      matchedParams: {},
+      resolvedMetadata: null,
+      resolvedViewport: {},
+      route: {
+        ancestorLoadings: [{ default: ParentLoading }],
+        ancestorLoadingTreePositions: [0],
+        layouts: [],
+        loading: null,
+        routeSegments: ["slow", "page"],
+      },
+      routePath: "/slow/page",
+    });
+
+    const suspense = findSuspenseWithFallback(elements["route:/slow/page"], "ParentLoading");
+    expect(suspense).not.toBeNull();
+    expect(suspense?.props.fallback).toMatchObject({ type: ParentLoading });
+  });
+
   it("probes returned layout children with param and revalidate tracking", async () => {
     const calls: string[] = [];
     const layoutParamAccess = createAppLayoutParamAccessTracker();

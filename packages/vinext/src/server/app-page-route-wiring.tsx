@@ -124,6 +124,8 @@ export type AppPageRouteWiringRoute<
   errorPaths?: readonly TErrorModule[] | null;
   errors?: readonly (TErrorModule | null | undefined)[] | null;
   errorTreePositions?: readonly number[] | null;
+  ancestorLoadings?: readonly (TModule | null | undefined)[] | null;
+  ancestorLoadingTreePositions?: readonly number[] | null;
   layoutTreePositions?: readonly number[] | null;
   layouts: readonly (TModule | null | undefined)[];
   loading?: TModule | null;
@@ -555,6 +557,7 @@ export function buildAppPageElements<
   const layoutEntriesByTreePosition = new Map<number, AppPageLayoutEntry<TModule, TErrorModule>>();
   const templateEntriesByTreePosition = new Map<number, AppPageTemplateEntry<TModule>>();
   const errorEntriesByTreePosition = new Map<number, AppPageErrorEntry<TErrorModule>>();
+  const ancestorLoadingByTreePosition = new Map<number, TModule>();
   for (const layoutEntry of layoutEntries) {
     layoutEntriesByTreePosition.set(layoutEntry.treePosition, layoutEntry);
   }
@@ -563,6 +566,12 @@ export function buildAppPageElements<
   }
   for (const errorEntry of errorEntries) {
     errorEntriesByTreePosition.set(errorEntry.treePosition, errorEntry);
+  }
+  for (const [index, loadingModule] of (options.route.ancestorLoadings ?? []).entries()) {
+    if (!loadingModule) continue;
+    const treePosition = options.route.ancestorLoadingTreePositions?.[index];
+    if (treePosition === undefined) continue;
+    ancestorLoadingByTreePosition.set(treePosition, loadingModule);
   }
   const layoutIndicesByTreePosition = new Map<number, number>();
   for (let index = 0; index < layoutEntries.length; index++) {
@@ -586,6 +595,7 @@ export function buildAppPageElements<
       ...layoutEntries.map((entry) => entry.treePosition),
       ...templateEntries.map((entry) => entry.treePosition),
       ...errorEntries.map((entry) => entry.treePosition),
+      ...ancestorLoadingByTreePosition.keys(),
     ]),
   ).sort((left, right) => left - right);
   const resolveSlotOverride = (slotKey: string, slotName: string) => {
@@ -1013,6 +1023,9 @@ export function buildAppPageElements<
     const layoutEntry = layoutEntriesByTreePosition.get(treePosition);
     const templateEntry = templateEntriesByTreePosition.get(treePosition);
     const errorEntry = errorEntriesByTreePosition.get(treePosition);
+    const ancestorLoadingComponent = getDefaultExport(
+      ancestorLoadingByTreePosition.get(treePosition),
+    );
 
     // Next.js nesting per segment (outer to inner): Layout > Template > Error > Unauthorized > Forbidden > NotFound > children.
     // Building bottom-up means NotFoundBoundary must wrap the leaf subtree first,
@@ -1050,6 +1063,15 @@ export function buildAppPageElements<
           </UnauthorizedBoundary>
         );
       }
+    }
+
+    if (ancestorLoadingComponent && !shouldSuppressLoadingBoundaries(renderMode)) {
+      const AncestorLoadingComponent = ancestorLoadingComponent;
+      segmentChildren = (
+        <Suspense key={segmentResetKey} fallback={<AncestorLoadingComponent />}>
+          {segmentChildren}
+        </Suspense>
+      );
     }
 
     const segmentErrorComponent = getErrorBoundaryExport(
