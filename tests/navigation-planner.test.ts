@@ -1825,6 +1825,46 @@ describe("navigationPlanner root-boundary decisions", () => {
     expect(decision.proposal.preservePreviousSlotIds).toEqual(["slot:activity:/feed"]);
   });
 
+  it("allows traverse to restore an intercepted world from a catch-all sibling", () => {
+    const currentSnapshot: RouteSnapshot = {
+      ...createRouteSnapshot(
+        "/",
+        ["layout:/", "layout:/feed"],
+        [],
+        [createSlotBinding("slot:modal:/feed", "layout:/feed", "active")],
+      ),
+      displayUrl: "https://example.com/profile",
+      matchedUrl: "/profile",
+      routeId: "route:/profile",
+    };
+    const targetSnapshot: RouteSnapshot = {
+      ...createRouteSnapshot(
+        "/",
+        ["layout:/", "layout:/feed"],
+        [],
+        [createSlotBinding("slot:modal:/feed", "layout:/feed", "active")],
+      ),
+      displayUrl: "https://example.com/photos/42",
+      interception: createInterceptionSnapshot(),
+      interceptionContext: "/feed",
+      matchedUrl: "/photos/42",
+      routeId: "route:/photos/42\u0000/feed",
+    };
+
+    const decision = planFlightResponseFromSnapshots({
+      currentSnapshot,
+      lane: "traverse",
+      targetSnapshot,
+    });
+
+    expect(decision.kind).toBe("proposeCommit");
+    if (decision.kind !== "proposeCommit") {
+      throw new Error("Expected proposeCommit decision");
+    }
+    expect(decision.proposal.reason).toBe("interceptedCurrentRootBoundary");
+    expect(decision.proposal.preservePreviousSlotIds).toEqual([]);
+  });
+
   it("does not preserve layouts across root-boundary uncertainty", () => {
     const currentSnapshot = createRouteSnapshot("/", ["layout:/"]);
     const targetSnapshot = createRouteSnapshot(null, ["layout:/"]);
