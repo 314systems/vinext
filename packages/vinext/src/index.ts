@@ -167,6 +167,7 @@ import {
 import { resolvePostcssStringPlugins } from "./plugins/postcss.js";
 import {
   buildSassPreprocessorOptions,
+  createSassTildeCssImportPlugin,
   createSassTildeImporter,
   createSassAwareFileSystemLoader,
 } from "./plugins/sass.js";
@@ -3233,6 +3234,7 @@ export const loadServerActionClient = ${
         });
       },
     },
+    createSassTildeCssImportPlugin(),
     // Stub node:async_hooks in client builds — see src/plugins/async-hooks-stub.ts
     asyncHooksStubPlugin,
     createInstrumentationClientTransformPlugin(() => instrumentationClientPath),

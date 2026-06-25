@@ -26,7 +26,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { preprocessCSS, type PreprocessCSSResult, type ResolvedConfig } from "vite";
+import { preprocessCSS, type Plugin, type PreprocessCSSResult, type ResolvedConfig } from "vite";
 
 type AdditionalData = string | ((source: string, filename: string) => string | Promise<string>);
 
@@ -36,6 +36,57 @@ type VitePreprocessorOptions = {
   // oxlint-disable-next-line typescript/no-explicit-any
   [key: string]: any;
 };
+
+const SASS_STYLESHEET_RE = /\.(?:scss|sass)(?:$|[?#])/;
+const TILDE_CSS_IMPORT_RE = /(@import\s+(?:url\(\s*)?)(["'])~([^"']+\.css(?:[?#][^"']*)?)\2/g;
+
+export function normalizeSassTildeCssImport(
+  source: string,
+  importer: string | undefined,
+  root: string,
+): string | null {
+  if (!source.startsWith("~") || !importer || !SASS_STYLESHEET_RE.test(importer)) return null;
+
+  const stripped = source.slice(1);
+  if (!stripped) return null;
+
+  return stripped.startsWith("/") ? path.resolve(root, `.${stripped}`) : stripped;
+}
+
+export function rewriteSassTildeCssImports(code: string, id: string, root: string): string | null {
+  let changed = false;
+  const rewritten = code.replace(
+    TILDE_CSS_IMPORT_RE,
+    (match, prefix: string, quote: string, source: string) => {
+      const normalized = normalizeSassTildeCssImport(`~${source}`, id, root);
+      if (!normalized) return match;
+      changed = true;
+      return `${prefix}${quote}${normalized}${quote}`;
+    },
+  );
+  return changed ? rewritten : null;
+}
+
+export function createSassTildeCssImportPlugin(): Plugin {
+  let root: string;
+
+  return {
+    name: "vinext:sass-tilde-css-imports",
+    enforce: "pre",
+
+    configResolved(config) {
+      root = config.root;
+    },
+
+    transform: {
+      filter: { id: SASS_STYLESHEET_RE, code: "@import" },
+      handler(code, id) {
+        const rewritten = rewriteSassTildeCssImports(code, id, root);
+        return rewritten ? { code: rewritten, map: null } : null;
+      },
+    },
+  };
+}
 
 /**
  * Create a Sass `FileImporter` that resolves webpack-style tilde (`~`) imports.

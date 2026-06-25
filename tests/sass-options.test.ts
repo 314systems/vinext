@@ -24,6 +24,8 @@ import os from "node:os";
 import fsp from "node:fs/promises";
 import {
   buildSassPreprocessorOptions,
+  normalizeSassTildeCssImport,
+  rewriteSassTildeCssImports,
   createSassTildeImporter,
 } from "../packages/vinext/src/plugins/sass.js";
 import { fileURLToPath } from "node:url";
@@ -196,6 +198,77 @@ describe("createSassTildeImporter", () => {
     const result = importer.findFileUrl("~/styles/variables");
     expect(result).toBeInstanceOf(URL);
     expect(result?.protocol).toBe("file:");
+  });
+});
+
+describe("normalizeSassTildeCssImport", () => {
+  const root = path.join(path.sep, "project");
+
+  it("strips package tilde imports emitted as plain CSS imports", () => {
+    expect(
+      normalizeSassTildeCssImport(
+        "~nprogress/nprogress.css",
+        path.join(root, "styles", "global.scss"),
+        root,
+      ),
+    ).toBe("nprogress/nprogress.css");
+  });
+
+  it("resolves root-relative tilde imports against the project root", () => {
+    expect(
+      normalizeSassTildeCssImport(
+        "~/styles/base.css?inline",
+        path.join(root, "styles", "global.scss"),
+        root,
+      ),
+    ).toBe(path.join(root, "styles", "base.css?inline"));
+  });
+
+  it("ignores tilde imports from JavaScript modules", () => {
+    expect(
+      normalizeSassTildeCssImport(
+        "~nprogress/nprogress.css",
+        path.join(root, "app", "page.tsx"),
+        root,
+      ),
+    ).toBeNull();
+  });
+
+  it("ignores non-tilde and bare-tilde imports", () => {
+    const importer = path.join(root, "styles", "global.scss");
+    expect(normalizeSassTildeCssImport("nprogress/nprogress.css", importer, root)).toBeNull();
+    expect(normalizeSassTildeCssImport("~", importer, root)).toBeNull();
+  });
+});
+
+describe("rewriteSassTildeCssImports", () => {
+  const root = path.join(path.sep, "project");
+  const id = path.join(root, "styles", "global.scss");
+
+  it("rewrites CSS imports that Sass preserves for PostCSS", () => {
+    const source = [
+      `@use '~/styles/variables' as *;`,
+      `@import '~nprogress/nprogress.css';`,
+      `@import url("~/styles/base.css");`,
+    ].join("\n");
+
+    expect(rewriteSassTildeCssImports(source, id, root)).toBe(
+      [
+        `@use '~/styles/variables' as *;`,
+        `@import 'nprogress/nprogress.css';`,
+        `@import url("${path.join(root, "styles", "base.css")}");`,
+      ].join("\n"),
+    );
+  });
+
+  it("leaves Sass imports and ordinary CSS imports unchanged", () => {
+    expect(
+      rewriteSassTildeCssImports(
+        [`@import '~package/theme.scss';`, `@import './local.css';`].join("\n"),
+        id,
+        root,
+      ),
+    ).toBeNull();
   });
 });
 
