@@ -46,6 +46,7 @@ export type PagesReqResResponse = Writable & {
 type CreatePagesReqResOptions = {
   body: unknown;
   query: PagesRequestQuery;
+  revalidateOrigin?: string;
   request: Request;
   url: string;
 };
@@ -166,7 +167,7 @@ class PagesResponseStream extends Writable {
   constructor(
     private readonly resolveResponse: (value: Response) => void,
     private readonly rejectResponse: (error: Error) => void,
-    private readonly requestHeaders: Headers,
+    private readonly revalidateOrigin: string,
   ) {
     super();
     this.once("error", (err) => {
@@ -261,7 +262,7 @@ class PagesResponseStream extends Writable {
   }
 
   async revalidate(urlPath: string, opts?: RevalidateOptions): Promise<void> {
-    await performOnDemandRevalidate(this.requestHeaders, urlPath, opts);
+    await performOnDemandRevalidate(this.revalidateOrigin, urlPath, opts);
   }
 
   override _write(
@@ -411,7 +412,7 @@ export function createPagesReqRes(options: CreatePagesReqResOptions): CreatePage
   const res: PagesReqResResponse = new PagesResponseStream(
     resolveResponse,
     rejectResponse,
-    options.request.headers,
+    options.revalidateOrigin ?? new URL(options.request.url).origin,
   ) as PagesReqResResponse;
 
   return { req, res, responsePromise };

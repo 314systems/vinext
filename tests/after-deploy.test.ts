@@ -149,6 +149,17 @@ describe("after() in deploy mode — ctx.waitUntil wiring", () => {
     );
     expect(viteConfig).toContain("images: { optimizer: imageAdapter() }");
   });
+
+  it("the benchmarks worker forwards runtime context to vinext", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const { resolve } = await import("node:path");
+    const worker = await readFile(
+      resolve(import.meta.dirname, "../examples/benchmarks/worker/index.ts"),
+      "utf8",
+    );
+
+    expect(worker).toContain("handler.fetch(request, env, ctx)");
+  });
 });
 
 describe("after() in deploy mode — Pages Router worker entry", () => {

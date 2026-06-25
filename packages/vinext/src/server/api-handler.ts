@@ -27,7 +27,11 @@ import {
   resolveBodyParserConfig,
 } from "./pages-body-parser-config.js";
 import { resolveRequestProtocol, resolveRequestHost } from "./proxy-trust.js";
-import { performOnDemandRevalidate, type RevalidateOptions } from "./pages-revalidate.js";
+import {
+  performOnDemandRevalidate,
+  resolveNodeRevalidateOrigin,
+  type RevalidateOptions,
+} from "./pages-revalidate.js";
 import { NextRequest } from "vinext/shims/server";
 import { hasBasePath } from "../utils/base-path.js";
 
@@ -339,7 +343,7 @@ function enhanceApiObjects(
     // success detection stay identical to the dev/Node-compat path. See
     // `pages-revalidate.ts`.
     async revalidate(this: NextApiResponse, urlPath: string, opts?: RevalidateOptions) {
-      await performOnDemandRevalidate(req, urlPath, opts);
+      await performOnDemandRevalidate(resolveNodeRevalidateOrigin(req), urlPath, opts);
     },
   });
 
