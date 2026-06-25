@@ -96,7 +96,7 @@ export function createBabelConfigPlugin(
   }),
 ): Plugin {
   let root = process.cwd();
-  let canonicalRoot = fs.realpathSync.native(root);
+  let canonicalRoot = tryRealpathSync(root) ?? root;
   let babelCorePromise: Promise<BabelCore> | null = null;
   let configPath: string | null = null;
   let srcDir = canonicalRoot;
@@ -108,8 +108,8 @@ export function createBabelConfigPlugin(
     enforce: "pre",
     configResolved(config) {
       root = config.root;
-      canonicalRoot = fs.realpathSync.native(root);
-      configPath = findBabelConfig(root);
+      canonicalRoot = tryRealpathSync(root) ?? root;
+      configPath = findBabelConfig(canonicalRoot);
       transpilePackageRoots = new Map();
       srcDir = fs.existsSync(path.join(canonicalRoot, "src"))
         ? path.join(canonicalRoot, "src")
@@ -119,7 +119,7 @@ export function createBabelConfigPlugin(
         : path.join(canonicalRoot, "src", "pages");
     },
     configureServer(server) {
-      const configCandidates = BABEL_CONFIG_FILES.map((file) => path.join(root, file));
+      const configCandidates = BABEL_CONFIG_FILES.map((file) => path.join(canonicalRoot, file));
       server.watcher.add(configCandidates);
       let restartPending = false;
       const restartForBabelConfig = (changedPath: string) => {
@@ -168,8 +168,8 @@ export function createBabelConfigPlugin(
           const babelCorePath = resolveBabelCore(root);
           if (!babelCorePath) {
             throw new Error(
-              "vinext: A Babel config was found, but @babel/core could not be resolved. " +
-                "Install @babel/core in the project.",
+              "vinext: A Babel config was found, but Babel could not be resolved. " +
+                "Install @babel/core or ensure next is installed in the project.",
             );
           }
           babelCorePromise = import(pathToFileURL(babelCorePath).href).then((module) => {
