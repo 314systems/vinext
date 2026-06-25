@@ -455,6 +455,12 @@ function prefetchUrl(
             ? resolveAutoAppRoutePrefetch(prefetchHref)
             : { cacheForNavigation: true, prefetchShellFirst: true, shouldPrefetch: true };
         if (!autoPrefetch.shouldPrefetch) return;
+        if (
+          canReuseRetainedHistory &&
+          getNavigationRuntime()?.functions.hasRestorableHistoryTarget?.(fullHref) === true
+        ) {
+          return;
+        }
 
         const interceptionContext = getPrefetchInterceptionContext(fullHref);
         const mountedSlotsHeader = getMountedSlotsHeader();
@@ -472,12 +478,6 @@ function prefetchUrl(
         // Distinguish the same visible URL when it is prefetched from different
         // request contexts such as /feed vs /gallery or different mounted slots.
         const rscUrl = await createRscRequestUrl(fullHref, headers);
-        if (
-          canReuseRetainedHistory &&
-          getNavigationRuntime()?.functions.hasRestorableHistoryTarget?.(fullHref) === true
-        ) {
-          return;
-        }
         const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
         const prefetched = getPrefetchedUrls();
         if (prefetched.has(cacheKey)) {
