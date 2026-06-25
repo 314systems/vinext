@@ -23,6 +23,8 @@ import { probeAppPageBeforeRender } from "./app-page-probe.js";
 import {
   createPrefetchSuspenseShellState,
   runWithPrefetchSuspenseShellState,
+  schedulePrefetchSuspenseShellAbort,
+  wasPrefetchSuspenseShellAborted,
 } from "vinext/shims/prefetch-suspense-shell";
 import {
   buildAppPageHtmlResponse,
@@ -695,6 +697,7 @@ export async function renderAppPageLifecycle(
   // standalone call would establish here is only effective if the caller has
   // an outer runWithRequestContext / runWithFetchDedupe scope keeping the ALS
   // store alive across that consumption.
+  let prefetchSuspenseShellWasAborted = false;
   let rscStream = await runWithFetchDedupe(async () => {
     if (
       options.renderMode === APP_RSC_RENDER_MODE_PREFETCH_SUSPENSE_SHELL &&
@@ -707,7 +710,14 @@ export async function renderAppPageLifecycle(
           signal: shellState.reactAbortController.signal,
         }),
       );
-      return (await pendingResult).prelude;
+      const cancelAbort = schedulePrefetchSuspenseShellAbort(shellState);
+      try {
+        const result = await pendingResult;
+        prefetchSuspenseShellWasAborted = wasPrefetchSuspenseShellAborted(shellState);
+        return result.prelude;
+      } finally {
+        cancelAbort();
+      }
     }
 
     if (options.pprFallbackShellSignal && options.prerenderToReadableStream) {
@@ -819,7 +829,7 @@ export async function renderAppPageLifecycle(
       params: options.navigationParams,
       partialShell:
         options.renderMode === APP_RSC_RENDER_MODE_PREFETCH_SUSPENSE_SHELL &&
-        dynamicUsedDuringBuild,
+        prefetchSuspenseShellWasAborted,
       policy: rscResponsePolicy,
       timing: buildResponseTiming({
         compileEnd,

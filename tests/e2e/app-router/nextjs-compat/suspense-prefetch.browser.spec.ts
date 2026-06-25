@@ -85,14 +85,9 @@ export default function Page() {
   await fs.writeFile(
     path.join(dynamicDir, "page.tsx"),
     `import { Suspense } from "react";
-import { connection } from "next/server";
-
-export function generateStaticParams() {
-  return [{ param: "a" }, { param: "b" }];
-}
 
 async function DynamicContent({ param }: { param: string }) {
-  await connection();
+  await new Promise((resolve) => setTimeout(resolve, 5_000));
   return <div id={\`dynamic-page-content-\${param}\`}>{\`Dynamic page \${param}\`}</div>;
 }
 
