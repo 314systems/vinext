@@ -1,7 +1,7 @@
 import type { NextHeader, NextI18nConfig } from "../config/next-config.js";
 import type { RequestContext } from "../config/config-matchers.js";
-import { VINEXT_STATIC_FILE_HEADER } from "./headers.js";
-import { applyCdnResponseHeaders } from "./cache-control.js";
+import { VINEXT_RSC_PARTIAL_SHELL_HEADER, VINEXT_STATIC_FILE_HEADER } from "./headers.js";
+import { applyCdnResponseHeaders, NO_STORE_CACHE_CONTROL } from "./cache-control.js";
 import { applyConfigHeadersToResponse } from "./request-pipeline.js";
 import { VINEXT_RSC_VARY_HEADER } from "./app-rsc-cache-busting.js";
 import { mergeVaryHeader } from "./middleware-response-headers.js";
@@ -28,6 +28,15 @@ type FinalizeAppRscResponseOptions = {
    */
   requestContext: RequestContext;
 };
+
+function lockPartialShellCacheHeaders(response: Response): void {
+  if (response.headers.get(VINEXT_RSC_PARTIAL_SHELL_HEADER) !== "1") return;
+
+  response.headers.set("Cache-Control", NO_STORE_CACHE_CONTROL);
+  response.headers.delete("CDN-Cache-Control");
+  response.headers.delete("Cloudflare-CDN-Cache-Control");
+  response.headers.delete("Cache-Tag");
+}
 
 /**
  * Apply App Router response finalization that must happen outside individual
@@ -74,6 +83,7 @@ export function finalizeAppRscResponse(
   }
 
   if (!options.configHeaders.length) {
+    lockPartialShellCacheHeaders(response);
     return response;
   }
 
@@ -110,6 +120,7 @@ export function finalizeAppRscResponse(
     requestContext: options.requestContext,
     basePathState: { basePath: options.basePath, hadBasePath },
   });
+  lockPartialShellCacheHeaders(response);
 
   return response;
 }
