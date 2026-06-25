@@ -5,6 +5,22 @@ import { waitForAppRouterHydration } from "../../helpers";
 
 const BASE = "http://localhost:4174";
 
+test("a descendant layout effect can shallow-push during hydration", async ({ page }) => {
+  await page.goto(`${BASE}/nextjs-compat/shallow-history/target?layout-effect=push`);
+  await waitForAppRouterHydration(page);
+
+  await expect(page).toHaveURL(/\?layout-effect=committed$/);
+  await expect(page.locator("#layout-effect-pathname")).toHaveText(
+    "/nextjs-compat/shallow-history/target",
+  );
+
+  await page.goBack();
+  await expect(page).toHaveURL(/\?layout-effect=push$/);
+  await expect(page.locator("#layout-effect-pathname")).toHaveText(
+    "/nextjs-compat/shallow-history/target",
+  );
+});
+
 test("external pushState pathname survives back and forward", async ({ page }) => {
   await page.goto(`${BASE}/nextjs-compat/shallow-history`);
   await waitForAppRouterHydration(page);

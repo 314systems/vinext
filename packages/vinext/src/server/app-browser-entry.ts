@@ -5,6 +5,7 @@ import {
   startTransition,
   use,
   useEffect,
+  useInsertionEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -972,12 +973,12 @@ function BrowserRoot({
   const stateRef = useRef(treeState);
   stateRef.current = treeState;
 
-  // Publish the stable ref object and dispatch during layout commit. This keeps
+  // Publish the stable ref object and dispatch during insertion commit. This keeps
   // the module-level escape hatches aligned with React's committed tree without
-  // performing module writes during render. The navigation runtime is registered
-  // after hydrateRoot() returns; by then this layout effect has already run for
-  // the hydration commit, so getBrowserRouterState() never observes a null ref.
-  useLayoutEffect(() => {
+  // performing module writes during render. Insertion effects run before descendant
+  // layout effects, so a client component may safely call history.pushState() from
+  // its initial layout effect without racing App Router state publication.
+  useInsertionEffect(() => {
     const setAppRouterStateValue = (value: AppRouterState | Promise<AppRouterState>) => {
       setTreeStateValue(value);
     };
