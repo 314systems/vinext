@@ -15,7 +15,7 @@ import {
   dynamicImportPreloadsWithBase,
 } from "./lazy-chunks.js";
 import { manifestFileWithBase, manifestFileWithAssetPrefix } from "./manifest-paths.js";
-import { resolveAssetsDir } from "./asset-prefix.js";
+import { isAbsoluteAssetPrefix, resolveAssetsDir } from "./asset-prefix.js";
 
 type ClientRuntimeMetadata = {
   clientEntryFile?: string;
@@ -108,7 +108,10 @@ export function computeClientRuntimeMetadata(opts: {
   metadata.appBootstrapPreinitModules = collectAppBootstrapPreinitModules(
     buildManifest,
     clientEntryManifest?.appBrowserEntry,
-    (file) => manifestFileWithAssetPrefix(file, opts.assetBase, opts.assetPrefix),
+    (file) => {
+      const url = manifestFileWithAssetPrefix(file, opts.assetBase, opts.assetPrefix);
+      return isAbsoluteAssetPrefix(opts.assetPrefix) ? url : "/" + url;
+    },
   );
 
   // `lazyChunks` and `dynamicPreloads` live in DIFFERENT key-spaces and must be

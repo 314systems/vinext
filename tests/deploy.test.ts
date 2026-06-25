@@ -2742,7 +2742,7 @@ describe("Cloudflare closeBundle lazy chunk injection", () => {
 
     const code = fs.readFileSync(path.join(tmpDir, "dist", "server", "index.js"), "utf-8");
     expect(code).toContain(
-      'globalThis.__VINEXT_APP_BOOTSTRAP_PREINIT_MODULES__ = ["assets/framework.js"];',
+      'globalThis.__VINEXT_APP_BOOTSTRAP_PREINIT_MODULES__ = ["/assets/framework.js"];',
     );
   });
 
