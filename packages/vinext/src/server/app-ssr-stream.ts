@@ -19,6 +19,11 @@ type RscEmbedTransform = {
   getRawBuffer(): Promise<ArrayBuffer>;
 };
 
+type RscEmbedTransformOptions = {
+  mirrorNextFlight?: boolean;
+  scriptNonce?: string;
+};
+
 type HtmlInsertion = string | (() => string);
 type InlineCssManifest = Record<string, string>;
 type InlineCssRewriteResult = {
@@ -57,6 +62,15 @@ function createNavigationRuntimeRscDoneScript(): string {
   return navigationRuntimeRscBootstrapExpression() + ".done=true";
 }
 
+function createNextFlightBootstrapScript(): string {
+  return "(self.__next_f=self.__next_f||[]).push([0])";
+}
+
+function createNextFlightChunkScript(chunk: RscEmbeddedChunk): string {
+  const nextChunk = typeof chunk === "string" ? [1, chunk] : chunk;
+  return "self.__next_f.push(" + safeJsonStringify(nextChunk) + ")";
+}
+
 /**
  * Fix invalid preload "as" values in RSC Flight hint lines before they reach
  * the client. React Flight emits HL hints with as="stylesheet" for CSS, but
@@ -72,12 +86,15 @@ export function fixFlightHints(text: string): string {
  */
 export function createRscEmbedTransform(
   embedStream: ReadableStream<Uint8Array>,
-  scriptNonce?: string,
+  optionsOrNonce: RscEmbedTransformOptions | string = {},
 ): RscEmbedTransform {
+  const options =
+    typeof optionsOrNonce === "string" ? { scriptNonce: optionsOrNonce } : optionsOrNonce;
   const reader = embedStream.getReader();
   let pendingChunks: RscEmbeddedChunk[] = [];
   const rawChunks: Uint8Array[] = [];
   let reading = false;
+  let mirroredNextFlightBootstrap = false;
 
   async function pumpReader(): Promise<void> {
     if (reading) return;
@@ -121,7 +138,20 @@ export function createRscEmbedTransform(
 
       let scripts = "";
       for (const chunk of chunks) {
-        scripts += createInlineScriptTag(createNavigationRuntimeRscChunkScript(chunk), scriptNonce);
+        scripts += createInlineScriptTag(
+          createNavigationRuntimeRscChunkScript(chunk),
+          options.scriptNonce,
+        );
+        if (options.mirrorNextFlight) {
+          if (!mirroredNextFlightBootstrap) {
+            scripts += createInlineScriptTag(
+              createNextFlightBootstrapScript(),
+              options.scriptNonce,
+            );
+            mirroredNextFlightBootstrap = true;
+          }
+          scripts += createInlineScriptTag(createNextFlightChunkScript(chunk), options.scriptNonce);
+        }
       }
       return scripts;
     },
@@ -129,7 +159,7 @@ export function createRscEmbedTransform(
     async finalize(): Promise<string> {
       await pumpPromise;
       let scripts = this.flush();
-      scripts += createInlineScriptTag(createNavigationRuntimeRscDoneScript(), scriptNonce);
+      scripts += createInlineScriptTag(createNavigationRuntimeRscDoneScript(), options.scriptNonce);
       return scripts;
     },
 

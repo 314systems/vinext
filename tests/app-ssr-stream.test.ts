@@ -122,6 +122,34 @@ describe("createRscEmbedTransform raw buffer (#981)", () => {
     expect(finalScripts).toContain('.rsc.push("chunk2")');
   });
 
+  it("optionally mirrors text chunks into the Next.js inline Flight transport", async () => {
+    const transform = createRscEmbedTransform(createTextStream(["chunk1", "chunk2"]), {
+      mirrorNextFlight: true,
+      scriptNonce: "test-nonce",
+    });
+
+    const finalScripts = await transform.finalize();
+
+    expect(finalScripts).toContain(
+      '<script nonce="test-nonce">(self.__next_f=self.__next_f||[]).push([0])</script>',
+    );
+    expect(finalScripts).toContain(
+      '<script nonce="test-nonce">self.__next_f.push([1,"chunk1"])</script>',
+    );
+    expect(finalScripts).toContain(
+      '<script nonce="test-nonce">self.__next_f.push([1,"chunk2"])</script>',
+    );
+    expect(finalScripts.match(/self\.__next_f=self\.__next_f\|\|\[\]/g)).toHaveLength(1);
+  });
+
+  it("does not mirror Next.js inline Flight chunks by default", async () => {
+    const transform = createRscEmbedTransform(createTextStream(["chunk"]));
+
+    const finalScripts = await transform.finalize();
+
+    expect(finalScripts).not.toContain("self.__next_f");
+  });
+
   it("rejects getRawBuffer when the stream errors (#1002)", async () => {
     const errorStream = new ReadableStream({
       start(controller) {
@@ -157,11 +185,13 @@ describe("createRscEmbedTransform raw buffer (#981)", () => {
     // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/binary/rsc-binary.test.ts
     const transform = createRscEmbedTransform(
       createByteStream([new Uint8Array([0xff, 0, 1, 2, 3])]),
+      { mirrorNextFlight: true },
     );
 
     const finalScripts = await transform.finalize();
 
     expect(finalScripts).toContain('.rsc.push([3,"/wABAgM="])');
+    expect(finalScripts).toContain('self.__next_f.push([3,"/wABAgM="])');
   });
 
   it("does not lose incomplete UTF-8 bytes before a binary chunk", async () => {
