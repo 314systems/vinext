@@ -1,3 +1,6 @@
+import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import path from "node:path";
 import MagicString from "magic-string";
 import { parseAst, type Plugin } from "vite";
 import {
@@ -10,7 +13,6 @@ import {
 } from "./ast-utils.js";
 
 const REQUIRE_PROXY_PREFIX = "virtual:vinext-require-condition:";
-const RESOLVED_REQUIRE_PROXY_PREFIX = `\0${REQUIRE_PROXY_PREFIX}`;
 const REQUIRE_MODULE_SUFFIX = ".vinext-require.js";
 
 type StaticRequire = {
@@ -19,18 +21,24 @@ type StaticRequire = {
 };
 
 export function createRequireExportConditionPlugin(): Plugin {
-  const requireModules = new Map<string, string>();
+  const clientRequireModules = new Map<string, string>();
+  const externalRequireModules = new Map<string, string>();
+  let projectRoot = process.cwd();
 
   return {
     name: "vinext:require-export-condition",
     enforce: "pre",
     sharedDuringBuild: true,
+    configResolved(config) {
+      projectRoot = config.root;
+    },
     transform: {
       filter: {
         id: /\.(?:[cm]?[jt]s|[jt]sx)(?:\?.*)?$/i,
         code: /\brequire\s*\(/,
       },
-      handler(code, id) {
+      async handler(code, id) {
+        if (this.environment && this.environment.name !== "rsc") return null;
         if (id.includes("node_modules")) return null;
 
         let ast: unknown;
@@ -60,34 +68,105 @@ export function createRequireExportConditionPlugin(): Plugin {
       },
     },
     async resolveId(id, importer) {
-      const prefix = id.startsWith(RESOLVED_REQUIRE_PROXY_PREFIX)
-        ? RESOLVED_REQUIRE_PROXY_PREFIX
-        : id.startsWith(REQUIRE_PROXY_PREFIX)
-          ? REQUIRE_PROXY_PREFIX
-          : null;
-      if (!prefix || !importer) return null;
+      const cleanId = id.startsWith("\0") ? id.slice(1) : id;
+      if (!cleanId.startsWith(REQUIRE_PROXY_PREFIX) || !importer) return null;
 
-      const specifier = decodeURIComponent(id.slice(prefix.length));
+      const specifier = decodeURIComponent(cleanId.slice(REQUIRE_PROXY_PREFIX.length));
       const resolved = await this.resolve(specifier, importer, {
         skipSelf: true,
         kind: "require-call",
       });
-      if (!resolved || resolved.external) return resolved;
+      if (!resolved || isVirtualId(resolved.id)) return resolved;
+      if (resolved.external) {
+        const requireModuleId = `\0${cleanId}${REQUIRE_MODULE_SUFFIX}`;
+        externalRequireModules.set(requireModuleId, specifier);
+        return requireModuleId;
+      }
 
-      const requireModuleId = resolved.id + REQUIRE_MODULE_SUFFIX;
-      requireModules.set(requireModuleId, resolved.id);
+      let requireResolvedId = resolved.id;
+      try {
+        requireResolvedId = createRequire(importer).resolve(specifier);
+      } catch {}
+      if (!(await hasLeadingUseClientDirective(requireResolvedId))) {
+        return { ...resolved, id: requireResolvedId };
+      }
+
+      const requireModuleId = `\0${cleanId}${REQUIRE_MODULE_SUFFIX}`;
+      clientRequireModules.set(requireModuleId, requireResolvedId);
       return requireModuleId;
     },
     load(id) {
-      const realId = requireModules.get(id);
-      if (!realId) return null;
-      return `'use client';
+      const realId = clientRequireModules.get(id);
+      if (realId) {
+        return `'use client';
 import * as namespace from ${JSON.stringify(realId)};
-const value = namespace.default || namespace;
+const value = "default" in namespace ? namespace.default : namespace;
+export default value;
+`;
+      }
+
+      const specifier = externalRequireModules.get(id);
+      if (!specifier) return null;
+      return `import { createRequire } from "node:module";
+const value = createRequire(${JSON.stringify(path.join(projectRoot, "package.json"))})(${JSON.stringify(specifier)});
 export default value;
 `;
     },
   };
+}
+
+function isVirtualId(id: string): boolean {
+  return id.startsWith("\0") || id.startsWith("virtual:");
+}
+
+async function hasLeadingUseClientDirective(id: string): Promise<boolean> {
+  const filePath = id.split("?", 1)[0] ?? id;
+  try {
+    return getLeadingReactDirective(await readFile(filePath, "utf8")) === "use client";
+  } catch {
+    return false;
+  }
+}
+
+function getLeadingReactDirective(code: string): "use client" | "use server" | null {
+  let index = code.charCodeAt(0) === 0xfeff ? 1 : 0;
+  if (code[index] === "#" && code[index + 1] === "!") {
+    const newline = code.indexOf("\n", index);
+    if (newline === -1) return null;
+    index = newline + 1;
+  }
+
+  while (index < code.length) {
+    while (index < code.length && /\s/.test(code[index] ?? "")) index++;
+    if (code[index] === "/" && code[index + 1] === "/") {
+      const newline = code.indexOf("\n", index + 2);
+      if (newline === -1) return null;
+      index = newline + 1;
+      continue;
+    }
+    if (code[index] === "/" && code[index + 1] === "*") {
+      const end = code.indexOf("*/", index + 2);
+      if (end === -1) return null;
+      index = end + 2;
+      continue;
+    }
+
+    const quote = code[index];
+    if (quote !== '"' && quote !== "'") return null;
+    const closing = code.indexOf(quote, index + 1);
+    if (closing === -1) return null;
+    const directive = code.slice(index + 1, closing);
+    if (directive === "use client" || directive === "use server") return directive;
+    index = closing + 1;
+    while (
+      index < code.length &&
+      (code[index] === ";" || code[index] === " " || code[index] === "\t")
+    ) {
+      index++;
+    }
+    if (code[index] === "\n") index++;
+  }
+  return null;
 }
 
 function hasRequireBinding(ast: unknown): boolean {
