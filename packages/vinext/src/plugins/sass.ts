@@ -74,6 +74,14 @@ function rewriteImportStatement(statement: string, id: string, root: string): st
       continue;
     }
 
+    if (char === "/" && next === "/") {
+      const end = statement.indexOf("\n", index + 2);
+      const nextIndex = end === -1 ? statement.length : end;
+      output += statement.slice(index, nextIndex);
+      index = nextIndex;
+      continue;
+    }
+
     if (char === '"' || char === "'") {
       let end = index + 1;
       while (end < statement.length) {
@@ -127,6 +135,7 @@ function rewriteImportStatement(statement: string, id: string, root: string): st
 export function rewriteSassTildeCssImports(code: string, id: string, root: string): string | null {
   let output = "";
   let changed = false;
+  const indentedSyntax = /\.sass(?:$|[?#])/.test(id);
 
   for (let index = 0; index < code.length; ) {
     const char = code[index];
@@ -174,11 +183,17 @@ export function rewriteSassTildeCssImports(code: string, id: string, root: strin
       let end = index + 7;
       let quote: string | null = null;
       let comment = false;
+      let lineComment = false;
       let parentheses = 0;
       while (end < code.length) {
         const current = code[end];
         const following = code[end + 1];
-        if (comment) {
+        if (lineComment) {
+          if (current === "\n") {
+            lineComment = false;
+            if (indentedSyntax && parentheses === 0) break;
+          }
+        } else if (comment) {
           if (current === "*" && following === "/") {
             comment = false;
             end += 2;
@@ -194,6 +209,10 @@ export function rewriteSassTildeCssImports(code: string, id: string, root: strin
           comment = true;
           end += 2;
           continue;
+        } else if (current === "/" && following === "/") {
+          lineComment = true;
+          end += 2;
+          continue;
         } else if (current === '"' || current === "'") {
           quote = current;
         } else if (current === "(") {
@@ -202,6 +221,8 @@ export function rewriteSassTildeCssImports(code: string, id: string, root: strin
           parentheses = Math.max(0, parentheses - 1);
         } else if (current === ";" && parentheses === 0) {
           end++;
+          break;
+        } else if (current === "\n" && indentedSyntax && parentheses === 0) {
           break;
         }
         end++;

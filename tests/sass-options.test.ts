@@ -273,6 +273,26 @@ describe("rewriteSassTildeCssImports", () => {
     expect(rewriteSassTildeCssImports(source, id, root)).toBeNull();
   });
 
+  it("stops semicolonless indented Sass imports at the newline", () => {
+    const source = [
+      `@import '~package/base.css'`,
+      `.example`,
+      `  background: url('~package/not-an-import.css')`,
+    ].join("\n");
+    expect(rewriteSassTildeCssImports(source, path.join(root, "styles", "global.sass"), root)).toBe(
+      [
+        `@import 'package/base.css'`,
+        `.example`,
+        `  background: url('~package/not-an-import.css')`,
+      ].join("\n"),
+    );
+  });
+
+  it("does not rewrite tilde paths inside line comments in an import statement", () => {
+    const source = [`@import './base.css', // ~package/comment.css`, `  './next.css';`].join("\n");
+    expect(rewriteSassTildeCssImports(source, id, root)).toBeNull();
+  });
+
   it("leaves Sass imports and ordinary CSS imports unchanged", () => {
     expect(
       rewriteSassTildeCssImports(
