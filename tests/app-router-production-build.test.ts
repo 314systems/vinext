@@ -78,6 +78,10 @@ describe("App Router Production build", () => {
     // app-basic imports next/image, so the completed RSC scan must retain the
     // App image endpoint even though image-free builds compile it out.
     expect(rscBundleCode).toContain("Invalid image optimization parameters");
+    // app-basic also contains server actions, which require the full client
+    // router. Its SSR bundle must therefore retain cache-proof/BFCache payload
+    // handling that document-only builds compile out.
+    expect(ssrBundleCode).toContain("CP_CACHE_ENTRY_PROOF_MISSING");
     const groupedPageChunks = fs
       .readdirSync(rscStaticDir)
       .filter((file) => file.startsWith("route-pages-") && file.endsWith(".js"));

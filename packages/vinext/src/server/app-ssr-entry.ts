@@ -48,6 +48,8 @@ import {
   normalizeAppElements,
   type AppWireElements,
 } from "./app-elements.js";
+import { normalizeDocumentAppElements } from "./app-elements-document.js";
+import { readAppElementsRouteId } from "./app-elements-route.js";
 import {
   createBfcacheSegmentStateKeyMap,
   createInitialBfcacheIdMap,
@@ -60,6 +62,7 @@ import { isPprFallbackShellAbortError } from "vinext/shims/ppr-fallback-shell-er
 import DefaultGlobalError from "vinext/shims/default-global-error";
 import { appendAssetDeploymentIdQuery } from "../utils/deployment-id.js";
 import { ssrAppRouterInstance } from "./app-ssr-router-instance.js";
+import { hasClientRouterRuntime } from "virtual:vinext-app-capabilities";
 
 /**
  * `@types/react-dom` does not yet type `maxHeadersLength` (it pairs with the
@@ -426,13 +429,19 @@ export async function handleSsr(
             flightRoot = createFromReadableStream<AppWireElements>(ssrStream);
           }
           const wireElements = use(flightRoot);
-          const elements = normalizeAppElements(wireElements);
-          const metadata = readAppElementsMetadata(elements);
+          const elements = hasClientRouterRuntime
+            ? normalizeAppElements(wireElements)
+            : normalizeDocumentAppElements(wireElements);
+          const routeId = hasClientRouterRuntime
+            ? readAppElementsMetadata(elements).routeId
+            : readAppElementsRouteId(elements);
           const routeTree = createReactElement(
             ElementsContext.Provider,
             { value: elements },
-            createReactElement(Slot, { id: metadata.routeId }),
+            createReactElement(Slot, { id: routeId }),
           );
+          if (!hasClientRouterRuntime) return routeTree;
+
           const stateKeyTree = createReactElement(
             BfcacheStateKeyMapContext.Provider,
             {

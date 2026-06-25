@@ -1,15 +1,18 @@
 "use client";
 
 import * as React from "react";
-import { UNMATCHED_SLOT, type AppElements } from "../server/app-elements-wire.js";
+import {
+  DOCUMENT_UNMATCHED_SLOT,
+  type DocumentAppElements,
+} from "../server/app-elements-document.js";
 import { notFound } from "./navigation-errors.js";
 
-const EMPTY_ELEMENTS: AppElements = Object.freeze({});
+const EMPTY_ELEMENTS: DocumentAppElements = Object.freeze({});
 const EMPTY_BFCACHE_STATE_KEYS: Readonly<Record<string, string>> = Object.freeze({});
 
-export { UNMATCHED_SLOT };
+export { DOCUMENT_UNMATCHED_SLOT as UNMATCHED_SLOT };
 
-export const ElementsContext = React.createContext<AppElements>(EMPTY_ELEMENTS);
+export const ElementsContext = React.createContext<DocumentAppElements>(EMPTY_ELEMENTS);
 export const ChildrenContext = React.createContext<React.ReactNode>(null);
 export const ParallelSlotsContext = React.createContext<Readonly<
   Record<string, React.ReactNode>
@@ -34,7 +37,7 @@ export function Slot({
   if (!Object.hasOwn(elements, id)) return null;
 
   const element = elements[id];
-  if (element === UNMATCHED_SLOT) notFound();
+  if (element === DOCUMENT_UNMATCHED_SLOT) notFound();
   if (element === null) return null;
 
   return (

@@ -3078,8 +3078,12 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         }
         if (id === RESOLVED_APP_CAPABILITIES && hasAppDir) {
           const hasServerActions = await resolveHasServerActions(this.environment.config);
+          const hasClientRouterRuntime = await resolveHasClientRouterRuntime(
+            this.environment.config,
+          );
           return `
 export const hasServerActions = ${JSON.stringify(hasServerActions)};
+export const hasClientRouterRuntime = ${JSON.stringify(hasClientRouterRuntime)};
 export const loadServerActionClient = ${
             hasServerActions
               ? `() => import(${JSON.stringify(_appBrowserServerActionClientPath)})`

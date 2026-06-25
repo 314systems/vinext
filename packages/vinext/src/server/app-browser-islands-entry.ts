@@ -9,16 +9,22 @@ import {
   createProgressiveRscStream,
   getVinextBrowserGlobal,
 } from "./app-browser-stream-document.js";
-import { normalizeAppElements, type AppElements, type AppWireElements } from "./app-elements.js";
+import {
+  normalizeDocumentAppElements,
+  type DocumentAppElements,
+  type DocumentAppWireElements,
+} from "./app-elements-document.js";
 import { readAppElementsRouteId } from "./app-elements-route.js";
 import { ElementsContext, Slot } from "virtual:vinext-app-slot-runtime";
 import { installWindowNext } from "../client/window-next.js";
 
-function decodeAppElementsPromise(payload: Promise<AppWireElements>): Promise<AppElements> {
-  return Promise.resolve(payload).then((elements) => normalizeAppElements(elements));
+function decodeAppElementsPromise(
+  payload: Promise<DocumentAppWireElements>,
+): Promise<DocumentAppElements> {
+  return Promise.resolve(payload).then((elements) => normalizeDocumentAppElements(elements));
 }
 
-function BrowserRoot({ initialElements }: { initialElements: Promise<AppElements> }) {
+function BrowserRoot({ initialElements }: { initialElements: Promise<DocumentAppElements> }) {
   const elements = use(initialElements);
   const routeId = readAppElementsRouteId(elements);
 
@@ -50,7 +56,7 @@ function main(): void {
   window.__VINEXT_RSC_BOOTSTRAP_STATE__ = "starting";
 
   const initialElements = decodeAppElementsPromise(
-    createFromReadableStream<AppWireElements>(readInitialRscStream()),
+    createFromReadableStream<DocumentAppWireElements>(readInitialRscStream()),
   );
   const children = createElement(BrowserRoot, { initialElements });
 
