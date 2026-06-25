@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
-export async function revalidateParallelSlots() {
+export async function revalidateParallelSlots(label?: string) {
   revalidatePath("/");
-  return { success: true };
+  return { label, success: true };
 }

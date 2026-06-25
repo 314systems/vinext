@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { revalidateParallelSlots } from "./parallel-revalidation-actions";
 
@@ -10,6 +11,26 @@ export function RefreshControl() {
 
 export function RevalidateControl() {
   return <button onClick={() => revalidateParallelSlots()}>Revalidate</button>;
+}
+
+export function SerializedRevalidateControl() {
+  const [status, setStatus] = useState("idle");
+  return (
+    <>
+      <button
+        data-testid="serialized-revalidate"
+        onClick={async () => {
+          await revalidateParallelSlots("A");
+          setStatus("A resolved");
+          await revalidateParallelSlots("B");
+          setStatus("B resolved");
+        }}
+      >
+        Revalidate twice
+      </button>
+      <p data-testid="serialized-revalidate-status">{status}</p>
+    </>
+  );
 }
 
 export function SearchParamsControl({ id, random }: { id: string; random?: string }) {

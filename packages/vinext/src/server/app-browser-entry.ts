@@ -95,6 +95,7 @@ import {
   settleSuccessfulServerActionResult,
   shouldScheduleSupplementalRefreshRecovery,
 } from "./app-browser-supplemental-refresh.js";
+import { createAppBrowserActionQueue } from "./app-browser-action-queue.js";
 import {
   consumeInitialFormState,
   createVinextHydrateRootOptions,
@@ -281,6 +282,7 @@ const discardedServerActionRefreshScheduler = hasServerActions
       schedule() {},
     };
 const serverActionSupplementalRefreshCoordinator = createSupplementalRefreshCoordinator();
+const serverActionQueue = createAppBrowserActionQueue();
 const NavigationCommitSignal = browserNavigationController.NavigationCommitSignal;
 const ACTION_HTTP_FALLBACK_ROBOTS_META_ATTR = "data-vinext-action-http-fallback";
 
@@ -723,12 +725,12 @@ async function renderNavigationPayload(
   });
 }
 
-async function commitSameUrlNavigatePayload(
+function commitSameUrlNavigatePayload(
   nextElements: Promise<AppElements>,
   actionInitiation: ActionInitiationSnapshot,
   returnValue?: ServerActionResult["returnValue"],
   revalidation: ServerActionRevalidationKind = "none",
-): Promise<unknown> {
+): { completion: Promise<unknown>; value: Promise<unknown> } {
   let supplementalRefresh: Promise<{ degraded: boolean; value: AppElements }> | undefined;
   let supplementalRefreshHandle: ReturnType<
     typeof serverActionSupplementalRefreshCoordinator.begin
@@ -806,18 +808,23 @@ async function commitSameUrlNavigatePayload(
   })();
 
   if (returnValue?.ok) {
-    return settleSuccessfulServerActionResult({
-      navigation,
-      onNavigationFailure() {
-        if (browserNavigationController.getActiveNavigationId() === actionInitiation.navigationId) {
-          discardedServerActionRefreshScheduler.schedule();
-        }
-      },
-      value: successfulReturnValue,
-    });
+    return {
+      completion: navigation,
+      value: settleSuccessfulServerActionResult({
+        navigation,
+        onNavigationFailure() {
+          if (
+            browserNavigationController.getActiveNavigationId() === actionInitiation.navigationId
+          ) {
+            discardedServerActionRefreshScheduler.schedule();
+          }
+        },
+        value: successfulReturnValue,
+      }),
+    };
   }
 
-  return navigation;
+  return { completion: navigation, value: navigation };
 }
 
 function evictVisitedResponseCacheIfNeeded(): void {
@@ -1531,52 +1538,64 @@ function applyRuntimeRscBootstrap(rsc: NavigationRuntimeRscBootstrap): void {
 }
 
 function registerServerActionCallback(): void {
-  setServerCallback((id, args) => {
-    const releaseCacheInvalidationGuard = historyController.beginCacheInvalidationGuard();
-    const actionInitiation = createActionInitiationSnapshot();
-    return loadServerActionClient!()
-      .then(({ invokeClientServerAction }) =>
-        invokeClientServerAction(id, args, actionInitiation, {
-          basePath: __basePath,
-          clearClientNavigationCaches,
-          clientRscCompatibilityId: CLIENT_RSC_COMPATIBILITY_ID,
-          commitSameUrlNavigatePayload,
-          navigationPlanner,
-          performHardNavigation: (url, historyMode) =>
-            browserNavigationController.performHardNavigation(url, historyMode),
-          renderRedirectPayload(elements, target, actionInitiation) {
-            const hashIdx = target.href.indexOf("#");
-            const hash = hashIdx !== -1 ? target.href.slice(hashIdx) : "";
-            const actionScrollIntent = beginAppRouterScrollIntent(hash || null);
-            if (target.type === "push") saveScrollPosition();
-            void renderNavigationPayload(
-              Promise.resolve(elements),
-              createClientNavigationRenderSnapshot(
+  setServerCallback((id, args) =>
+    serverActionQueue.enqueue(() => {
+      const releaseCacheInvalidationGuard = historyController.beginCacheInvalidationGuard();
+      const actionInitiation = createActionInitiationSnapshot();
+      let completion: Promise<unknown> | null = null;
+      const value = loadServerActionClient!()
+        .then(({ invokeClientServerAction }) =>
+          invokeClientServerAction(id, args, actionInitiation, {
+            basePath: __basePath,
+            clearClientNavigationCaches,
+            clientRscCompatibilityId: CLIENT_RSC_COMPATIBILITY_ID,
+            commitSameUrlNavigatePayload(...commitArgs) {
+              const result = commitSameUrlNavigatePayload(...commitArgs);
+              completion = result.completion;
+              return result.value;
+            },
+            navigationPlanner,
+            performHardNavigation: (url, historyMode) =>
+              browserNavigationController.performHardNavigation(url, historyMode),
+            renderRedirectPayload(elements, target, actionInitiation) {
+              const hashIdx = target.href.indexOf("#");
+              const hash = hashIdx !== -1 ? target.href.slice(hashIdx) : "";
+              const actionScrollIntent = beginAppRouterScrollIntent(hash || null);
+              if (target.type === "push") saveScrollPosition();
+              completion = renderNavigationPayload(
+                Promise.resolve(elements),
+                createClientNavigationRenderSnapshot(
+                  target.href,
+                  actionInitiation.routerState.navigationSnapshot.params,
+                ),
                 target.href,
-                actionInitiation.routerState.navigationSnapshot.params,
-              ),
-              target.href,
-              actionInitiation.navigationId,
-              target.type === "push" ? "push" : "replace",
-              {},
-              null,
-              null,
-              FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
-              target.type === "push" ? "navigate" : "replace",
-              "server-action",
-              null,
-              actionScrollIntent,
-            ).catch(() => {
-              browserNavigationController.performHardNavigation(target.href);
-            });
-          },
-          syncCurrentHistoryState: (previousNextUrl, bfcacheIds) =>
-            historyController.syncCurrentHistoryStatePreviousNextUrl(previousNextUrl, bfcacheIds),
-          syncServerActionHttpFallbackHead,
-        }),
-      )
-      .finally(releaseCacheInvalidationGuard);
-  });
+                actionInitiation.navigationId,
+                target.type === "push" ? "push" : "replace",
+                {},
+                null,
+                null,
+                FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
+                target.type === "push" ? "navigate" : "replace",
+                "server-action",
+                null,
+                actionScrollIntent,
+              ).catch(() => browserNavigationController.performHardNavigation(target.href));
+            },
+            syncCurrentHistoryState: (previousNextUrl, bfcacheIds) =>
+              historyController.syncCurrentHistoryStatePreviousNextUrl(previousNextUrl, bfcacheIds),
+            syncServerActionHttpFallbackHead,
+          }),
+        )
+        .finally(releaseCacheInvalidationGuard);
+      return {
+        completion: value.then(
+          () => completion ?? undefined,
+          () => completion ?? undefined,
+        ),
+        value,
+      };
+    }),
+  );
 }
 
 async function main(): Promise<void> {
@@ -2261,7 +2280,7 @@ function bootstrapHydration(
     clearNavigationCaches: clearClientNavigationCaches,
     commitHashNavigation: (href, historyUpdateMode, scroll) =>
       historyController.commitHashOnlyNavigation(href, historyUpdateMode, scroll),
-    navigate: navigateRsc,
+    navigate: (...args) => serverActionQueue.runNavigation(() => navigateRsc(...args)),
   });
 
   // Note: This popstate handler runs for App Router (RSC navigation available).

@@ -4,6 +4,14 @@ import { isAppRouterRscRequestForPath, waitForAppRouterHydration } from "../help
 const BASE = "http://localhost:4174";
 const FEED_DRAFT_VALUE = "source draft survives";
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 async function fillFeedSourceState(page: Page, value: string = FEED_DRAFT_VALUE): Promise<void> {
   await expect(page.getByTestId("feed-draft-input")).toBeVisible();
   await page.getByTestId("feed-draft-input").fill(value);
@@ -594,6 +602,47 @@ test.describe("Intercepting Routes", () => {
       });
     }
   }
+
+  test("serializes actions behind an earlier detached supplemental commit", async ({ page }) => {
+    await page.goto(`${BASE}/refreshing`);
+    await waitForAppRouterHydration(page);
+    await page.getByRole("link", { name: "Open refreshing login" }).click();
+    await expect(page.getByTestId("refreshing-login-modal")).toBeVisible();
+    await page.getByRole("link", { name: "Go to Other Page" }).click();
+    await expect(page.getByTestId("refreshing-other-page")).toBeVisible();
+
+    let actionPosts = 0;
+    await page.route("**/*", async (route) => {
+      if (route.request().method() === "POST") actionPosts++;
+      await route.continue();
+    });
+    const supplementalRequested = deferred();
+    const releaseSupplemental = deferred();
+    await page.route("**/refreshing/login**", async (route) => {
+      supplementalRequested.resolve();
+      await releaseSupplemental.promise;
+      await route.continue();
+    });
+
+    const initialModalToken = await page.getByTestId("refreshing-modal-token").textContent();
+    const initialOtherToken = await page.getByTestId("refreshing-other-token").textContent();
+    await page.getByTestId("serialized-revalidate").click();
+    await supplementalRequested.promise;
+    await expect(page.getByTestId("serialized-revalidate-status")).toHaveText("A resolved");
+    expect(actionPosts).toBe(1);
+
+    releaseSupplemental.resolve();
+    await expect(page.getByTestId("serialized-revalidate-status")).toHaveText("B resolved");
+    expect(actionPosts).toBe(2);
+    await expect(page.getByTestId("refreshing-modal-token")).not.toHaveText(
+      initialModalToken ?? "",
+    );
+    await expect(page.getByTestId("refreshing-other-token")).not.toHaveText(
+      initialOtherToken ?? "",
+    );
+    await expect(page.getByTestId("refreshing-login-modal")).toBeVisible();
+    await expect(page.getByTestId("refreshing-other-page")).toBeVisible();
+  });
 
   test("sibling (..) intercepted navigation mounts the modal slot", async ({ page }) => {
     // Ported from the sibling-interception behavior covered by Next.js:
