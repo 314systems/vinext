@@ -3278,6 +3278,28 @@ export default function Page() { return <div>{packageSentinel}</div>; }\n`,
       expect(packageOutput).toContain("PACKAGE_BABEL_AFTER");
       expect(packageOutput).not.toContain("PACKAGE_BABEL_BEFORE");
 
+      const externalRoot = path.join(tmpRoot, "external-dir");
+      const externalSourceRoot = path.join(tmpRoot, "external-source");
+      await fsp.mkdir(externalRoot);
+      await fsp.mkdir(externalSourceRoot);
+      await setupFixture(externalRoot);
+      await fsp.writeFile(
+        path.join(externalSourceRoot, "shared.js"),
+        `export const externalSentinel = "PACKAGE_BABEL_BEFORE";\n`,
+      );
+      await fsp.writeFile(
+        path.join(externalRoot, "pages", "index.jsx"),
+        `import { externalSentinel } from "../../external-source/shared.js";
+export default function Page() { return <div>{externalSentinel}</div>; }\n`,
+      );
+      await fsp.writeFile(
+        path.join(externalRoot, "next.config.mjs"),
+        `export default { experimental: { externalDir: true } };\n`,
+      );
+      const externalOutput = await buildFixture(externalRoot);
+      expect(externalOutput).toContain("PACKAGE_BABEL_AFTER");
+      expect(externalOutput).not.toContain("PACKAGE_BABEL_BEFORE");
+
       const forcedRoot = path.join(tmpRoot, "forced-swc");
       await fsp.mkdir(forcedRoot);
       await setupFixture(forcedRoot);

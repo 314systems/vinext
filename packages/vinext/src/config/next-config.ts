@@ -383,6 +383,8 @@ export type ResolvedNextConfig = {
   optimizePackageImports: string[];
   /** Packages explicitly requested for server/client transpilation. */
   transpilePackages: string[];
+  /** Allow source imports from outside the project root. */
+  externalDir: boolean;
   /** Ignore a custom Babel config and retain the default compiler transform. */
   forceSwcTransforms: boolean;
   /** Packages treated as application code by Turbopack's foreign-code condition. */
@@ -1349,6 +1351,7 @@ export async function resolveNextConfig(
       serverActionsAllowedOrigins: [],
       optimizePackageImports: [],
       transpilePackages: [],
+      externalDir: false,
       forceSwcTransforms: false,
       turbopackTranspilePackages: [...DEFAULT_TRANSPILED_PACKAGES],
       inlineCss: false,
@@ -1527,6 +1530,7 @@ export async function resolveNextConfig(
   );
   const serverExternalPackages = topLevelServerExternalPackages ?? legacyServerComponentsExternal;
   const transpilePackages = readStringArray(config.transpilePackages);
+  const externalDir = experimental?.externalDir === true;
   const forceSwcTransforms = experimental?.forceSwcTransforms === true;
   const turbopackTranspilePackages = [...transpilePackages, ...DEFAULT_TRANSPILED_PACKAGES];
 
@@ -1675,6 +1679,7 @@ export async function resolveNextConfig(
     serverActionsAllowedOrigins,
     optimizePackageImports,
     transpilePackages,
+    externalDir,
     forceSwcTransforms,
     turbopackTranspilePackages,
     inlineCss,

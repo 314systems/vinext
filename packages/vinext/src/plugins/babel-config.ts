@@ -36,7 +36,9 @@ type BabelCore = {
 };
 
 type BabelConfigPluginOptions = {
+  externalDir: boolean;
   forceSwcTransforms: boolean;
+  serverTarget: "node" | "webworker";
   transpilePackages: string[];
 };
 
@@ -91,7 +93,9 @@ function resolvePackageRoot(root: string, packageName: string): string | null {
 
 export function createBabelConfigPlugin(
   getOptions: () => BabelConfigPluginOptions = () => ({
+    externalDir: false,
     forceSwcTransforms: false,
+    serverTarget: "node",
     transpilePackages: [],
   }),
 ): Plugin {
@@ -158,7 +162,8 @@ export function createBabelConfigPlugin(
           return packageRoot !== null && relativeWithinRoot(packageRoot, canonicalFilename);
         });
         if (
-          (!isProjectFile || normalizedFilename.includes("/node_modules/")) &&
+          ((!isProjectFile && !options.externalDir) ||
+            normalizedFilename.includes("/node_modules/")) &&
           !isTranspiledPackage
         ) {
           return;
@@ -199,7 +204,7 @@ export function createBabelConfigPlugin(
             supportsDynamicImport: true,
             supportsTopLevelAwait: true,
             supportsExportNamespaceFrom: true,
-            target: isServer ? "node" : "web",
+            target: isServer ? options.serverTarget : "web",
             isServer,
             isDev,
             srcDir,
