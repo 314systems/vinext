@@ -2049,6 +2049,7 @@ function bootstrapHydration(
         )
       );
     },
+    invalidateRestorableHistory: () => historyController.invalidateRestorableClientState(),
     navigateRestorableHistoryTarget: (href, scroll) => {
       const targetUrl = new URL(href, window.location.href);
       if (targetUrl.hash !== "") return false;

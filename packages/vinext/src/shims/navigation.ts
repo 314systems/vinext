@@ -2150,6 +2150,7 @@ if (!isServer) {
       unused: string,
       url?: string | URL | null,
     ): void {
+      getNavigationRuntime()?.functions.invalidateRestorableHistory?.();
       state.originalPushState.call(
         window.history,
         createExternalHistoryStatePreservingMetadata(data, window.history.state),

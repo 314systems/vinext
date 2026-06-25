@@ -53,6 +53,7 @@ export type NavigationRuntimeFunctions = {
   ) => Promise<void>;
   navigate?: NavigationRuntimeNavigate;
   hasRestorableHistoryTarget?: (href: string) => boolean;
+  invalidateRestorableHistory?: () => void;
   navigateRestorableHistoryTarget?: (href: string, scroll: boolean) => boolean;
   /**
    * Called at the start of every App Router navigation so the <Link> shim can
@@ -114,6 +115,7 @@ function isNavigationRuntimeFunctions(value: unknown): value is NavigationRuntim
     isOptionalRuntimeFunction(Reflect.get(value, "clearNavigationCaches")) &&
     isOptionalRuntimeFunction(Reflect.get(value, "commitHashNavigation")) &&
     isOptionalRuntimeFunction(Reflect.get(value, "hasRestorableHistoryTarget")) &&
+    isOptionalRuntimeFunction(Reflect.get(value, "invalidateRestorableHistory")) &&
     isOptionalRuntimeFunction(Reflect.get(value, "navigateRestorableHistoryTarget")) &&
     isOptionalRuntimeFunction(Reflect.get(value, "navigateExternal")) &&
     isOptionalRuntimeFunction(Reflect.get(value, "navigate")) &&
