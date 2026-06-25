@@ -31,6 +31,7 @@ import { Children, ParallelSlot, Slot } from "vinext/shims/slot";
 import type { AppPageParams } from "./app-page-boundary.js";
 import type { AppLayoutParamAccessTracker } from "./app-layout-param-observation.js";
 import type { ThenableParamsObserver } from "vinext/shims/thenable-params";
+import { peekDynamicUsage } from "vinext/shims/headers";
 import {
   createAppRenderDependency,
   registerAppElementRenderDependencies,
@@ -192,7 +193,7 @@ type BuildAppPageRouteElementOptions<
   layoutParamAccess?: AppLayoutParamAccessTracker;
   makeThenableParams: MakeThenableParams;
   matchedParams: AppPageParams;
-  metadataPlacement?: "body" | "head";
+  metadataPlacement?: "body" | "head" | "head-if-static";
   resolvedMetadata: Metadata | null;
   resolvedMetadataPathname?: string;
   resolvedViewport: Viewport;
@@ -502,14 +503,24 @@ function createAppPageRouteHead(
   metadata: Metadata | null,
   viewport: Viewport,
   pathname: string,
-  metadataPlacement: "body" | "head",
+  metadataPlacement: "body" | "head" | "head-if-static",
+  metadataPlacementDependencies: readonly AppRenderDependency[],
   trailingSlash?: boolean,
 ): ReactNode {
+  async function StaticMetadataHead() {
+    await Promise.all(metadataPlacementDependencies.map((dependency) => dependency.promise));
+    return peekDynamicUsage() ? null : (
+      <MetadataHead metadata={metadata!} pathname={pathname} trailingSlash={trailingSlash} />
+    );
+  }
+
   return (
     <>
       <meta charSet="utf-8" />
       {metadata && metadataPlacement === "head" ? (
         <MetadataHead metadata={metadata} pathname={pathname} trailingSlash={trailingSlash} />
+      ) : metadata && metadataPlacement === "head-if-static" ? (
+        <StaticMetadataHead />
       ) : null}
       <ViewportHead viewport={viewport} />
     </>
@@ -519,11 +530,13 @@ function createAppPageRouteHead(
 export function createAppPageRouteBodyMetadata(
   metadata: Metadata | null,
   pathname: string,
-  metadataPlacement: "body" | "head",
+  metadataPlacement: "body" | "head" | "head-if-static",
   trailingSlash?: boolean,
+  metadataPlacementDependencies: readonly AppRenderDependency[] = [],
 ): ReactNode {
-  if (!metadata || metadataPlacement !== "body") return null;
-  return (
+  if (!metadata || metadataPlacement === "head") return null;
+
+  const metadataHtml = (
     <div
       hidden
       dangerouslySetInnerHTML={{
@@ -531,6 +544,14 @@ export function createAppPageRouteBodyMetadata(
       }}
     />
   );
+  if (metadataPlacement === "body") return metadataHtml;
+
+  async function DynamicMetadataBody() {
+    await Promise.all(metadataPlacementDependencies.map((dependency) => dependency.promise));
+    return peekDynamicUsage() ? metadataHtml : null;
+  }
+
+  return <DynamicMetadataBody />;
 }
 
 export function buildAppPageElements<
@@ -552,6 +573,7 @@ export function buildAppPageElements<
   const templateEntries = createAppPageTemplateEntries(options.route);
   const errorEntries = createAppPageErrorEntries(options.route);
   const metadataPlacement = options.metadataPlacement ?? "head";
+  const metadataPlacementDependencies: AppRenderDependency[] = [];
   const layoutEntriesByTreePosition = new Map<number, AppPageLayoutEntry<TModule, TErrorModule>>();
   const templateEntriesByTreePosition = new Map<number, AppPageTemplateEntry<TModule>>();
   const errorEntriesByTreePosition = new Map<number, AppPageErrorEntry<TErrorModule>>();
@@ -673,9 +695,18 @@ export function buildAppPageElements<
     elements[APP_PREFETCH_LOADING_SHELL_MARKER_KEY] = "LoadingBoundary";
   }
 
-  elements[pageId] = isPrefetchLoadingShell
-    ? null
-    : renderAfterAppDependencies(options.element, pageDependencies);
+  if (isPrefetchLoadingShell) {
+    elements[pageId] = null;
+  } else if (metadataPlacement === "head-if-static") {
+    const pageCompletion = createAppRenderDependency();
+    metadataPlacementDependencies.push(pageCompletion);
+    elements[pageId] = renderAfterAppDependencies(
+      renderWithAppDependencyBarrier(options.element, pageCompletion),
+      pageDependencies,
+    );
+  } else {
+    elements[pageId] = renderAfterAppDependencies(options.element, pageDependencies);
+  }
 
   for (const templateEntry of templateEntries) {
     const templateComponent = getDefaultExport(templateEntry.templateModule);
@@ -1135,6 +1166,7 @@ export function buildAppPageElements<
         options.resolvedViewport,
         options.resolvedMetadataPathname ?? options.routePath,
         metadataPlacement,
+        metadataPlacementDependencies,
         options.trailingSlash,
       )}
       {routeChildren}
@@ -1143,6 +1175,7 @@ export function buildAppPageElements<
         options.resolvedMetadataPathname ?? options.routePath,
         metadataPlacement,
         options.trailingSlash,
+        metadataPlacementDependencies,
       )}
     </>
   );

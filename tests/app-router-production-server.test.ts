@@ -1239,6 +1239,19 @@ describe("App Router Production server (startProdServer)", () => {
     expect(getDocumentSection(html, "body")).toContain("<title>Dynamic streamed metadata</title>");
   });
 
+  // Ported from Next.js: test/e2e/app-dir/ppr-metadata-streaming/ppr-metadata-streaming.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/ppr-metadata-streaming/ppr-metadata-streaming.test.ts
+  it("keeps static metadata in body when only page content uses a dynamic API", async () => {
+    const response = await fetch(`${baseUrl}/metadata-streaming-body-dynamic`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-vinext-cache")).toBeNull();
+    const html = await response.text();
+    expect(getDocumentSection(html, "head")).not.toContain("<title>");
+    expect(getDocumentSection(html, "body")).toContain(
+      "<title>Body dynamic streamed metadata</title>",
+    );
+  });
+
   it("page ISR + searchParams: RSC requests stay dynamic instead of serving cached query data", async () => {
     const res1 = await fetch(`${baseUrl}/isr-dynamic-search.rsc?filter=crimson`, {
       headers: { Accept: "text/x-component", RSC: "1" },

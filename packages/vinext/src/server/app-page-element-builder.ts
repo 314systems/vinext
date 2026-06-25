@@ -23,7 +23,6 @@ import type { MetadataFileRoute } from "./metadata-routes.js";
 import { APP_RSC_RENDER_MODE_NAVIGATION, type AppRscRenderMode } from "./app-rsc-render-mode.js";
 import type { AppLayoutParamAccessTracker } from "./app-layout-param-observation.js";
 import { createAppPageRenderIdentity } from "./app-page-render-identity.js";
-import { peekDynamicUsage } from "vinext/shims/headers";
 import {
   createAppPageSearchParamsObserver,
   makeObservedAppPageSearchParamsThenable,
@@ -368,12 +367,7 @@ export async function buildPageElements<
     )
       ? "body"
       : "head";
-  const metadataPlacement =
-    requestedMetadataPlacement === "head-if-static"
-      ? peekDynamicUsage()
-        ? defaultMetadataPlacement
-        : "head"
-      : (requestedMetadataPlacement ?? defaultMetadataPlacement);
+  const metadataPlacement = requestedMetadataPlacement ?? defaultMetadataPlacement;
 
   // For sibling intercepts, wrap the intercepting page in any layouts that
   // live under the interception marker directory (interceptLayouts). In Next.js
