@@ -49,6 +49,7 @@ import MagicString from "magic-string";
 import path from "node:path";
 import fs from "node:fs";
 import {
+  collectBindingNames,
   forEachAstChild,
   hasRange,
   isAstRecord,
@@ -57,6 +58,16 @@ import {
   type AstRange,
   type AstRecord,
 } from "./ast-utils.js";
+import {
+  collectDirectScopeBindings,
+  collectLoopScopeBindings,
+  collectSwitchScopeBindings,
+  collectVarScopeBindings,
+  createAstScope,
+  hasAstBinding,
+  isFunctionNode,
+  type AstScope,
+} from "./ast-scope.js";
 
 const VITE_IGNORE_RE = /\/\*\s*@vite-ignore\s*\*\//;
 
@@ -132,6 +143,42 @@ function isImportMetaUrl(value: unknown): boolean {
   );
 }
 
+function createChildScope(node: AstRecord, parent: AstScope): AstScope | null {
+  if (
+    node.type !== "Program" &&
+    node.type !== "BlockStatement" &&
+    node.type !== "StaticBlock" &&
+    node.type !== "TSModuleBlock" &&
+    node.type !== "CatchClause" &&
+    node.type !== "ForStatement" &&
+    node.type !== "ForInStatement" &&
+    node.type !== "ForOfStatement" &&
+    node.type !== "ClassDeclaration" &&
+    node.type !== "ClassExpression"
+  ) {
+    return null;
+  }
+
+  const scope = createAstScope(parent);
+  if (node.type === "ClassDeclaration" || node.type === "ClassExpression") {
+    collectBindingNames(node.id, scope.bindings);
+  } else if (node.type === "CatchClause") {
+    collectBindingNames(node.param, scope.bindings);
+  }
+  collectDirectScopeBindings(node, scope);
+  if (node.type === "StaticBlock" || node.type === "TSModuleBlock") {
+    collectVarScopeBindings(node, scope);
+  }
+  if (
+    node.type === "ForStatement" ||
+    node.type === "ForInStatement" ||
+    node.type === "ForOfStatement"
+  ) {
+    collectLoopScopeBindings(node, scope);
+  }
+  return scope;
+}
+
 function collectAssetUrlExpressions(code: string, id: string): AssetUrlExpression[] {
   let ast: ReturnType<typeof parseAst>;
   try {
@@ -140,9 +187,52 @@ function collectAssetUrlExpressions(code: string, id: string): AssetUrlExpressio
     return [];
   }
 
+  if (!isAstRecord(ast)) return [];
+
   const expressions: AssetUrlExpression[] = [];
-  function visit(node: AstRecord): void {
-    if (node.type === "NewExpression" && isIdentifierNamed(node.callee, "URL") && hasRange(node)) {
+  const rootScope = createAstScope(null);
+  collectDirectScopeBindings(ast, rootScope);
+  collectVarScopeBindings(ast, rootScope);
+
+  function visit(node: AstRecord, parentScope: AstScope): void {
+    if (isFunctionNode(node)) {
+      const parameterScope = createAstScope(parentScope);
+      collectBindingNames(node.id, parameterScope.bindings);
+      for (const parameter of nodeArray(node.params)) {
+        collectBindingNames(parameter, parameterScope.bindings);
+        if (isAstRecord(parameter)) visit(parameter, parameterScope);
+      }
+
+      if (isAstRecord(node.body)) {
+        if (node.body.type === "BlockStatement") {
+          const bodyScope = createAstScope(parameterScope);
+          collectDirectScopeBindings(node.body, bodyScope);
+          collectVarScopeBindings(node.body, bodyScope);
+          visit(node.body, bodyScope);
+        } else {
+          visit(node.body, parameterScope);
+        }
+      }
+      return;
+    }
+
+    if (node.type === "SwitchStatement") {
+      if (isAstRecord(node.discriminant)) visit(node.discriminant, parentScope);
+      const switchScope = createAstScope(parentScope);
+      collectSwitchScopeBindings(node, switchScope);
+      for (const switchCase of nodeArray(node.cases)) {
+        if (isAstRecord(switchCase)) visit(switchCase, switchScope);
+      }
+      return;
+    }
+
+    const scope = createChildScope(node, parentScope) ?? parentScope;
+    if (
+      node.type === "NewExpression" &&
+      isIdentifierNamed(node.callee, "URL") &&
+      !hasAstBinding(scope, "URL") &&
+      hasRange(node)
+    ) {
       const args = nodeArray(node.arguments);
       const url = stringLiteralValue(args[0]);
       const firstArgument = isAstRecord(args[0]) ? args[0] : null;
@@ -157,9 +247,11 @@ function collectAssetUrlExpressions(code: string, id: string): AssetUrlExpressio
         expressions.push({ node, url });
       }
     }
-    forEachAstChild(node, visit);
+    forEachAstChild(node, (child) => visit(child, scope));
   }
-  if (isAstRecord(ast)) visit(ast);
+  for (const node of nodeArray(ast.body)) {
+    if (isAstRecord(node)) visit(node, rootScope);
+  }
   return expressions;
 }
 

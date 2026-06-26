@@ -121,6 +121,23 @@ describe("SSR build emits CSS assets referenced by SSR chunks", () => {
           path.join(tmpDir, "route.js"),
         ),
       ).toBeNull();
+
+      const shadowedUrl = `
+        function buildUrl(URL) {
+          return new URL("./style.css", import.meta.url)
+        }
+      `;
+      expect(
+        await transform.handler.call(
+          {
+            emitFile: () => {
+              throw new Error("shadowed URL constructors must not emit assets");
+            },
+          },
+          shadowedUrl,
+          path.join(tmpDir, "route.js"),
+        ),
+      ).toBeNull();
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
