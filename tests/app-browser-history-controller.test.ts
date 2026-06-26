@@ -432,10 +432,7 @@ describe("history snapshot target normalization shared with same-route popstate 
   });
 
   it("requires an exact fragment match for retained history reuse", () => {
-    const snapshot = createClientNavigationRenderSnapshot(
-      "https://example.com/target#section",
-      {},
-    );
+    const snapshot = createClientNavigationRenderSnapshot("https://example.com/target#section", {});
 
     expect(isSnapshotExactTargetHref("/docs", snapshot, "/docs/target#section")).toBe(true);
     expect(isSnapshotExactTargetHref("/docs", snapshot, "/docs/target")).toBe(false);
