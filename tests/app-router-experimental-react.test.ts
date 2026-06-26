@@ -5,7 +5,7 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { createBuilder, createServer, preview, type ViteDevServer } from "vite";
+import { createBuilder, createServer, preview, resolveConfig, type ViteDevServer } from "vite";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import vinext from "../packages/vinext/src/index.js";
 
@@ -106,6 +106,36 @@ describe("App Router experimental React channel", () => {
 
     expect(versions.length).toBeGreaterThanOrEqual(5);
     expect(versions).toEqual(versions.map(() => expect.stringContaining("-experimental-")));
+  });
+
+  it("keeps the experimental React channel in router-disabled hybrid Pages builds", async () => {
+    const config = await resolveConfig(
+      {
+        root: FIXTURE_DIR,
+        configFile: false,
+        plugins: [vinext({ appDir: FIXTURE_DIR, disableAppRouter: true })],
+        logLevel: "silent",
+      },
+      "build",
+    );
+
+    expect(config.define?.["process.env.__NEXT_EXPERIMENTAL_REACT"]).toBe('"true"');
+    const channelPlugin = config.plugins.find(
+      (plugin) => plugin.name === "vinext:experimental-react-channel",
+    );
+    const resolveId =
+      typeof channelPlugin?.resolveId === "function"
+        ? channelPlugin.resolveId
+        : channelPlugin?.resolveId?.handler;
+    const resolvedReact = await resolveId?.call(
+      { environment: { name: "ssr" } } as unknown as ThisParameterType<
+        NonNullable<typeof resolveId>
+      >,
+      "react",
+      undefined,
+      { isEntry: false },
+    );
+    expect(resolvedReact).toContain("/next/dist/compiled/react-experimental/");
   });
 
   async function expectExternalReactRejection(external: true | string[]) {

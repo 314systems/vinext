@@ -1474,7 +1474,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             nextConfig = { ...nextConfig, buildId: sharedBuildId };
           }
 
-          if (hasAppDir && nextConfig.useExperimentalReact) {
+          if (nextConfig.useExperimentalReact) {
             const configuredSsrExternal = config.ssr?.external;
             if (
               configuredSsrExternal === true ||
