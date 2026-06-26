@@ -1191,7 +1191,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     createOgInlineFetchAssetsPlugin(),
     // Emit assets referenced via `new URL("./asset", import.meta.url)` in
     // SSR/server environments before the dynamic-request guard sees imports
-    // such as `import(new URL("./style.css", import.meta.url).href)`.
+    // such as `import(new URL("./style.css", import.meta.url).href)`. Keep this
+    // before `vinext:og-font-patch`: that plugin injects Node fallback URL
+    // references which `createOgAssetsPlugin` must retain and deduplicate.
     createServerAssetImportMetaUrlPlugin(() => hasCloudflarePlugin),
     // Next.js ignores requests without any statically known path component
     // during graph analysis and leaves a deterministic runtime failure.
