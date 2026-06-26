@@ -78,6 +78,7 @@ import {
 import { mergeServerExternalPackages } from "./config/server-external-packages.js";
 import {
   createExperimentalReactEnvironmentAliases,
+  EXPERIMENTAL_REACT_SPECIFIERS,
   resolveExperimentalReactAliases,
   type ExperimentalReactAliasEntry,
   type ExperimentalReactEnvironment,
@@ -1218,7 +1219,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           ) {
             return null;
           }
-          return code.replaceAll("globalThis.__next_require__", "__vite_rsc_require__");
+          return {
+            code: code.replaceAll("globalThis.__next_require__", "__vite_rsc_require__"),
+            map: null,
+          };
         },
       },
     },
@@ -1453,6 +1457,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           }
 
           if (hasAppDir && nextConfig.useExperimentalReact) {
+            if (config.ssr?.external === true) {
+              throw new Error(
+                "[vinext] `ssr.external: true` is incompatible with Next.js's experimental React channel because it bypasses the vendored React runtime.",
+              );
+            }
             const packages = resolveExperimentalReactAliases(root);
             experimentalReactAliases = {
               rsc: createExperimentalReactEnvironmentAliases(packages, "rsc"),
@@ -2337,7 +2346,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             ? true
             : nextServerExternal;
         const externalizeSsrReactInDev =
-          env.command === "serve" && !hasCloudflarePlugin && !hasNitroPlugin;
+          env.command === "serve" &&
+          !hasCloudflarePlugin &&
+          !hasNitroPlugin &&
+          !experimentalReactAliases;
 
         // Capture top-level optimizeDeps populated by earlier plugins
         // (e.g. @lingui/vite-plugin) so we merge rather than overwrite.
@@ -5749,6 +5761,61 @@ export const loadServerActionClient = ${
   // Append auto-injected RSC plugins if applicable
   if (rscPluginPromise) {
     plugins.push(rscPluginPromise);
+    plugins.push({
+      name: "vinext:experimental-react-dev-optimizer",
+      enforce: "post",
+      configEnvironment(name, config, env) {
+        if (
+          env.command !== "serve" ||
+          !experimentalReactAliases ||
+          (name !== "rsc" && name !== "ssr" && name !== "client")
+        ) {
+          return null;
+        }
+
+        const aliases = experimentalReactAliases[name];
+        if (name === "ssr") {
+          if (Array.isArray(config.resolve?.external)) {
+            config.resolve.external = config.resolve.external.filter(
+              (entry) =>
+                typeof entry !== "string" ||
+                !EXPERIMENTAL_REACT_SPECIFIERS.some(
+                  (specifier) => entry === specifier || entry.startsWith(`${specifier}/`),
+                ),
+            );
+          }
+        }
+        config.optimizeDeps ??= {};
+        config.optimizeDeps.include = config.optimizeDeps.include?.map((specifier) => {
+          const normalizedSpecifier = specifier.replace(
+            "@vitejs/plugin-rsc/vendor/react-server-dom/",
+            "react-server-dom-webpack/",
+          );
+          return (
+            aliases.find(({ find }) => find.test(normalizedSpecifier))?.replacement ?? specifier
+          );
+        });
+        const rolldownOptions = config.optimizeDeps.rolldownOptions ?? {};
+        const existingPlugins = rolldownOptions.plugins
+          ? Array.isArray(rolldownOptions.plugins)
+            ? rolldownOptions.plugins
+            : [rolldownOptions.plugins]
+          : [];
+        config.optimizeDeps.rolldownOptions = {
+          ...rolldownOptions,
+          plugins: [
+            {
+              name: `vinext:experimental-react-dep-optimize:${name}`,
+              resolveId(id: string) {
+                return aliases.find(({ find }) => find.test(id))?.replacement;
+              },
+            },
+            ...existingPlugins,
+          ],
+        };
+        return null;
+      },
+    });
     plugins.push(createRscClientReferenceLoadersPlugin());
   }
 

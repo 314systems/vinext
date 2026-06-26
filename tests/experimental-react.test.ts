@@ -99,7 +99,7 @@ describe("experimental React channel", () => {
     );
     fs.writeFileSync(
       path.join(reactServerDomDir, "package.json"),
-      JSON.stringify({ exports: { "./server.edge": "./server.edge.js" } }),
+      JSON.stringify({ exports: { ".": "./index.js", "./server.edge": "./server.edge.js" } }),
     );
     const packages = {
       react: reactDir,

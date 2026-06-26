@@ -5,7 +5,7 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { createBuilder, preview } from "vite";
+import { createBuilder, createServer, preview, type ViteDevServer } from "vite";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import vinext from "../packages/vinext/src/index.js";
 
@@ -15,7 +15,9 @@ const require = createRequire(import.meta.url);
 
 describe("App Router experimental React channel", () => {
   let previewServer: Awaited<ReturnType<typeof preview>>;
+  let devServer: ViteDevServer;
   let baseUrl = "";
+  let devBaseUrl = "";
   const fixtureNodeModules = path.join(FIXTURE_DIR, "node_modules");
 
   beforeAll(async () => {
@@ -40,6 +42,14 @@ describe("App Router experimental React channel", () => {
         preview: { port: 0 },
         logLevel: "silent",
       });
+      devServer = await createServer({
+        root: FIXTURE_DIR,
+        configFile: false,
+        plugins: [vinext({ appDir: FIXTURE_DIR })],
+        server: { port: 0 },
+        logLevel: "silent",
+      });
+      await devServer.listen();
     } catch (error) {
       fs.rmSync(DIST_DIR, { recursive: true, force: true });
       fs.rmSync(fixtureNodeModules, { recursive: true, force: true });
@@ -47,10 +57,14 @@ describe("App Router experimental React channel", () => {
     }
     const address = previewServer.httpServer.address();
     baseUrl = address && typeof address === "object" ? `http://localhost:${address.port}` : "";
+    const devAddress = devServer.httpServer?.address();
+    devBaseUrl =
+      devAddress && typeof devAddress === "object" ? `http://localhost:${devAddress.port}` : "";
   }, 120_000);
 
-  afterAll(() => {
+  afterAll(async () => {
     previewServer?.httpServer.close();
+    await devServer?.close();
     fs.rmSync(DIST_DIR, { recursive: true, force: true });
     fs.rmSync(fixtureNodeModules, { recursive: true, force: true });
   });
@@ -61,7 +75,9 @@ describe("App Router experimental React channel", () => {
       ...html
         .replaceAll("<!-- -->", "")
         .matchAll(/(?:React|ReactDOM|ReactDOMServer)\.version=([^<]+)/g),
-    ].map((match) => match[1]);
+    ]
+      .map((match) => match[1])
+      .filter((version) => /^\d+\.\d+\.\d+/.test(version));
 
     expect(versions.length).toBeGreaterThanOrEqual(5);
     expect(versions.every((version) => version.includes("-experimental-"))).toBe(true);
@@ -74,5 +90,33 @@ describe("App Router experimental React channel", () => {
       )
       .join("\n");
     expect(clientJavaScript).toContain("-experimental-");
+  });
+
+  it("uses the experimental React channel in the dev dependency optimizer", async () => {
+    const response = await fetch(devBaseUrl);
+    const html = await response.text();
+    expect(response.status).toBe(200);
+    const versions = [
+      ...html
+        .replaceAll("<!-- -->", "")
+        .matchAll(/(?:React|ReactDOM|ReactDOMServer)\.version=([^<]+)/g),
+    ]
+      .map((match) => match[1])
+      .filter((version) => /^\d+\.\d+\.\d+/.test(version));
+
+    expect(versions.length).toBeGreaterThanOrEqual(5);
+    expect(versions).toEqual(versions.map(() => expect.stringContaining("-experimental-")));
+  });
+
+  it("rejects ssr.external true because it bypasses experimental React", async () => {
+    await expect(
+      createServer({
+        root: FIXTURE_DIR,
+        configFile: false,
+        plugins: [vinext({ appDir: FIXTURE_DIR })],
+        ssr: { external: true },
+        logLevel: "silent",
+      }),
+    ).rejects.toThrow("`ssr.external: true` is incompatible");
   });
 });

@@ -86,7 +86,7 @@ export function resolveExperimentalReactSpecifier(
   return target ? path.join(packageDir, target) : null;
 }
 
-const EXPERIMENTAL_REACT_SPECIFIERS = [
+export const EXPERIMENTAL_REACT_SPECIFIERS = [
   "react",
   "react/compiler-runtime",
   "react/jsx-dev-runtime",
@@ -130,17 +130,35 @@ export function createExperimentalReactEnvironmentAliases(
     ...packageAliases,
     {
       find: /^next\/dist\/compiled\/react-experimental$/,
-      replacement: resolveExperimentalReactSpecifier(packages, "react", environment)!,
+      replacement: requireExperimentalReactSpecifier(packages, "react", environment),
     },
     {
       find: /^next\/dist\/compiled\/react-dom-experimental$/,
-      replacement: resolveExperimentalReactSpecifier(packages, "react-dom", environment)!,
+      replacement: requireExperimentalReactSpecifier(packages, "react-dom", environment),
     },
     {
       find: /^next\/dist\/compiled\/react-server-dom-webpack-experimental$/,
-      replacement: path.join(packages["react-server-dom-webpack"], "index.js"),
+      replacement: requireExperimentalReactSpecifier(
+        packages,
+        "react-server-dom-webpack",
+        environment,
+      ),
     },
   ];
+}
+
+function requireExperimentalReactSpecifier(
+  packages: ExperimentalReactAliases,
+  specifier: string,
+  environment: ExperimentalReactEnvironment,
+): string {
+  const resolved = resolveExperimentalReactSpecifier(packages, specifier, environment);
+  if (!resolved) {
+    throw new Error(
+      `[vinext] Next.js's experimental React runtime does not export ${specifier} for the ${environment} environment.`,
+    );
+  }
+  return resolved;
 }
 
 function selectPackageExport(
