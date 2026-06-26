@@ -116,7 +116,12 @@ describe("SSR build emits CSS assets referenced by SSR chunks", () => {
         path.join(tmpDir, "route.js"),
       );
       expect(withSuffix?.code).toContain('new URL("data:text/css;base64,');
-      expect(withSuffix?.code).toContain('?v=1#theme")');
+      expect(withSuffix?.code).not.toContain("?v=1#theme");
+      const dataUrl = withSuffix?.code.match(/new URL\("([^"]+)"\)/)?.[1];
+      expect(dataUrl).toBeDefined();
+      expect(Buffer.from(dataUrl!.split(",", 2)[1]!, "base64").toString()).toBe(
+        ".foo { color: red; }\n",
+      );
 
       const nonCode = `
         // new URL("./style.css", import.meta.url)

@@ -319,7 +319,11 @@ export function createServerAssetImportMetaUrlPlugin(
             output.overwrite(
               node.start,
               node.end,
-              `new URL(${JSON.stringify(`${assetDataUrl(file, buffer)}${suffix}`)})`,
+              // Do not append the original query/fragment to a data URL.
+              // A query becomes part of the base64 payload for data: fetches
+              // and makes the inlined asset unreadable. The file bytes are
+              // already content-addressed inside the generated URL.
+              `new URL(${JSON.stringify(assetDataUrl(file, buffer))})`,
             );
             didReplace = true;
             continue;
