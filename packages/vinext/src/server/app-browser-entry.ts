@@ -122,6 +122,7 @@ import {
   type VisitedResponseCacheEntry,
 } from "./app-visited-response-cache.js";
 import {
+  createNativeHashChangeHandler,
   createPopstateRestoreHandler,
   restoreSynchronousPopstateScrollPosition,
 } from "./app-browser-popstate.js";
@@ -2180,6 +2181,10 @@ function bootstrapHydration(
     }
     handlePopstate(event);
   });
+  window.addEventListener(
+    "hashchange",
+    createNativeHashChangeHandler(() => historyController.invalidateRestorableClientState()),
+  );
 
   if (import.meta.env.DEV && import.meta.hot) {
     const applyRscHmrUpdate = async (updateId: number): Promise<void> => {

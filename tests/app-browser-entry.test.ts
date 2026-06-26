@@ -32,6 +32,7 @@ import {
 } from "../packages/vinext/src/server/app-browser-hydration.js";
 import { createAppBrowserNavigationController } from "../packages/vinext/src/server/app-browser-navigation-controller.js";
 import {
+  createNativeHashChangeHandler,
   createPopstateRestoreHandler,
   restoreSynchronousPopstateScrollPosition,
 } from "../packages/vinext/src/server/app-browser-popstate.js";
@@ -5881,6 +5882,16 @@ describe("app browser entry bfcacheId helpers", () => {
 
     const freshIdNumber = Number(/^_b_(\d+)_$/.exec(next[pageX2Id] ?? "")?.[1]);
     expect(freshIdNumber).toBeGreaterThan(900000);
+  });
+});
+
+describe("native hash history invalidation", () => {
+  it("invalidates retained snapshots when a fragment navigation branches history", () => {
+    const invalidateRestorableHistory = vi.fn();
+
+    createNativeHashChangeHandler(invalidateRestorableHistory)();
+
+    expect(invalidateRestorableHistory).toHaveBeenCalledOnce();
   });
 });
 

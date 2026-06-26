@@ -32,6 +32,10 @@ type SynchronousPopstateScrollRestoreDeps = {
   restorePopstateScrollPosition: RestoreScrollPosition;
 };
 
+export function createNativeHashChangeHandler(invalidateRestorableHistory: () => void): () => void {
+  return () => invalidateRestorableHistory();
+}
+
 function hasSavedScrollPosition(state: unknown): boolean {
   return Boolean(state && typeof state === "object" && "__vinext_scrollY" in state);
 }
