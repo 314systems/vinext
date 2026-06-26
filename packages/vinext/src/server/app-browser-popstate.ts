@@ -54,6 +54,18 @@ export function shouldHandleSameRoutePopstate(hasPendingRetainedNavigation: bool
   return !hasPendingRetainedNavigation;
 }
 
+export function isExpectedRetainedPopstate(options: {
+  actualHref: string;
+  actualHistoryIndex: number | null;
+  expectedHref: string;
+  expectedHistoryIndex: number;
+}): boolean {
+  return (
+    options.actualHistoryIndex === options.expectedHistoryIndex &&
+    new URL(options.expectedHref, options.actualHref).href === options.actualHref
+  );
+}
+
 function hasSavedScrollPosition(state: unknown): boolean {
   return Boolean(state && typeof state === "object" && "__vinext_scrollY" in state);
 }

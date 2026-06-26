@@ -108,6 +108,7 @@ import {
   createBfcacheSegmentStateKeyMap,
   createInitialBfcacheIdMap,
   isCacheRestorableAppPayloadMetadata,
+  readHistoryStateTraversalIndex,
   readHistoryStatePreviousNextUrl,
   resolveInterceptionContextFromPreviousNextUrl,
   type AppNavigationPayloadOrigin,
@@ -124,6 +125,7 @@ import {
 import {
   createNativeHashChangeHandler,
   createPopstateRestoreHandler,
+  isExpectedRetainedPopstate,
   resolveCoalescedRetainedNavigation,
   restoreSynchronousPopstateScrollPosition,
   shouldHandleSameRoutePopstate,
@@ -331,6 +333,7 @@ let latestRscHmrUpdateId = 0;
 // asynchronous scroll restore for an older navId is already stale.
 let synchronousPopstateScrollRestoreNavigationId: number | null = null;
 let pendingRetainedHistoryNavigation: {
+  expectedHistoryIndex: number;
   href: string;
   promise: Promise<boolean>;
   resolve: (handled: boolean) => void;
@@ -2090,6 +2093,7 @@ function bootstrapHydration(
         resolve = settle;
       });
       pendingRetainedHistoryNavigation = {
+        expectedHistoryIndex: currentHistoryIndex + 1,
         href,
         promise,
         resolve,
@@ -2188,6 +2192,19 @@ function bootstrapHydration(
     // Notify the transition start so observers still see the URL change, then
     // restore scroll directly and skip the RSC dispatch.
     const href = window.location.href;
+    const retainedNavigation = pendingRetainedHistoryNavigation;
+    if (
+      retainedNavigation !== null &&
+      !isExpectedRetainedPopstate({
+        actualHref: href,
+        actualHistoryIndex: readHistoryStateTraversalIndex(event.state),
+        expectedHref: retainedNavigation.href,
+        expectedHistoryIndex: retainedNavigation.expectedHistoryIndex,
+      })
+    ) {
+      pendingRetainedHistoryNavigation = null;
+      retainedNavigation.resolve(false);
+    }
     if (
       shouldHandleSameRoutePopstate(pendingRetainedHistoryNavigation !== null) &&
       isSameAppRoutePopstateTarget(href)

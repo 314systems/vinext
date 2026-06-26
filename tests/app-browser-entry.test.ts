@@ -34,6 +34,7 @@ import { createAppBrowserNavigationController } from "../packages/vinext/src/ser
 import {
   createNativeHashChangeHandler,
   createPopstateRestoreHandler,
+  isExpectedRetainedPopstate,
   resolveCoalescedRetainedNavigation,
   restoreSynchronousPopstateScrollPosition,
   shouldHandleSameRoutePopstate,
@@ -5921,6 +5922,25 @@ describe("retained history lifecycle helpers", () => {
   it("settles pending retained traversals instead of taking the same-route fast path", () => {
     expect(shouldHandleSameRoutePopstate(true)).toBe(false);
     expect(shouldHandleSameRoutePopstate(false)).toBe(true);
+  });
+
+  it("rejects unrelated popstate entries for a retained traversal", () => {
+    expect(
+      isExpectedRetainedPopstate({
+        actualHref: "https://example.com/other",
+        actualHistoryIndex: 2,
+        expectedHref: "/target",
+        expectedHistoryIndex: 1,
+      }),
+    ).toBe(false);
+    expect(
+      isExpectedRetainedPopstate({
+        actualHref: "https://example.com/target",
+        actualHistoryIndex: 1,
+        expectedHref: "/target",
+        expectedHistoryIndex: 1,
+      }),
+    ).toBe(true);
   });
 });
 
