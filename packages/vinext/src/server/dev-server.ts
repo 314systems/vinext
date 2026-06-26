@@ -41,7 +41,6 @@ import { getScriptNonceFromNodeHeaderSources } from "./csp.js";
 import { mergeRouteParamsIntoQuery, parseQueryString as parseQuery } from "../utils/query.js";
 import path from "node:path";
 import React from "react";
-import { renderToReadableStream } from "react-dom/server.edge";
 import { logRequest, now } from "./request-log.js";
 import {
   createValidFileMatcher,
@@ -85,13 +84,23 @@ import { isUnknownRecord } from "../utils/record.js";
  * boundaries to resolve via stream.allReady before collecting output.
  * Used for _document rendering and error pages (small, non-streaming).
  */
-async function renderToStringAsync(element: React.ReactElement): Promise<string> {
+type RenderToReadableStream = (
+  element: React.ReactElement,
+) => Promise<ReadableStream<Uint8Array> & { allReady: Promise<void> }>;
+
+async function renderToStringAsync(
+  renderToReadableStream: RenderToReadableStream,
+  element: React.ReactElement,
+): Promise<string> {
   const stream = await renderToReadableStream(element);
   await stream.allReady;
   return new Response(stream).text();
 }
 
-async function renderIsrPassToStringAsync(element: React.ReactElement): Promise<string> {
+async function renderIsrPassToStringAsync(
+  renderToReadableStream: RenderToReadableStream,
+  element: React.ReactElement,
+): Promise<string> {
   // The cache-fill render is a second render pass for the same request.
   // Reset render-scoped state so it cannot leak from the streamed response
   // render or affect async work that is still draining from that stream.
@@ -100,7 +109,9 @@ async function renderIsrPassToStringAsync(element: React.ReactElement): Promise<
   return await runWithServerInsertedHTMLState(() =>
     runWithHeadState(() =>
       _runWithCacheState(() =>
-        runWithPrivateCache(() => runWithFetchCache(async () => renderToStringAsync(element))),
+        runWithPrivateCache(() =>
+          runWithFetchCache(async () => renderToStringAsync(renderToReadableStream, element)),
+        ),
       ),
     ),
   );
@@ -212,6 +223,7 @@ async function streamPageToResponse(
      * into `getSSRHeadHTML()`'s output. Called before `getHeadHTML()`.
      */
     setDocumentInitialHead?: (head: React.ReactNode[]) => void;
+    renderToReadableStream: RenderToReadableStream;
     /** Buffer the body before writing headers so error-page fallback remains safe. */
     bufferBodyBeforeHeaders?: boolean;
   },
@@ -229,6 +241,7 @@ async function streamPageToResponse(
     scriptNonce,
     documentContext,
     setDocumentInitialHead,
+    renderToReadableStream,
     bufferBodyBeforeHeaders = false,
   } = options;
 
@@ -243,7 +256,7 @@ async function streamPageToResponse(
     DocumentComponent,
     enhancePageElement,
     renderToReadableStream,
-    renderStylesToString: renderToStringAsync,
+    renderStylesToString: (element) => renderToStringAsync(renderToReadableStream, element),
     scriptNonce,
     context: documentContext,
   });
@@ -301,7 +314,7 @@ async function streamPageToResponse(
     const docElement = docProps
       ? React.createElement(DocumentComponent, docProps)
       : React.createElement(DocumentComponent);
-    let docHtml = await renderToStringAsync(docElement);
+    let docHtml = await renderToStringAsync(renderToReadableStream, docElement);
     // Replace __NEXT_MAIN__ with our stream marker
     docHtml = docHtml.replace("__NEXT_MAIN__", STREAM_BODY_MARKER);
     // Inject head tags
@@ -442,6 +455,14 @@ export function createSSRHandler(
   htmlLimitedBots?: string,
 ) {
   const matcher = fileMatcher ?? createValidFileMatcher();
+  const reactDomServer = importModule(runner, "react-dom/server.edge");
+  const renderToReadableStream: RenderToReadableStream = async (element) => {
+    const renderer = await reactDomServer;
+    if (typeof renderer.renderToReadableStream !== "function") {
+      throw new Error("[vinext] react-dom/server.edge does not export renderToReadableStream");
+    }
+    return renderer.renderToReadableStream(element);
+  };
 
   // Page route patterns in Next.js bracket format, sorted by specificity
   // (sortRoutes via pagesRouter). Mirrors the production client entry's
@@ -1195,6 +1216,7 @@ export function createSSRHandler(
                         el = routerShim.wrapWithRouterContext(el);
                       }
                       const freshBody = await renderIsrPassToStringAsync(
+                        renderToReadableStream,
                         withScriptNonce(el, scriptNonce),
                       );
 
@@ -1782,6 +1804,7 @@ hydrate();
               ? headShim.setDocumentInitialHead
               : undefined,
           bufferBodyBeforeHeaders: true,
+          renderToReadableStream,
         });
         _renderEnd = now();
 
@@ -1805,6 +1828,7 @@ hydrate();
             isrElement = wrapWithRouterContext(isrElement);
           }
           const isrBodyHtml = await renderIsrPassToStringAsync(
+            renderToReadableStream,
             withScriptNonce(isrElement, scriptNonce),
           );
           const isrHtml = `<!DOCTYPE html><html><head></head><body><div id="__next">${isrBodyHtml}</div>${allScripts}</body></html>`;
@@ -1887,6 +1911,12 @@ async function renderErrorPage(
   err?: Error,
 ): Promise<void> {
   const matcher = fileMatcher ?? createValidFileMatcher();
+  const reactDomServer = await importModule(runner, "react-dom/server.edge");
+  if (typeof reactDomServer.renderToReadableStream !== "function") {
+    throw new Error("[vinext] react-dom/server.edge does not export renderToReadableStream");
+  }
+  const renderToReadableStream: RenderToReadableStream =
+    reactDomServer.renderToReadableStream.bind(reactDomServer);
   // Try specific status page first, then _error, then fallback
   const candidates =
     statusCode === 404 ? ["404", "_error"] : statusCode === 500 ? ["500", "_error"] : ["_error"];
@@ -2004,9 +2034,10 @@ async function renderErrorPage(
             typeof headShim.setDocumentInitialHead === "function"
               ? headShim.setDocumentInitialHead
               : undefined,
+          renderToReadableStream,
         });
       } else {
-        const bodyHtml = await renderToStringAsync(element);
+        const bodyHtml = await renderToStringAsync(renderToReadableStream, element);
         const html = `<!DOCTYPE html>
 <html>
 <head>
