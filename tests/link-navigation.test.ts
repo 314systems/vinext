@@ -1768,6 +1768,45 @@ describe("Link prefetch scheduling", () => {
     }
   });
 
+  it("waits for a retained traversal before a replace navigation", async () => {
+    let settlePendingTraversal!: () => void;
+    const waitForPendingRestorableHistory = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          settlePendingTraversal = resolve;
+        }),
+    );
+    const result = await renderIsolatedLink({
+      href: "/intent-prefetch-target",
+      nodeEnv: "production",
+      props: { replace: true },
+      runtimeFunctions: { waitForPendingRestorableHistory },
+    });
+
+    try {
+      const clickPromise = result.capturedAnchorProps.onClick?.({
+        button: 0,
+        currentTarget: result.anchor,
+        defaultPrevented: false,
+        preventDefault() {
+          this.defaultPrevented = true;
+        },
+      });
+      await flushPrefetchTasks();
+
+      expect(waitForPendingRestorableHistory).toHaveBeenCalledOnce();
+      expect(result.navigate).not.toHaveBeenCalled();
+
+      settlePendingTraversal();
+      await clickPromise;
+      await flushPrefetchTasks();
+
+      expect(result.navigate).toHaveBeenCalledOnce();
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
   it("prefetches a retained history target when Link uses replace", async () => {
     const observer = stubIntersectionObserver();
     const hasRestorableHistoryTarget = vi.fn(() => true);

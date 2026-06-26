@@ -1647,6 +1647,13 @@ export async function navigateClientSide(
   }
 
   const fullHref = toBrowserNavigationHref(normalizedHref, window.location.href, __basePath);
+  if (mode !== "push") {
+    const pendingRetainedHistory =
+      getNavigationRuntime()?.functions.waitForPendingRestorableHistory?.();
+    if (pendingRetainedHistory) {
+      await pendingRetainedHistory;
+    }
+  }
   stageAppNavigationFailureTarget(fullHref);
   // Match Next.js: App Router reports navigation start before dispatching,
   // including hash-only navigations that short-circuit after URL update.

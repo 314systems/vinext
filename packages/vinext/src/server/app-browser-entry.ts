@@ -2061,6 +2061,10 @@ function bootstrapHydration(
       );
     },
     invalidateRestorableHistory: () => historyController.invalidateRestorableClientState(),
+    waitForPendingRestorableHistory: () => {
+      const pendingNavigation = pendingRetainedHistoryNavigation;
+      return pendingNavigation === null ? null : pendingNavigation.promise.then(() => undefined);
+    },
     navigateRestorableHistoryTarget: (href, scroll) => {
       const pendingNavigation = pendingRetainedHistoryNavigation;
       if (pendingNavigation !== null) {
