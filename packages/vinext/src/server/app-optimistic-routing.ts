@@ -333,9 +333,13 @@ function sanitizeInstantShellValue(value: unknown): unknown {
   }
 
   if (!isValidElement(value) || !isUnknownRecord(value.props)) return value;
-  const children = value.props.children;
-  if (children === undefined) return value;
-  return cloneElement(value, undefined, sanitizeInstantShellValue(children) as ReactNode);
+  const props = Object.fromEntries(
+    Object.entries(value.props).map(([name, propValue]) => [
+      name,
+      sanitizeInstantShellValue(propValue),
+    ]),
+  );
+  return cloneElement(value, props as Record<string, ReactNode>);
 }
 
 export function sanitizeInstantShellElements(elements: AppElements): AppElements {

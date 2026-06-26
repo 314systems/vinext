@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { createElement, Suspense } from "react";
+import { createElement, Suspense, type ReactNode } from "react";
 import {
   AppElementsWire,
   APP_PREFETCH_LOADING_SHELL_MARKER_KEY,
@@ -440,6 +440,30 @@ describe("App Router optimistic routing", () => {
       });
     },
   );
+
+  it("sanitizes suspended instant content in named element props", () => {
+    const payload = { status: "pending" };
+    const suspendedLazy = {
+      $$typeof: Symbol.for("react.lazy"),
+      _init(receivedPayload: unknown) {
+        throw receivedPayload;
+      },
+      _payload: payload,
+    };
+    const ClientShell = (_props: { content: ReactNode }) => null;
+    const pageId = AppElementsWire.encodePageId("/instant", null);
+    const elements = {
+      [pageId]: createElement(ClientShell, {
+        content: createElement(Suspense, { fallback: "dynamic" }, suspendedLazy as never),
+      }),
+    } as AppElements;
+
+    const sanitized = sanitizeInstantShellElements(elements);
+
+    expect(sanitized[pageId]).toMatchObject({
+      props: { content: { props: { children: { type: expect.any(Function) } } } },
+    });
+  });
 
   it.each([
     ["layout", AppElementsWire.encodeLayoutId("/")],

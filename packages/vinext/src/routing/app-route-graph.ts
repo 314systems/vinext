@@ -196,7 +196,7 @@ export type AppRoute = {
   hasInstant?: boolean;
 };
 
-function routeModuleHasInstant(filePath: string | null): boolean {
+export function routeModuleHasInstant(filePath: string | null): boolean {
   if (filePath === null) return false;
   try {
     return hasNamedExportObjectStringProperty(

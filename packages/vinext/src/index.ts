@@ -22,6 +22,7 @@ import {
   invalidateAppRouteCache,
   matchAppRoute,
 } from "./routing/app-router.js";
+import { routeModuleHasInstant } from "./routing/app-route-graph.js";
 import type { NitroRouteRuleConfig } from "./build/nitro-route-rules.js";
 import {
   buildViteResolveExtensions,
@@ -3534,6 +3535,24 @@ export const loadServerActionClient = ${
         regenerateAppRouteTypes();
         revalidateHybridRoutes();
 
+        const instantConfigByFile = new Map<string, boolean>();
+        if (hasAppDir) {
+          void appRouteGraph(appDir, nextConfig?.pageExtensions, fileMatcher).then((graph) => {
+            const files = new Set<string>();
+            for (const route of graph.routes) {
+              if (route.pagePath) files.add(route.pagePath);
+              for (const layoutPath of route.layouts) files.add(layoutPath);
+              for (const slot of route.parallelSlots) {
+                if (slot.pagePath) files.add(slot.pagePath);
+                for (const layoutPath of slot.configLayoutPaths ?? []) files.add(layoutPath);
+              }
+            }
+            for (const filePath of files) {
+              instantConfigByFile.set(filePath, routeModuleHasInstant(filePath));
+            }
+          });
+        }
+
         // Node throws on unhandled 'error' events on sockets. When a browser
         // drops the connection mid-response (common in dev: HMR triggers a
         // reload while an RSC stream is still flushing), the next res.write
@@ -3582,7 +3601,11 @@ export const loadServerActionClient = ${
         });
         server.watcher.on("change", (filePath: string) => {
           if (!hasAppDir || !shouldInvalidateAppRouteFile(appDir, filePath, fileMatcher)) return;
-          invalidateAppRoutingModules();
+          const nextHasInstant = routeModuleHasInstant(filePath);
+          const previousHasInstant = instantConfigByFile.get(filePath) ?? false;
+          instantConfigByFile.set(filePath, nextHasInstant);
+          if (nextHasInstant === previousHasInstant) return;
+          invalidateAppRouteCache();
           invalidateHybridClientEntries();
         });
 
