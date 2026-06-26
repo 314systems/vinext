@@ -234,6 +234,9 @@ export class AppBrowserHistoryController {
     const bfcacheIds = visible
       ? visible.bfcacheIds
       : this.#restorableClientState.readCurrentBfcacheVersionHistoryIds(historyState);
+    if (historyUpdateMode === "push") {
+      this.#invalidateBranchedForwardHistory();
+    }
     const nextHistoryState = createHistoryStateWithNavigationMetadata(
       this.#createHashOnlyNavigationBaseHistoryState(historyUpdateMode, scroll),
       {
@@ -248,7 +251,6 @@ export class AppBrowserHistoryController {
     if (historyUpdateMode === "replace") {
       this.#replaceHistoryState(nextHistoryState, href);
     } else {
-      this.#invalidateBranchedForwardHistory();
       this.#pushHistoryState(nextHistoryState, href);
       this.#commitPushedHistoryTraversalIndex(navigationHistoryIndex);
       return;
@@ -283,6 +285,9 @@ export class AppBrowserHistoryController {
       options.targetHistoryIndex !== undefined
         ? options.targetHistoryIndex
         : this.allocateNavigationHistoryTraversalIndex(options.historyUpdateMode);
+    if (options.historyUpdateMode === "push" && currentHref !== targetHref) {
+      this.#invalidateBranchedForwardHistory();
+    }
     const historyState = createHistoryStateWithNavigationMetadata(
       preserveExistingState ? this.#readHistoryState() : null,
       {
@@ -301,7 +306,6 @@ export class AppBrowserHistoryController {
       this.commitHistoryTraversalIndex(navigationHistoryIndex);
     } else if (options.historyUpdateMode === "push" && currentHref !== targetHref) {
       options.stageClientParams();
-      this.#invalidateBranchedForwardHistory();
       this.#pushHistoryState(historyState, options.href);
       wroteHistoryState = true;
       this.#commitPushedHistoryTraversalIndex(navigationHistoryIndex);

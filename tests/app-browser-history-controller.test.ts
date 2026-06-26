@@ -11,6 +11,7 @@ import {
 } from "../packages/vinext/src/server/app-browser-navigation-controller.js";
 import {
   createHistoryStateWithNavigationMetadata,
+  readHistoryStateBfcacheVersion,
   readHistoryStateTraversalIndex,
 } from "../packages/vinext/src/server/app-history-state.js";
 import {
@@ -187,7 +188,7 @@ describe("AppBrowserHistoryController traversal index allocation", () => {
   });
 
   it("invalidates replaced forward snapshots when a soft push branches history", () => {
-    const { controller } = createController({
+    const { controller, store } = createController({
       initialState: createHistoryStateWithNavigationMetadata(null, {
         previousNextUrl: null,
         traversalIndex: 0,
@@ -208,7 +209,7 @@ describe("AppBrowserHistoryController traversal index allocation", () => {
     );
 
     controller.commitNavigationHistory({
-      bfcacheIds: {},
+      bfcacheIds: { "/": "branched-entry" },
       href: "/c",
       historyUpdateMode: "push",
       previousNextUrl: null,
@@ -217,6 +218,7 @@ describe("AppBrowserHistoryController traversal index allocation", () => {
 
     expect(controller.currentHistoryTraversalIndex).toBe(1);
     expect(controller.hasRestorableSnapshotAtIndex(1, () => true)).toBe(false);
+    expect(readHistoryStateBfcacheVersion(store.pushed[0]?.state)).toBe(1);
   });
 });
 
