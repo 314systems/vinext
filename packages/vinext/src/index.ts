@@ -80,6 +80,7 @@ import {
   createExperimentalReactEnvironmentAliases,
   createExperimentalReactEsbuildPlugin,
   EXPERIMENTAL_REACT_SPECIFIERS,
+  isExperimentalReactSpecifier,
   resolveExperimentalReactAliases,
   type ExperimentalReactAliasEntry,
   type ExperimentalReactEnvironment,
@@ -1463,15 +1464,12 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               configuredSsrExternal === true ||
               (Array.isArray(configuredSsrExternal) &&
                 configuredSsrExternal.some(
-                  (entry) =>
-                    typeof entry === "string" &&
-                    EXPERIMENTAL_REACT_SPECIFIERS.some(
-                      (specifier) => entry === specifier || entry.startsWith(`${specifier}/`),
-                    ),
-                ))
+                  (entry) => typeof entry === "string" && isExperimentalReactSpecifier(entry),
+                )) ||
+              nextConfig.serverExternalPackages.some(isExperimentalReactSpecifier)
             ) {
               throw new Error(
-                "[vinext] Externalizing React through `ssr.external` is incompatible with Next.js's experimental React channel because it bypasses the vendored React runtime.",
+                "[vinext] Externalizing React through `ssr.external` or `serverExternalPackages` is incompatible with Next.js's experimental React channel because it bypasses the vendored React runtime.",
               );
             }
             const packages = resolveExperimentalReactAliases(root);

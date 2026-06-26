@@ -124,6 +124,12 @@ export const EXPERIMENTAL_REACT_SPECIFIERS = [
   "react-server-dom-webpack/static.node",
 ] as const;
 
+export function isExperimentalReactSpecifier(specifier: string): boolean {
+  return EXPERIMENTAL_REACT_SPECIFIERS.some(
+    (candidate) => specifier === candidate || specifier.startsWith(`${candidate}/`),
+  );
+}
+
 export function createExperimentalReactEnvironmentAliases(
   packages: ExperimentalReactAliases,
   environment: ExperimentalReactEnvironment,

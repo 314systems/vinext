@@ -127,4 +127,21 @@ describe("App Router experimental React channel", () => {
   it("rejects React entries in ssr.external", async () => {
     await expectExternalReactRejection(["react"]);
   });
+
+  it("rejects React entries in serverExternalPackages", async () => {
+    await expect(
+      createServer({
+        root: FIXTURE_DIR,
+        configFile: false,
+        plugins: vinext({
+          appDir: FIXTURE_DIR,
+          nextConfig: {
+            experimental: { taint: true },
+            serverExternalPackages: ["react-dom/server.edge"],
+          },
+        }),
+        logLevel: "silent",
+      }),
+    ).rejects.toThrow("`serverExternalPackages` is incompatible");
+  });
 });
