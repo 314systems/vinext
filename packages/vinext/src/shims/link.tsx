@@ -554,7 +554,7 @@ function prefetchUrl(
                 // @ts-expect-error — purpose is a valid fetch option in some browsers
                 purpose: "prefetch",
               });
-        prefetchRscResponse(
+          await prefetchRscResponse(
           rscUrl,
           fetchPromise,
           interceptionContext,

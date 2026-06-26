@@ -272,7 +272,7 @@ declare module "next/navigation" {
     response: Response,
     interceptionContext?: string | null,
     options?: { onInvalidate?: () => void },
-  ): void;
+  ): Promise<void>;
   export function snapshotRscResponse(response: Response): Promise<CachedRscResponse>;
   export function restoreRscResponse(cached: CachedRscResponse, copy?: boolean): Response;
   export function prefetchRscResponse(

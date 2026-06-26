@@ -355,7 +355,7 @@ const Form = forwardRef(function Form(props: FormProps, ref: ForwardedRef<HTMLFo
                 // @ts-expect-error — purpose is a valid fetch option in some browsers
                 purpose: "prefetch",
               });
-              prefetchRscResponse(
+              void prefetchRscResponse(
                 rscUrl,
                 fetchPromise,
                 interceptionContext,

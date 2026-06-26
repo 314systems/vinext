@@ -724,7 +724,7 @@ export function prefetchRscResponse(
   mountedSlotsHeader: string | null = null,
   options?: PrefetchOptions,
   behavior: { cacheForNavigation?: boolean; optimisticRouteShell?: boolean } = {},
-): void {
+): Promise<void> {
   const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
   const cache = getPrefetchCache();
   const prefetched = getPrefetchedUrls();
@@ -768,6 +768,7 @@ export function prefetchRscResponse(
   // entries inserted before it are candidates for removal.
   cache.set(cacheKey, entry);
   evictPrefetchCacheIfNeeded();
+  return entry.pending;
 }
 
 /**
@@ -1906,7 +1907,7 @@ const _appRouter: AppRouterInstance = {
         return;
       }
       prefetched.add(cacheKey);
-      prefetchRscResponse(
+      void prefetchRscResponse(
         rscUrl,
         fetch(rscUrl, {
           headers,
