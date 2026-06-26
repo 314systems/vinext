@@ -123,6 +123,18 @@ describe("SSR build emits CSS assets referenced by SSR chunks", () => {
         ".foo { color: red; }\n",
       );
 
+      const withTemplate = await transform.handler.call(
+        {
+          emitFile: () => {
+            throw new Error("Cloudflare assets must be inlined");
+          },
+        },
+        "const asset = new URL(`./style.css`, import.meta.url);",
+        path.join(tmpDir, "route.js"),
+      );
+      expect(withTemplate?.code).toContain('new URL("data:text/css;base64,');
+      expect(withTemplate?.code).not.toContain("import.meta.url");
+
       const nonCode = `
         // new URL("./style.css", import.meta.url)
         const example = 'new URL("./style.css", import.meta.url)'
@@ -179,7 +191,7 @@ describe("SSR build emits CSS assets referenced by SSR chunks", () => {
       await fs.writeFile(path.join(tmpDir, "style.css"), ".foo { color: red; }\n");
       const transformed = await transform.handler.call(
         { emitFile: () => "asset-ref" },
-        `const asset = new URL("./style.css?v=1#theme", import.meta.url);`,
+        "const asset = new URL(`./style.css?v=1#theme`, import.meta.url);",
         path.join(tmpDir, "route.js"),
       );
       expect(transformed?.code).toContain("__VINEXT_SERVER_ASSET__asset-ref__?v=1#theme");

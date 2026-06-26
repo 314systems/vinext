@@ -137,6 +137,15 @@ function stringLiteralValue(value: unknown): string | null {
   ) {
     return value.value;
   }
+  if (value.type === "TemplateLiteral" && nodeArray(value.expressions).length === 0) {
+    const quasi = nodeArray(value.quasis)[0];
+    if (isAstRecord(quasi) && typeof quasi.value === "object" && quasi.value !== null) {
+      const cooked = Reflect.get(quasi.value, "cooked");
+      const raw = Reflect.get(quasi.value, "raw");
+      if (typeof cooked === "string") return cooked;
+      if (typeof raw === "string") return raw;
+    }
+  }
   return null;
 }
 
