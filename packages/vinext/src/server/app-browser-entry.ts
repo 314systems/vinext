@@ -328,8 +328,9 @@ let latestRscHmrUpdateId = 0;
 // asynchronous scroll restore for an older navId is already stale.
 let synchronousPopstateScrollRestoreNavigationId: number | null = null;
 let pendingRetainedHistoryNavigation: {
-  promise: Promise<void>;
-  resolve: () => void;
+  href: string;
+  promise: Promise<boolean>;
+  resolve: (handled: boolean) => void;
   scrollPosition: { x: number; y: number };
 } | null = null;
 
@@ -2057,6 +2058,10 @@ function bootstrapHydration(
     },
     invalidateRestorableHistory: () => historyController.invalidateRestorableClientState(),
     navigateRestorableHistoryTarget: (href, scroll) => {
+      const pendingNavigation = pendingRetainedHistoryNavigation;
+      if (pendingNavigation !== null) {
+        return pendingNavigation.promise.then(() => pendingNavigation.href === href);
+      }
       const targetUrl = new URL(href, window.location.href);
       if (targetUrl.hash !== "") return null;
       const currentHistoryIndex = historyController.currentHistoryTraversalIndex;
@@ -2068,11 +2073,12 @@ function bootstrapHydration(
       ) {
         return null;
       }
-      let resolve!: () => void;
-      const promise = new Promise<void>((settle) => {
+      let resolve!: (handled: boolean) => void;
+      const promise = new Promise<boolean>((settle) => {
         resolve = settle;
       });
       pendingRetainedHistoryNavigation = {
+        href,
         promise,
         resolve,
         scrollPosition: scroll ? { x: 0, y: 0 } : { x: window.scrollX, y: window.scrollY },
@@ -2105,7 +2111,10 @@ function bootstrapHydration(
       const retainedNavigation = pendingRetainedHistoryNavigation;
       pendingRetainedHistoryNavigation = null;
       if (retainedNavigation === null) return;
-      void pendingNavigation.finally(retainedNavigation.resolve);
+      void pendingNavigation.then(
+        () => retainedNavigation.resolve(true),
+        () => retainedNavigation.resolve(false),
+      );
     },
     setPendingNavigation: (pendingNavigation) => {
       window.__VINEXT_RSC_PENDING__ = pendingNavigation;

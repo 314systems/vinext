@@ -1690,7 +1690,7 @@ describe("Link prefetch scheduling", () => {
   });
 
   it("traverses to a retained history target instead of fetching it again", async () => {
-    const navigateRestorableHistoryTarget = vi.fn(() => Promise.resolve());
+    const navigateRestorableHistoryTarget = vi.fn(() => Promise.resolve(true));
     const result = await renderIsolatedLink({
       href: "/intent-prefetch-target",
       nodeEnv: "production",
@@ -1711,6 +1711,32 @@ describe("Link prefetch scheduling", () => {
       expect(navigateRestorableHistoryTarget).toHaveBeenCalledWith("/intent-prefetch-target", true);
       expect(result.fetch).not.toHaveBeenCalled();
       expect(result.navigate).not.toHaveBeenCalled();
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("uses normal navigation when a serialized retained traversal does not handle the target", async () => {
+    const navigateRestorableHistoryTarget = vi.fn(() => Promise.resolve(false));
+    const result = await renderIsolatedLink({
+      href: "/intent-prefetch-target",
+      nodeEnv: "production",
+      runtimeFunctions: { navigateRestorableHistoryTarget },
+    });
+
+    try {
+      await result.capturedAnchorProps.onClick?.({
+        button: 0,
+        currentTarget: result.anchor,
+        defaultPrevented: false,
+        preventDefault() {
+          this.defaultPrevented = true;
+        },
+      });
+      await flushPrefetchTasks();
+
+      expect(navigateRestorableHistoryTarget).toHaveBeenCalledWith("/intent-prefetch-target", true);
+      expect(result.navigate).toHaveBeenCalledOnce();
     } finally {
       result.restoreNodeEnv();
     }

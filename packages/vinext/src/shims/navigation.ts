@@ -1681,9 +1681,10 @@ export async function navigateClientSide(
       ? getNavigationRuntime()?.functions.navigateRestorableHistoryTarget?.(fullHref, scroll)
       : null;
   if (retainedHistoryNavigation) {
-    await retainedHistoryNavigation;
-    clearAppNavigationFailureTarget(fullHref);
-    return;
+    if (await retainedHistoryNavigation) {
+      clearAppNavigationFailureTarget(fullHref);
+      return;
+    }
   }
 
   // Next.js treats a streamed redirect meta tag as an MPA-navigation marker.
