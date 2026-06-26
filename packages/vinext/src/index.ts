@@ -1185,7 +1185,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     reactPluginPromise,
     // Inline binary assets fetched via `fetch(new URL("./asset", import.meta.url))` —
     // see src/plugins/og-assets.ts. This must run before the more general
-    // server asset URL transform below.
+    // server asset URL transform below. Running before `commonjs()` is
+    // intentional: this transform only matches ESM `import.meta.url` syntax,
+    // so CJS conversion cannot create additional eligible inputs.
     createOgInlineFetchAssetsPlugin(),
     // Emit assets referenced via `new URL("./asset", import.meta.url)` in
     // SSR/server environments before the dynamic-request guard sees imports
