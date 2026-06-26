@@ -144,7 +144,7 @@ describe("Next.js compat: next/dynamic", () => {
   it("SSR: adds nonce attributes to preload links when next/dynamic runs under CSP", async () => {
     const { html, res } = await fetchHtml(baseUrl, "/nextjs-compat/dynamic?csp-nonce=1");
     expect(res.headers.get("content-security-policy")).toBe(
-      "script-src 'nonce-vinext-test-nonce' 'strict-dynamic' 'unsafe-eval';",
+      "script-src 'nonce-vinext-test-nonce' 'strict-dynamic';",
     );
 
     const preloadLinks = [

@@ -18,7 +18,6 @@ import { applyLocaleToRoutes, isExternalUrl } from "./config-matchers.js";
 import { loadTsconfigResolutionForRoot } from "./tsconfig-paths.js";
 import { getViteMajorVersion } from "../utils/vite-version.js";
 import { loadCommonJsModule, shouldRetryAsCommonJs } from "../utils/commonjs-loader.js";
-import { needsExperimentalReact } from "./experimental-react.js";
 
 /**
  * Parse a body size limit value (string or number) into bytes.
@@ -357,8 +356,6 @@ export type ResolvedNextConfig = {
    * `useRouter().experimental_gesturePush()`.
    */
   gestureTransition: boolean;
-  /** Whether App Router environments should use Next.js's vendored experimental React channel. */
-  useExperimentalReact: boolean;
   /**
    * Whether `experimental.prefetchInlining` is configured. Next.js uses this
    * with the Segment Cache to fetch the route tree before the bundled inlined
@@ -1338,7 +1335,6 @@ export async function resolveNextConfig(
       cacheComponents: false,
       appNavFailHandling: false,
       gestureTransition: false,
-      useExperimentalReact: false,
       prefetchInlining: false,
       redirects: [],
       rewrites: { beforeFiles: [], afterFiles: [], fallback: [] },
@@ -1663,7 +1659,6 @@ export async function resolveNextConfig(
     cacheComponents: config.cacheComponents ?? false,
     appNavFailHandling: experimental?.appNavFailHandling === true,
     gestureTransition: experimental?.gestureTransition === true,
-    useExperimentalReact: needsExperimentalReact(experimental),
     prefetchInlining,
     redirects,
     rewrites,

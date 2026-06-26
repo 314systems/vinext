@@ -76,16 +76,6 @@ import {
   type ResolvedNextConfig,
 } from "./config/next-config.js";
 import { mergeServerExternalPackages } from "./config/server-external-packages.js";
-import {
-  createExperimentalReactEnvironmentAliases,
-  createExperimentalReactEsbuildPlugin,
-  EXPERIMENTAL_REACT_SPECIFIERS,
-  isExperimentalReactSpecifier,
-  resolveExperimentalReactAliases,
-  resolveExperimentalReactDevelopmentEntry,
-  type ExperimentalReactAliasEntry,
-  type ExperimentalReactEnvironment,
-} from "./config/experimental-react.js";
 
 import { findMiddlewareFile, isProxyFile, runMiddleware } from "./server/middleware.js";
 import { isNextDataPathname, parseNextDataPathname } from "./server/pages-data-route.js";
@@ -892,12 +882,6 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   let hasAppDir = false;
   let hasPagesDir = false;
   let nextConfig: ResolvedNextConfig;
-  let experimentalReactAliases: Record<
-    ExperimentalReactEnvironment,
-    ExperimentalReactAliasEntry[]
-  > | null = null;
-  const experimentalReactClientDevelopmentEntries = new Set<string>();
-  let experimentalReactFlightDir: string | null = null;
   let fileMatcher: ReturnType<typeof createValidFileMatcher>;
   let middlewarePath: string | null = null;
   let instrumentationPath: string | null = null;
@@ -910,7 +894,6 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   // initializer guards any unexpected hook ordering.
   let clientAssetsInlineLimit: NonNullable<UserConfig["build"]>["assetsInlineLimit"] = 0;
   let hasCloudflarePlugin = false;
-  let isServeCommand = false;
   let warnedInlineNextConfigOverride = false;
   let hasNitroPlugin = false;
   let rscCompatibilityId: string | undefined;
@@ -1199,56 +1182,12 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     ...(viteMajorVersion >= 8 ? [] : [loadVite7TsconfigPathsPlugin(earlyBaseDir)]),
     // React Fast Refresh + JSX transform for client components.
     reactPluginPromise,
-    {
-      name: "vinext:experimental-react-channel",
-      enforce: "pre",
-      resolveId(id) {
-        const environment = this.environment?.name;
-        if (
-          !experimentalReactAliases ||
-          (environment !== "rsc" && environment !== "ssr" && environment !== "client")
-        ) {
-          return null;
-        }
-        const alias = experimentalReactAliases[environment].find(({ find }) => find.test(id));
-        if (alias && environment === "client" && isServeCommand) {
-          const developmentEntry = resolveExperimentalReactDevelopmentEntry(alias.replacement);
-          experimentalReactClientDevelopmentEntries.add(normalizePathSeparators(developmentEntry));
-          return developmentEntry;
-        }
-        return alias?.replacement ?? null;
-      },
-      transform: {
-        filter: { code: "globalThis.__next_require__" },
-        handler(code, id) {
-          const cleanId = normalizePathSeparators(id.split("?", 1)[0]);
-          if (
-            !experimentalReactFlightDir ||
-            !cleanId.startsWith(`${experimentalReactFlightDir}/`) ||
-            !code.includes("globalThis.__next_require__")
-          ) {
-            return null;
-          }
-          return {
-            code: code.replaceAll("globalThis.__next_require__", "__vite_rsc_require__"),
-            map: null,
-          };
-        },
-      },
-    },
     // Next.js ignores requests without any statically known path component
     // during graph analysis and leaves a deterministic runtime failure.
     createIgnoreDynamicRequestsPlugin(() => nextConfig?.turbopackTranspilePackages ?? []),
     // Transform CJS require()/module.exports to ESM before other plugins
     // analyze imports (RSC directive scanning, shim resolution, etc.)
     commonjs(),
-    commonjs({
-      filter(id: string) {
-        return experimentalReactClientDevelopmentEntries.has(
-          normalizePathSeparators(stripViteModuleQuery(id)),
-        );
-      },
-    }),
     // Enable JSX in plain .js files. Next.js allows JSX in .js files
     // (Babel/SWC handle it transparently), but Vite 8's built-in `vite:oxc`
     // plugin excludes .js files by default (`exclude: /\.js$/`) AND infers
@@ -1352,7 +1291,6 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
       enforce: "pre",
 
       async config(config, env) {
-        isServeCommand = env.command === "serve";
         root = normalizePathSeparators(config.root ?? process.cwd());
         const userResolve = config.resolve as UserResolveConfigWithTsconfigPaths | undefined;
         const shouldEnableNativeTsconfigPaths =
@@ -1473,31 +1411,6 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           if (sharedBuildId && sharedBuildId.length > 0) {
             nextConfig = { ...nextConfig, buildId: sharedBuildId };
           }
-
-          if (nextConfig.useExperimentalReact) {
-            const configuredSsrExternal = config.ssr?.external;
-            if (
-              configuredSsrExternal === true ||
-              (Array.isArray(configuredSsrExternal) &&
-                configuredSsrExternal.some(
-                  (entry) => typeof entry === "string" && isExperimentalReactSpecifier(entry),
-                )) ||
-              nextConfig.serverExternalPackages.some(isExperimentalReactSpecifier)
-            ) {
-              throw new Error(
-                "[vinext] Externalizing React through `ssr.external` or `serverExternalPackages` is incompatible with Next.js's experimental React channel because it bypasses the vendored React runtime.",
-              );
-            }
-            const packages = resolveExperimentalReactAliases(root);
-            experimentalReactAliases = {
-              rsc: createExperimentalReactEnvironmentAliases(packages, "rsc"),
-              ssr: createExperimentalReactEnvironmentAliases(packages, "ssr"),
-              client: createExperimentalReactEnvironmentAliases(packages, "client"),
-            };
-            experimentalReactFlightDir = normalizePathSeparators(
-              packages["react-server-dom-webpack"],
-            );
-          }
         }
         // RSC-compat ID coordination across plugin instances — same rationale as
         // the build ID above. createRscCompatibilityId() falls back to a random
@@ -1550,9 +1463,6 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           // and it would silently override the value we just set above.
           if (key === "NODE_ENV") continue;
           defines[`process.env.${key}`] = JSON.stringify(value);
-        }
-        if (experimentalReactAliases) {
-          defines["process.env.__NEXT_EXPERIMENTAL_REACT"] = JSON.stringify("true");
         }
         // Expose basePath to client-side code
         defines["process.env.__NEXT_ROUTER_BASEPATH"] = JSON.stringify(nextConfig.basePath);
@@ -2372,10 +2282,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             ? true
             : nextServerExternal;
         const externalizeSsrReactInDev =
-          env.command === "serve" &&
-          !hasCloudflarePlugin &&
-          !hasNitroPlugin &&
-          !experimentalReactAliases;
+          env.command === "serve" && !hasCloudflarePlugin && !hasNitroPlugin;
 
         // Capture top-level optimizeDeps populated by earlier plugins
         // (e.g. @lingui/vite-plugin) so we merge rather than overwrite.
@@ -4481,7 +4388,6 @@ export const loadServerActionClient = ${
                         (nextConfig?.rewrites.fallback.length ?? 0) > 0,
                       nextConfig?.clientTraceMetadata,
                       nextConfig?.htmlLimitedBots,
-                      experimentalReactAliases !== null,
                     ),
                   };
                 }
@@ -5788,69 +5694,6 @@ export const loadServerActionClient = ${
   // Append auto-injected RSC plugins if applicable
   if (rscPluginPromise) {
     plugins.push(rscPluginPromise);
-    plugins.push({
-      name: "vinext:experimental-react-dev-optimizer",
-      enforce: "post",
-      configEnvironment(name, config, env) {
-        if (
-          env.command !== "serve" ||
-          !experimentalReactAliases ||
-          (name !== "rsc" && name !== "ssr" && name !== "client")
-        ) {
-          return null;
-        }
-
-        const aliases = experimentalReactAliases[name];
-        if (name === "rsc" || name === "ssr") {
-          if (Array.isArray(config.resolve?.external)) {
-            config.resolve.external = config.resolve.external.filter(
-              (entry) =>
-                typeof entry !== "string" ||
-                !EXPERIMENTAL_REACT_SPECIFIERS.some(
-                  (specifier) => entry === specifier || entry.startsWith(`${specifier}/`),
-                ),
-            );
-          }
-        }
-        config.optimizeDeps ??= {};
-        config.optimizeDeps.include = config.optimizeDeps.include?.map((specifier) => {
-          const normalizedSpecifier = specifier.replace(
-            "@vitejs/plugin-rsc/vendor/react-server-dom/",
-            "react-server-dom-webpack/",
-          );
-          return (
-            aliases.find(({ find }) => find.test(normalizedSpecifier))?.replacement ?? specifier
-          );
-        });
-        const rolldownOptions = config.optimizeDeps.rolldownOptions ?? {};
-        const existingPlugins = rolldownOptions.plugins
-          ? Array.isArray(rolldownOptions.plugins)
-            ? rolldownOptions.plugins
-            : [rolldownOptions.plugins]
-          : [];
-        config.optimizeDeps.rolldownOptions = {
-          ...rolldownOptions,
-          plugins: [
-            {
-              name: `vinext:experimental-react-dep-optimize:${name}`,
-              resolveId(id: string) {
-                return aliases.find(({ find }) => find.test(id))?.replacement;
-              },
-            },
-            ...existingPlugins,
-          ],
-        };
-        const esbuildOptions = config.optimizeDeps.esbuildOptions ?? {};
-        config.optimizeDeps.esbuildOptions = {
-          ...esbuildOptions,
-          plugins: [
-            createExperimentalReactEsbuildPlugin(aliases, name),
-            ...(esbuildOptions.plugins ?? []),
-          ],
-        };
-        return null;
-      },
-    });
     plugins.push(createRscClientReferenceLoadersPlugin());
   }
 

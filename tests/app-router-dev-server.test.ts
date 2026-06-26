@@ -2009,29 +2009,12 @@ describe("App Router integration", () => {
     const ssrInclude = server.config.environments.ssr?.optimizeDeps?.include;
     const clientInclude = server.config.environments.client?.optimizeDeps?.include;
 
-    // Experimental React rewrites plugin-rsc's framework include to Next.js's
-    // vendored renderer so the optimizer and runtime share one React channel.
-    expect(ssrInclude).toEqual(
-      expect.arrayContaining([
-        expect.stringMatching(
-          /(?:react-dom\/server\.edge|react-dom-experimental\/server\.edge\.js)$/,
-        ),
-      ]),
-    );
+    // react-dom/server.edge should be present (added by @vitejs/plugin-rsc)
+    expect(ssrInclude).toContain("react-dom/server.edge");
 
-    for (const [specifier, experimentalFile] of [
-      ["react", "react-experimental/index.js"],
-      ["react-dom", "react-dom-experimental/index.js"],
-      ["react-dom/client", "react-dom-experimental/client.js"],
-    ]) {
-      expect(clientInclude).toEqual(
-        expect.arrayContaining([
-          expect.stringMatching(
-            new RegExp(`(?:${specifier.replace("/", "\\/")}|${experimentalFile})$`),
-          ),
-        ]),
-      );
-    }
+    expect(clientInclude).toContain("react");
+    expect(clientInclude).toContain("react-dom");
+    expect(clientInclude).toContain("react-dom/client");
   });
 
   it("drops unused NODE_ENV branches from optimized server dependencies", async () => {
@@ -2067,13 +2050,7 @@ describe("App Router integration", () => {
 
     const optimizedDependencies =
       rscEnvironment.depsOptimizer?.metadata.depInfoList.map((dep) => dep.id) ?? [];
-    expect(optimizedDependencies).toEqual(
-      expect.arrayContaining([
-        expect.stringMatching(
-          /(?:react-server-dom-webpack\/static\.edge|react-server-dom-webpack-experimental\/static\.edge\.js)$/,
-        ),
-      ]),
-    );
+    expect(optimizedDependencies).toContain("react-server-dom-webpack/static.edge");
   });
 
   // ── CSRF protection for server actions ───────────────────────────────

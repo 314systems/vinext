@@ -41,7 +41,7 @@ import { getScriptNonceFromNodeHeaderSources } from "./csp.js";
 import { mergeRouteParamsIntoQuery, parseQueryString as parseQuery } from "../utils/query.js";
 import path from "node:path";
 import React from "react";
-import { renderToReadableStream as nativeRenderToReadableStream } from "react-dom/server.edge";
+import { renderToReadableStream } from "react-dom/server.edge";
 import { logRequest, now } from "./request-log.js";
 import {
   createValidFileMatcher,
@@ -85,39 +85,13 @@ import { isUnknownRecord } from "../utils/record.js";
  * boundaries to resolve via stream.allReady before collecting output.
  * Used for _document rendering and error pages (small, non-streaming).
  */
-type RenderToReadableStream = (
-  element: React.ReactElement,
-) => Promise<ReadableStream<Uint8Array> & { allReady: Promise<void> }>;
-
-function createPagesRenderToReadableStream(
-  runner: ModuleImporter,
-  useExperimentalReact: boolean,
-): RenderToReadableStream {
-  if (!useExperimentalReact) return nativeRenderToReadableStream;
-
-  const reactDomServer = importModule(runner, "react-dom/server.edge");
-  return async (element) => {
-    const renderer = await reactDomServer;
-    if (typeof renderer.renderToReadableStream !== "function") {
-      throw new Error("[vinext] react-dom/server.edge does not export renderToReadableStream");
-    }
-    return renderer.renderToReadableStream(element);
-  };
-}
-
-async function renderToStringAsync(
-  renderToReadableStream: RenderToReadableStream,
-  element: React.ReactElement,
-): Promise<string> {
+async function renderToStringAsync(element: React.ReactElement): Promise<string> {
   const stream = await renderToReadableStream(element);
   await stream.allReady;
   return new Response(stream).text();
 }
 
-async function renderIsrPassToStringAsync(
-  renderToReadableStream: RenderToReadableStream,
-  element: React.ReactElement,
-): Promise<string> {
+async function renderIsrPassToStringAsync(element: React.ReactElement): Promise<string> {
   // The cache-fill render is a second render pass for the same request.
   // Reset render-scoped state so it cannot leak from the streamed response
   // render or affect async work that is still draining from that stream.
@@ -126,9 +100,7 @@ async function renderIsrPassToStringAsync(
   return await runWithServerInsertedHTMLState(() =>
     runWithHeadState(() =>
       _runWithCacheState(() =>
-        runWithPrivateCache(() =>
-          runWithFetchCache(async () => renderToStringAsync(renderToReadableStream, element)),
-        ),
+        runWithPrivateCache(() => runWithFetchCache(async () => renderToStringAsync(element))),
       ),
     ),
   );
@@ -240,7 +212,6 @@ async function streamPageToResponse(
      * into `getSSRHeadHTML()`'s output. Called before `getHeadHTML()`.
      */
     setDocumentInitialHead?: (head: React.ReactNode[]) => void;
-    renderToReadableStream: RenderToReadableStream;
     /** Buffer the body before writing headers so error-page fallback remains safe. */
     bufferBodyBeforeHeaders?: boolean;
   },
@@ -258,7 +229,6 @@ async function streamPageToResponse(
     scriptNonce,
     documentContext,
     setDocumentInitialHead,
-    renderToReadableStream,
     bufferBodyBeforeHeaders = false,
   } = options;
 
@@ -273,7 +243,7 @@ async function streamPageToResponse(
     DocumentComponent,
     enhancePageElement,
     renderToReadableStream,
-    renderStylesToString: (element) => renderToStringAsync(renderToReadableStream, element),
+    renderStylesToString: renderToStringAsync,
     scriptNonce,
     context: documentContext,
   });
@@ -331,7 +301,7 @@ async function streamPageToResponse(
     const docElement = docProps
       ? React.createElement(DocumentComponent, docProps)
       : React.createElement(DocumentComponent);
-    let docHtml = await renderToStringAsync(renderToReadableStream, docElement);
+    let docHtml = await renderToStringAsync(docElement);
     // Replace __NEXT_MAIN__ with our stream marker
     docHtml = docHtml.replace("__NEXT_MAIN__", STREAM_BODY_MARKER);
     // Inject head tags
@@ -470,10 +440,8 @@ export function createSSRHandler(
    */
   clientTraceMetadata?: readonly string[],
   htmlLimitedBots?: string,
-  useExperimentalReact = false,
 ) {
   const matcher = fileMatcher ?? createValidFileMatcher();
-  const renderToReadableStream = createPagesRenderToReadableStream(runner, useExperimentalReact);
 
   // Page route patterns in Next.js bracket format, sorted by specificity
   // (sortRoutes via pagesRouter). Mirrors the production client entry's
@@ -597,19 +565,7 @@ export function createSSRHandler(
         return;
       }
       // No route matched — try to render custom 404 page
-      await renderErrorPage(
-        server,
-        runner,
-        req,
-        res,
-        url,
-        pagesDir,
-        404,
-        undefined,
-        matcher,
-        undefined,
-        renderToReadableStream,
-      );
+      await renderErrorPage(server, runner, req, res, url, pagesDir, 404, undefined, matcher);
       return;
     }
 
@@ -806,8 +762,6 @@ export function createSSRHandler(
               404,
               routerShim.wrapWithRouterContext,
               matcher,
-              undefined,
-              renderToReadableStream,
             );
             return;
           }
@@ -955,9 +909,6 @@ export function createSSRHandler(
               pagesDir,
               404,
               routerShim.wrapWithRouterContext,
-              undefined,
-              undefined,
-              renderToReadableStream,
             );
             return;
           }
@@ -1244,7 +1195,6 @@ export function createSSRHandler(
                         el = routerShim.wrapWithRouterContext(el);
                       }
                       const freshBody = await renderIsrPassToStringAsync(
-                        renderToReadableStream,
                         withScriptNonce(el, scriptNonce),
                       );
 
@@ -1395,9 +1345,6 @@ export function createSSRHandler(
               pagesDir,
               404,
               routerShim.wrapWithRouterContext,
-              undefined,
-              undefined,
-              renderToReadableStream,
             );
             return;
           }
@@ -1835,7 +1782,6 @@ hydrate();
               ? headShim.setDocumentInitialHead
               : undefined,
           bufferBodyBeforeHeaders: true,
-          renderToReadableStream,
         });
         _renderEnd = now();
 
@@ -1859,7 +1805,6 @@ hydrate();
             isrElement = wrapWithRouterContext(isrElement);
           }
           const isrBodyHtml = await renderIsrPassToStringAsync(
-            renderToReadableStream,
             withScriptNonce(isrElement, scriptNonce),
           );
           const isrHtml = `<!DOCTYPE html><html><head></head><body><div id="__next">${isrBodyHtml}</div>${allScripts}</body></html>`;
@@ -1906,7 +1851,6 @@ hydrate();
             undefined,
             matcher,
             e instanceof Error ? e : new Error(String(e)),
-            renderToReadableStream,
           );
         } catch (fallbackErr) {
           // If error page itself fails, fall back to plain text.
@@ -1941,7 +1885,6 @@ async function renderErrorPage(
   wrapWithRouterContext?: ((el: React.ReactElement) => React.ReactElement) | null,
   fileMatcher?: ValidFileMatcher,
   err?: Error,
-  renderToReadableStream: RenderToReadableStream = nativeRenderToReadableStream,
 ): Promise<void> {
   const matcher = fileMatcher ?? createValidFileMatcher();
   // Try specific status page first, then _error, then fallback
@@ -2061,10 +2004,9 @@ async function renderErrorPage(
             typeof headShim.setDocumentInitialHead === "function"
               ? headShim.setDocumentInitialHead
               : undefined,
-          renderToReadableStream,
         });
       } else {
-        const bodyHtml = await renderToStringAsync(renderToReadableStream, element);
+        const bodyHtml = await renderToStringAsync(element);
         const html = `<!DOCTYPE html>
 <html>
 <head>
