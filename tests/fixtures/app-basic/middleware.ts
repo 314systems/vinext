@@ -290,9 +290,10 @@ export async function middleware(request: NextRequest, event: NextFetchEvent) {
     pathname.startsWith("/use-client-page-pathname") &&
     request.nextUrl.searchParams.has("csp-nonce")
   ) {
+    const devEvalSource = process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : "";
     r.headers.set(
       "content-security-policy",
-      "script-src 'nonce-vinext-test-nonce' 'strict-dynamic' 'unsafe-eval';",
+      `script-src 'nonce-vinext-test-nonce' 'strict-dynamic'${devEvalSource};`,
     );
   }
   if (
@@ -327,9 +328,10 @@ export async function middleware(request: NextRequest, event: NextFetchEvent) {
     pathname.startsWith("/nextjs-compat/dynamic") &&
     request.nextUrl.searchParams.has("csp-nonce")
   ) {
+    const devEvalSource = process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : "";
     r.headers.set(
       "content-security-policy",
-      "script-src 'nonce-vinext-test-nonce' 'strict-dynamic' 'unsafe-eval';",
+      `script-src 'nonce-vinext-test-nonce' 'strict-dynamic'${devEvalSource};`,
     );
   }
   r.headers.set("x-mw-pathname", pathname);
