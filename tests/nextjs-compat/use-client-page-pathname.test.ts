@@ -105,7 +105,7 @@ describe('"use client" page component: usePathname() SSR (issue #688)', () => {
   it("adds CSP nonce to inline hydration and bootstrap scripts", async () => {
     const res = await fetch(`${_baseUrl}${ROUTE}?csp-nonce=1`);
     expect(res.headers.get("content-security-policy")).toBe(
-      "script-src 'nonce-vinext-test-nonce' 'strict-dynamic';",
+      "script-src 'nonce-vinext-test-nonce' 'strict-dynamic' 'unsafe-eval';",
     );
 
     const html = await res.text();
