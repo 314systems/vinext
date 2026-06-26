@@ -67,35 +67,16 @@ async function makeAppRouterCssFixture(): Promise<string> {
 }
 
 describe("SSR build emits CSS assets referenced by SSR chunks", () => {
-  it("uses a workerd-safe data URL for Cloudflare server builds", async () => {
-    const plugin = createServerAssetImportMetaUrlPlugin(() => true);
-    const transform = plugin.transform as unknown as {
-      handler: (
-        this: { emitFile(): never },
-        code: string,
-        id: string,
-      ) => Promise<{
-        code: string;
-      } | null>;
-    };
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-worker-url-dep-"));
-    try {
-      const assetPath = path.join(tmpDir, "style.css");
-      await fs.writeFile(assetPath, ".foo { color: red; }\n");
-      const transformed = await transform.handler.call(
-        {
-          emitFile: () => {
-            throw new Error("Cloudflare assets must be inlined");
-          },
-        },
-        `import(new URL("./style.css", import.meta.url).href);`,
-        path.join(tmpDir, "route.js"),
-      );
-      expect(transformed?.code).toContain('new URL("data:text/css;base64,');
-      expect(transformed?.code).not.toContain("import.meta.url");
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+  it("does not emit Node filesystem URLs for Cloudflare server builds", () => {
+    const environment = {
+      config: { consumer: "server", ssr: {} },
+    } as Parameters<NonNullable<import("vite").Plugin["applyToEnvironment"]>>[0];
+    expect(createServerAssetImportMetaUrlPlugin(() => true).applyToEnvironment!(environment)).toBe(
+      false,
+    );
+    expect(createServerAssetImportMetaUrlPlugin(() => false).applyToEnvironment!(environment)).toBe(
+      true,
+    );
   });
 
   it("App Router SSR environment is configured with emitAssets: true", async () => {
