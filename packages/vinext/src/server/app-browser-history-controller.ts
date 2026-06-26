@@ -105,9 +105,10 @@ export class AppBrowserHistoryController {
   readonly #readVisibleNavigationMetadata: () => VisibleNavigationMetadata | null;
 
   // Highest app-owned traversal index we know about (`#next`) versus the index
-  // of the currently committed entry (`#current`). Traversing to a metadata-less
-  // entry makes `#current` unknown (null), but the next app-owned push must
-  // still continue from the highest known app history.
+  // of the currently committed entry (`#current`). A push from a known current
+  // entry branches at current + 1 and truncates any higher retained indices.
+  // When current is unknown, the next app-owned push continues from the highest
+  // known app history to avoid colliding with an existing index.
   #currentHistoryTraversalIndex: number | null;
   #nextHistoryTraversalIndex: number;
 
@@ -135,7 +136,7 @@ export class AppBrowserHistoryController {
   ): number | null {
     switch (historyUpdateMode) {
       case "push":
-        return this.#nextHistoryTraversalIndex + 1;
+        return (this.#currentHistoryTraversalIndex ?? this.#nextHistoryTraversalIndex) + 1;
       case "replace":
         return this.#currentHistoryTraversalIndex;
       case undefined:
@@ -151,6 +152,22 @@ export class AppBrowserHistoryController {
     this.#currentHistoryTraversalIndex = index;
     if (index !== null) {
       this.#nextHistoryTraversalIndex = Math.max(this.#nextHistoryTraversalIndex, index);
+    }
+  }
+
+  #commitPushedHistoryTraversalIndex(index: number | null): void {
+    this.#currentHistoryTraversalIndex = index;
+    if (index !== null) {
+      this.#nextHistoryTraversalIndex = index;
+    }
+  }
+
+  #invalidateBranchedForwardHistory(): void {
+    if (
+      this.#currentHistoryTraversalIndex !== null &&
+      this.#currentHistoryTraversalIndex < this.#nextHistoryTraversalIndex
+    ) {
+      this.#restorableClientState.invalidateClientState();
     }
   }
 
@@ -231,7 +248,10 @@ export class AppBrowserHistoryController {
     if (historyUpdateMode === "replace") {
       this.#replaceHistoryState(nextHistoryState, href);
     } else {
+      this.#invalidateBranchedForwardHistory();
       this.#pushHistoryState(nextHistoryState, href);
+      this.#commitPushedHistoryTraversalIndex(navigationHistoryIndex);
+      return;
     }
     this.commitHistoryTraversalIndex(navigationHistoryIndex);
   }
@@ -281,9 +301,10 @@ export class AppBrowserHistoryController {
       this.commitHistoryTraversalIndex(navigationHistoryIndex);
     } else if (options.historyUpdateMode === "push" && currentHref !== targetHref) {
       options.stageClientParams();
+      this.#invalidateBranchedForwardHistory();
       this.#pushHistoryState(historyState, options.href);
       wroteHistoryState = true;
-      this.commitHistoryTraversalIndex(navigationHistoryIndex);
+      this.#commitPushedHistoryTraversalIndex(navigationHistoryIndex);
     }
 
     if (!wroteHistoryState) {

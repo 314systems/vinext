@@ -138,7 +138,7 @@ function createRouterState(overrides: Partial<AppRouterState> = {}): AppRouterSt
 }
 
 describe("AppBrowserHistoryController traversal index allocation", () => {
-  it("allocates per history update mode and anchors to the highest committed index", () => {
+  it("allocates pushes adjacent to the current known history entry", () => {
     const initialState = createHistoryStateWithNavigationMetadata(null, {
       previousNextUrl: null,
       traversalIndex: 3,
@@ -156,8 +156,8 @@ describe("AppBrowserHistoryController traversal index allocation", () => {
     expect(controller.currentHistoryTraversalIndex).toBe(4);
     expect(controller.allocateNavigationHistoryTraversalIndex("push")).toBe(5);
 
-    // Traversing back to a lower index keeps the next-push anchor at the highest
-    // app-owned entry (4), not the index we just traversed to.
+    // Traversing back to a lower known index makes the next push branch from
+    // that entry, matching the browser truncating its forward stack.
     controller.commitTraversalIndexFromHistoryState(
       createHistoryStateWithNavigationMetadata(null, {
         previousNextUrl: null,
@@ -165,7 +165,7 @@ describe("AppBrowserHistoryController traversal index allocation", () => {
       }),
     );
     expect(controller.currentHistoryTraversalIndex).toBe(2);
-    expect(controller.allocateNavigationHistoryTraversalIndex("push")).toBe(5);
+    expect(controller.allocateNavigationHistoryTraversalIndex("push")).toBe(3);
     expect(controller.allocateNavigationHistoryTraversalIndex("replace")).toBe(2);
   });
 
@@ -184,6 +184,39 @@ describe("AppBrowserHistoryController traversal index allocation", () => {
     // the highest known app entry (4).
     expect(controller.allocateNavigationHistoryTraversalIndex("replace")).toBeNull();
     expect(controller.allocateNavigationHistoryTraversalIndex("push")).toBe(5);
+  });
+
+  it("invalidates replaced forward snapshots when a soft push branches history", () => {
+    const { controller } = createController({
+      initialState: createHistoryStateWithNavigationMetadata(null, {
+        previousNextUrl: null,
+        traversalIndex: 0,
+      }),
+    });
+    const replacedForwardState = createRouterState({
+      navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/b", {}),
+      routeId: "route:/b",
+    });
+
+    controller.commitHistoryTraversalIndex(1);
+    controller.rememberHistoryStateSnapshot(replacedForwardState);
+    controller.commitTraversalIndexFromHistoryState(
+      createHistoryStateWithNavigationMetadata(null, {
+        previousNextUrl: null,
+        traversalIndex: 0,
+      }),
+    );
+
+    controller.commitNavigationHistory({
+      bfcacheIds: {},
+      href: "/c",
+      historyUpdateMode: "push",
+      previousNextUrl: null,
+      stageClientParams: vi.fn(),
+    });
+
+    expect(controller.currentHistoryTraversalIndex).toBe(1);
+    expect(controller.hasRestorableSnapshotAtIndex(1, () => true)).toBe(false);
   });
 });
 
