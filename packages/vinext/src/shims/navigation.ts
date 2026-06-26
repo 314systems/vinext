@@ -18,10 +18,7 @@ import {
 } from "../client/navigation-runtime.js";
 import { notifyAppRouterTransitionStart } from "../client/instrumentation-client-state.js";
 import { resolveAppRoutePrefetchPolicy } from "../client/app-route-prefetch-policy.js";
-import {
-  APP_RSC_RENDER_MODE_PREFETCH_INSTANT_SHELL,
-  APP_RSC_RENDER_MODE_PREFETCH_SUSPENSE_SHELL,
-} from "../server/app-rsc-render-mode.js";
+import { APP_RSC_RENDER_MODE_PREFETCH_INSTANT_SHELL } from "../server/app-rsc-render-mode.js";
 import {
   clearAppNavigationFailureTarget,
   stageAppNavigationFailureTarget,
@@ -1931,16 +1928,11 @@ const _appRouter: AppRouterInstance = {
         href: fullHref,
         routes: window.__VINEXT_LINK_PREFETCH_ROUTES__,
       });
-      const cacheForNavigation = prefetchPolicy.shouldPrefetch
-        ? prefetchPolicy.cacheForNavigation
-        : true;
       const headers = createRscRequestHeaders({
         interceptionContext,
         renderMode: prefetchPolicy.prefetchInstantShell
           ? APP_RSC_RENDER_MODE_PREFETCH_INSTANT_SHELL
-          : prefetchPolicy.prefetchSuspenseShell
-            ? APP_RSC_RENDER_MODE_PREFETCH_SUSPENSE_SHELL
-            : undefined,
+          : undefined,
       });
       if (mountedSlotsHeader) {
         headers.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
@@ -1964,7 +1956,7 @@ const _appRouter: AppRouterInstance = {
         mountedSlotsHeader,
         options,
         {
-          cacheForNavigation,
+          cacheForNavigation: true,
           instantShell: prefetchPolicy.prefetchInstantShell,
         },
       );

@@ -576,6 +576,35 @@ describe("prefetch cache eviction", () => {
     });
   });
 
+  it("keeps ordinary router.prefetch responses available for navigation", async () => {
+    const fetch = vi.fn(() =>
+      Promise.resolve(new Response("flight", { headers: { "content-type": "text/x-component" } })),
+    );
+    (globalThis as any).fetch = fetch;
+    (globalThis as any).window.__VINEXT_LINK_PREFETCH_ROUTES__ = [
+      {
+        canPrefetchLoadingShell: true,
+        isDynamic: false,
+        patternParts: ["dashboard"],
+      },
+    ];
+    (globalThis as any).window[Symbol.for("vinext.navigationRuntime")] = {
+      bootstrap: { routeManifest: null, rsc: undefined },
+      functions: { navigate: vi.fn() },
+    };
+
+    appRouterInstance.prefetch("/dashboard");
+    await waitForPrefetchSetup(() => fetch.mock.calls.length > 0);
+    await waitForPrefetchSetup(() =>
+      [...getPrefetchCache().values()].some((entry) => entry.outcome === "cache-seeded"),
+    );
+
+    expect([...getPrefetchCache().values()][0]).toMatchObject({
+      cacheForNavigation: true,
+      instantShell: false,
+    });
+  });
+
   it("awaits an in-flight prefetch instead of missing the navigation cache", async () => {
     const rscUrl = "/dashboard.rsc";
     const deferred = createDeferredResponse();
