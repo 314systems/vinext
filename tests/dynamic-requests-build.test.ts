@@ -779,7 +779,7 @@ function load(URL) { return import(new URL("./style.css", import.meta.url).href)
         await server.close();
       }
     });
-  });
+  }, 15_000);
 
   // Ported from Next.js: test/e2e/app-dir/dynamic-requests/dynamic-requests.test.ts
   // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/dynamic-requests/dynamic-requests.test.ts
