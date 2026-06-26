@@ -3,6 +3,7 @@ import {
   isBenignAssetImportError,
   isSocketErrorBackstopInstalled,
   peerDisconnectCode,
+  shouldSkipSocketErrorBackstopInstall,
 } from "../packages/vinext/src/server/socket-error-backstop.js";
 
 describe("peerDisconnectCode", () => {
@@ -119,7 +120,7 @@ describe("installSocketErrorBackstop", () => {
   });
 
   it("does not treat NODE_ENV=test as a test-runner signal", () => {
-    expect(process.env.NODE_ENV).toBe("test");
-    expect(process.env.VITEST).toBe("true");
+    expect(shouldSkipSocketErrorBackstopInstall({ NODE_ENV: "test" })).toBe(false);
+    expect(shouldSkipSocketErrorBackstopInstall({ NODE_ENV: "test", VITEST: "true" })).toBe(true);
   });
 });

@@ -181,10 +181,14 @@ export function isSocketErrorBackstopInstalled(): boolean {
   );
 }
 
+export function shouldSkipSocketErrorBackstopInstall(env: NodeJS.ProcessEnv): boolean {
+  return env.VITEST === "true";
+}
+
 export function installSocketErrorBackstop(): void {
   const proc = process as typeof process & { [SOCKET_BACKSTOP_FLAG]?: true };
   if (proc[SOCKET_BACKSTOP_FLAG]) return;
-  if (process.env.VITEST === "true") return;
+  if (shouldSkipSocketErrorBackstopInstall(process.env)) return;
   proc[SOCKET_BACKSTOP_FLAG] = true;
 
   const debug = process.env.VINEXT_DEBUG_SOCKET_ERRORS === "1";

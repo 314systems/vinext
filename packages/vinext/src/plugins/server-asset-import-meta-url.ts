@@ -49,7 +49,7 @@ import fs from "node:fs";
 // with `${...}` interpolation are not handled here; Vite's upstream plugin
 // uses `import.meta.glob` for those, which is a client-only concern.
 const ASSET_IMPORT_META_URL_RE =
-  /\bnew\s+URL\s*\(\s*(['"])(\.\.?\/[^'"`]+)\1\s*,\s*import\.meta\.url\s*(?:,\s*)?\)/g;
+  /\bnew\s+URL\s*\(\s*(['"])(\.\.?\/[^'"`]+)\1\s*,\s*import\.meta\.url\s*(?:,\s*)?\)/;
 const VITE_IGNORE_RE = /\/\*\s*@vite-ignore\s*\*\//;
 
 // Placeholder that survives Vite's renderChunk pipeline (it does not start
@@ -63,17 +63,23 @@ const PLACEHOLDER_RE = new RegExp(`${PLACEHOLDER_PREFIX}([\\w$-]+)${PLACEHOLDER_
  * Create the `vinext:server-asset-import-meta-url` Vite plugin.
  *
  * Emits assets referenced via `new URL("./path", import.meta.url)` in
- * server environments and rewrites the URL to point at the emitted file
- * so the runtime can resolve it.
+ * server environments and rewrites the URL to point at the emitted file.
+ * The relative URL is directly usable by Node/self-hosted SSR. Bundled
+ * runtimes may apply their own `import.meta.url` transform; this plugin does
+ * not claim that a raw relative `new URL(..., import.meta.url)` is portable
+ * to runtimes such as workerd where `import.meta.url` is not a file URL.
+ *
+ * The more specific OG asset plugin runs first. If it declines an arbitrary
+ * user `fetch(new URL(...))`, this plugin deliberately handles the remaining
+ * `new URL(...)` as a normal server asset reference.
  */
 export function createServerAssetImportMetaUrlPlugin(): Plugin {
   return {
     name: "vinext:server-asset-import-meta-url",
     enforce: "pre",
     apply: "build",
-    // Run for all non-client environments (Pages Router SSR build, App
-    // Router ssr environment, RSC environment, Cloudflare worker
-    // environment). Vite's upstream plugin already covers `client`.
+    // Run for non-client build environments. Vite's upstream plugin already
+    // covers `client`; bundled runtimes may further rewrite import.meta.url.
     applyToEnvironment(environment) {
       return environment.config.consumer !== "client";
     },
@@ -88,7 +94,7 @@ export function createServerAssetImportMetaUrlPlugin(): Plugin {
         let result = "";
         let lastIndex = 0;
         let didReplace = false;
-        const re = new RegExp(ASSET_IMPORT_META_URL_RE);
+        const re = new RegExp(ASSET_IMPORT_META_URL_RE.source, "g");
         let match: RegExpExecArray | null;
 
         while ((match = re.exec(code))) {
