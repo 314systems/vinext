@@ -417,6 +417,30 @@ describe("App Router optimistic routing", () => {
     },
   );
 
+  it.each(["resolved_model", "resolved_module"])(
+    "suspends %s lazy children when initialization is still blocked",
+    (status) => {
+      const pending = new Promise<never>(() => {});
+      const suspendedLazy = {
+        $$typeof: Symbol.for("react.lazy"),
+        _init() {
+          throw pending;
+        },
+        _payload: { status },
+      };
+      const pageId = AppElementsWire.encodePageId("/instant", null);
+      const elements = {
+        [pageId]: createElement(Suspense, { fallback: "dynamic" }, suspendedLazy as never),
+      } as AppElements;
+
+      const sanitized = sanitizeInstantShellElements(elements);
+
+      expect(sanitized[pageId]).toMatchObject({
+        props: { children: { type: expect.any(Function) } },
+      });
+    },
+  );
+
   it.each([
     ["layout", AppElementsWire.encodeLayoutId("/")],
     ["parallel slot", AppElementsWire.encodeSlotId("modal", "/")],

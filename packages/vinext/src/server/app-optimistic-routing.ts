@@ -321,7 +321,14 @@ function sanitizeInstantShellValue(value: unknown): unknown {
       return createElement(OptimisticRouteSegment);
     }
     if (typeof initialize === "function") {
-      return sanitizeInstantShellValue(Reflect.apply(initialize, undefined, [payload]));
+      try {
+        return sanitizeInstantShellValue(Reflect.apply(initialize, undefined, [payload]));
+      } catch (error) {
+        if (error === payload || (isUnknownRecord(error) && typeof error.then === "function")) {
+          return createElement(OptimisticRouteSegment);
+        }
+        throw error;
+      }
     }
   }
 
