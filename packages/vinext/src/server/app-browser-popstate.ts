@@ -42,6 +42,18 @@ export function createNativeHashChangeHandler(options: {
   };
 }
 
+export function resolveCoalescedRetainedNavigation(
+  pendingNavigation: Promise<boolean>,
+  pendingHref: string,
+  requestedHref: string,
+): Promise<boolean> {
+  return pendingNavigation.then((handled) => pendingHref === requestedHref && handled);
+}
+
+export function shouldHandleSameRoutePopstate(hasPendingRetainedNavigation: boolean): boolean {
+  return !hasPendingRetainedNavigation;
+}
+
 function hasSavedScrollPosition(state: unknown): boolean {
   return Boolean(state && typeof state === "object" && "__vinext_scrollY" in state);
 }

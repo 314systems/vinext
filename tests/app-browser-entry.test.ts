@@ -34,7 +34,9 @@ import { createAppBrowserNavigationController } from "../packages/vinext/src/ser
 import {
   createNativeHashChangeHandler,
   createPopstateRestoreHandler,
+  resolveCoalescedRetainedNavigation,
   restoreSynchronousPopstateScrollPosition,
+  shouldHandleSameRoutePopstate,
 } from "../packages/vinext/src/server/app-browser-popstate.js";
 import {
   VINEXT_RSC_COMPATIBILITY_ID_HEADER,
@@ -5906,6 +5908,19 @@ describe("native hash history invalidation", () => {
     })();
 
     expect(invalidateRestorableHistory).not.toHaveBeenCalled();
+  });
+});
+
+describe("retained history lifecycle helpers", () => {
+  it("preserves a failed result for coalesced same-href navigation", async () => {
+    await expect(
+      resolveCoalescedRetainedNavigation(Promise.resolve(false), "/target", "/target"),
+    ).resolves.toBe(false);
+  });
+
+  it("settles pending retained traversals instead of taking the same-route fast path", () => {
+    expect(shouldHandleSameRoutePopstate(true)).toBe(false);
+    expect(shouldHandleSameRoutePopstate(false)).toBe(true);
   });
 });
 

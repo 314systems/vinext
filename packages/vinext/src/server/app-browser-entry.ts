@@ -124,7 +124,9 @@ import {
 import {
   createNativeHashChangeHandler,
   createPopstateRestoreHandler,
+  resolveCoalescedRetainedNavigation,
   restoreSynchronousPopstateScrollPosition,
+  shouldHandleSameRoutePopstate,
 } from "./app-browser-popstate.js";
 import {
   DevRecoveryBoundary,
@@ -2062,7 +2064,11 @@ function bootstrapHydration(
     navigateRestorableHistoryTarget: (href, scroll) => {
       const pendingNavigation = pendingRetainedHistoryNavigation;
       if (pendingNavigation !== null) {
-        return pendingNavigation.promise.then(() => pendingNavigation.href === href);
+        return resolveCoalescedRetainedNavigation(
+          pendingNavigation.promise,
+          pendingNavigation.href,
+          href,
+        );
       }
       const targetUrl = new URL(href, window.location.href);
       if (targetUrl.hash !== "") return null;
@@ -2178,7 +2184,10 @@ function bootstrapHydration(
     // Notify the transition start so observers still see the URL change, then
     // restore scroll directly and skip the RSC dispatch.
     const href = window.location.href;
-    if (isSameAppRoutePopstateTarget(href)) {
+    if (
+      shouldHandleSameRoutePopstate(pendingRetainedHistoryNavigation !== null) &&
+      isSameAppRoutePopstateTarget(href)
+    ) {
       notifyAppRouterTransitionStart(href, "traverse");
       historyController.commitTraversalIndexFromHistoryState(event.state);
       restorePopstateScrollPosition(event.state);
