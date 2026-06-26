@@ -32,6 +32,7 @@ import path from "node:path";
 import os from "node:os";
 import { resolveConfig, createBuilder, build as viteBuild, type ResolvedConfig } from "vite";
 import vinext from "../packages/vinext/src/index.js";
+import { _transformVeryDynamicRequests } from "../packages/vinext/src/plugins/ignore-dynamic-requests.js";
 import { createServerAssetImportMetaUrlPlugin } from "../packages/vinext/src/plugins/server-asset-import-meta-url.js";
 
 const ROOT_NODE_MODULES = path.resolve(import.meta.dirname, "../node_modules");
@@ -134,6 +135,21 @@ describe("SSR build emits CSS assets referenced by SSR chunks", () => {
       );
       expect(withTemplate?.code).toContain('new URL("data:text/css;base64,');
       expect(withTemplate?.code).not.toContain("import.meta.url");
+
+      const originalImport = `import(new URL("./style.css", import.meta.url).href);`;
+      expect(
+        _transformVeryDynamicRequests(originalImport, path.join(tmpDir, "route.js")),
+      ).toBeNull();
+      const composed = await transform.handler.call(
+        {
+          emitFile: () => {
+            throw new Error("Cloudflare assets must be inlined");
+          },
+        },
+        originalImport,
+        path.join(tmpDir, "route.js"),
+      );
+      expect(composed?.code).toContain('import(new URL("data:text/css;base64,');
 
       const nonCode = `
         // new URL("./style.css", import.meta.url)

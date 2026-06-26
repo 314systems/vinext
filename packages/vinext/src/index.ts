@@ -1189,15 +1189,18 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     // intentional: this transform only matches ESM `import.meta.url` syntax,
     // so CJS conversion cannot create additional eligible inputs.
     createOgInlineFetchAssetsPlugin(),
-    // Emit assets referenced via `new URL("./asset", import.meta.url)` in
-    // SSR/server environments before the dynamic-request guard sees imports
-    // such as `import(new URL("./style.css", import.meta.url).href)`. Keep this
-    // before `vinext:og-font-patch`: that plugin injects Node fallback URL
-    // references which `createOgAssetsPlugin` must retain and deduplicate.
-    createServerAssetImportMetaUrlPlugin(() => hasCloudflarePlugin),
     // Next.js ignores requests without any statically known path component
-    // during graph analysis and leaves a deterministic runtime failure.
+    // during graph analysis and leaves a deterministic runtime failure. Run
+    // this before the server asset transform so it sees the original anchored
+    // `new URL(..., import.meta.url)` expression rather than a rewritten data
+    // URL in Cloudflare builds.
     createIgnoreDynamicRequestsPlugin(() => nextConfig?.turbopackTranspilePackages ?? []),
+    // Emit assets referenced via `new URL("./asset", import.meta.url)` in
+    // SSR/server environments after the dynamic-request guard has preserved
+    // statically anchored imports. Keep this before `vinext:og-font-patch`:
+    // that plugin injects Node fallback URL references which
+    // `createOgAssetsPlugin` must retain and deduplicate.
+    createServerAssetImportMetaUrlPlugin(() => hasCloudflarePlugin),
     // Transform CJS require()/module.exports to ESM before other plugins
     // analyze imports (RSC directive scanning, shim resolution, etc.)
     commonjs(),
