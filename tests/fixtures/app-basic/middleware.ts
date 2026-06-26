@@ -292,7 +292,7 @@ export async function middleware(request: NextRequest, event: NextFetchEvent) {
   ) {
     r.headers.set(
       "content-security-policy",
-      "script-src 'nonce-vinext-test-nonce' 'strict-dynamic';",
+      "script-src 'nonce-vinext-test-nonce' 'strict-dynamic' 'unsafe-eval';",
     );
   }
   if (
@@ -329,7 +329,7 @@ export async function middleware(request: NextRequest, event: NextFetchEvent) {
   ) {
     r.headers.set(
       "content-security-policy",
-      "script-src 'nonce-vinext-test-nonce' 'strict-dynamic';",
+      "script-src 'nonce-vinext-test-nonce' 'strict-dynamic' 'unsafe-eval';",
     );
   }
   r.headers.set("x-mw-pathname", pathname);

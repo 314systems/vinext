@@ -27,7 +27,7 @@ test.describe("Next.js compat: CSP nonce (browser)", () => {
 
     expect(response?.status()).toBe(200);
     expect(response?.headers()["content-security-policy"]).toBe(
-      "script-src 'nonce-vinext-test-nonce' 'strict-dynamic';",
+      "script-src 'nonce-vinext-test-nonce' 'strict-dynamic' 'unsafe-eval';",
     );
 
     await waitForAppRouterHydration(page);
@@ -45,7 +45,7 @@ test.describe("Next.js compat: CSP nonce (browser)", () => {
 
     expect(response?.status()).toBe(200);
     expect(response?.headers()["content-security-policy"]).toBe(
-      "script-src 'nonce-vinext-test-nonce' 'strict-dynamic';",
+      "script-src 'nonce-vinext-test-nonce' 'strict-dynamic' 'unsafe-eval';",
     );
 
     await waitForAppRouterHydration(page);
@@ -73,7 +73,7 @@ test.describe("Next.js compat: CSP nonce (browser)", () => {
 
     expect(response?.status()).toBe(200);
     expect(response?.headers()["content-security-policy"]).toBe(
-      "script-src 'nonce-vinext-test-nonce' 'strict-dynamic';",
+      "script-src 'nonce-vinext-test-nonce' 'strict-dynamic' 'unsafe-eval';",
     );
 
     await waitForAppRouterHydration(page);
