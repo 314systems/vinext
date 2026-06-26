@@ -73,7 +73,7 @@ import {
   clearHardNavigationLoopGuard,
   createAppBrowserNavigationController,
   createBasePathStrippedPathAndSearch,
-  isSnapshotTargetHref,
+  isSnapshotExactTargetHref,
   createSnapshotPathAndSearch,
   type HistoryUpdateMode,
   type NavigationPayloadOutcome,
@@ -2052,7 +2052,7 @@ function bootstrapHydration(
       return (
         currentHistoryIndex !== null &&
         historyController.hasRestorableSnapshotAtIndex(currentHistoryIndex + 1, (state) =>
-          isSnapshotTargetHref(__basePath, state.navigationSnapshot, href),
+          isSnapshotExactTargetHref(__basePath, state.navigationSnapshot, href),
         )
       );
     },
@@ -2068,7 +2068,7 @@ function bootstrapHydration(
       if (
         currentHistoryIndex === null ||
         !historyController.hasRestorableSnapshotAtIndex(currentHistoryIndex + 1, (state) =>
-          isSnapshotTargetHref(__basePath, state.navigationSnapshot, href),
+          isSnapshotExactTargetHref(__basePath, state.navigationSnapshot, href),
         )
       ) {
         return null;

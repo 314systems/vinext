@@ -6,6 +6,7 @@ import {
 } from "../packages/vinext/src/server/app-browser-history-controller.js";
 import {
   createBasePathStrippedPathAndSearch,
+  isSnapshotExactTargetHref,
   createSnapshotPathAndSearch,
 } from "../packages/vinext/src/server/app-browser-navigation-controller.js";
 import {
@@ -428,5 +429,16 @@ describe("history snapshot target normalization shared with same-route popstate 
 
     expect(plannerCurrentUrl.searchParams.toString()).toBe(snapshot.searchParams.toString());
     expect([...plannerCurrentUrl.searchParams]).toEqual([...snapshot.searchParams]);
+  });
+
+  it("requires an exact fragment match for retained history reuse", () => {
+    const snapshot = createClientNavigationRenderSnapshot(
+      "https://example.com/target#section",
+      {},
+    );
+
+    expect(isSnapshotExactTargetHref("/docs", snapshot, "/docs/target#section")).toBe(true);
+    expect(isSnapshotExactTargetHref("/docs", snapshot, "/docs/target")).toBe(false);
+    expect(isSnapshotExactTargetHref("/docs", snapshot, "/docs/target#other")).toBe(false);
   });
 });

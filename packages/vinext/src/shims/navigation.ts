@@ -1126,6 +1126,7 @@ const _EMPTY_PARAMS: Record<string, string | string[]> = {};
 // ---------------------------------------------------------------------------
 
 export type ClientNavigationRenderSnapshot = {
+  hash: string;
   pathname: string;
   searchParams: ReadonlyURLSearchParams;
   params: Record<string, string | string[]>;
@@ -1169,6 +1170,7 @@ export function createClientNavigationRenderSnapshot(
   const url = new URL(href, origin);
 
   return {
+    hash: url.hash,
     pathname: stripBasePath(url.pathname, __basePath),
     searchParams: new ReadonlyURLSearchParams(url.search),
     params,
