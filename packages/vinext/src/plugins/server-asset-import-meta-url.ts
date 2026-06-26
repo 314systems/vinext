@@ -28,6 +28,8 @@
  *     referenced asset via `this.emitFile`, then rewrite the original
  *     `new URL("./X", import.meta.url)` to use a vinext-internal
  *     placeholder containing the reference id.
+ *   - Cloudflare builds instead inline the asset as a `data:` URL because
+ *     workerd exposes `import.meta.url` as the non-URL string `"worker"`.
  *   - In `renderChunk` we resolve the placeholder to a relative URL from
  *     the host chunk to the emitted asset (e.g. `./_next/static/<hash>.css`).
  *     A relative URL is required because in SSR/server builds Vite's
@@ -59,27 +61,58 @@ const PLACEHOLDER_PREFIX = "__VINEXT_SERVER_ASSET__";
 const PLACEHOLDER_SUFFIX = "__";
 const PLACEHOLDER_RE = new RegExp(`${PLACEHOLDER_PREFIX}([\\w$-]+)${PLACEHOLDER_SUFFIX}`, "g");
 
+const ASSET_MIME_TYPES: Readonly<Record<string, string>> = {
+  ".css": "text/css",
+  ".csv": "text/csv",
+  ".gif": "image/gif",
+  ".html": "text/html",
+  ".ico": "image/x-icon",
+  ".jpeg": "image/jpeg",
+  ".jpg": "image/jpeg",
+  ".json": "application/json",
+  ".md": "text/markdown",
+  ".otf": "font/otf",
+  ".pdf": "application/pdf",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".ttf": "font/ttf",
+  ".txt": "text/plain",
+  ".wasm": "application/wasm",
+  ".webp": "image/webp",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".xml": "application/xml",
+};
+
+function assetDataUrl(file: string, buffer: Buffer): string {
+  const mimeType = ASSET_MIME_TYPES[path.extname(file).toLowerCase()] ?? "application/octet-stream";
+  return `data:${mimeType};base64,${buffer.toString("base64")}`;
+}
+
 /**
  * Create the `vinext:server-asset-import-meta-url` Vite plugin.
  *
  * Emits assets referenced via `new URL("./path", import.meta.url)` in
  * server environments and rewrites the URL to point at the emitted file.
- * The relative URL is directly usable by Node/self-hosted SSR. Bundled
- * runtimes may apply their own `import.meta.url` transform; this plugin does
- * not claim that a raw relative `new URL(..., import.meta.url)` is portable
- * to runtimes such as workerd where `import.meta.url` is not a file URL.
+ * Node/self-hosted SSR uses an emitted file with a chunk-relative URL.
+ * Cloudflare builds use an inline `data:` URL so the result remains valid in
+ * workerd, where `import.meta.url` is not a file URL.
  *
  * The more specific OG asset plugin runs first. If it declines an arbitrary
  * user `fetch(new URL(...))`, this plugin deliberately handles the remaining
  * `new URL(...)` as a normal server asset reference.
  */
-export function createServerAssetImportMetaUrlPlugin(): Plugin {
+export function createServerAssetImportMetaUrlPlugin(
+  isCloudflareBuild: () => boolean = () => false,
+): Plugin {
   return {
     name: "vinext:server-asset-import-meta-url",
     enforce: "pre",
     apply: "build",
     // Run for non-client build environments. Vite's upstream plugin already
-    // covers `client`; bundled runtimes may further rewrite import.meta.url.
+    // covers `client`. The caller supplies vinext's already-resolved
+    // Cloudflare plugin detection so transform() can select a workerd-safe
+    // data URL instead of a Node filesystem-relative URL.
     applyToEnvironment(environment) {
       return environment.config.consumer !== "client";
     },
@@ -122,15 +155,22 @@ export function createServerAssetImportMetaUrlPlugin(): Plugin {
             continue;
           }
 
+          if (matchStart > lastIndex) {
+            result += code.slice(lastIndex, matchStart);
+          }
+          if (isCloudflareBuild()) {
+            result += `new URL(${JSON.stringify(assetDataUrl(file, buffer))})`;
+            lastIndex = matchEnd;
+            didReplace = true;
+            continue;
+          }
+
           const referenceId = this.emitFile({
             type: "asset",
             name: path.basename(file),
             source: buffer,
           });
 
-          if (matchStart > lastIndex) {
-            result += code.slice(lastIndex, matchStart);
-          }
           // Replace the entire `new URL("./X", import.meta.url)` expression
           // with a plugin-private placeholder wrapped in `new URL(...,
           // import.meta.url)`. The placeholder is resolved in renderChunk

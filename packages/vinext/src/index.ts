@@ -1192,7 +1192,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     // Emit assets referenced via `new URL("./asset", import.meta.url)` in
     // SSR/server environments before the dynamic-request guard sees imports
     // such as `import(new URL("./style.css", import.meta.url).href)`.
-    createServerAssetImportMetaUrlPlugin(),
+    createServerAssetImportMetaUrlPlugin(() => hasCloudflarePlugin),
     // Next.js ignores requests without any statically known path component
     // during graph analysis and leaves a deterministic runtime failure.
     createIgnoreDynamicRequestsPlugin(() => nextConfig?.turbopackTranspilePackages ?? []),

@@ -119,8 +119,14 @@ describe("installSocketErrorBackstop", () => {
     expect(isSocketErrorBackstopInstalled()).toBe(false);
   });
 
-  it("does not treat NODE_ENV=test as a test-runner signal", () => {
-    expect(shouldSkipSocketErrorBackstopInstall({ NODE_ENV: "test" })).toBe(false);
+  it("only opts NODE_ENV=test production servers in explicitly", () => {
+    expect(shouldSkipSocketErrorBackstopInstall({ NODE_ENV: "test" })).toBe(true);
+    expect(
+      shouldSkipSocketErrorBackstopInstall({
+        NODE_ENV: "test",
+        VINEXT_NEXT_DEPLOY_TEST: "1",
+      }),
+    ).toBe(false);
     expect(shouldSkipSocketErrorBackstopInstall({ NODE_ENV: "test", VITEST: "true" })).toBe(true);
   });
 });
