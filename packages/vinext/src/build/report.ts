@@ -157,6 +157,38 @@ export function hasTruthyNamedExport(code: string, name: string): boolean {
   return Boolean(expression.value);
 }
 
+export function hasNamedExportObjectStringProperty(
+  code: string,
+  name: string,
+  property: string,
+  expectedValue: string,
+): boolean {
+  const program = parseRouteModule(code);
+  if (!program) return false;
+
+  const localName = findExportedLocalNameInProgram(program, name);
+  if (localName === null) return false;
+  const initializer =
+    findExportedConstInitializerInProgram(program, name) ??
+    findLocalConstInitializerInProgram(program, localName);
+  if (initializer === null) return false;
+
+  const expression = unwrapStaticExpression(initializer);
+  if (expression.type !== "ObjectExpression") return false;
+  for (const candidate of expression.properties) {
+    if (
+      candidate.type !== "Property" ||
+      candidate.computed ||
+      propertyName(candidate.key) !== property
+    ) {
+      continue;
+    }
+    const value = unwrapStaticExpression(candidate.value);
+    return value.type === "Literal" && value.value === expectedValue;
+  }
+  return false;
+}
+
 function findExportedLocalNameInProgram(program: Program, name: string): string | null {
   for (const node of program.body) {
     if (node.type !== "ExportNamedDeclaration") continue;

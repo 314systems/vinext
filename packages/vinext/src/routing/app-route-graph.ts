@@ -12,7 +12,7 @@ import { findFileWithExts, scanWithExtensions, type ValidFileMatcher } from "./f
 import { validateRoutePatterns } from "./route-validation.js";
 import { compareStrings } from "../utils/compare.js";
 import { normalizePathSeparators } from "../utils/path.js";
-import { hasTruthyNamedExport } from "../build/report.js";
+import { hasNamedExportObjectStringProperty } from "../build/report.js";
 
 type InterceptingRoute = {
   /** The interception convention: "." | ".." | "../.." | "..." */
@@ -199,7 +199,12 @@ export type AppRoute = {
 function routeModuleHasInstant(filePath: string | null): boolean {
   if (filePath === null) return false;
   try {
-    return hasTruthyNamedExport(fs.readFileSync(filePath, "utf8"), "unstable_instant");
+    return hasNamedExportObjectStringProperty(
+      fs.readFileSync(filePath, "utf8"),
+      "unstable_instant",
+      "prefetch",
+      "runtime",
+    );
   } catch {
     return false;
   }

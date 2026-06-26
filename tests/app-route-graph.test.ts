@@ -119,12 +119,18 @@ describe("App Router route graph builder", () => {
         "export const unstable_instant = { prefetch: 'runtime' }; export default function Layout() {}",
       );
       await writeAppFile(appDir, "layout-instant/page.tsx", EMPTY_PAGE);
+      await writeAppFile(
+        appDir,
+        "static-instant/page.tsx",
+        "export const unstable_instant = { prefetch: 'static' }; export default function Page() {}",
+      );
       await writeAppFile(appDir, "plain/page.tsx", EMPTY_PAGE);
 
       const graph = await buildAppRouteGraph(appDir, createValidFileMatcher());
 
       expect(findRoute(graph.routes, "/page-instant").hasInstant).toBe(true);
       expect(findRoute(graph.routes, "/layout-instant").hasInstant).toBe(true);
+      expect(findRoute(graph.routes, "/static-instant").hasInstant).toBe(false);
       expect(findRoute(graph.routes, "/plain").hasInstant).toBe(false);
     });
   });

@@ -11,6 +11,7 @@ import os from "node:os";
 import fs from "node:fs/promises";
 import {
   hasNamedExport,
+  hasNamedExportObjectStringProperty,
   hasTruthyNamedExport,
   extractExportConstString,
   extractExportConstNumber,
@@ -162,6 +163,52 @@ describe("hasTruthyNamedExport", () => {
     expect(
       hasTruthyNamedExport("export { unstable_instant } from './config';", "unstable_instant"),
     ).toBe(true);
+  });
+});
+
+describe("hasNamedExportObjectStringProperty", () => {
+  it("matches runtime instant configuration", () => {
+    expect(
+      hasNamedExportObjectStringProperty(
+        "export const unstable_instant = { prefetch: 'runtime', samples: [] };",
+        "unstable_instant",
+        "prefetch",
+        "runtime",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match static instant configuration", () => {
+    expect(
+      hasNamedExportObjectStringProperty(
+        "export const unstable_instant = { prefetch: 'static', samples: [] };",
+        "unstable_instant",
+        "prefetch",
+        "runtime",
+      ),
+    ).toBe(false);
+  });
+
+  it("matches aliased local configuration", () => {
+    expect(
+      hasNamedExportObjectStringProperty(
+        "const config = { prefetch: 'runtime' }; export { config as unstable_instant };",
+        "unstable_instant",
+        "prefetch",
+        "runtime",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not guess external re-export values", () => {
+    expect(
+      hasNamedExportObjectStringProperty(
+        "export { config as unstable_instant } from './config';",
+        "unstable_instant",
+        "prefetch",
+        "runtime",
+      ),
+    ).toBe(false);
   });
 });
 
