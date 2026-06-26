@@ -17,6 +17,11 @@ import {
   type NavigationRuntimeVisibleCommitMode,
 } from "../client/navigation-runtime.js";
 import { notifyAppRouterTransitionStart } from "../client/instrumentation-client-state.js";
+import { resolveAppRoutePrefetchPolicy } from "../client/app-route-prefetch-policy.js";
+import {
+  APP_RSC_RENDER_MODE_PREFETCH_INSTANT_SHELL,
+  APP_RSC_RENDER_MODE_PREFETCH_SUSPENSE_SHELL,
+} from "../server/app-rsc-render-mode.js";
 import {
   clearAppNavigationFailureTarget,
   stageAppNavigationFailureTarget,
@@ -1920,7 +1925,23 @@ const _appRouter: AppRouterInstance = {
       const fullHref = toBrowserNavigationHref(prefetchHref, window.location.href, __basePath);
       const interceptionContext = getPrefetchInterceptionContext(fullHref);
       const mountedSlotsHeader = getMountedSlotsHeader();
-      const headers = createRscRequestHeaders({ interceptionContext });
+      const prefetchPolicy = resolveAppRoutePrefetchPolicy({
+        basePath: __basePath,
+        currentHref: window.location.href,
+        href: fullHref,
+        routes: window.__VINEXT_LINK_PREFETCH_ROUTES__,
+      });
+      const cacheForNavigation = prefetchPolicy.shouldPrefetch
+        ? prefetchPolicy.cacheForNavigation
+        : true;
+      const headers = createRscRequestHeaders({
+        interceptionContext,
+        renderMode: prefetchPolicy.prefetchInstantShell
+          ? APP_RSC_RENDER_MODE_PREFETCH_INSTANT_SHELL
+          : prefetchPolicy.prefetchSuspenseShell
+            ? APP_RSC_RENDER_MODE_PREFETCH_SUSPENSE_SHELL
+            : undefined,
+      });
       if (mountedSlotsHeader) {
         headers.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
       }
@@ -1942,6 +1963,10 @@ const _appRouter: AppRouterInstance = {
         interceptionContext,
         mountedSlotsHeader,
         options,
+        {
+          cacheForNavigation,
+          instantShell: prefetchPolicy.prefetchInstantShell,
+        },
       );
     })().catch((error) => {
       console.error("[vinext] RSC prefetch setup error:", error);

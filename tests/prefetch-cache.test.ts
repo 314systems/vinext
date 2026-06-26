@@ -535,6 +535,47 @@ describe("prefetch cache eviction", () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
+  it("uses instant-shell policy for router.prefetch on runtime instant routes", async () => {
+    let fetchedHeaders: Headers | undefined;
+    const fetch = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      fetchedHeaders = new Headers(init?.headers);
+      return Promise.resolve(
+        new Response("instant shell", {
+          headers: {
+            "content-type": "text/x-component",
+            [VINEXT_RSC_PARTIAL_SHELL_HEADER]: "1",
+          },
+        }),
+      );
+    });
+    (globalThis as any).fetch = fetch;
+    (globalThis as any).window.__VINEXT_LINK_PREFETCH_ROUTES__ = [
+      {
+        canPrefetchLoadingShell: false,
+        hasInstant: true,
+        isDynamic: false,
+        patternParts: ["instant"],
+      },
+    ];
+    (globalThis as any).window[Symbol.for("vinext.navigationRuntime")] = {
+      bootstrap: { routeManifest: null, rsc: undefined },
+      functions: { navigate: vi.fn() },
+    };
+
+    appRouterInstance.prefetch("/instant");
+    await waitForPrefetchSetup(() => fetch.mock.calls.length > 0);
+
+    expect(fetchedHeaders?.get("x-vinext-rsc-render-mode")).toBe("prefetch-instant-shell");
+    await waitForPrefetchSetup(() =>
+      [...getPrefetchCache().values()].some((entry) => entry.outcome === "cache-seeded"),
+    );
+    expect([...getPrefetchCache().values()][0]).toMatchObject({
+      cacheForNavigation: false,
+      instantShell: true,
+      partialSuspenseShell: true,
+    });
+  });
+
   it("awaits an in-flight prefetch instead of missing the navigation cache", async () => {
     const rscUrl = "/dashboard.rsc";
     const deferred = createDeferredResponse();

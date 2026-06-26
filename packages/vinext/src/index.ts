@@ -3573,6 +3573,7 @@ export const loadServerActionClient = ${
             routeChanged = true;
           }
           if (hasAppDir && shouldInvalidateAppRouteFile(appDir, filePath, fileMatcher)) {
+            instantConfigByFile.set(filePath, routeModuleHasInstant(filePath));
             invalidateAppRoutingModules();
             regenerateAppRouteTypes();
             routeChanged = true;
@@ -3590,6 +3591,7 @@ export const loadServerActionClient = ${
             routeChanged = true;
           }
           if (hasAppDir && shouldInvalidateAppRouteFile(appDir, filePath, fileMatcher)) {
+            instantConfigByFile.delete(filePath);
             invalidateAppRoutingModules();
             regenerateAppRouteTypes();
             routeChanged = true;
