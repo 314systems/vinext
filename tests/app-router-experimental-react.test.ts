@@ -117,7 +117,7 @@ describe("App Router experimental React channel", () => {
         ssr: { external },
         logLevel: "silent",
       }),
-    ).rejects.toThrow("Externalizing React through `ssr.external` is incompatible");
+    ).rejects.toThrow("Externalizing React through `ssr.external` or `serverExternalPackages`");
   }
 
   it("rejects ssr.external true because it bypasses experimental React", async () => {
