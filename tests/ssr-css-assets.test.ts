@@ -106,6 +106,18 @@ describe("SSR build emits CSS assets referenced by SSR chunks", () => {
       expect(withComment?.code).toContain('new URL("data:text/css;base64,');
       expect(withComment?.code).not.toContain("import.meta.url");
 
+      const withSuffix = await transform.handler.call(
+        {
+          emitFile: () => {
+            throw new Error("Cloudflare assets must be inlined");
+          },
+        },
+        `const asset = new URL("./style.css?v=1#theme", import.meta.url);`,
+        path.join(tmpDir, "route.js"),
+      );
+      expect(withSuffix?.code).toContain('new URL("data:text/css;base64,');
+      expect(withSuffix?.code).toContain('?v=1#theme")');
+
       const nonCode = `
         // new URL("./style.css", import.meta.url)
         const example = 'new URL("./style.css", import.meta.url)'
@@ -138,6 +150,41 @@ describe("SSR build emits CSS assets referenced by SSR chunks", () => {
           path.join(tmpDir, "route.js"),
         ),
       ).toBeNull();
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves query strings and fragments on emitted Node asset URLs", async () => {
+    const plugin = createServerAssetImportMetaUrlPlugin();
+    const transform = plugin.transform as unknown as {
+      handler: (
+        this: { emitFile(): string },
+        code: string,
+        id: string,
+      ) => Promise<{ code: string } | null>;
+    };
+    const renderChunk = plugin.renderChunk as unknown as (
+      this: { getFileName(): string },
+      code: string,
+      chunk: { fileName: string },
+    ) => Promise<{ code: string } | null> | { code: string } | null;
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-node-url-dep-"));
+    try {
+      await fs.writeFile(path.join(tmpDir, "style.css"), ".foo { color: red; }\n");
+      const transformed = await transform.handler.call(
+        { emitFile: () => "asset-ref" },
+        `const asset = new URL("./style.css?v=1#theme", import.meta.url);`,
+        path.join(tmpDir, "route.js"),
+      );
+      expect(transformed?.code).toContain("__VINEXT_SERVER_ASSET__asset-ref__?v=1#theme");
+
+      const rendered = await renderChunk.call(
+        { getFileName: () => "_next/static/style-hash.css" },
+        transformed!.code,
+        { fileName: "entry.js" },
+      );
+      expect(rendered?.code).toContain("./_next/static/style-hash.css?v=1#theme");
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }

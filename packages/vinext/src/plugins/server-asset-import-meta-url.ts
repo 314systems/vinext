@@ -108,8 +108,18 @@ function assetDataUrl(file: string, buffer: Buffer): string {
 
 type AssetUrlExpression = {
   node: AstRange;
-  url: string;
+  pathname: string;
+  suffix: string;
 };
+
+function splitAssetUrl(url: string): { pathname: string; suffix: string } {
+  const queryIndex = url.indexOf("?");
+  const hashIndex = url.indexOf("#");
+  const suffixIndex =
+    queryIndex === -1 ? hashIndex : hashIndex === -1 ? queryIndex : Math.min(queryIndex, hashIndex);
+  if (suffixIndex === -1) return { pathname: url, suffix: "" };
+  return { pathname: url.slice(0, suffixIndex), suffix: url.slice(suffixIndex) };
+}
 
 function parserLanguage(id: string): "js" | "jsx" | "ts" | "tsx" {
   const extension = path.extname(id.split("?", 1)[0]).toLowerCase();
@@ -244,7 +254,7 @@ function collectAssetUrlExpressions(code: string, id: string): AssetUrlExpressio
         hasRange(firstArgument) &&
         !VITE_IGNORE_RE.test(code.slice(node.start, firstArgument.start))
       ) {
-        expressions.push({ node, url });
+        expressions.push({ node, ...splitAssetUrl(url) });
       }
     }
     forEachAstChild(node, (child) => visit(child, scope));
@@ -293,8 +303,8 @@ export function createServerAssetImportMetaUrlPlugin(
         const output = new MagicString(code);
         let didReplace = false;
 
-        for (const { node, url } of collectAssetUrlExpressions(code, id)) {
-          const file = path.resolve(moduleDir, url);
+        for (const { node, pathname, suffix } of collectAssetUrlExpressions(code, id)) {
+          const file = path.resolve(moduleDir, pathname);
           let buffer: Buffer;
           try {
             buffer = await fs.promises.readFile(file);
@@ -309,7 +319,7 @@ export function createServerAssetImportMetaUrlPlugin(
             output.overwrite(
               node.start,
               node.end,
-              `new URL(${JSON.stringify(assetDataUrl(file, buffer))})`,
+              `new URL(${JSON.stringify(`${assetDataUrl(file, buffer)}${suffix}`)})`,
             );
             didReplace = true;
             continue;
@@ -330,7 +340,7 @@ export function createServerAssetImportMetaUrlPlugin(
             node.start,
             node.end,
             `new URL(${JSON.stringify(
-              `${PLACEHOLDER_PREFIX}${referenceId}${PLACEHOLDER_SUFFIX}`,
+              `${PLACEHOLDER_PREFIX}${referenceId}${PLACEHOLDER_SUFFIX}${suffix}`,
             )}, import.meta.url)`,
           );
           didReplace = true;
