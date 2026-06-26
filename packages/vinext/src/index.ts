@@ -1183,6 +1183,14 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     ...(viteMajorVersion >= 8 ? [] : [loadVite7TsconfigPathsPlugin(earlyBaseDir)]),
     // React Fast Refresh + JSX transform for client components.
     reactPluginPromise,
+    // Inline binary assets fetched via `fetch(new URL("./asset", import.meta.url))` —
+    // see src/plugins/og-assets.ts. This must run before the more general
+    // server asset URL transform below.
+    createOgInlineFetchAssetsPlugin(),
+    // Emit assets referenced via `new URL("./asset", import.meta.url)` in
+    // SSR/server environments before the dynamic-request guard sees imports
+    // such as `import(new URL("./style.css", import.meta.url).href)`.
+    createServerAssetImportMetaUrlPlugin(),
     // Next.js ignores requests without any statically known path component
     // during graph analysis and leaves a deterministic runtime failure.
     createIgnoreDynamicRequestsPlugin(() => nextConfig?.turbopackTranspilePackages ?? []),
@@ -5105,23 +5113,6 @@ export const loadServerActionClient = ${
     // Expand Webpack's build-time `require.context(...)` into a static module
     // map backed by `import.meta.glob` — see src/plugins/require-context.ts
     createRequireContextPlugin(),
-    // Inline binary assets fetched via `fetch(new URL("./asset", import.meta.url))` —
-    // see src/plugins/og-assets.ts
-    createOgInlineFetchAssetsPlugin(),
-    // Emit assets referenced via `new URL("./asset", import.meta.url)` in
-    // SSR/server environments. Vite's built-in asset-import-meta-url plugin
-    // only runs in the client environment, so server-side URL dependencies
-    // (e.g. edge API routes with `import(new URL('./style.css', ...))`) are
-    // left untransformed and reference files that never get emitted. See
-    // src/plugins/server-asset-import-meta-url.ts and #1346.
-    //
-    // MUST run AFTER `vinext:og-inline-fetch-assets`: that plugin matches
-    // the `fetch(new URL(...))` pattern verbatim, and our regex would also
-    // match the inner `new URL(...)` and rewrite it to a placeholder before
-    // OG inlining gets a chance to inline @vercel/og fonts as base64 —
-    // silently breaking @vercel/og under Cloudflare Workers where
-    // `import.meta.url` is the literal string "worker".
-    createServerAssetImportMetaUrlPlugin(),
     // Dedupe/copy @vercel/og binary WASM assets in the RSC output — see src/plugins/og-assets.ts
     createOgAssetsPlugin(),
     // Collect SSR/RSC bundle externals and write dist/server/vinext-externals.json.

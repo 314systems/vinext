@@ -117,4 +117,9 @@ describe("installSocketErrorBackstop", () => {
     expect(process.env.VITEST).toBe("true");
     expect(isSocketErrorBackstopInstalled()).toBe(false);
   });
+
+  it("does not treat NODE_ENV=test as a test-runner signal", () => {
+    expect(process.env.NODE_ENV).toBe("test");
+    expect(process.env.VITEST).toBe("true");
+  });
 });

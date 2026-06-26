@@ -733,6 +733,23 @@ function withDeclaration(value = require(request)) {
     expect(transformed?.match(/Cannot find module as expression is too dynamic/g)).toHaveLength(2);
   });
 
+  it("preserves imports of statically anchored URL dependencies", () => {
+    expect(
+      _transformVeryDynamicRequests(
+        `import(new URL("./style.css", import.meta.url).href);`,
+        "/pages/api/asset.ts",
+      ),
+    ).toBeNull();
+
+    const transformed = _transformVeryDynamicRequests(
+      `import(new URL(request, import.meta.url).href);
+function load(URL) { return import(new URL("./style.css", import.meta.url).href); }`,
+      "/pages/api/asset.ts",
+    )?.code;
+
+    expect(transformed?.match(/Cannot find module as expression is too dynamic/g)).toHaveLength(2);
+  });
+
   it("serves guarded fully dynamic requests in pages and route handlers during development", async () => {
     await withTempDir(async (root) => {
       writeAppFixture(root);

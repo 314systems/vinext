@@ -57,9 +57,10 @@
  * **Test skip is install-time.** Vitest workers that import
  * `index.ts` directly should never have the listener installed —
  * peer-disconnect errors during test runs should surface normally.
- * `process.env.VITEST === "true"` is set by Vitest in every worker;
- * `NODE_ENV === "test"` covers other test runners that follow the
- * standard convention.
+ * `process.env.VITEST === "true"` is set by Vitest in every worker.
+ * Do not also gate on `NODE_ENV === "test"`: Next.js deploy-mode E2Es
+ * launch a real production server with that value, and its module-load
+ * side effects still need the production backstop.
  *
  * **Listener ordering.** `index.ts` is imported synchronously at the
  * top of every user's `vite.config.ts`, so vinext's listener registers
@@ -183,7 +184,7 @@ export function isSocketErrorBackstopInstalled(): boolean {
 export function installSocketErrorBackstop(): void {
   const proc = process as typeof process & { [SOCKET_BACKSTOP_FLAG]?: true };
   if (proc[SOCKET_BACKSTOP_FLAG]) return;
-  if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") return;
+  if (process.env.VITEST === "true") return;
   proc[SOCKET_BACKSTOP_FLAG] = true;
 
   const debug = process.env.VINEXT_DEBUG_SOCKET_ERRORS === "1";

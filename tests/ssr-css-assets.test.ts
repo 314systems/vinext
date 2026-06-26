@@ -253,12 +253,13 @@ describe("SSR build emits CSS assets referenced by SSR chunks", () => {
       // the emitted asset path under `_next/static/`. Match either the
       // relative or implicit-current-directory form.
       const urlMatch = entryCode.match(
-        /new URL\(["'](\.\/[^"']*_next\/static\/[^"']*\.css)["']\s*,\s*import\.meta\.url/,
+        /new URL\(["'`](\.\/[^"'`]*_next\/static\/[^"'`]*\.css)["'`]\s*,\s*import\.meta\.url/,
       );
+      const testUrlIndex = entryCode.indexOf("TEST_URL");
       expect(
         urlMatch,
-        `expected rewritten relative URL to an emitted CSS asset; entry begins:\n` +
-          entryCode.slice(0, 500),
+        `expected rewritten relative URL to an emitted CSS asset; URL dependency chunk:\n` +
+          entryCode.slice(Math.max(0, testUrlIndex - 300), testUrlIndex + 700),
       ).not.toBeNull();
 
       const emittedRelPath = urlMatch![1]!;
