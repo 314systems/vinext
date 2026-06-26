@@ -111,6 +111,27 @@ describe("server entry import URL resolution", () => {
     expect(thirdImportUrl).toBe(secondBuildUrl);
   });
 
+  it("reuses the bare entry after prerender injects concrete paths", () => {
+    const dir = makeTmpDir();
+    const entryPath = path.join(dir, "entry.mjs");
+    const originalCode = `export const state = { marker: "build-1" };\n`;
+
+    fs.writeFileSync(entryPath, originalCode);
+    const firstBuildUrl = resolveServerEntryImportUrl(entryPath);
+
+    fs.writeFileSync(
+      entryPath,
+      `/* __VINEXT_PREGENERATED_CONCRETE_PATHS_START__ */\n` +
+        `globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS = [["/blog/:slug",["/blog/post-a"]]];\n` +
+        `/* __VINEXT_PREGENERATED_CONCRETE_PATHS_END__ */\n` +
+        originalCode,
+    );
+    const bumped = new Date(Date.now() + 10_000);
+    fs.utimesSync(entryPath, bumped, bumped);
+
+    expect(resolveServerEntryImportUrl(entryPath)).toBe(firstBuildUrl);
+  });
+
   it("shares the module instance with chunks that import the entry by bare specifier", async () => {
     const dir = makeTmpDir();
     const entryPath = path.join(dir, "entry.mjs");

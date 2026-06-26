@@ -21,6 +21,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { Readable, pipeline } from "node:stream";
 import { pathToFileURL } from "node:url";
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import zlib from "node:zlib";
@@ -79,6 +80,7 @@ import {
   resolveRequestProtocol,
   resolveRequestHost as resolveHost,
 } from "./proxy-trust.js";
+import { stripPregeneratedConcretePathsInjection } from "./pregenerated-concrete-paths-injection.js";
 import {
   negotiateEncoding,
   parseAcceptedEncodings,
@@ -91,7 +93,12 @@ import {
  * build forever, so rebuilds to the same path must be detected and loaded
  * through a cache-busted URL instead.
  */
-const bareServerEntryMtimes = new Map<string, number>();
+const bareServerEntries = new Map<string, { mtime: number; fingerprint: string }>();
+
+function fingerprintServerEntry(entryPath: string): string {
+  const code = stripPregeneratedConcretePathsInjection(fs.readFileSync(entryPath, "utf-8"));
+  return createHash("sha256").update(code).digest("base64url");
+}
 
 /**
  * Import a built server entry module (App Router RSC entry or Pages Router
@@ -111,9 +118,13 @@ const bareServerEntryMtimes = new Map<string, number>();
  * https://github.com/cloudflare/vinext/issues/1923.
  *
  * A `?t=<mtime>` query string is appended only when the same path is
- * imported again after a rebuild (different mtime) — e.g. test suites that
- * rebuild a fixture to the same output path within one process — where the
- * bare URL's cache entry would return the stale previous build. Note this
+ * imported again after a rebuild with different executable code — e.g. test
+ * suites that rebuild a fixture to the same output path within one process —
+ * where the bare URL's cache entry would return the stale previous build.
+ * The post-prerender concrete-path prologue is ignored when fingerprinting:
+ * Node startup seeds the same data from the manifest, and re-importing the
+ * entry just for that prologue would instantiate a second React RSC renderer.
+ * Note this
  * rebuild branch trades the single-instance guarantee back: chunks that
  * import the entry by bare path still resolve to the FIRST build's cache
  * entry, so freshness and single-instance only hold together on the first
@@ -141,9 +152,16 @@ export function resolveServerEntryImportUrl(entryPath: string): string {
   }
   const href = pathToFileURL(canonicalEntryPath).href;
   const mtime = fs.statSync(canonicalEntryPath).mtimeMs;
-  const bareMtime = bareServerEntryMtimes.get(href);
-  if (bareMtime === undefined || bareMtime === mtime) {
-    bareServerEntryMtimes.set(href, mtime);
+  const bareEntry = bareServerEntries.get(href);
+  if (bareEntry === undefined) {
+    bareServerEntries.set(href, { mtime, fingerprint: fingerprintServerEntry(canonicalEntryPath) });
+    return href;
+  }
+  if (bareEntry.mtime === mtime) {
+    return href;
+  }
+  if (bareEntry.fingerprint === fingerprintServerEntry(canonicalEntryPath)) {
+    bareEntry.mtime = mtime;
     return href;
   }
   return `${href}?t=${mtime}`;
