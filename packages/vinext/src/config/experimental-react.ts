@@ -54,6 +54,7 @@ export function resolveExperimentalReactAliases(root: string): ExperimentalReact
     react: path.join(compiledDir, "react-experimental"),
     "react-dom": path.join(compiledDir, "react-dom-experimental"),
     "react-server-dom-webpack": path.join(compiledDir, "react-server-dom-webpack-experimental"),
+    scheduler: path.join(compiledDir, "scheduler-experimental"),
   };
 
   for (const [specifier, packageDir] of Object.entries(packages)) {
@@ -93,6 +94,14 @@ export function resolveExperimentalReactSpecifier(
         : ["workerd", "edge-light", "node", "default"];
   const target = selectPackageExport(packageExport, conditions);
   return target ? path.join(packageDir, target) : null;
+}
+
+export function resolveExperimentalReactDevelopmentEntry(entry: string): string {
+  const code = fs.readFileSync(entry, "utf8");
+  const developmentRequire = code.match(
+    /process\.env\.NODE_ENV\s*===\s*["']production["'][\s\S]*?else\s*\{\s*module\.exports\s*=\s*require\(["'](\.\/cjs\/[^"']+\.development\.js)["']\)/,
+  )?.[1];
+  return developmentRequire ? path.resolve(path.dirname(entry), developmentRequire) : entry;
 }
 
 export const EXPERIMENTAL_REACT_SPECIFIERS = [
@@ -158,6 +167,10 @@ export function createExperimentalReactEnvironmentAliases(
         "react-server-dom-webpack",
         environment,
       ),
+    },
+    {
+      find: /^next\/dist\/compiled\/scheduler-experimental$/,
+      replacement: path.join(packages.scheduler, "index.js"),
     },
   ];
 }

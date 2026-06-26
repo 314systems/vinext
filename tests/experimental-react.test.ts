@@ -7,6 +7,7 @@ import {
   createExperimentalReactEsbuildPlugin,
   needsExperimentalReact,
   resolveExperimentalReactAliases,
+  resolveExperimentalReactDevelopmentEntry,
   resolveExperimentalReactSpecifier,
 } from "../packages/vinext/src/config/experimental-react.js";
 
@@ -41,6 +42,7 @@ describe("experimental React channel", () => {
       "react-experimental",
       "react-dom-experimental",
       "react-server-dom-webpack-experimental",
+      "scheduler-experimental",
     ]) {
       const packageDir = path.join(nextDir, "dist", "compiled", packageName);
       fs.mkdirSync(packageDir, { recursive: true });
@@ -58,6 +60,7 @@ describe("experimental React channel", () => {
         "compiled",
         "react-server-dom-webpack-experimental",
       ),
+      scheduler: path.join(canonicalNextDir, "dist", "compiled", "scheduler-experimental"),
     });
   });
 
@@ -77,9 +80,11 @@ describe("experimental React channel", () => {
     const reactDir = path.join(root, "react-experimental");
     const reactDomDir = path.join(root, "react-dom-experimental");
     const reactServerDomDir = path.join(root, "react-server-dom-webpack-experimental");
+    const schedulerDir = path.join(root, "scheduler-experimental");
     fs.mkdirSync(reactDir, { recursive: true });
     fs.mkdirSync(reactDomDir, { recursive: true });
     fs.mkdirSync(reactServerDomDir, { recursive: true });
+    fs.mkdirSync(schedulerDir, { recursive: true });
     fs.writeFileSync(
       path.join(reactDir, "package.json"),
       JSON.stringify({
@@ -106,6 +111,7 @@ describe("experimental React channel", () => {
       react: reactDir,
       "react-dom": reactDomDir,
       "react-server-dom-webpack": reactServerDomDir,
+      scheduler: schedulerDir,
     };
 
     expect(resolveExperimentalReactSpecifier(packages, "react", "rsc")).toBe(
@@ -126,6 +132,27 @@ describe("experimental React channel", () => {
         find.test("react-server-dom-webpack/server.edge"),
       )?.replacement,
     ).toBe(path.join(reactServerDomDir, "server.edge.js"));
+    expect(
+      clientAliases.find(({ find }) => find.test("next/dist/compiled/scheduler-experimental")),
+    ).toEqual({
+      find: /^next\/dist\/compiled\/scheduler-experimental$/,
+      replacement: path.join(schedulerDir, "index.js"),
+    });
+  });
+
+  it("unwraps vendored development channel selectors for client dev", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-experimental-react-entry-"));
+    tempDirs.push(root);
+    const entry = path.join(root, "index.js");
+    fs.mkdirSync(path.join(root, "cjs"));
+    fs.writeFileSync(
+      entry,
+      `if (process.env.NODE_ENV === 'production') {\n  module.exports = require('./cjs/runtime.production.js')\n} else {\n  module.exports = require('./cjs/runtime.development.js')\n}`,
+    );
+
+    expect(resolveExperimentalReactDevelopmentEntry(entry)).toBe(
+      path.join(root, "cjs", "runtime.development.js"),
+    );
   });
 
   it("creates a Vite 7 esbuild optimizer resolver", () => {

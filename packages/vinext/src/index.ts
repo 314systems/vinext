@@ -82,6 +82,7 @@ import {
   EXPERIMENTAL_REACT_SPECIFIERS,
   isExperimentalReactSpecifier,
   resolveExperimentalReactAliases,
+  resolveExperimentalReactDevelopmentEntry,
   type ExperimentalReactAliasEntry,
   type ExperimentalReactEnvironment,
 } from "./config/experimental-react.js";
@@ -895,6 +896,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     ExperimentalReactEnvironment,
     ExperimentalReactAliasEntry[]
   > | null = null;
+  const experimentalReactClientDevelopmentEntries = new Set<string>();
   let experimentalReactFlightDir: string | null = null;
   let fileMatcher: ReturnType<typeof createValidFileMatcher>;
   let middlewarePath: string | null = null;
@@ -908,6 +910,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   // initializer guards any unexpected hook ordering.
   let clientAssetsInlineLimit: NonNullable<UserConfig["build"]>["assetsInlineLimit"] = 0;
   let hasCloudflarePlugin = false;
+  let isServeCommand = false;
   let warnedInlineNextConfigOverride = false;
   let hasNitroPlugin = false;
   let rscCompatibilityId: string | undefined;
@@ -1208,6 +1211,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           return null;
         }
         const alias = experimentalReactAliases[environment].find(({ find }) => find.test(id));
+        if (alias && environment === "client" && isServeCommand) {
+          const developmentEntry = resolveExperimentalReactDevelopmentEntry(alias.replacement);
+          experimentalReactClientDevelopmentEntries.add(normalizePathSeparators(developmentEntry));
+          return developmentEntry;
+        }
         return alias?.replacement ?? null;
       },
       transform: {
@@ -1234,6 +1242,13 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     // Transform CJS require()/module.exports to ESM before other plugins
     // analyze imports (RSC directive scanning, shim resolution, etc.)
     commonjs(),
+    commonjs({
+      filter(id: string) {
+        return experimentalReactClientDevelopmentEntries.has(
+          normalizePathSeparators(stripViteModuleQuery(id)),
+        );
+      },
+    }),
     // Enable JSX in plain .js files. Next.js allows JSX in .js files
     // (Babel/SWC handle it transparently), but Vite 8's built-in `vite:oxc`
     // plugin excludes .js files by default (`exclude: /\.js$/`) AND infers
@@ -1337,6 +1352,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
       enforce: "pre",
 
       async config(config, env) {
+        isServeCommand = env.command === "serve";
         root = normalizePathSeparators(config.root ?? process.cwd());
         const userResolve = config.resolve as UserResolveConfigWithTsconfigPaths | undefined;
         const shouldEnableNativeTsconfigPaths =
