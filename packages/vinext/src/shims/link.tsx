@@ -55,6 +55,10 @@ import {
 } from "./internal/pages-data-target.js";
 import { interpolateDynamicRouteHref } from "./internal/interpolate-as.js";
 import { markAppRouteDetectedOnPrefetch } from "./internal/app-route-detection.js";
+import {
+  createViewportPrefetchScheduler,
+  type ViewportPrefetchTask,
+} from "./internal/viewport-prefetch-scheduler.js";
 import { getCurrentBrowserLocale } from "./client-locale.js";
 import {
   clearLinkForCurrentNavigation,
@@ -390,15 +394,22 @@ function prefetchUrl(
   mode: LinkPrefetchMode,
   priority: "low" | "high" = "low",
   scheduling: "idle" | "immediate" = priority === "high" ? "immediate" : "idle",
+  onComplete?: () => void,
 ): void {
-  if (typeof window === "undefined") return;
+  if (typeof window === "undefined") {
+    onComplete?.();
+    return;
+  }
 
   const prefetchHref = getLinkPrefetchHref({
     href,
     basePath: __basePath,
     currentOrigin: window.location.origin,
   });
-  if (prefetchHref == null) return;
+  if (prefetchHref == null) {
+    onComplete?.();
+    return;
+  }
 
   const fullHref = toBrowserNavigationHref(prefetchHref, window.location.href, __basePath);
   const target = new URL(fullHref, window.location.href);
@@ -407,6 +418,7 @@ function prefetchUrl(
     target.pathname === window.location.pathname &&
     target.search === window.location.search
   ) {
+    onComplete?.();
     return;
   }
 
@@ -587,9 +599,11 @@ function prefetchUrl(
           document.head.appendChild(link);
         }
       }
-    })().catch((error) => {
-      console.error("[vinext] RSC prefetch setup error:", error);
-    });
+    })()
+      .catch((error) => {
+        console.error("[vinext] RSC prefetch setup error:", error);
+      })
+      .finally(onComplete);
   });
 }
 
@@ -636,11 +650,45 @@ type LinkPrefetchInstance = {
   isVisible: boolean;
   mode: LinkPrefetchMode;
   routerMode: LinkPrefetchRouterMode;
+  viewportTask: ViewportPrefetchTask | null;
   viewportPrefetched: boolean;
 };
 
 const observedLinkPrefetches = new WeakMap<Element, LinkPrefetchInstance>();
 const visibleLinkPrefetches = new Set<LinkPrefetchInstance>();
+const viewportPrefetchScheduler = createViewportPrefetchScheduler();
+
+function scheduleViewportPrefetch(instance: LinkPrefetchInstance): void {
+  if (instance.viewportTask !== null) return;
+  let task: ViewportPrefetchTask | null = null;
+  let completedSynchronously = false;
+  const scheduledTask = viewportPrefetchScheduler.schedule(
+    () =>
+      new Promise<void>((resolve) => {
+        if (!instance.isVisible) {
+          resolve();
+          return;
+        }
+        prefetchUrl(instance.href, instance.mode, "low", "immediate", () => {
+          if (task === null) {
+            completedSynchronously = true;
+          } else if (instance.viewportTask === task) {
+            instance.viewportTask = null;
+          }
+          resolve();
+        });
+      }),
+  );
+  task = scheduledTask;
+  instance.viewportTask = completedSynchronously ? null : scheduledTask;
+}
+
+function cancelQueuedViewportPrefetch(instance: LinkPrefetchInstance): void {
+  const task = instance.viewportTask;
+  if (task === null) return;
+  task.cancel();
+  instance.viewportTask = null;
+}
 
 function setVisibleLinkPrefetch(instance: LinkPrefetchInstance, isVisible: boolean): void {
   instance.isVisible = isVisible;
@@ -650,10 +698,15 @@ function setVisibleLinkPrefetch(instance: LinkPrefetchInstance, isVisible: boole
     // IntersectionObserver already moved this work off the render path. Start
     // the request now so router-act can observe it during the same interaction,
     // while retaining low network priority for viewport-driven prefetches.
-    prefetchUrl(instance.href, instance.mode, "low", "immediate");
+    if (instance.routerMode === "app") {
+      scheduleViewportPrefetch(instance);
+    } else {
+      prefetchUrl(instance.href, instance.mode, "low", "immediate");
+    }
     instance.viewportPrefetched = true;
   } else {
     visibleLinkPrefetches.delete(instance);
+    cancelQueuedViewportPrefetch(instance);
   }
 }
 
@@ -665,7 +718,7 @@ function registerVisibleLinkPing(): void {
 function pingVisibleLinkPrefetches(): void {
   for (const instance of visibleLinkPrefetches) {
     if (instance.isVisible && instance.routerMode === "app") {
-      prefetchUrl(instance.href, instance.mode, "low");
+      scheduleViewportPrefetch(instance);
     }
   }
 }
@@ -964,6 +1017,7 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
       isVisible: false,
       mode: prefetchMode,
       routerMode: getLinkPrefetchRouterMode(),
+      viewportTask: null,
       viewportPrefetched: false,
     };
     observedLinkPrefetches.set(node, instance);
@@ -972,7 +1026,7 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
     return () => {
       observer.unobserve(node);
       observedLinkPrefetches.delete(node);
-      visibleLinkPrefetches.delete(instance);
+      setVisibleLinkPrefetch(instance, false);
     };
   }, [shouldViewportPrefetch, prefetchMode, normalizedHref]);
 
