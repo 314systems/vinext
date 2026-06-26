@@ -209,10 +209,33 @@ describe("prefetch cache eviction", () => {
     );
     await waitForPrefetchSetup(() => getPrefetchCache().get(rscUrl)?.outcome === "cache-seeded");
 
-    attachPrefetchInvalidationCallback(rscUrl, onInvalidate);
+    expect(attachPrefetchInvalidationCallback(rscUrl, onInvalidate)).toBe(true);
     invalidatePrefetchCache();
 
     expect(onInvalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not attach invalidation ownership to a replaced prefetch entry", async () => {
+    const rscUrl = "/instant-shell.rsc";
+    const onInvalidate = vi.fn();
+    prefetchRscResponse(
+      rscUrl,
+      Promise.resolve(new Response("first", { headers: { "content-type": "text/x-component" } })),
+    );
+    await waitForPrefetchSetup(() => getPrefetchCache().get(rscUrl)?.outcome === "cache-seeded");
+    const firstEntry = getPrefetchCache().get(rscUrl);
+    if (firstEntry === undefined) throw new Error("Expected first prefetch entry");
+
+    invalidatePrefetchCache();
+    prefetchRscResponse(
+      rscUrl,
+      Promise.resolve(new Response("second", { headers: { "content-type": "text/x-component" } })),
+    );
+    await waitForPrefetchSetup(() => getPrefetchCache().get(rscUrl)?.outcome === "cache-seeded");
+
+    expect(attachPrefetchInvalidationCallback(rscUrl, onInvalidate, firstEntry)).toBe(false);
+    invalidatePrefetchCache();
+    expect(onInvalidate).not.toHaveBeenCalled();
   });
 
   it("reuses a prefetched response only when mounted-slot context matches", () => {

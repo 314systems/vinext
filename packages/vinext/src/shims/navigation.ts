@@ -580,14 +580,16 @@ function addPrefetchInvalidationCallback(
 export function attachPrefetchInvalidationCallback(
   cacheKey: string,
   onInvalidate: (() => void) | undefined,
-): void {
-  if (onInvalidate === undefined) return;
+  expectedEntry?: PrefetchCacheEntry,
+): boolean {
+  if (onInvalidate === undefined) return false;
   const entry = getPrefetchCache().get(cacheKey);
-  if (!entry) return;
+  if (!entry || (expectedEntry !== undefined && entry !== expectedEntry)) return false;
   addPrefetchInvalidationCallback(entry, onInvalidate);
   if (entry.outcome === "cache-seeded") {
     schedulePrefetchInvalidation(cacheKey, entry);
   }
+  return true;
 }
 
 export function invalidatePrefetchCache(): void {

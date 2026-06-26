@@ -3424,9 +3424,12 @@ export const loadServerActionClient = ${
         }
 
         function invalidateHybridClientEntries() {
-          if (!hasAppDir || !hasPagesDir) return;
+          if (!hasAppDir) return;
           for (const env of Object.values(server.environments)) {
-            for (const id of [RESOLVED_CLIENT_ENTRY, RESOLVED_APP_BROWSER_ENTRY]) {
+            const ids = hasPagesDir
+              ? [RESOLVED_CLIENT_ENTRY, RESOLVED_APP_BROWSER_ENTRY]
+              : [RESOLVED_APP_BROWSER_ENTRY];
+            for (const id of ids) {
               const mod = env.moduleGraph.getModuleById(id);
               if (mod) env.moduleGraph.invalidateModule(mod);
             }
@@ -3576,6 +3579,11 @@ export const loadServerActionClient = ${
             invalidateHybridClientEntries();
             revalidateHybridRoutes();
           }
+        });
+        server.watcher.on("change", (filePath: string) => {
+          if (!hasAppDir || !shouldInvalidateAppRouteFile(appDir, filePath, fileMatcher)) return;
+          invalidateAppRoutingModules();
+          invalidateHybridClientEntries();
         });
 
         // ── Dev request origin check ─────────────────────────────────────

@@ -465,20 +465,26 @@ async function learnOptimisticRouteTemplateFromPrefetch(options: {
     mountedSlotsHeader: options.mountedSlotsHeader,
     routeId: template.routeId,
   });
-  optimisticRouteTemplates.set(templateKey, template);
+  const sourceKey = getOptimisticPrefetchSourceKey({
+    cacheKey: options.cacheKey,
+    interceptionContext: options.interceptionContext,
+    mountedSlotsHeader: options.mountedSlotsHeader,
+  });
   if (options.entry.instantShell === true) {
-    const sourceKey = getOptimisticPrefetchSourceKey({
-      cacheKey: options.cacheKey,
-      interceptionContext: options.interceptionContext,
-      mountedSlotsHeader: options.mountedSlotsHeader,
-    });
-    attachPrefetchInvalidationCallback(options.cacheKey, () => {
-      if (optimisticRouteTemplates.get(templateKey) === template) {
-        optimisticRouteTemplates.delete(templateKey);
+    const attached = attachPrefetchInvalidationCallback(
+      options.cacheKey,
+      () => {
+        if (optimisticRouteTemplates.get(templateKey) === template) {
+          optimisticRouteTemplates.delete(templateKey);
+        }
         optimisticRouteTemplateSources.delete(sourceKey);
-      }
-    });
+      },
+      options.entry,
+    );
+    if (!attached) return false;
   }
+  optimisticRouteTemplates.set(templateKey, template);
+  optimisticRouteTemplateSources.add(sourceKey);
   return true;
 }
 
@@ -507,9 +513,7 @@ async function learnOptimisticRouteTemplatesFromPrefetchCache(options: {
       mountedSlotsHeader: options.mountedSlotsHeader,
       routeManifest: options.routeManifest,
     })
-      .then((learned) => {
-        if (learned) optimisticRouteTemplateSources.add(sourceKey);
-      })
+      .then(() => {})
       .finally(() => {
         optimisticRouteTemplateLearning.delete(sourceKey);
       });
