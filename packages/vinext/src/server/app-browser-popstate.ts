@@ -66,6 +66,12 @@ export function isExpectedRetainedPopstate(options: {
   );
 }
 
+export function cancelPendingRetainedNavigation(
+  resolvePendingNavigation: ((handled: boolean) => void) | undefined,
+): void {
+  resolvePendingNavigation?.(false);
+}
+
 function hasSavedScrollPosition(state: unknown): boolean {
   return Boolean(state && typeof state === "object" && "__vinext_scrollY" in state);
 }

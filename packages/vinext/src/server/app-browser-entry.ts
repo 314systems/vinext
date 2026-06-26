@@ -123,6 +123,7 @@ import {
   type VisitedResponseCacheEntry,
 } from "./app-visited-response-cache.js";
 import {
+  cancelPendingRetainedNavigation,
   createNativeHashChangeHandler,
   createPopstateRestoreHandler,
   isExpectedRetainedPopstate,
@@ -414,10 +415,17 @@ function clearPrefetchState(): void {
   optimisticRouteTemplateLearning.clear();
 }
 
+function invalidateRestorableHistory(): void {
+  historyController.invalidateRestorableClientState();
+  const retainedNavigation = pendingRetainedHistoryNavigation;
+  pendingRetainedHistoryNavigation = null;
+  cancelPendingRetainedNavigation(retainedNavigation?.resolve);
+}
+
 function clearClientNavigationCaches(): void {
   clearVisitedResponseCache();
   clearPrefetchState();
-  historyController.invalidateRestorableClientState();
+  invalidateRestorableHistory();
 }
 
 function isSettledPrefetchCacheEntry(
@@ -2049,7 +2057,7 @@ function bootstrapHydration(
   registerNavigationRuntimeFunctions({
     clearNavigationCaches: clearClientNavigationCaches,
     commitHashNavigation: (href, historyUpdateMode, scroll) => {
-      historyController.invalidateRestorableClientState();
+      invalidateRestorableHistory();
       historyController.commitHashOnlyNavigation(href, historyUpdateMode, scroll);
     },
     hasRestorableHistoryTarget: (href) => {
@@ -2063,7 +2071,7 @@ function bootstrapHydration(
         )
       );
     },
-    invalidateRestorableHistory: () => historyController.invalidateRestorableClientState(),
+    invalidateRestorableHistory,
     waitForPendingRestorableHistory: () => {
       const pendingNavigation = pendingRetainedHistoryNavigation;
       return pendingNavigation === null ? null : pendingNavigation.promise.then(() => undefined);
@@ -2219,7 +2227,7 @@ function bootstrapHydration(
   window.addEventListener(
     "hashchange",
     createNativeHashChangeHandler({
-      invalidateRestorableHistory: () => historyController.invalidateRestorableClientState(),
+      invalidateRestorableHistory,
       shouldSuppressInvalidation: () => suppressNextHashChangeInvalidation,
     }),
   );

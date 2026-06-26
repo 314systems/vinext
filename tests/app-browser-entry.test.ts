@@ -32,6 +32,7 @@ import {
 } from "../packages/vinext/src/server/app-browser-hydration.js";
 import { createAppBrowserNavigationController } from "../packages/vinext/src/server/app-browser-navigation-controller.js";
 import {
+  cancelPendingRetainedNavigation,
   createNativeHashChangeHandler,
   createPopstateRestoreHandler,
   isExpectedRetainedPopstate,
@@ -5913,6 +5914,14 @@ describe("native hash history invalidation", () => {
 });
 
 describe("retained history lifecycle helpers", () => {
+  it("settles a pending retained traversal as unhandled when history is invalidated", () => {
+    const resolvePendingNavigation = vi.fn();
+
+    cancelPendingRetainedNavigation(resolvePendingNavigation);
+
+    expect(resolvePendingNavigation).toHaveBeenCalledWith(false);
+  });
+
   it("preserves a failed result for coalesced same-href navigation", async () => {
     await expect(
       resolveCoalescedRetainedNavigation(Promise.resolve(false), "/target", "/target"),
