@@ -164,6 +164,7 @@ const __basePath: string = process.env.__NEXT_ROUTER_BASEPATH ?? "";
 /** trailingSlash from next.config.js, injected by the plugin at build time */
 const __trailingSlash: boolean = process.env.__VINEXT_TRAILING_SLASH === "true";
 const __prefetchInlining: boolean = process.env.__VINEXT_PREFETCH_INLINING === "true";
+const __cacheComponents: boolean = process.env.__NEXT_CACHE_COMPONENTS === "true";
 const linkPrefetchRouteTrieCache = createRouteTrieCache<VinextLinkPrefetchRoute>();
 
 function resolveHref(href: LinkProps["href"]): string {
@@ -439,7 +440,11 @@ function prefetchUrl(
           { AppElementsWire },
           rscCacheBusting,
           { APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL },
-          { VINEXT_MOUNTED_SLOTS_HEADER },
+          {
+            NEXT_ROUTER_PREFETCH_HEADER,
+            NEXT_ROUTER_SEGMENT_PREFETCH_HEADER,
+            VINEXT_MOUNTED_SLOTS_HEADER,
+          },
           { resolveHybridClientRouteOwner },
         ] = await Promise.all([
           import("./navigation.js"),
@@ -485,6 +490,10 @@ function prefetchUrl(
             ? APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL
             : undefined,
         });
+        if (__cacheComponents) {
+          headers.set(NEXT_ROUTER_PREFETCH_HEADER, "1");
+          headers.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, target.pathname || "/");
+        }
         if (mountedSlotsHeader) {
           headers.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
         }
@@ -554,7 +563,7 @@ function prefetchUrl(
                 // @ts-expect-error — purpose is a valid fetch option in some browsers
                 purpose: "prefetch",
               });
-          await prefetchRscResponse(
+        await prefetchRscResponse(
           rscUrl,
           fetchPromise,
           interceptionContext,

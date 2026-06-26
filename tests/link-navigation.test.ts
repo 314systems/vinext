@@ -9,7 +9,11 @@ import {
   type LinkPrefetchRouterMode,
 } from "../packages/vinext/src/shims/link-prefetch.js";
 import { APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL } from "../packages/vinext/src/server/app-rsc-render-mode.js";
-import { VINEXT_RSC_RENDER_MODE_HEADER } from "../packages/vinext/src/server/headers.js";
+import {
+  NEXT_ROUTER_PREFETCH_HEADER,
+  NEXT_ROUTER_SEGMENT_PREFETCH_HEADER,
+  VINEXT_RSC_RENDER_MODE_HEADER,
+} from "../packages/vinext/src/server/headers.js";
 import type { VinextLinkPrefetchRoute } from "../packages/vinext/src/client/vinext-next-data.js";
 
 type CapturedEffect = () => void | (() => void);
@@ -1325,6 +1329,32 @@ describe("Link prefetch scheduling", () => {
         result.fetch.mock.calls[0],
         "/viewport-prefetch-target",
         expect.objectContaining({ priority: "low" }),
+      );
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("marks cache-components viewport requests as segment prefetches", async () => {
+    vi.stubEnv("__NEXT_CACHE_COMPONENTS", "true");
+    const observer = stubIntersectionObserver();
+    const result = await renderIsolatedLink({
+      href: "/viewport-prefetch-target",
+      nodeEnv: "production",
+    });
+
+    try {
+      observer.dispatchIntersectingEntry(result.anchor);
+      await waitForFetchCalls(result.fetch, 1);
+
+      const init = result.fetch.mock.calls[0]?.[1];
+      expect(init?.headers).toBeInstanceOf(Headers);
+      if (!(init?.headers instanceof Headers)) {
+        throw new Error("Expected prefetch request headers");
+      }
+      expect(init.headers.get(NEXT_ROUTER_PREFETCH_HEADER)).toBe("1");
+      expect(init.headers.get(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER)).toBe(
+        "/viewport-prefetch-target",
       );
     } finally {
       result.restoreNodeEnv();
