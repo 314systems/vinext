@@ -44,16 +44,20 @@
  * Vite's upstream behaviour.
  */
 
-import type { Plugin } from "vite";
+import { parseAst, type Plugin } from "vite";
+import MagicString from "magic-string";
 import path from "node:path";
 import fs from "node:fs";
+import {
+  forEachAstChild,
+  hasRange,
+  isAstRecord,
+  isIdentifierNamed,
+  nodeArray,
+  type AstRange,
+  type AstRecord,
+} from "./ast-utils.js";
 
-// Matches `new URL("./foo.css", import.meta.url)` — quoted string literals
-// (no template literals) and relative specifiers only. Template literals
-// with `${...}` interpolation are not handled here; Vite's upstream plugin
-// uses `import.meta.glob` for those, which is a client-only concern.
-const ASSET_IMPORT_META_URL_RE =
-  /\bnew\s+URL\s*\(\s*(['"])(\.\.?\/[^'"`]+)\1\s*,\s*import\.meta\.url\s*(?:,\s*)?\)/;
 const VITE_IGNORE_RE = /\/\*\s*@vite-ignore\s*\*\//;
 
 // Placeholder that survives Vite's renderChunk pipeline (it does not start
@@ -91,6 +95,74 @@ function assetDataUrl(file: string, buffer: Buffer): string {
   return `data:${mimeType};base64,${buffer.toString("base64")}`;
 }
 
+type AssetUrlExpression = {
+  node: AstRange;
+  url: string;
+};
+
+function parserLanguage(id: string): "js" | "jsx" | "ts" | "tsx" {
+  const extension = path.extname(id.split("?", 1)[0]).toLowerCase();
+  if (extension === ".ts" || extension === ".mts" || extension === ".cts") return "ts";
+  if (extension === ".tsx") return "tsx";
+  if (extension === ".jsx") return "jsx";
+  return "js";
+}
+
+function stringLiteralValue(value: unknown): string | null {
+  if (!isAstRecord(value)) return null;
+  if (
+    (value.type === "Literal" || value.type === "StringLiteral") &&
+    typeof value.value === "string"
+  ) {
+    return value.value;
+  }
+  return null;
+}
+
+function isImportMetaUrl(value: unknown): boolean {
+  if (!isAstRecord(value) || value.type !== "MemberExpression" || value.computed === true) {
+    return false;
+  }
+  const object = isAstRecord(value.object) ? value.object : null;
+  return (
+    object?.type === "MetaProperty" &&
+    isIdentifierNamed(object.meta, "import") &&
+    isIdentifierNamed(object.property, "meta") &&
+    isIdentifierNamed(value.property, "url")
+  );
+}
+
+function collectAssetUrlExpressions(code: string, id: string): AssetUrlExpression[] {
+  let ast: ReturnType<typeof parseAst>;
+  try {
+    ast = parseAst(code, { lang: parserLanguage(id) });
+  } catch {
+    return [];
+  }
+
+  const expressions: AssetUrlExpression[] = [];
+  function visit(node: AstRecord): void {
+    if (node.type === "NewExpression" && isIdentifierNamed(node.callee, "URL") && hasRange(node)) {
+      const args = nodeArray(node.arguments);
+      const url = stringLiteralValue(args[0]);
+      const firstArgument = isAstRecord(args[0]) ? args[0] : null;
+      if (
+        args.length === 2 &&
+        url !== null &&
+        (url.startsWith("./") || url.startsWith("../")) &&
+        isImportMetaUrl(args[1]) &&
+        hasRange(firstArgument) &&
+        !VITE_IGNORE_RE.test(code.slice(node.start, firstArgument.start))
+      ) {
+        expressions.push({ node, url });
+      }
+    }
+    forEachAstChild(node, visit);
+  }
+  if (isAstRecord(ast)) visit(ast);
+  return expressions;
+}
+
 /**
  * Create the `vinext:server-asset-import-meta-url` Vite plugin.
  *
@@ -119,33 +191,17 @@ export function createServerAssetImportMetaUrlPlugin(
       return environment.config.consumer !== "client";
     },
     transform: {
-      filter: { code: ASSET_IMPORT_META_URL_RE },
+      filter: { code: "import.meta.url" },
       async handler(code, id) {
         // Skip virtual modules — `id` would not be a real file system path
         // and resolving the relative URL against it would be meaningless.
         if (id.startsWith("\0") || id.startsWith("virtual:")) return null;
 
         const moduleDir = path.dirname(id.split("?")[0]!);
-        let result = "";
-        let lastIndex = 0;
+        const output = new MagicString(code);
         let didReplace = false;
-        const re = new RegExp(ASSET_IMPORT_META_URL_RE.source, "g");
-        let match: RegExpExecArray | null;
 
-        while ((match = re.exec(code))) {
-          const fullMatch = match[0];
-          const matchStart = match.index;
-          const matchEnd = matchStart + fullMatch.length;
-          const url = match[2]!;
-
-          // Honour `/* @vite-ignore */` to match Vite's upstream contract.
-          // The comment appears between `new URL(` and the string literal
-          // in the original source, so scan that slice.
-          const literalStart = code.indexOf(match[1]!, matchStart);
-          if (literalStart !== -1 && VITE_IGNORE_RE.test(code.slice(matchStart, literalStart))) {
-            continue;
-          }
-
+        for (const { node, url } of collectAssetUrlExpressions(code, id)) {
           const file = path.resolve(moduleDir, url);
           let buffer: Buffer;
           try {
@@ -157,12 +213,12 @@ export function createServerAssetImportMetaUrlPlugin(
             continue;
           }
 
-          if (matchStart > lastIndex) {
-            result += code.slice(lastIndex, matchStart);
-          }
           if (isCloudflareBuild()) {
-            result += `new URL(${JSON.stringify(assetDataUrl(file, buffer))})`;
-            lastIndex = matchEnd;
+            output.overwrite(
+              node.start,
+              node.end,
+              `new URL(${JSON.stringify(assetDataUrl(file, buffer))})`,
+            );
             didReplace = true;
             continue;
           }
@@ -178,18 +234,18 @@ export function createServerAssetImportMetaUrlPlugin(
           // import.meta.url)`. The placeholder is resolved in renderChunk
           // (below) to a chunk-relative URL so the runtime computes the
           // correct file:// URL at module load time.
-          result += `new URL(${JSON.stringify(
-            `${PLACEHOLDER_PREFIX}${referenceId}${PLACEHOLDER_SUFFIX}`,
-          )}, import.meta.url)`;
-          lastIndex = matchEnd;
+          output.overwrite(
+            node.start,
+            node.end,
+            `new URL(${JSON.stringify(
+              `${PLACEHOLDER_PREFIX}${referenceId}${PLACEHOLDER_SUFFIX}`,
+            )}, import.meta.url)`,
+          );
           didReplace = true;
         }
 
         if (!didReplace) return null;
-        if (lastIndex < code.length) {
-          result += code.slice(lastIndex);
-        }
-        return { code: result, map: null };
+        return { code: output.toString(), map: output.generateMap({ hires: "boundary" }) };
       },
     },
     renderChunk(code, chunk) {

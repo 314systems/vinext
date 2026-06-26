@@ -93,6 +93,34 @@ describe("SSR build emits CSS assets referenced by SSR chunks", () => {
       );
       expect(transformed?.code).toContain('new URL("data:text/css;base64,');
       expect(transformed?.code).not.toContain("import.meta.url");
+
+      const withComment = await transform.handler.call(
+        {
+          emitFile: () => {
+            throw new Error("Cloudflare assets must be inlined");
+          },
+        },
+        `import(new URL(/* asset */ "./style.css", import.meta.url).href);`,
+        path.join(tmpDir, "route.js"),
+      );
+      expect(withComment?.code).toContain('new URL("data:text/css;base64,');
+      expect(withComment?.code).not.toContain("import.meta.url");
+
+      const nonCode = `
+        // new URL("./style.css", import.meta.url)
+        const example = 'new URL("./style.css", import.meta.url)'
+      `;
+      expect(
+        await transform.handler.call(
+          {
+            emitFile: () => {
+              throw new Error("non-code text must not emit assets");
+            },
+          },
+          nonCode,
+          path.join(tmpDir, "route.js"),
+        ),
+      ).toBeNull();
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
