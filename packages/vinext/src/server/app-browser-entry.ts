@@ -2083,6 +2083,11 @@ function bootstrapHydration(
         resolve,
         scrollPosition: scroll ? { x: 0, y: 0 } : { x: window.scrollX, y: window.scrollY },
       };
+      // A current snapshot at the immediate next traversal index is retained
+      // only while the browser's forward stack is intact. Every operation that
+      // can truncate that stack invalidates these snapshots before reaching
+      // this point, so this traversal is expected to dispatch popstate and
+      // settle the retained navigation promise below.
       window.history.forward();
       return promise;
     },
