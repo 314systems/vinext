@@ -5910,6 +5910,34 @@ describe("createPopstateRestoreHandler", () => {
     expect(setPendingNavigation).toHaveBeenCalledWith(null);
   });
 
+  it("settles a retained navigation without reporting a second transition", async () => {
+    const notifyAppRouterTransitionStart = vi.fn();
+    const settleRetainedHistoryNavigation = vi.fn();
+    const historyState = { __vinext_historyIndex: 1 };
+
+    stubWindow("https://example.com/feed");
+
+    const handler = createPopstateRestoreHandler({
+      getActiveNavigationId: () => 1,
+      getNavigate: () => undefined,
+      getPendingNavigation: () => null,
+      isCurrentNavigation: () => true,
+      notifyAppRouterTransitionStart,
+      restorePopstateScrollPosition: () => {},
+      settleRetainedHistoryNavigation,
+      setPendingNavigation: () => {},
+      shouldSkipScrollRestore: () => false,
+      shouldSuppressTransitionStart: () => true,
+      tryRestoreHistorySnapshot: (state) => state === historyState,
+    });
+
+    handler({ state: historyState } as PopStateEvent);
+
+    expect(notifyAppRouterTransitionStart).not.toHaveBeenCalled();
+    expect(settleRetainedHistoryNavigation).toHaveBeenCalledOnce();
+    await expect(settleRetainedHistoryNavigation.mock.calls[0]?.[0]).resolves.toBeUndefined();
+  });
+
   it("guards synchronous popstate scroll retry to the active navigation", () => {
     const scrollState = { __vinext_scrollY: 10 };
     let activeNavigationId = 3;

@@ -327,7 +327,11 @@ let latestRscHmrUpdateId = 0;
 // navigation. This is intentionally not a per-navigation set — a future
 // asynchronous scroll restore for an older navId is already stale.
 let synchronousPopstateScrollRestoreNavigationId: number | null = null;
-let pendingRetainedHistoryScrollPosition: { x: number; y: number } | null = null;
+let pendingRetainedHistoryNavigation: {
+  promise: Promise<void>;
+  resolve: () => void;
+  scrollPosition: { x: number; y: number };
+} | null = null;
 
 // Vite can notify the browser about an RSC HMR update before the dev server's
 // request runner has swapped to the invalidated module graph. Give the
@@ -2036,8 +2040,10 @@ function bootstrapHydration(
   // the browser entry share a single App Router capability contract.
   registerNavigationRuntimeFunctions({
     clearNavigationCaches: clearClientNavigationCaches,
-    commitHashNavigation: (href, historyUpdateMode, scroll) =>
-      historyController.commitHashOnlyNavigation(href, historyUpdateMode, scroll),
+    commitHashNavigation: (href, historyUpdateMode, scroll) => {
+      historyController.invalidateRestorableClientState();
+      historyController.commitHashOnlyNavigation(href, historyUpdateMode, scroll);
+    },
     hasRestorableHistoryTarget: (href) => {
       const targetUrl = new URL(href, window.location.href);
       if (targetUrl.hash !== "") return false;
@@ -2052,7 +2058,7 @@ function bootstrapHydration(
     invalidateRestorableHistory: () => historyController.invalidateRestorableClientState(),
     navigateRestorableHistoryTarget: (href, scroll) => {
       const targetUrl = new URL(href, window.location.href);
-      if (targetUrl.hash !== "") return false;
+      if (targetUrl.hash !== "") return null;
       const currentHistoryIndex = historyController.currentHistoryTraversalIndex;
       if (
         currentHistoryIndex === null ||
@@ -2060,13 +2066,19 @@ function bootstrapHydration(
           isSnapshotTargetHref(__basePath, state.navigationSnapshot, href),
         )
       ) {
-        return false;
+        return null;
       }
-      pendingRetainedHistoryScrollPosition = scroll
-        ? { x: 0, y: 0 }
-        : { x: window.scrollX, y: window.scrollY };
+      let resolve!: () => void;
+      const promise = new Promise<void>((settle) => {
+        resolve = settle;
+      });
+      pendingRetainedHistoryNavigation = {
+        promise,
+        resolve,
+        scrollPosition: scroll ? { x: 0, y: 0 } : { x: window.scrollX, y: window.scrollY },
+      };
       window.history.forward();
-      return true;
+      return promise;
     },
     navigate: navigateRsc,
   });
@@ -2089,13 +2101,20 @@ function bootstrapHydration(
       notifyAppRouterTransitionStart(href, "traverse");
     },
     restorePopstateScrollPosition,
+    settleRetainedHistoryNavigation: (pendingNavigation) => {
+      const retainedNavigation = pendingRetainedHistoryNavigation;
+      pendingRetainedHistoryNavigation = null;
+      if (retainedNavigation === null) return;
+      void pendingNavigation.finally(retainedNavigation.resolve);
+    },
     setPendingNavigation: (pendingNavigation) => {
       window.__VINEXT_RSC_PENDING__ = pendingNavigation;
     },
     shouldSkipScrollRestore: (navId) => synchronousPopstateScrollRestoreNavigationId === navId,
+    shouldSuppressTransitionStart: () => pendingRetainedHistoryNavigation !== null,
     tryRestoreHistorySnapshot: (historyState) => {
-      const retainedHistoryScrollPosition = pendingRetainedHistoryScrollPosition;
-      pendingRetainedHistoryScrollPosition = null;
+      const retainedHistoryScrollPosition =
+        pendingRetainedHistoryNavigation?.scrollPosition ?? null;
       browserNavigationController.beginNavigation();
       if (!restoreHistoryStateSnapshot(historyState)) return false;
 

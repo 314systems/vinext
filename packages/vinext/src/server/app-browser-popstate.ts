@@ -18,8 +18,10 @@ type BrowserPopstateRestoreDeps = {
   isCurrentNavigation: (navId: number) => boolean;
   notifyAppRouterTransitionStart: (href: string) => void;
   restorePopstateScrollPosition: RestoreScrollPosition;
+  settleRetainedHistoryNavigation?: (pendingNavigation: Promise<void>) => void;
   setPendingNavigation: (pendingNavigation: Promise<void> | null) => void;
   shouldSkipScrollRestore: (navId: number) => boolean;
+  shouldSuppressTransitionStart?: () => boolean;
   tryRestoreHistorySnapshot?: (state: unknown) => boolean;
 };
 
@@ -66,9 +68,13 @@ export function createPopstateRestoreHandler(
   deps: BrowserPopstateRestoreDeps,
 ): (event: PopStateEvent) => void {
   return (event) => {
-    deps.notifyAppRouterTransitionStart(window.location.href);
+    const isRetainedHistoryNavigation = deps.shouldSuppressTransitionStart?.() === true;
+    if (!isRetainedHistoryNavigation) {
+      deps.notifyAppRouterTransitionStart(window.location.href);
+    }
     if (deps.tryRestoreHistorySnapshot?.(event.state)) {
       deps.setPendingNavigation(null);
+      deps.settleRetainedHistoryNavigation?.(Promise.resolve());
       return;
     }
 
@@ -86,6 +92,7 @@ export function createPopstateRestoreHandler(
     const popstateNavId = deps.getActiveNavigationId();
 
     deps.setPendingNavigation(pendingNavigation);
+    deps.settleRetainedHistoryNavigation?.(pendingNavigation);
     const shouldRestoreSavedScroll = hasSavedScrollPosition(event.state);
     const shouldRestoreScrollForNavigation = () =>
       deps.isCurrentNavigation(popstateNavId) && !deps.shouldSkipScrollRestore(popstateNavId);

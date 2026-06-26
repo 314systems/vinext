@@ -1676,10 +1676,12 @@ export async function navigateClientSide(
     return;
   }
 
-  if (
-    mode === "push" &&
-    getNavigationRuntime()?.functions.navigateRestorableHistoryTarget?.(fullHref, scroll) === true
-  ) {
+  const retainedHistoryNavigation =
+    mode === "push"
+      ? getNavigationRuntime()?.functions.navigateRestorableHistoryTarget?.(fullHref, scroll)
+      : null;
+  if (retainedHistoryNavigation) {
+    await retainedHistoryNavigation;
     clearAppNavigationFailureTarget(fullHref);
     return;
   }

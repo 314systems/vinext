@@ -1690,7 +1690,7 @@ describe("Link prefetch scheduling", () => {
   });
 
   it("traverses to a retained history target instead of fetching it again", async () => {
-    const navigateRestorableHistoryTarget = vi.fn(() => true);
+    const navigateRestorableHistoryTarget = vi.fn(() => Promise.resolve());
     const result = await renderIsolatedLink({
       href: "/intent-prefetch-target",
       nodeEnv: "production",
@@ -1717,7 +1717,7 @@ describe("Link prefetch scheduling", () => {
   });
 
   it("uses normal navigation when a retained history target cannot be traversed", async () => {
-    const navigateRestorableHistoryTarget = vi.fn(() => false);
+    const navigateRestorableHistoryTarget = vi.fn(() => null);
     const result = await renderIsolatedLink({
       href: "/intent-prefetch-target",
       nodeEnv: "production",
