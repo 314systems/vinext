@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import {
   createExperimentalReactEnvironmentAliases,
+  createExperimentalReactEsbuildPlugin,
   needsExperimentalReact,
   resolveExperimentalReactAliases,
   resolveExperimentalReactSpecifier,
@@ -125,5 +126,20 @@ describe("experimental React channel", () => {
         find.test("react-server-dom-webpack/server.edge"),
       )?.replacement,
     ).toBe(path.join(reactServerDomDir, "server.edge.js"));
+  });
+
+  it("creates a Vite 7 esbuild optimizer resolver", () => {
+    const aliases = [{ find: /^react$/, replacement: "/next/react-experimental/index.js" }];
+    let resolver: ((args: { path: string }) => { path: string } | undefined) | undefined;
+    createExperimentalReactEsbuildPlugin(aliases, "client").setup({
+      onResolve(_options, callback) {
+        resolver = callback;
+      },
+    });
+
+    expect(resolver?.({ path: "react" })).toEqual({
+      path: "/next/react-experimental/index.js",
+    });
+    expect(resolver?.({ path: "react-dom" })).toBeUndefined();
   });
 });

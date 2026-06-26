@@ -108,15 +108,23 @@ describe("App Router experimental React channel", () => {
     expect(versions).toEqual(versions.map(() => expect.stringContaining("-experimental-")));
   });
 
-  it("rejects ssr.external true because it bypasses experimental React", async () => {
+  async function expectExternalReactRejection(external: true | string[]) {
     await expect(
       createServer({
         root: FIXTURE_DIR,
         configFile: false,
-        plugins: [vinext({ appDir: FIXTURE_DIR })],
-        ssr: { external: true },
+        plugins: vinext({ appDir: FIXTURE_DIR }),
+        ssr: { external },
         logLevel: "silent",
       }),
-    ).rejects.toThrow("`ssr.external: true` is incompatible");
+    ).rejects.toThrow("Externalizing React through `ssr.external` is incompatible");
+  }
+
+  it("rejects ssr.external true because it bypasses experimental React", async () => {
+    await expectExternalReactRejection(true);
+  });
+
+  it("rejects React entries in ssr.external", async () => {
+    await expectExternalReactRejection(["react"]);
   });
 });

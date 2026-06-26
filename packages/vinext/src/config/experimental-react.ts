@@ -5,6 +5,15 @@ import fs from "node:fs";
 export type ExperimentalReactAliases = Record<string, string>;
 export type ExperimentalReactEnvironment = "rsc" | "ssr" | "client";
 export type ExperimentalReactAliasEntry = { find: RegExp; replacement: string };
+type EsbuildPlugin = {
+  name: string;
+  setup(build: {
+    onResolve(
+      options: { filter: RegExp },
+      callback: (args: { path: string }) => { path: string } | undefined,
+    ): void;
+  }): void;
+};
 
 type PackageExport = string | PackageExportConditions;
 type PackageExportConditions = {
@@ -145,6 +154,21 @@ export function createExperimentalReactEnvironmentAliases(
       ),
     },
   ];
+}
+
+export function createExperimentalReactEsbuildPlugin(
+  aliases: ExperimentalReactAliasEntry[],
+  environment: ExperimentalReactEnvironment,
+): EsbuildPlugin {
+  return {
+    name: `vinext:experimental-react-dep-optimize:${environment}`,
+    setup(build) {
+      build.onResolve({ filter: /^(?:react|next\/dist\/compiled\/react)/ }, (args) => {
+        const replacement = aliases.find(({ find }) => find.test(args.path))?.replacement;
+        return replacement ? { path: replacement } : undefined;
+      });
+    },
+  };
 }
 
 function requireExperimentalReactSpecifier(

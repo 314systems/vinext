@@ -78,6 +78,7 @@ import {
 import { mergeServerExternalPackages } from "./config/server-external-packages.js";
 import {
   createExperimentalReactEnvironmentAliases,
+  createExperimentalReactEsbuildPlugin,
   EXPERIMENTAL_REACT_SPECIFIERS,
   resolveExperimentalReactAliases,
   type ExperimentalReactAliasEntry,
@@ -1457,9 +1458,20 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           }
 
           if (hasAppDir && nextConfig.useExperimentalReact) {
-            if (config.ssr?.external === true) {
+            const configuredSsrExternal = config.ssr?.external;
+            if (
+              configuredSsrExternal === true ||
+              (Array.isArray(configuredSsrExternal) &&
+                configuredSsrExternal.some(
+                  (entry) =>
+                    typeof entry === "string" &&
+                    EXPERIMENTAL_REACT_SPECIFIERS.some(
+                      (specifier) => entry === specifier || entry.startsWith(`${specifier}/`),
+                    ),
+                ))
+            ) {
               throw new Error(
-                "[vinext] `ssr.external: true` is incompatible with Next.js's experimental React channel because it bypasses the vendored React runtime.",
+                "[vinext] Externalizing React through `ssr.external` is incompatible with Next.js's experimental React channel because it bypasses the vendored React runtime.",
               );
             }
             const packages = resolveExperimentalReactAliases(root);
@@ -5774,7 +5786,7 @@ export const loadServerActionClient = ${
         }
 
         const aliases = experimentalReactAliases[name];
-        if (name === "ssr") {
+        if (name === "rsc" || name === "ssr") {
           if (Array.isArray(config.resolve?.external)) {
             config.resolve.external = config.resolve.external.filter(
               (entry) =>
@@ -5811,6 +5823,14 @@ export const loadServerActionClient = ${
               },
             },
             ...existingPlugins,
+          ],
+        };
+        const esbuildOptions = config.optimizeDeps.esbuildOptions ?? {};
+        config.optimizeDeps.esbuildOptions = {
+          ...esbuildOptions,
+          plugins: [
+            createExperimentalReactEsbuildPlugin(aliases, name),
+            ...(esbuildOptions.plugins ?? []),
           ],
         };
         return null;
