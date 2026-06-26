@@ -5889,9 +5889,23 @@ describe("native hash history invalidation", () => {
   it("invalidates retained snapshots when a fragment navigation branches history", () => {
     const invalidateRestorableHistory = vi.fn();
 
-    createNativeHashChangeHandler(invalidateRestorableHistory)();
+    createNativeHashChangeHandler({
+      invalidateRestorableHistory,
+      shouldSuppressInvalidation: () => false,
+    })();
 
     expect(invalidateRestorableHistory).toHaveBeenCalledOnce();
+  });
+
+  it("preserves retained snapshots for a popstate-driven hash change", () => {
+    const invalidateRestorableHistory = vi.fn();
+
+    createNativeHashChangeHandler({
+      invalidateRestorableHistory,
+      shouldSuppressInvalidation: () => true,
+    })();
+
+    expect(invalidateRestorableHistory).not.toHaveBeenCalled();
   });
 });
 

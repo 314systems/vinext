@@ -334,6 +334,7 @@ let pendingRetainedHistoryNavigation: {
   resolve: (handled: boolean) => void;
   scrollPosition: { x: number; y: number };
 } | null = null;
+let suppressNextHashChangeInvalidation = false;
 
 // Vite can notify the browser about an RSC HMR update before the dev server's
 // request runner has swapped to the invalidated module graph. Give the
@@ -2166,6 +2167,10 @@ function bootstrapHydration(
   });
 
   window.addEventListener("popstate", (event) => {
+    suppressNextHashChangeInvalidation = true;
+    window.setTimeout(() => {
+      suppressNextHashChangeInvalidation = false;
+    }, 0);
     // The browser has already applied the history entry by the time popstate
     // fires. App Router state does not include hashes, so matching the
     // committed pathname/search proves this traversal does not need a new RSC
@@ -2183,7 +2188,10 @@ function bootstrapHydration(
   });
   window.addEventListener(
     "hashchange",
-    createNativeHashChangeHandler(() => historyController.invalidateRestorableClientState()),
+    createNativeHashChangeHandler({
+      invalidateRestorableHistory: () => historyController.invalidateRestorableClientState(),
+      shouldSuppressInvalidation: () => suppressNextHashChangeInvalidation,
+    }),
   );
 
   if (import.meta.env.DEV && import.meta.hot) {

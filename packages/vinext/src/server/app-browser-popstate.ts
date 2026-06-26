@@ -32,8 +32,14 @@ type SynchronousPopstateScrollRestoreDeps = {
   restorePopstateScrollPosition: RestoreScrollPosition;
 };
 
-export function createNativeHashChangeHandler(invalidateRestorableHistory: () => void): () => void {
-  return () => invalidateRestorableHistory();
+export function createNativeHashChangeHandler(options: {
+  invalidateRestorableHistory: () => void;
+  shouldSuppressInvalidation: () => boolean;
+}): () => void {
+  return () => {
+    if (options.shouldSuppressInvalidation()) return;
+    options.invalidateRestorableHistory();
+  };
 }
 
 function hasSavedScrollPosition(state: unknown): boolean {
