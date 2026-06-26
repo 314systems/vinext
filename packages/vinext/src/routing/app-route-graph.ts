@@ -221,6 +221,7 @@ function routeHasInstant(options: {
     options.parallelSlots.some(
       (slot) =>
         routeModuleHasInstant(slot.pagePath) ||
+        routeModuleHasInstant(slot.layoutPath ?? null) ||
         (slot.configLayoutPaths ?? []).some((layoutPath) => routeModuleHasInstant(layoutPath)),
     )
   );

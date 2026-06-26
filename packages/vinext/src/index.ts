@@ -3544,6 +3544,7 @@ export const loadServerActionClient = ${
               for (const layoutPath of route.layouts) files.add(layoutPath);
               for (const slot of route.parallelSlots) {
                 if (slot.pagePath) files.add(slot.pagePath);
+                if (slot.layoutPath) files.add(slot.layoutPath);
                 for (const layoutPath of slot.configLayoutPaths ?? []) files.add(layoutPath);
               }
             }

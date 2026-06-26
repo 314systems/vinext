@@ -297,6 +297,23 @@ describe("App Router route graph builder", () => {
     });
   });
 
+  it("detects unstable_instant on parallel-slot root layouts", async () => {
+    await withTempApp(async (appDir) => {
+      await writeAppFile(appDir, "layout.tsx", EMPTY_LAYOUT);
+      await writeAppFile(appDir, "dashboard/page.tsx", EMPTY_PAGE);
+      await writeAppFile(
+        appDir,
+        "dashboard/@team/layout.tsx",
+        `export const unstable_instant = { prefetch: "runtime" };\n${EMPTY_LAYOUT}`,
+      );
+      await writeAppFile(appDir, "dashboard/@team/default.tsx", EMPTY_PAGE);
+
+      const graph = await buildAppRouteGraph(appDir, createValidFileMatcher());
+
+      expect(findRoute(graph.routes, "/dashboard").hasInstant).toBe(true);
+    });
+  });
+
   // Regression for https://github.com/cloudflare/vinext/issues/1339
   // Ported from Next.js: test/e2e/app-dir/parallel-routes-layouts/
   // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/parallel-routes-layouts/parallel-routes-layouts.test.ts
