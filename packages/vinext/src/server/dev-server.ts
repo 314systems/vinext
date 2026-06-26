@@ -41,6 +41,7 @@ import { getScriptNonceFromNodeHeaderSources } from "./csp.js";
 import { mergeRouteParamsIntoQuery, parseQueryString as parseQuery } from "../utils/query.js";
 import path from "node:path";
 import React from "react";
+import { renderToReadableStream as nativeRenderToReadableStream } from "react-dom/server.edge";
 import { logRequest, now } from "./request-log.js";
 import {
   createValidFileMatcher,
@@ -87,6 +88,22 @@ import { isUnknownRecord } from "../utils/record.js";
 type RenderToReadableStream = (
   element: React.ReactElement,
 ) => Promise<ReadableStream<Uint8Array> & { allReady: Promise<void> }>;
+
+function createPagesRenderToReadableStream(
+  runner: ModuleImporter,
+  useExperimentalReact: boolean,
+): RenderToReadableStream {
+  if (!useExperimentalReact) return nativeRenderToReadableStream;
+
+  const reactDomServer = importModule(runner, "react-dom/server.edge");
+  return async (element) => {
+    const renderer = await reactDomServer;
+    if (typeof renderer.renderToReadableStream !== "function") {
+      throw new Error("[vinext] react-dom/server.edge does not export renderToReadableStream");
+    }
+    return renderer.renderToReadableStream(element);
+  };
+}
 
 async function renderToStringAsync(
   renderToReadableStream: RenderToReadableStream,
@@ -453,16 +470,10 @@ export function createSSRHandler(
    */
   clientTraceMetadata?: readonly string[],
   htmlLimitedBots?: string,
+  useExperimentalReact = false,
 ) {
   const matcher = fileMatcher ?? createValidFileMatcher();
-  const reactDomServer = importModule(runner, "react-dom/server.edge");
-  const renderToReadableStream: RenderToReadableStream = async (element) => {
-    const renderer = await reactDomServer;
-    if (typeof renderer.renderToReadableStream !== "function") {
-      throw new Error("[vinext] react-dom/server.edge does not export renderToReadableStream");
-    }
-    return renderer.renderToReadableStream(element);
-  };
+  const renderToReadableStream = createPagesRenderToReadableStream(runner, useExperimentalReact);
 
   // Page route patterns in Next.js bracket format, sorted by specificity
   // (sortRoutes via pagesRouter). Mirrors the production client entry's
@@ -586,7 +597,19 @@ export function createSSRHandler(
         return;
       }
       // No route matched — try to render custom 404 page
-      await renderErrorPage(server, runner, req, res, url, pagesDir, 404, undefined, matcher);
+      await renderErrorPage(
+        server,
+        runner,
+        req,
+        res,
+        url,
+        pagesDir,
+        404,
+        undefined,
+        matcher,
+        undefined,
+        renderToReadableStream,
+      );
       return;
     }
 
@@ -783,6 +806,8 @@ export function createSSRHandler(
               404,
               routerShim.wrapWithRouterContext,
               matcher,
+              undefined,
+              renderToReadableStream,
             );
             return;
           }
@@ -930,6 +955,9 @@ export function createSSRHandler(
               pagesDir,
               404,
               routerShim.wrapWithRouterContext,
+              undefined,
+              undefined,
+              renderToReadableStream,
             );
             return;
           }
@@ -1367,6 +1395,9 @@ export function createSSRHandler(
               pagesDir,
               404,
               routerShim.wrapWithRouterContext,
+              undefined,
+              undefined,
+              renderToReadableStream,
             );
             return;
           }
@@ -1875,6 +1906,7 @@ hydrate();
             undefined,
             matcher,
             e instanceof Error ? e : new Error(String(e)),
+            renderToReadableStream,
           );
         } catch (fallbackErr) {
           // If error page itself fails, fall back to plain text.
@@ -1909,14 +1941,9 @@ async function renderErrorPage(
   wrapWithRouterContext?: ((el: React.ReactElement) => React.ReactElement) | null,
   fileMatcher?: ValidFileMatcher,
   err?: Error,
+  renderToReadableStream: RenderToReadableStream = nativeRenderToReadableStream,
 ): Promise<void> {
   const matcher = fileMatcher ?? createValidFileMatcher();
-  const reactDomServer = await importModule(runner, "react-dom/server.edge");
-  if (typeof reactDomServer.renderToReadableStream !== "function") {
-    throw new Error("[vinext] react-dom/server.edge does not export renderToReadableStream");
-  }
-  const renderToReadableStream: RenderToReadableStream =
-    reactDomServer.renderToReadableStream.bind(reactDomServer);
   // Try specific status page first, then _error, then fallback
   const candidates =
     statusCode === 404 ? ["404", "_error"] : statusCode === 500 ? ["500", "_error"] : ["_error"];
