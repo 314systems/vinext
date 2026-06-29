@@ -96,8 +96,10 @@ describe("deploy-suite report comparison", () => {
 
   it("defaults the baseline to the latest ingested main run and downloads both report artifacts", async () => {
     getDb.mockReturnValue(createDb([{ runKey: "111" }]));
-    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+    const requests: Array<{ url: string; authorization: string | null }> = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      requests.push({ url, authorization: readAuthorization(init?.headers) });
       if (url.includes("/runs/111/artifacts")) {
         return Response.json({
           artifacts: [
@@ -154,6 +156,18 @@ describe("deploy-suite report comparison", () => {
         noLongerFailing: 1,
       },
     });
+    expect(requests).toEqual([
+      {
+        url: "https://api.github.com/repos/cloudflare/vinext/actions/runs/111/artifacts?per_page=100",
+        authorization: null,
+      },
+      {
+        url: "https://api.github.com/repos/cloudflare/vinext/actions/runs/222/artifacts?per_page=100",
+        authorization: null,
+      },
+      { url: "https://artifacts.example/baseline.zip", authorization: "Bearer github-token" },
+      { url: "https://artifacts.example/target.zip", authorization: "Bearer github-token" },
+    ]);
   });
 
   it("rejects missing comparison run ids", async () => {
@@ -194,6 +208,15 @@ function createDb(rows: Array<{ runKey: string }>) {
     limit: vi.fn(async () => rows),
   };
   return { select: vi.fn(() => query) };
+}
+
+function readAuthorization(headers: HeadersInit | undefined): string | null {
+  if (!headers) return null;
+  if (headers instanceof Headers) return headers.get("authorization");
+  if (Array.isArray(headers)) {
+    return headers.find(([name]) => name.toLowerCase() === "authorization")?.[1] ?? null;
+  }
+  return headers.Authorization ?? headers.authorization ?? null;
 }
 
 function zipReport(report: Report): ArrayBuffer {

@@ -183,7 +183,7 @@ function toComparedRun(runId: string, report: DeploySuiteReport): ComparedRun {
 
 async function downloadDeploySuiteReport(runId: string, token: string): Promise<DeploySuiteReport> {
   const artifactsUrl = `https://api.github.com/repos/${OWNER}/${REPO}/actions/runs/${runId}/artifacts?per_page=100`;
-  const artifactsResponse = await fetch(artifactsUrl, { headers: githubHeaders(token) });
+  const artifactsResponse = await fetch(artifactsUrl, { headers: githubHeaders() });
   if (!artifactsResponse.ok) {
     throw new HttpError(
       `Failed to list artifacts for run ${runId} (${artifactsResponse.status})`,
@@ -204,8 +204,12 @@ async function downloadDeploySuiteReport(runId: string, token: string): Promise<
     headers: githubHeaders(token),
   });
   if (!archiveResponse.ok) {
+    const hint =
+      archiveResponse.status === 401 || archiveResponse.status === 403
+        ? "; check that GITHUB_TOKEN can read Actions artifacts for cloudflare/vinext and is authorized for the Cloudflare organization"
+        : "";
     throw new HttpError(
-      `Failed to download ${REPORT_ARTIFACT_NAME} for run ${runId} (${archiveResponse.status})`,
+      `Failed to download ${REPORT_ARTIFACT_NAME} for run ${runId} (${archiveResponse.status})${hint}`,
       archiveResponse.status,
     );
   }
@@ -221,7 +225,7 @@ async function downloadDeploySuiteReport(runId: string, token: string): Promise<
   return report;
 }
 
-function githubHeaders(token: string | undefined): HeadersInit {
+function githubHeaders(token?: string): HeadersInit {
   const headers: Record<string, string> = {
     Accept: "application/vnd.github+json",
     "User-Agent": "vinext-web-compatibility",
