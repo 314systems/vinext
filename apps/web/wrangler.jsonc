@@ -51,6 +51,6 @@
     },
   },
   "secrets": {
-    "required": ["COMPAT_INGEST_SECRET"],
+    "required": ["COMPAT_INGEST_SECRET", "GITHUB_TOKEN"],
   },
 }

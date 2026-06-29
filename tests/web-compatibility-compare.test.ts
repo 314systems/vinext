@@ -50,7 +50,7 @@ describe("deploy-suite report comparison", () => {
   beforeEach(() => {
     getDb.mockReset();
     getGitHubToken.mockReset();
-    getGitHubToken.mockReturnValue(undefined);
+    getGitHubToken.mockReturnValue("github-token");
   });
 
   afterEach(() => {
@@ -166,6 +166,23 @@ describe("deploy-suite report comparison", () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "A comparison run id is required" });
+  });
+
+  it("returns a configuration error when artifact downloads cannot be authenticated", async () => {
+    getGitHubToken.mockReturnValue(undefined);
+
+    const response = await POST(
+      new Request("https://example.com/api/compatibility/compare", {
+        method: "POST",
+        body: JSON.stringify({ baselineRunId: "111", targetRunId: "222" }),
+      }),
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error:
+        "GITHUB_TOKEN is not configured on the worker; deploy-suite artifact downloads require authentication.",
+    });
   });
 });
 

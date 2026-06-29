@@ -113,6 +113,15 @@ export async function POST(request: Request): Promise<Response> {
 
   try {
     const token = getGitHubToken();
+    if (!token) {
+      return Response.json(
+        {
+          error:
+            "GITHUB_TOKEN is not configured on the worker; deploy-suite artifact downloads require authentication.",
+        },
+        { status: 503 },
+      );
+    }
     const [baselineReport, targetReport] = await Promise.all([
       downloadDeploySuiteReport(baselineRunId, token),
       downloadDeploySuiteReport(targetRunId, token),
@@ -172,10 +181,7 @@ function toComparedRun(runId: string, report: DeploySuiteReport): ComparedRun {
   };
 }
 
-async function downloadDeploySuiteReport(
-  runId: string,
-  token: string | undefined,
-): Promise<DeploySuiteReport> {
+async function downloadDeploySuiteReport(runId: string, token: string): Promise<DeploySuiteReport> {
   const artifactsUrl = `https://api.github.com/repos/${OWNER}/${REPO}/actions/runs/${runId}/artifacts?per_page=100`;
   const artifactsResponse = await fetch(artifactsUrl, { headers: githubHeaders(token) });
   if (!artifactsResponse.ok) {
