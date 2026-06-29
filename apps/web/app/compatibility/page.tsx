@@ -432,10 +432,11 @@ export default async function CompatibilityPage() {
       </section>
 
       <section className="mx-auto w-full max-w-6xl px-6 pb-24">
-        <div className="mb-4">
+        <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
           <Text variant="heading2" as="h2">
-            Compare deploy suite runs
+            Deploy suite comparison
           </Text>
+          <span className="text-sm text-kumo-subtle">Compare GitHub Actions report artifacts</span>
         </div>
         <div className={CARD}>
           <DeploySuiteCompare defaultBaselineRunId={latestRun?.runKey ?? ""} />

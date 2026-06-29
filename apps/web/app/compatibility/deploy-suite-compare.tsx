@@ -60,7 +60,10 @@ const GROUPS: ReadonlyArray<{
 const inputClass =
   "h-10 w-full rounded-md border border-kumo-hairline bg-kumo-base px-3 font-mono text-sm text-kumo-default outline-none transition focus:border-kumo-primary focus:ring-2 focus:ring-kumo-primary/20";
 
-const metricClass = "rounded-md bg-kumo-elevated p-3 ring ring-kumo-hairline";
+const buttonClass =
+  "inline-flex h-10 w-full items-center justify-center rounded-md bg-zinc-950 px-4 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 lg:w-auto";
+
+const metricClass = "rounded-md bg-kumo-elevated p-4 ring ring-kumo-hairline";
 
 export function DeploySuiteCompare({ defaultBaselineRunId }: { defaultBaselineRunId: string }) {
   const [baselineRunId, setBaselineRunId] = useState(defaultBaselineRunId);
@@ -116,57 +119,73 @@ export function DeploySuiteCompare({ defaultBaselineRunId }: { defaultBaselineRu
   }
 
   return (
-    <div className="flex flex-col gap-5">
-      <form className="grid gap-4 lg:grid-cols-[1fr_1fr_auto]" onSubmit={onSubmit}>
-        <label className="flex flex-col gap-2 text-sm text-kumo-subtle">
-          Baseline run
-          <input
-            className={inputClass}
-            inputMode="numeric"
-            pattern="[0-9]*"
-            value={baselineRunId}
-            placeholder="Latest main run"
-            onChange={(event) => setBaselineRunId(event.target.value)}
-          />
-        </label>
-        <label className="flex flex-col gap-2 text-sm text-kumo-subtle">
-          Comparison run
-          <input
-            className={inputClass}
-            inputMode="numeric"
-            pattern="[0-9]*"
-            value={targetRunId}
-            placeholder="GitHub Actions run id"
-            onChange={(event) => setTargetRunId(event.target.value)}
-          />
-        </label>
-        <button
-          type="submit"
-          disabled={loading}
-          className="mt-7 h-10 rounded-md bg-kumo-primary px-4 text-sm font-medium text-white transition hover:bg-kumo-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {loading ? "Comparing..." : "Compare"}
-        </button>
+    <div className="flex flex-col gap-6">
+      <form className="rounded-md bg-kumo-elevated p-4 ring ring-kumo-hairline" onSubmit={onSubmit}>
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] lg:items-end">
+          <label className="flex min-w-0 flex-col gap-2 text-sm text-kumo-subtle">
+            <span className="font-medium text-kumo-default">Baseline run</span>
+            <input
+              className={inputClass}
+              inputMode="numeric"
+              pattern="[0-9]*"
+              value={baselineRunId}
+              placeholder="Latest main run"
+              onChange={(event) => setBaselineRunId(event.target.value)}
+            />
+          </label>
+          <label className="flex min-w-0 flex-col gap-2 text-sm text-kumo-subtle">
+            <span className="font-medium text-kumo-default">Comparison run</span>
+            <input
+              className={inputClass}
+              inputMode="numeric"
+              pattern="[0-9]*"
+              value={targetRunId}
+              placeholder="GitHub Actions run id"
+              onChange={(event) => setTargetRunId(event.target.value)}
+            />
+          </label>
+          <button type="submit" disabled={loading} className={buttonClass}>
+            {loading ? "Comparing..." : "Compare runs"}
+          </button>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-kumo-subtle">
+          {defaultBaselineRunId ? (
+            <span>
+              Latest main run:{" "}
+              <span className="font-mono text-kumo-default">{defaultBaselineRunId}</span>
+            </span>
+          ) : null}
+          {baselineRunId !== defaultBaselineRunId && defaultBaselineRunId ? (
+            <button
+              type="button"
+              className="font-medium text-kumo-primary hover:underline"
+              onClick={() => setBaselineRunId(defaultBaselineRunId)}
+            >
+              Reset baseline
+            </button>
+          ) : null}
+        </div>
       </form>
 
       {error ? (
-        <div className="rounded-md bg-red-50 p-3 text-sm text-red-700 ring ring-red-200">
-          {error}
+        <div className="rounded-md bg-red-50 p-4 text-sm text-red-700 ring ring-red-200">
+          <div className="font-medium">Comparison failed</div>
+          <div className="mt-1 leading-relaxed">{error}</div>
         </div>
       ) : null}
 
       {result ? (
-        <div className="flex flex-col gap-5">
+        <div className="flex flex-col gap-4">
+          <div className="grid gap-3 text-sm md:grid-cols-2">
+            <RunSummary label="Baseline" run={result.baseline} />
+            <RunSummary label="Comparison" run={result.target} />
+          </div>
+
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Metric label="Passed" value={result.delta.passed} />
             <Metric label="Failed" value={result.delta.failed} />
             <Metric label="Skipped" value={result.delta.skipped} />
             <Metric label="Total" value={result.delta.total} />
-          </div>
-
-          <div className="grid gap-3 text-sm md:grid-cols-2">
-            <RunSummary label="Baseline" run={result.baseline} />
-            <RunSummary label="Comparison" run={result.target} />
           </div>
 
           {!hasChanges ? (
@@ -196,8 +215,8 @@ function Metric({ label, value }: { label: string; value: number }) {
   const tone = value > 0 ? "text-red-600" : value < 0 ? "text-green-600" : "text-kumo-default";
   return (
     <div className={metricClass}>
-      <div className={`text-2xl font-semibold tracking-tight ${tone}`}>{formatted}</div>
-      <div className="text-xs text-kumo-subtle">{label} delta</div>
+      <div className="text-xs font-medium text-kumo-subtle">{label}</div>
+      <div className={`mt-1 text-2xl font-semibold tracking-tight ${tone}`}>{formatted}</div>
     </div>
   );
 }
@@ -208,12 +227,19 @@ function RunSummary({ label, run }: { label: string; run: ComparedRun }) {
     <div className="rounded-md bg-kumo-elevated p-4 ring ring-kumo-hairline">
       <div className="mb-2 flex items-center justify-between gap-3">
         <span className="font-medium text-kumo-default">{label}</span>
-        <a className="font-mono text-xs text-kumo-primary hover:underline" href={run.htmlUrl}>
+        <a
+          className="shrink-0 font-mono text-xs text-kumo-primary hover:underline"
+          href={run.htmlUrl}
+          target="_blank"
+          rel="noreferrer"
+        >
           {run.runId}
         </a>
       </div>
-      <div className="text-kumo-subtle">
-        {summary.passed} passed · {summary.failed} failed · {summary.skipped} skipped
+      <div className="flex flex-wrap gap-x-3 gap-y-1 text-kumo-subtle">
+        <span>{summary.passed} passed</span>
+        <span>{summary.failed} failed</span>
+        <span>{summary.skipped} skipped</span>
       </div>
       <div className="mt-1 font-mono text-xs text-kumo-subtle">
         {run.report.vinextRef ?? "unknown vinext ref"} ·{" "}
@@ -236,7 +262,9 @@ function ChangeGroup({
     <section className="rounded-md bg-kumo-elevated p-4 ring ring-kumo-hairline">
       <div className="mb-3 flex items-baseline justify-between gap-3">
         <h4 className="text-sm font-medium text-kumo-default">{title}</h4>
-        <span className="text-xs text-kumo-subtle">{changes.length}</span>
+        <span className="rounded-full bg-kumo-base px-2 py-0.5 text-xs text-kumo-subtle ring ring-kumo-hairline">
+          {changes.length}
+        </span>
       </div>
       {changes.length === 0 ? (
         <p className="text-sm text-kumo-subtle">{empty}</p>
