@@ -24,6 +24,7 @@ import { CompatibilityViews } from "./compatibility-views";
 import type { GridCell } from "./contribution-grid";
 import type { TrendPoint } from "./compatibility-line-chart";
 import { bucketByRouter, bucketPassRate } from "./router-buckets";
+import { DeploySuiteCompare } from "./deploy-suite-compare";
 
 // ISR: rebuild this page at most every 5 minutes. Compat data only changes
 // when a nightly deploy-suite run lands, so 5 minutes of staleness is fine
@@ -427,6 +428,17 @@ export default async function CompatibilityPage() {
           >
             View deploy suite runs
           </LinkButton>
+        </div>
+      </section>
+
+      <section className="mx-auto w-full max-w-6xl px-6 pb-24">
+        <div className="mb-4">
+          <Text variant="heading2" as="h2">
+            Compare deploy suite runs
+          </Text>
+        </div>
+        <div className={CARD}>
+          <DeploySuiteCompare defaultBaselineRunId={latestRun?.runKey ?? ""} />
         </div>
       </section>
     </>
