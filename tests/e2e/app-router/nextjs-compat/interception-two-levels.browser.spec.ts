@@ -1,17 +1,20 @@
 import fs from "node:fs/promises";
-import type { Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, test } from "@playwright/test";
 import { waitForAppRouterHydration } from "../../helpers";
+import {
+  startChildProductionServer,
+  stopChildProductionServer,
+  type ChildProductionServer,
+} from "../../production-server";
 
-async function closeServer(server: Server): Promise<void> {
-  const closed = new Promise<void>((resolve) => server.close(() => resolve()));
-  server.closeIdleConnections();
-  server.closeAllConnections();
-  await closed;
-}
+type ProductionApp = {
+  root: string;
+  server: ChildProductionServer;
+  url: string;
+};
 
 async function linkFixtureNodeModules(fixtureRoot: string): Promise<void> {
   const source = path.resolve(process.cwd(), "tests/fixtures/app-basic/node_modules");
@@ -27,7 +30,7 @@ async function linkFixtureNodeModules(fixtureRoot: string): Promise<void> {
   }
 }
 
-async function buildFixture() {
+async function buildFixture(): Promise<ProductionApp> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-interception-two-levels-"));
   const app = path.join(root, "app");
   await fs.mkdir(path.join(app, "foo", "bar", "(..)(..)hoge"), { recursive: true });
@@ -71,16 +74,8 @@ export default defineConfig({ plugins: [vinext({ appDir: import.meta.dirname })]
     pathToFileURL(path.resolve(process.cwd(), "packages/vinext/dist/build/run-prerender.js")).href
   );
   await runPrerender({ root });
-  const { startProdServer } = await import(
-    pathToFileURL(path.resolve(process.cwd(), "packages/vinext/dist/server/prod-server.js")).href
-  );
-  const started = await startProdServer({
-    host: "127.0.0.1",
-    port: 0,
-    outDir: path.join(root, "dist"),
-    noCompression: true,
-  });
-  return { root, server: started.server, url: `http://127.0.0.1:${started.port}` };
+  const server = await startChildProductionServer(root);
+  return { root, server, url: `http://127.0.0.1:${server.port}` };
 }
 
 test.setTimeout(90_000);
@@ -99,7 +94,7 @@ test("restores a two-level interception on forward navigation", async ({ page })
     await expect(page.locator("#intercepted")).toHaveText("intercepted");
   } finally {
     await page.close();
-    await closeServer(fixture.server);
+    await stopChildProductionServer(fixture.server);
     await fs.rm(fixture.root, { recursive: true, force: true });
   }
 });
