@@ -488,19 +488,26 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     if (originBlock) return originBlock;
   }
 
-  const normalized = normalizeRscRequest(request, options.basePath, {
-    allowOutOfBasePath: true,
-  });
+  const canHandleOutsideBasePath =
+    Boolean(options.runMiddleware) ||
+    [
+      ...options.configRedirects,
+      ...options.configRewrites.beforeFiles,
+      ...options.configRewrites.afterFiles,
+      ...options.configRewrites.fallback,
+      ...options.configHeaders,
+    ].some((rule) => rule.basePath === false);
+  const normalized = normalizeRscRequest(request, options.basePath, canHandleOutsideBasePath);
   if (normalized instanceof Response) return normalized;
 
   const {
-    hadBasePath,
     url,
     isRscRequest,
     interceptionContextHeader,
     mountedSlotsHeader,
     renderMode,
     clientReuseManifest,
+    hadBasePath,
   } = normalized;
   let { pathname, cleanPathname } = normalized;
   let resolvedUrl = cleanPathname + url.search;
@@ -514,15 +521,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   //   "should have the canonical url pathname on rewrite"
   const canonicalPathname = cleanPathname;
 
-  // Preserve whether the original request was under basePath so config rules
-  // can apply Next.js's basePath gating. Filesystem routes remain disabled for
-  // out-of-basePath requests until middleware or a config rewrite explicitly
-  // maps the request into framework-owned routing.
   const basePathState = { basePath: options.basePath, hadBasePath };
-  let configRewriteFired = false;
-  let didMiddlewareRewrite = false;
-  const canUseFilesystemRoutes = (): boolean =>
-    !options.basePath || hadBasePath || didMiddlewareRewrite || configRewriteFired;
 
   if (
     pathname === VINEXT_PRERENDER_STATIC_PARAMS_PATH ||
@@ -541,9 +540,12 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     if (prerenderEndpointResponse) return prerenderEndpointResponse;
   }
 
-  const trailingSlashRedirect = hadBasePath
-    ? normalizeTrailingSlash(pathname, options.basePath, options.trailingSlash, url.search)
-    : null;
+  const trailingSlashRedirect = normalizeTrailingSlash(
+    pathname,
+    hadBasePath ? options.basePath : "",
+    options.trailingSlash,
+    url.search,
+  );
   if (trailingSlashRedirect) return trailingSlashRedirect;
 
   // Default-locale path normalisation (issue #1336, item 4). Next.js
@@ -599,6 +601,9 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     requestHeaders: null,
     status: null,
   };
+  let didMiddlewareRewrite = false;
+  let didMiddlewareRewritePathname = false;
+
   if (options.runMiddleware) {
     const middlewareResult = await options.runMiddleware({
       cleanPathname,
@@ -617,7 +622,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     }
 
     cleanPathname = middlewareResult.cleanPathname;
-    didMiddlewareRewrite = cleanPathname !== normalized.cleanPathname;
+    didMiddlewareRewrite = middlewareResult.rewritten;
+    didMiddlewareRewritePathname = cleanPathname !== normalized.cleanPathname;
     if (middlewareResult.search !== null) {
       url.search = middlewareResult.search;
     }
@@ -626,6 +632,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
 
   const scriptNonce = getScriptNonceFromHeaderSources(request.headers, middlewareContext.headers);
   const postMiddlewareRequestContext = buildPostMwRequestContext(userlandRequest);
+  let filesystemRouteEligible = hadBasePath || didMiddlewareRewrite;
 
   // Rewrites (beforeFiles, afterFiles, fallback) use `matchPathname` from
   // above to splice in the default locale before matching. Route matching
@@ -653,11 +660,11 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     if (beforeFilesRewrite) {
       resolvedUrl = mergeRewriteQuery(resolvedUrl, beforeFilesRewrite);
       cleanPathname = pathnameForResolvedUrl(resolvedUrl);
-      configRewriteFired = true;
+      filesystemRouteEligible = true;
     }
   }
 
-  if (canUseFilesystemRoutes() && isImageOptimizationPath(cleanPathname)) {
+  if (filesystemRouteEligible && isImageOptimizationPath(cleanPathname)) {
     const imageRedirect = resolveDevImageRedirect(
       url,
       [
@@ -672,7 +679,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     return Response.redirect(new URL(imageRedirect, url.origin).href, 302);
   }
 
-  if (canUseFilesystemRoutes() && options.handleMetadataRouteRequest) {
+  if (filesystemRouteEligible && options.handleMetadataRouteRequest) {
     const metadataRouteResponse = await options.handleMetadataRouteRequest(cleanPathname);
     if (metadataRouteResponse) {
       applyConfigHeadersToResponse(metadataRouteResponse.headers, {
@@ -686,7 +693,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     }
   }
 
-  const publicFileResponse = canUseFilesystemRoutes()
+  const publicFileResponse = filesystemRouteEligible
     ? resolvePublicFileRoute({
         cleanPathname,
         middlewareContext,
@@ -725,7 +732,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   // page renders, so there is no stale-value risk for ordinary page renders.
   // For action requests we intentionally do not re-run rewrites — actions
   // are always processed against the cleanPathname they were posted to.
-  const preActionMatch = canUseFilesystemRoutes() ? options.matchRoute(cleanPathname) : null;
+  const preActionMatch = filesystemRouteEligible ? options.matchRoute(cleanPathname) : null;
   if (preActionMatch) {
     setRootParams(pickRootParams(preActionMatch.params, preActionMatch.route.rootParamNames));
   }
@@ -735,10 +742,9 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   const contentType = request.headers.get("content-type") || "";
 
   const isPostRequest = request.method.toUpperCase() === "POST";
-  const canDispatchAppRoute = canUseFilesystemRoutes();
   let progressiveActionResult: Response | ProgressiveActionFormStateResult | null = null;
   if (
-    canDispatchAppRoute &&
+    filesystemRouteEligible &&
     isPostRequest &&
     contentType.startsWith("multipart/form-data") &&
     !actionId
@@ -782,7 +788,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   }
 
   const serverActionResponse =
-    canDispatchAppRoute && isPostRequest && actionId && options.handleServerActionRequest
+    filesystemRouteEligible && isPostRequest && actionId && options.handleServerActionRequest
       ? await options.handleServerActionRequest({
           actionId,
           cleanPathname,
@@ -796,7 +802,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
         })
       : null;
   if (serverActionResponse) return serverActionResponse;
-  if (canDispatchAppRoute && isPostRequest && actionId && !options.handleServerActionRequest) {
+  if (filesystemRouteEligible && isPostRequest && actionId && !options.handleServerActionRequest) {
     return createMissingServerActionResponse(options, actionId);
   }
 
@@ -804,12 +810,12 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   const renderPagesForMatchKind = async (
     matchKind: "dynamic" | "static",
   ): Promise<Response | null> => {
-    if (!canUseFilesystemRoutes()) return null;
+    if (!filesystemRouteEligible) return null;
     const response =
       match === null || match.route.isDynamic
         ? ((await options.renderPagesFallback?.({
             appRouteMatch: match ?? null,
-            allowRscDocumentFallback: didMiddlewareRewrite,
+            allowRscDocumentFallback: didMiddlewareRewritePathname,
             isDataRequest,
             isRscRequest,
             matchKind,
@@ -856,7 +862,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       if (!afterFilesRewrite) continue;
       resolvedUrl = mergeRewriteQuery(resolvedUrl, afterFilesRewrite);
       cleanPathname = pathnameForResolvedUrl(resolvedUrl);
-      configRewriteFired = true;
+      filesystemRouteEligible = true;
       match = options.matchRoute(cleanPathname);
       const rewrittenStaticPagesResponse = await renderPagesForMatchKind("static");
       if (rewrittenStaticPagesResponse) {
@@ -899,7 +905,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       if (!fallbackRewrite) continue;
       resolvedUrl = mergeRewriteQuery(resolvedUrl, fallbackRewrite);
       cleanPathname = pathnameForResolvedUrl(resolvedUrl);
-      configRewriteFired = true;
+      filesystemRouteEligible = true;
       match = options.matchRoute(cleanPathname);
       const rewrittenStaticPagesResponse = await renderPagesForMatchKind("static");
       if (rewrittenStaticPagesResponse) {
@@ -913,6 +919,13 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       }
       if (match) break;
     }
+  }
+
+  if (!filesystemRouteEligible) {
+    options.clearRequestContext();
+    const headers = new Headers();
+    mergeMiddlewareResponseHeaders(headers, middlewareContext.headers);
+    return notFoundResponse({ headers });
   }
 
   if (pagesDataRequest) {
@@ -944,7 +957,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       return new Response("", { status: 404 });
     }
 
-    const renderedNotFoundResponse = canUseFilesystemRoutes()
+    const renderedNotFoundResponse = filesystemRouteEligible
       ? await options.renderNotFound({
           isRscRequest,
           middlewareContext,

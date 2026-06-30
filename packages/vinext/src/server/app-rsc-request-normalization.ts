@@ -28,8 +28,6 @@ export { normalizeMountedSlotsHeader } from "./app-mounted-slots-header.js";
 export type NormalizedRscRequest = {
   /** Parsed URL. Callers may mutate `url.search` after middleware runs. */
   url: URL;
-  /** True when the incoming pathname was under the configured basePath. */
-  hadBasePath: boolean;
   /** Normalized pathname with basePath stripped. Used for all internal routing. */
   pathname: string;
   /** Pathname with `.rsc` suffix removed. Used for route matching and navigation context. */
@@ -44,7 +42,15 @@ export type NormalizedRscRequest = {
   renderMode: AppRscRenderMode;
   /** Parsed ClientReuseManifest hint. Verification and skip authorization happen later. */
   clientReuseManifest: ClientReuseManifestParseResult;
+  /** Whether the incoming pathname included the configured basePath. */
+  hadBasePath: boolean;
 };
+
+type NormalizeRscRequestOptions =
+  | boolean
+  | {
+      allowOutOfBasePath?: boolean;
+    };
 
 /**
  * Normalize an App Router RSC request.
@@ -80,8 +86,10 @@ export type NormalizedRscRequest = {
 export function normalizeRscRequest(
   request: Request,
   basePath: string,
-  options: { allowOutOfBasePath?: boolean } = {},
+  options: NormalizeRscRequestOptions = false,
 ): Response | NormalizedRscRequest {
+  const allowOutOfBasePath =
+    typeof options === "boolean" ? options : (options.allowOutOfBasePath ?? false);
   const url = new URL(request.url);
 
   // Step 2: Guard against protocol-relative open redirects on the raw pathname.
@@ -102,16 +110,16 @@ export function normalizeRscRequest(
 
   // Step 4: Collapse double-slashes and resolve . / .. segments.
   let pathname = normalizePath(decoded);
+  let hadBasePath = true;
 
   // Step 5: basePath check and strip.
   // Skipped when basePath is empty (no basePath configured).
   // /__vinext/ prefix bypasses the check for internal prerender endpoints
   // that must be reachable regardless of basePath configuration.
-  let hadBasePath = true;
   if (basePath) {
     hadBasePath = hasBasePath(pathname, basePath);
     if (!hadBasePath && !pathname.startsWith("/__vinext/")) {
-      if (!options.allowOutOfBasePath) return notFoundResponse();
+      if (!allowOutOfBasePath) return notFoundResponse();
     } else if (hadBasePath) {
       pathname = stripBasePath(pathname, basePath);
     }
