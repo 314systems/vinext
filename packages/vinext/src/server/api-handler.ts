@@ -19,7 +19,6 @@ import {
   parseQueryString,
   urlQueryToSearchParams,
 } from "../utils/query.js";
-import { parseCookieHeader } from "../utils/parse-cookie.js";
 import { PagesBodyParseError, getMediaType, isJsonMediaType } from "./pages-media-type.js";
 import { isEdgeApiRuntime } from "./edge-api-runtime.js";
 import {
@@ -34,6 +33,7 @@ import {
 } from "./pages-revalidate.js";
 import { NextRequest } from "vinext/shims/server";
 import { hasBasePath } from "../utils/base-path.js";
+import { attachPagesRequestCookies } from "./pages-node-compat.js";
 
 /**
  * Extend the Node.js request with Next.js-style helpers.
@@ -140,13 +140,6 @@ async function parseBody(
       }
     });
   });
-}
-
-/**
- * Parse cookies from the Cookie header.
- */
-function parseCookies(req: IncomingMessage): Record<string, string> {
-  return parseCookieHeader(req.headers.cookie);
 }
 
 function isEdgeApiRouteModule(module: Record<string, unknown>): module is EdgeApiRouteModule {
@@ -291,11 +284,11 @@ function enhanceApiObjects(
   query: Record<string, string | string[]>,
   body: unknown,
 ): { apiReq: NextApiRequest; apiRes: NextApiResponse } {
-  const apiReq: NextApiRequest = Object.assign(req, {
+  const apiReq = Object.assign(req, {
     body,
-    cookies: parseCookies(req),
     query,
-  });
+  }) as NextApiRequest;
+  attachPagesRequestCookies(apiReq);
 
   const apiRes: NextApiResponse = Object.assign(res, {
     status(this: NextApiResponse, code: number) {
