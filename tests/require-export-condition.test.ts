@@ -124,7 +124,8 @@ const dynamicValue = require(name);`,
   });
 
   it("loads external packages through createRequire at runtime", async () => {
-    const plugin = createRequireExportConditionPlugin();
+    const externalRequireSpecifiers = new Set<string>();
+    const plugin = createRequireExportConditionPlugin({ externalRequireSpecifiers });
     const resolve = vi.fn().mockResolvedValue({ id: "external-pkg", external: true });
     const resolveId = plugin.resolveId as unknown as (
       this: { resolve: typeof resolve },
@@ -137,6 +138,7 @@ const dynamicValue = require(name);`,
       "/app/page.tsx",
     );
     expect(resolvedProxyId).toBe(expectedResolvedProxyId("external-pkg"));
+    expect(externalRequireSpecifiers).toEqual(new Set(["external-pkg"]));
 
     const load = plugin.load as (id: string) => string | null;
     expect(load(resolvedProxyId ?? "")).toContain('createRequire(import.meta.url)("external-pkg")');
@@ -181,6 +183,50 @@ const dynamicValue = require(name);`,
       ),
     ).resolves.toBeNull();
     expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("does not rewrite when require is bound in module scope", async () => {
+    const plugin = createRequireExportConditionPlugin();
+    const resolve = vi.fn();
+
+    await expect(
+      getTransform(plugin).handler.call(
+        { environment: { name: "rsc" }, resolve },
+        `const require = createRequire(import.meta.url);
+const value = require("pkg");`,
+        "/app/page.tsx",
+      ),
+    ).resolves.toBeNull();
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("rewrites unbound requires even when a nested scope binds require", async () => {
+    await withModule(`module.exports = { value: "server" };`, async (moduleId) => {
+      const plugin = createRequireExportConditionPlugin();
+      const resolve = vi.fn().mockImplementation(async (specifier: string) => {
+        if (specifier === "server-pkg") return { id: moduleId };
+        throw new Error(`unexpected resolve: ${specifier}`);
+      });
+
+      const result = await getTransform(plugin).handler.call(
+        { environment: { name: "rsc" }, resolve },
+        `const value = require("server-pkg");
+function helper(require: (id: string) => unknown) {
+  return require("shadowed-pkg");
+}`,
+        "/app/page.tsx",
+      );
+
+      expect(result?.code).toContain(
+        `require(${JSON.stringify(proxyId("server-pkg"))}).__vinextRequireValue`,
+      );
+      expect(result?.code).toContain('return require("shadowed-pkg");');
+      expect(resolve).toHaveBeenCalledOnce();
+      expect(resolve).toHaveBeenCalledWith("server-pkg", "/app/page.tsx", {
+        skipSelf: true,
+        kind: "require-call",
+      });
+    });
   });
 
   it("leaves bare Node builtins alone", async () => {

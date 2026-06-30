@@ -337,11 +337,15 @@ export default function Page() { return <p>external: {value}; falsy: {String(fal
           logLevel: "silent",
         });
         const routes = [["", "external: require; falsy: false"]] as const;
+        const outDir = path.join(root, "dist");
 
         await withDevServer(createConfig, (baseUrl) => expectRoutes(baseUrl, routes));
-        await withProdServer(createConfig, path.join(root, "dist"), (baseUrl) =>
-          expectRoutes(baseUrl, routes),
-        );
+        await withProdServer(createConfig, outDir, (baseUrl) => expectRoutes(baseUrl, routes));
+        const manifest = JSON.parse(
+          fs.readFileSync(path.join(outDir, "server", "vinext-externals.json"), "utf-8"),
+        ) as string[];
+        expect(manifest).toContain("external-condition");
+        expect(manifest).toContain("external-falsy");
       });
     },
     90_000,

@@ -4,6 +4,7 @@ import { createRequire, isBuiltin } from "node:module";
 import MagicString from "magic-string";
 import { parseAst, type Plugin } from "vite";
 import {
+  collectBindingNames,
   forEachAstChild,
   hasRange,
   isAstRecord,
@@ -11,6 +12,16 @@ import {
   type AstRange,
   type AstRecord,
 } from "./ast-utils.js";
+import {
+  collectDirectScopeBindings,
+  collectLoopScopeBindings,
+  collectSwitchScopeBindings,
+  collectVarScopeBindings,
+  createAstScope,
+  hasAstBinding,
+  isFunctionNode,
+  type AstScope,
+} from "./ast-scope.js";
 
 const REQUIRE_PROXY_PREFIX = "virtual:vinext-require-condition:";
 const REQUIRE_MODULE_SUFFIX = ".vinext-require.js";
@@ -22,7 +33,13 @@ type StaticRequire = {
   specifier: string;
 };
 
-export function createRequireExportConditionPlugin(): Plugin {
+type RequireExportConditionPluginOptions = {
+  externalRequireSpecifiers?: Set<string>;
+};
+
+export function createRequireExportConditionPlugin(
+  options: RequireExportConditionPluginOptions = {},
+): Plugin {
   const clientRequireModules = new Map<string, string>();
   const serverRequireModules = new Map<string, string>();
   const externalRequireModules = new Map<string, string>();
@@ -49,8 +66,6 @@ export function createRequireExportConditionPlugin(): Plugin {
         } catch {
           return null;
         }
-        if (hasRequireBinding(ast)) return null;
-
         const requires = collectStaticPackageRequires(ast);
         if (requires.length === 0) return null;
 
@@ -93,6 +108,7 @@ export function createRequireExportConditionPlugin(): Plugin {
       if (resolved.external) {
         const requireModuleId = `\0${cleanId}${REQUIRE_MODULE_SUFFIX}`;
         externalRequireModules.set(requireModuleId, specifier);
+        options.externalRequireSpecifiers?.add(specifier);
         return requireModuleId;
       }
 
@@ -218,52 +234,6 @@ function getLeadingReactDirective(code: string): "use client" | "use server" | n
   return null;
 }
 
-function hasRequireBinding(ast: unknown): boolean {
-  let found = false;
-
-  function visit(value: unknown): void {
-    if (found || !isAstRecord(value)) return;
-
-    if (
-      (value.type === "VariableDeclarator" && isRequireBinding(value.id)) ||
-      ((value.type === "FunctionDeclaration" ||
-        value.type === "FunctionExpression" ||
-        value.type === "ArrowFunctionExpression") &&
-        nodeArray(value.params).some(isRequireBinding)) ||
-      (value.type === "CatchClause" && isRequireBinding(value.param)) ||
-      ((value.type === "ImportDefaultSpecifier" ||
-        value.type === "ImportNamespaceSpecifier" ||
-        value.type === "ImportSpecifier") &&
-        isRequireBinding(value.local)) ||
-      ((value.type === "FunctionDeclaration" || value.type === "ClassDeclaration") &&
-        isRequireBinding(value.id))
-    ) {
-      found = true;
-      return;
-    }
-
-    forEachAstChild(value, visit);
-  }
-
-  visit(ast);
-  return found;
-}
-
-function isRequireBinding(value: unknown): boolean {
-  if (!isAstRecord(value)) return false;
-  if (value.type === "Identifier") return value.name === "require";
-  if (value.type === "AssignmentPattern") return isRequireBinding(value.left);
-  if (value.type === "RestElement") return isRequireBinding(value.argument);
-  if (value.type === "ArrayPattern") return nodeArray(value.elements).some(isRequireBinding);
-  if (value.type === "ObjectPattern") {
-    return nodeArray(value.properties).some((property) => {
-      if (!isAstRecord(property)) return false;
-      return isRequireBinding(property.type === "Property" ? property.value : property.argument);
-    });
-  }
-  return false;
-}
-
 function langForId(id: string): "jsx" | "ts" | "tsx" {
   const cleanId = id.split("?", 1)[0]?.toLowerCase() ?? id.toLowerCase();
   if (cleanId.endsWith(".tsx")) return "tsx";
@@ -275,27 +245,105 @@ function langForId(id: string): "jsx" | "ts" | "tsx" {
 
 function collectStaticPackageRequires(ast: unknown): StaticRequire[] {
   const requires: StaticRequire[] = [];
+  if (!isAstRecord(ast)) return requires;
 
-  function visit(value: unknown): void {
-    if (!isAstRecord(value)) return;
-    const requireCall = parseStaticPackageRequire(value);
+  const rootScope = createAstScope(null);
+  collectDirectScopeBindings(ast, rootScope);
+  collectVarScopeBindings(ast, rootScope);
+
+  function visit(node: AstRecord, parentScope: AstScope): void {
+    if (isFunctionNode(node)) {
+      const parameterScope = createAstScope(parentScope);
+      collectBindingNames(node.id, parameterScope.bindings);
+      for (const parameter of nodeArray(node.params)) {
+        collectBindingNames(parameter, parameterScope.bindings);
+        if (isAstRecord(parameter)) visit(parameter, parameterScope);
+      }
+
+      if (isAstRecord(node.body)) {
+        if (node.body.type === "BlockStatement") {
+          const bodyScope = createAstScope(parameterScope);
+          collectDirectScopeBindings(node.body, bodyScope);
+          collectVarScopeBindings(node.body, bodyScope);
+          for (const statement of nodeArray(node.body.body)) {
+            if (isAstRecord(statement)) visit(statement, bodyScope);
+          }
+        } else {
+          visit(node.body, parameterScope);
+        }
+      }
+      return;
+    }
+
+    if (node.type === "SwitchStatement") {
+      if (isAstRecord(node.discriminant)) visit(node.discriminant, parentScope);
+      const switchScope = createAstScope(parentScope);
+      collectSwitchScopeBindings(node, switchScope);
+      for (const switchCase of nodeArray(node.cases)) {
+        if (isAstRecord(switchCase)) visit(switchCase, switchScope);
+      }
+      return;
+    }
+
+    const scope = createChildRequireScope(node, parentScope) ?? parentScope;
+    const requireCall = parseStaticPackageRequire(node, scope);
     if (requireCall) {
       requires.push(requireCall);
       return;
     }
-    forEachAstChild(value, visit);
+    forEachAstChild(node, (child) => {
+      if (isAstRecord(child)) visit(child, scope);
+    });
   }
 
-  visit(ast);
+  for (const statement of nodeArray(ast.body)) {
+    if (isAstRecord(statement)) visit(statement, rootScope);
+  }
   return requires;
 }
 
-function parseStaticPackageRequire(node: AstRecord): StaticRequire | null {
+function createChildRequireScope(node: AstRecord, parentScope: AstScope): AstScope | null {
+  if (
+    node.type !== "BlockStatement" &&
+    node.type !== "StaticBlock" &&
+    node.type !== "TSModuleBlock" &&
+    node.type !== "CatchClause" &&
+    node.type !== "ForStatement" &&
+    node.type !== "ForInStatement" &&
+    node.type !== "ForOfStatement" &&
+    node.type !== "ClassDeclaration" &&
+    node.type !== "ClassExpression"
+  ) {
+    return null;
+  }
+
+  const scope = createAstScope(parentScope);
+  if (node.type === "ClassDeclaration" || node.type === "ClassExpression") {
+    collectBindingNames(node.id, scope.bindings);
+  } else if (node.type === "CatchClause") {
+    collectBindingNames(node.param, scope.bindings);
+  }
+  collectDirectScopeBindings(node, scope);
+  if (node.type === "StaticBlock" || node.type === "TSModuleBlock") {
+    collectVarScopeBindings(node, scope);
+  }
+  if (
+    node.type === "ForStatement" ||
+    node.type === "ForInStatement" ||
+    node.type === "ForOfStatement"
+  ) {
+    collectLoopScopeBindings(node, scope);
+  }
+  return scope;
+}
+
+function parseStaticPackageRequire(node: AstRecord, scope: AstScope): StaticRequire | null {
   if (node.type !== "CallExpression" || !hasRange(node)) return null;
   const callee = node.callee;
   if (!isAstRecord(callee) || callee.type !== "Identifier" || callee.name !== "require") {
     return null;
   }
+  if (hasAstBinding(scope, "require")) return null;
 
   const args = nodeArray(node.arguments);
   if (args.length !== 1) return null;
