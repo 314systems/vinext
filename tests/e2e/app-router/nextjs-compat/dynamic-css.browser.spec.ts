@@ -1,22 +1,19 @@
 import fs from "node:fs/promises";
-import type { Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, test } from "../../fixtures";
+import {
+  startChildProductionServer,
+  stopChildProductionServer,
+  type ChildProductionServer,
+} from "../../production-server";
 
 type ProductionApp = {
   baseUrl: string;
   fixtureRoot: string;
-  server: Server;
+  server: ChildProductionServer;
 };
-
-async function closeServer(server: Server): Promise<void> {
-  const closed = new Promise<void>((resolve) => server.close(() => resolve()));
-  server.closeIdleConnections();
-  server.closeAllConnections();
-  await closed;
-}
 
 async function linkFixtureNodeModules(fixtureRoot: string): Promise<void> {
   const targetNodeModules = path.join(fixtureRoot, "node_modules");
@@ -288,20 +285,12 @@ async function buildAndServeFixture(): Promise<ProductionApp> {
   );
   await runPrerender({ root: fixtureRoot });
 
-  const { startProdServer } = await import(
-    pathToFileURL(path.resolve(process.cwd(), "packages/vinext/dist/server/prod-server.js")).href
-  );
-  const started = await startProdServer({
-    host: "127.0.0.1",
-    port: 0,
-    outDir: path.join(fixtureRoot, "dist"),
-    noCompression: true,
-  });
+  const started = await startChildProductionServer(fixtureRoot);
 
   return {
     baseUrl: `http://127.0.0.1:${started.port}`,
     fixtureRoot,
-    server: started.server,
+    server: started,
   };
 }
 
@@ -365,7 +354,7 @@ test("preserves CSS order across layouts, client components, and next/dynamic", 
     await expect(page.locator("#dynamic-css-hybrid-shared")).toHaveText("Hybrid shared");
     await expect(page.locator("#dynamic-css-hybrid-shared")).toHaveCSS("color", "rgb(0, 128, 128)");
   } finally {
-    await closeServer(app.server);
+    await stopChildProductionServer(app.server);
     await fs.rm(app.fixtureRoot, { recursive: true, force: true });
   }
 });
