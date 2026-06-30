@@ -19,6 +19,7 @@ async function withModule(content: string, run: (id: string) => Promise<void>): 
 
 function getTransform(plugin: ReturnType<typeof createRequireExportConditionPlugin>) {
   return plugin.transform as unknown as {
+    filter: { id: { exclude: RegExp } };
     handler: (
       this: { environment?: { name: string }; resolve: ReturnType<typeof vi.fn> },
       code: string,
@@ -244,6 +245,23 @@ const path = require("node:path");`,
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("does not rewrite requires from dependency modules", async () => {
+    const plugin = createRequireExportConditionPlugin();
+    const resolve = vi.fn();
+    const transform = getTransform(plugin);
+
+    expect(transform.filter.id.exclude.test("/app/node_modules/pkg/index.js")).toBe(true);
+    expect(transform.filter.id.exclude.test("C:\\app\\node_modules\\pkg\\index.js")).toBe(true);
+    await expect(
+      transform.handler.call(
+        { environment: { name: "rsc" }, resolve },
+        `const value = require("pkg");`,
+        "/app/node_modules/pkg/index.js",
+      ),
+    ).resolves.toBeNull();
+    expect(resolve).not.toHaveBeenCalled();
   });
 
   it("does not rewrite requires outside the RSC environment", async () => {

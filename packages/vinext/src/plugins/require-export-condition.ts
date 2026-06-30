@@ -14,6 +14,7 @@ import {
 
 const REQUIRE_PROXY_PREFIX = "virtual:vinext-require-condition:";
 const REQUIRE_MODULE_SUFFIX = ".vinext-require.js";
+const NODE_MODULES_RE = /[\\/]node_modules[\\/]/;
 
 type StaticRequire = {
   argument: AstRange;
@@ -32,12 +33,15 @@ export function createRequireExportConditionPlugin(): Plugin {
     sharedDuringBuild: true,
     transform: {
       filter: {
-        id: /\.(?:[cm]?[jt]s|[jt]sx)(?:\?.*)?$/i,
+        id: {
+          include: /\.(?:[cm]?[jt]s|[jt]sx)(?:\?.*)?$/i,
+          exclude: NODE_MODULES_RE,
+        },
         code: /\brequire\s*\(/,
       },
       async handler(code, id) {
         if (this.environment && this.environment.name !== "rsc") return null;
-        if (id.includes("node_modules")) return null;
+        if (isNodeModulesId(id)) return null;
 
         let ast: unknown;
         try {
