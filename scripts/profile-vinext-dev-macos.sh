@@ -259,6 +259,38 @@ clear_directory_contents() {
   find "${path}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 }
 
+is_path_inside() {
+  local path="$1"
+  local parent="$2"
+
+  case "${path}/" in
+    "${parent%/}/"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+dev_server_url_from_log() {
+  local log_file="$1"
+  local route="$2"
+  local line=""
+  local base=""
+
+  line="$(grep -m1 -E "Local:[[:space:]]+https?://" "${log_file}" 2>/dev/null || true)"
+  if [[ -z "${line}" ]]; then
+    line="$(grep -m1 -E "Network:[[:space:]]+https?://" "${log_file}" 2>/dev/null || true)"
+  fi
+  if [[ -z "${line}" ]]; then
+    return 0
+  fi
+
+  base="$(printf '%s\n' "${line}" | sed -E 's/.*(Local|Network):[[:space:]]+(https?:\/\/[^[:space:]]+).*/\2/')"
+  if [[ "${base}" != http://* && "${base}" != https://* ]]; then
+    return 0
+  fi
+
+  printf '%s%s\n' "${base%/}" "${route}"
+}
+
 allocate_port() {
   node <<'NODE'
 const net = require("node:net");
@@ -348,9 +380,11 @@ wait_for_profiled_route() {
   local process_log="$5"
   local command_log="$6"
   local response_file="$7"
+  local route="$8"
   local deadline
   local attempts=0
   local status
+  local detected_url
 
   deadline=$((SECONDS + timeout_seconds))
   {
@@ -371,14 +405,25 @@ wait_for_profiled_route() {
       return 1
     fi
 
+    detected_url="$(dev_server_url_from_log "${command_log}" "${route}")"
+    if [[ -n "${detected_url}" && "${detected_url}" != "${url}" ]]; then
+      {
+        echo "=== $(date -Iseconds) route URL detected ==="
+        echo "configured_url=${url}"
+        echo "detected_url=${detected_url}"
+        echo
+      } >>"${process_log}"
+      url="${detected_url}"
+    fi
+
     status="$(
       curl -sS --max-time 2 -o "${response_file}" -w "%{http_code}" "${url}" \
         2>>"${process_log}" || true
     )"
     attempts=$((attempts + 1))
 
-    if [[ "${status}" =~ ^2 ]] &&
-      { [[ -z "${expected_text}" ]] || grep -Fq -- "${expected_text}" "${response_file}" 2>/dev/null; }; then
+    if { [[ -z "${expected_text}" ]] && [[ "${status}" =~ ^[1-5][0-9][0-9]$ ]]; } ||
+      { [[ "${status}" =~ ^2 ]] && grep -Fq -- "${expected_text}" "${response_file}" 2>/dev/null; }; then
       {
         echo "=== $(date -Iseconds) route ready ==="
         echo "status=${status}"
@@ -403,7 +448,7 @@ wait_for_profiled_route() {
     if [[ -n "${expected_text}" ]]; then
       echo "Timed out waiting for ${url} to return a 2xx response containing ${expected_text}."
     else
-      echo "Timed out waiting for ${url} to return a 2xx response."
+      echo "Timed out waiting for ${url} to return an HTTP response."
     fi
     echo
     echo "--- command.log tail ---"
@@ -577,11 +622,20 @@ EOF
 
   local timestamp
   timestamp="$(date +%Y%m%d-%H%M%S)"
-  local output_dir
+  local final_output_dir
   if [[ "${out_root}" == */vinext-dev-profile-* ]]; then
-    output_dir="$(absolute_path "${out_root}")"
+    final_output_dir="$(absolute_path "${out_root}")"
   else
-    output_dir="$(absolute_path "${out_root}")/vinext-dev-profile-${timestamp}"
+    final_output_dir="$(absolute_path "${out_root}")/vinext-dev-profile-${timestamp}"
+  fi
+  local output_dir="${final_output_dir}"
+  local staged_output_parent=""
+  local copy_staged_output="0"
+  if [[ "${profile_mode}" != "benchmark-cold-start" ]] &&
+    is_path_inside "${final_output_dir}" "${command_cwd}"; then
+    staged_output_parent="$(mktemp -d "${TMPDIR:-/tmp}/vinext-profile-live.XXXXXXXX")"
+    output_dir="${staged_output_parent}/$(basename "${final_output_dir}")"
+    copy_staged_output="1"
   fi
   mkdir -p "${output_dir}"
 
@@ -698,7 +752,7 @@ EOF
   fi
   samply_args+=("--" "${command_args[@]}")
 
-  write_metadata "${metadata_file}" "${output_dir}" "${command_args[@]}"
+  write_metadata "${metadata_file}" "${final_output_dir}" "${command_args[@]}"
   if [[ "${node_perf}" != "0" ]]; then
     append_node_option "--perf-prof"
     append_node_option "--perf-basic-prof"
@@ -717,10 +771,16 @@ EOF
     echo "require_route=${require_route}"
     echo "setup_benchmark=${setup_benchmark}"
     echo "node_perf=${node_perf}"
+    if [[ "${copy_staged_output}" = "1" ]]; then
+      echo "live_output_dir=${output_dir}"
+    fi
     echo "NODE_OPTIONS=${NODE_OPTIONS:-}"
   } >>"${metadata_file}"
 
-  info "Output directory: ${output_dir}"
+  info "Output directory: ${final_output_dir}"
+  if [[ "${copy_staged_output}" = "1" ]]; then
+    info "Live artifacts staged outside the watched app directory: ${output_dir}"
+  fi
   info "Mode: ${profile_mode}"
   info "Command cwd: ${command_cwd}"
   info "Command: ${command_args[*]}"
@@ -788,7 +848,8 @@ EOF
       "${timeout}" \
       "${process_log}" \
       "${command_log}" \
-      "${route_response_file}"; then
+      "${route_response_file}" \
+      "${route}"; then
       expected_stop="1"
       : >"${expected_stop_file}"
       stop_profiled_children "${samply_pid}" "${process_log}"
@@ -867,6 +928,25 @@ Useful files:
   metadata.txt            Host, tool, git, and command metadata.
   setup.log               Benchmark setup output, when default mode runs setup.
 EOF
+
+  if [[ "${copy_staged_output}" = "1" ]]; then
+    {
+      echo
+      echo "=== $(date -Iseconds) copy staged output ==="
+      echo "from=${output_dir}"
+      echo "to=${final_output_dir}"
+      echo
+    } >>"${process_log}"
+    rm -rf "${final_output_dir}"
+    mkdir -p "${final_output_dir}"
+    cp -R "${output_dir}/." "${final_output_dir}/"
+    rm -rf "${staged_output_parent}"
+    output_dir="${final_output_dir}"
+    raw_profile="${output_dir}/samply-profile.json"
+    gz_profile="${output_dir}/samply-profile.json.gz"
+    command_log="${output_dir}/command.log"
+    process_log="${output_dir}/process-tree.log"
+  fi
 
   info "Profile: ${gz_profile}"
   info "Logs: ${command_log}"
