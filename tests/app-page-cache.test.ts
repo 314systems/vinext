@@ -155,6 +155,22 @@ describe("app page cache helpers", () => {
     expect(response?.headers.get("X-Vinext-Cache")).toBe("HIT");
   });
 
+  it("replays prerendered Link headers before middleware overrides", () => {
+    const cachedValue = buildCachedAppPageValue("<h1>cached</h1>");
+    cachedValue.headers = {
+      link: "</font.woff2>; rel=preload; as=font",
+    };
+
+    const response = buildAppPageCachedResponse(cachedValue, {
+      cacheState: "HIT",
+      isRscRequest: false,
+      middlewareHeaders: new Headers({ link: "</middleware.css>; rel=preload; as=style" }),
+      revalidateSeconds: 60,
+    });
+
+    expect(response?.headers.get("link")).toBe("</middleware.css>; rel=preload; as=style");
+  });
+
   it("merges middleware response headers into cached RSC responses", async () => {
     const rscData = new TextEncoder().encode("flight").buffer;
     const middlewareHeaders = new Headers({
@@ -652,6 +668,7 @@ describe("app page cache helpers", () => {
     const isrSetCalls: Array<{
       key: string;
       expireSeconds: number | undefined;
+      linkHeader: string | string[] | undefined;
       revalidateSeconds: number;
     }> = [];
     const rscData = new TextEncoder().encode("fresh-flight").buffer;
@@ -667,8 +684,13 @@ describe("app page cache helpers", () => {
       isrRscKey(pathname, mountedSlotsHeader) {
         return `rsc:${pathname}:${mountedSlotsHeader ?? "none"}`;
       },
-      async isrSet(key, _data, revalidateSeconds, _tags, expireSeconds) {
-        isrSetCalls.push({ key, expireSeconds, revalidateSeconds });
+      async isrSet(key, data, revalidateSeconds, _tags, expireSeconds) {
+        isrSetCalls.push({
+          key,
+          expireSeconds,
+          linkHeader: data.headers?.link,
+          revalidateSeconds,
+        });
       },
       expireSeconds: 300,
       revalidateSeconds: 60,
@@ -676,6 +698,7 @@ describe("app page cache helpers", () => {
         return {
           cacheControl: { revalidate: 10, expire: 20 },
           html: "<h1>fresh</h1>",
+          linkHeader: "</fresh.css>; rel=preload; as=style",
           rscData,
           tags: ["/stale-html", "_N_T_/stale-html"],
         };
@@ -689,8 +712,18 @@ describe("app page cache helpers", () => {
     await scheduledRegenerations[0]();
     expect(isrHtmlKey).toHaveBeenCalledOnce();
     expect(isrSetCalls).toEqual([
-      { key: "rsc:/stale-html:none", expireSeconds: 20, revalidateSeconds: 10 },
-      { key: "html:/stale-html", expireSeconds: 20, revalidateSeconds: 10 },
+      {
+        key: "rsc:/stale-html:none",
+        expireSeconds: 20,
+        linkHeader: undefined,
+        revalidateSeconds: 10,
+      },
+      {
+        key: "html:/stale-html",
+        expireSeconds: 20,
+        linkHeader: "</fresh.css>; rel=preload; as=style",
+        revalidateSeconds: 10,
+      },
     ]);
   });
 
@@ -907,6 +940,7 @@ describe("app page cache helpers", () => {
       key: string;
       html: string;
       hasRscData: boolean;
+      linkHeader: string | string[] | undefined;
       expireSeconds: number | undefined;
       revalidateSeconds: number;
       tags: string[];
@@ -920,6 +954,7 @@ describe("app page cache helpers", () => {
         headers: {
           "Content-Type": "text/html; charset=utf-8",
           "Cache-Control": "s-maxage=60, stale-while-revalidate",
+          Link: "</fresh.css>; rel=preload; as=style",
           Vary: "RSC, Accept",
           "X-Vinext-Cache": "MISS",
         },
@@ -947,6 +982,7 @@ describe("app page cache helpers", () => {
             key,
             html: data.html,
             hasRscData: Boolean(data.rscData),
+            linkHeader: data.headers?.link,
             expireSeconds,
             revalidateSeconds,
             tags,
@@ -973,6 +1009,7 @@ describe("app page cache helpers", () => {
         key: "html:/fresh",
         html: "<h1>fresh</h1>",
         hasRscData: false,
+        linkHeader: "</fresh.css>; rel=preload; as=style",
         expireSeconds: 300,
         revalidateSeconds: 60,
         tags: ["/fresh", "_N_T_/fresh"],
@@ -981,6 +1018,7 @@ describe("app page cache helpers", () => {
         key: "rsc:/fresh",
         html: "",
         hasRscData: true,
+        linkHeader: undefined,
         expireSeconds: 300,
         revalidateSeconds: 60,
         tags: ["/fresh", "_N_T_/fresh"],
