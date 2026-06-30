@@ -726,6 +726,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
             return {
               html: rendered.html,
               htmlRenderObservation: rendered.htmlRenderObservation,
+              linkHeader: rendered.linkHeader,
               rscData: rendered.rscData!,
               rscRenderObservation: rendered.rscRenderObservation,
               tags: rendered.tags,

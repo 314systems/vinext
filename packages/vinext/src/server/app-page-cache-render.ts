@@ -14,8 +14,16 @@ import {
   createAppPageRenderObservation,
   createAppPageRscOutputScope,
 } from "./app-page-render-observation.js";
-import { teeAppPageRscStreamForCapture, type AppPageFontPreload } from "./app-page-execution.js";
-import { isAppSsrRenderResult, type AppPageSsrHandler } from "./app-page-stream.js";
+import {
+  buildAppPageFontLinkHeader,
+  teeAppPageRscStreamForCapture,
+  type AppPageFontPreload,
+} from "./app-page-execution.js";
+import {
+  buildAppPageLinkHeader,
+  isAppSsrRenderResult,
+  type AppPageSsrHandler,
+} from "./app-page-stream.js";
 import { readStreamAsText } from "../utils/text-stream.js";
 import { buildAppPageTags } from "./implicit-tags.js";
 
@@ -54,6 +62,7 @@ export type RenderAppPageCacheArtifactsResult = {
   cacheControl?: CacheControlMetadata;
   html: string;
   htmlRenderObservation: ReturnType<typeof createAppPageRenderObservation>;
+  linkHeader?: string;
   rscData?: ArrayBuffer;
   rscRenderObservation?: ReturnType<typeof createAppPageRenderObservation>;
   tags: string[];
@@ -73,6 +82,7 @@ export async function renderAppPageCacheArtifacts(
   });
   const rscCapture = teeAppPageRscStreamForCapture(rscStream, options.captureRscData);
   const capturedRscDataRef: { value: Promise<ArrayBuffer> | null } = { value: null };
+  const fontPreloads = options.getFontPreloads();
   const ssrHandler = await options.loadSsrHandler();
   const navigationContext = options.getNavigationContext();
   const htmlResult = await ssrHandler.handleSsr(
@@ -83,7 +93,7 @@ export async function renderAppPageCacheArtifacts(
     {
       links: options.getFontLinks(),
       styles: options.getFontStyles(),
-      preloads: options.getFontPreloads(),
+      preloads: fontPreloads,
     },
     {
       basePath: options.basePath,
@@ -100,6 +110,12 @@ export async function renderAppPageCacheArtifacts(
     },
   );
   const htmlStream = isAppSsrRenderResult(htmlResult) ? htmlResult.htmlStream : htmlResult;
+  const reactLinkHeader = isAppSsrRenderResult(htmlResult) ? htmlResult.linkHeader : undefined;
+  const linkHeader = buildAppPageLinkHeader(
+    reactLinkHeader,
+    buildAppPageFontLinkHeader(fontPreloads),
+    options.reactMaxHeadersLength,
+  );
   const html = await readStreamAsText(htmlStream);
 
   let rscData: ArrayBuffer | undefined;
@@ -142,6 +158,7 @@ export async function renderAppPageCacheArtifacts(
   const result: RenderAppPageCacheArtifactsResult = {
     html,
     htmlRenderObservation,
+    ...(linkHeader ? { linkHeader } : {}),
     tags,
     cacheControl:
       typeof cacheLife?.revalidate === "number"
