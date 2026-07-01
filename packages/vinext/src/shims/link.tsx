@@ -858,7 +858,7 @@ function pingVisibleLinkPrefetches(options: { force?: boolean } = {}): void {
   const batchId =
     options.force === true ? segmentCacheLinkPrefetchScheduler.createBatch() : undefined;
   for (const instance of visibleLinkPrefetches) {
-    if (instance.isVisible && instance.routerMode === "app") {
+    if (instance.isVisible && resolveCurrentLinkPrefetchRouterMode(instance) === "app") {
       if (usesSegmentCachePrefetchScheduler(instance)) {
         scheduleSegmentCacheLinkPrefetch(instance, "low", batchId, options);
       } else {

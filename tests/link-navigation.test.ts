@@ -1418,6 +1418,70 @@ describe("Link prefetch scheduling", () => {
     }
   });
 
+  it("force-pings late-App-runtime visible cacheComponents links after cache invalidation", async () => {
+    vi.stubEnv("__NEXT_CACHE_COMPONENTS", "true");
+    const observer = stubIntersectionObserver();
+    const result = await renderIsolatedLink({
+      appNavigation: false,
+      href: "/viewport-prefetch-target",
+      nodeEnv: "production",
+    });
+    const { invalidatePrefetchCache } = await import("../packages/vinext/src/shims/navigation.js");
+
+    result.fetch
+      .mockImplementationOnce(() => Promise.resolve(new Response("rewarmed route tree")))
+      .mockImplementationOnce(() => Promise.resolve(new Response("rewarmed segment")));
+
+    try {
+      observer.dispatchIntersectingEntry(result.anchor);
+      await flushPrefetchTasks();
+
+      expect(result.fetch).not.toHaveBeenCalled();
+
+      const runtime = Reflect.get(window, Symbol.for("vinext.navigationRuntime"));
+      expect(runtime).toEqual(
+        expect.objectContaining({
+          functions: expect.objectContaining({
+            pingVisibleLinks: expect.any(Function),
+          }),
+        }),
+      );
+      if (typeof runtime !== "object" || runtime === null || !("functions" in runtime)) {
+        throw new Error("Expected Link to register visible-link ping runtime functions");
+      }
+      const { functions } = runtime;
+      if (typeof functions !== "object" || functions === null) {
+        throw new Error("Expected navigation runtime functions");
+      }
+      Reflect.set(functions, "navigate", vi.fn());
+
+      invalidatePrefetchCache();
+      await waitForFetchCalls(result.fetch, 2);
+
+      const routeTreeInit = result.fetch.mock.calls[0]?.[1];
+      expect(routeTreeInit?.headers).toBeInstanceOf(Headers);
+      if (!(routeTreeInit?.headers instanceof Headers)) {
+        throw new Error("Expected late-runtime route-tree prefetch request headers");
+      }
+      expect(routeTreeInit.headers.get(NEXT_ROUTER_PREFETCH_HEADER)).toBe("1");
+      expect(routeTreeInit.headers.get(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER)).toBe("/_tree");
+      expect(routeTreeInit.headers.get(VINEXT_RSC_RENDER_MODE_HEADER)).toBe(
+        APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
+      );
+
+      const segmentInit = result.fetch.mock.calls[1]?.[1];
+      expect(segmentInit?.headers).toBeInstanceOf(Headers);
+      if (!(segmentInit?.headers instanceof Headers)) {
+        throw new Error("Expected late-runtime segment prefetch request headers");
+      }
+      expect(segmentInit.headers.get(NEXT_ROUTER_PREFETCH_HEADER)).toBe("1");
+      expect(segmentInit.headers.get(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER)).toBe("/_page");
+      expect(segmentInit.headers.get(VINEXT_RSC_RENDER_MODE_HEADER)).toBeNull();
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
   it("keeps rescheduled cacheComponents prefetches blocked on the route-tree response", async () => {
     // Ported from the hover-reschedule contract covered by Next.js:
     // test/e2e/app-dir/segment-cache/prefetch-scheduling/prefetch-scheduling.test.ts
