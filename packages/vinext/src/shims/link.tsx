@@ -754,7 +754,7 @@ function drainVisibleAppPrefetchQueue(): void {
     if (!instance) return;
     instance.queuedViewportPrefetch = false;
     if (!instance.isVisible || instance.routerMode !== "app") continue;
-    prefetchUrl(instance.href, instance.mode, "low", instance.pagesRouteHref);
+    void prefetchUrl(instance.href, instance.mode, "low", instance.pagesRouteHref);
   }
 }
 
