@@ -178,6 +178,88 @@ describe("Link Segment Cache prefetch scheduler", () => {
     });
   });
 
+  it("restarts from route-tree after forced invalidation while route-tree is running", async () => {
+    const { deferredRequests, requests, runPhase, scheduler } = createSchedulerHarness();
+    const instance = createInstance("/notifications");
+
+    scheduler.schedule(instance, "low", 1);
+    await flushScheduler();
+
+    scheduler.schedule(instance, "high", 1);
+    scheduler.schedule(instance, "low", 2, { force: true });
+    scheduler.schedule(instance, "high", 2);
+    await flushScheduler();
+
+    expect(runPhase).toHaveBeenCalledTimes(1);
+    expect(requests[0]).toMatchObject({
+      href: "/notifications",
+      phase: "route-tree",
+      priority: "low",
+    });
+
+    deferredRequests[0]?.resolve();
+    await flushScheduler();
+
+    expect(runPhase).toHaveBeenCalledTimes(2);
+    expect(requests[1]).toMatchObject({
+      href: "/notifications",
+      phase: "route-tree",
+      priority: "high",
+    });
+
+    deferredRequests[1]?.resolve();
+    await flushScheduler();
+
+    expect(runPhase).toHaveBeenCalledTimes(3);
+    expect(requests[2]).toMatchObject({
+      href: "/notifications",
+      phase: "segment",
+      priority: "high",
+    });
+  });
+
+  it("restarts from route-tree after forced invalidation while segment is running", async () => {
+    const { deferredRequests, requests, runPhase, scheduler } = createSchedulerHarness();
+    const instance = createInstance("/activity");
+
+    scheduler.schedule(instance, "low", 1);
+    await flushScheduler();
+    deferredRequests[0]?.resolve();
+    await flushScheduler();
+
+    expect(runPhase).toHaveBeenCalledTimes(2);
+    expect(requests[1]).toMatchObject({
+      href: "/activity",
+      phase: "segment",
+      priority: "low",
+    });
+
+    scheduler.schedule(instance, "low", 2, { force: true });
+    await flushScheduler();
+
+    expect(runPhase).toHaveBeenCalledTimes(2);
+
+    deferredRequests[1]?.resolve();
+    await flushScheduler();
+
+    expect(runPhase).toHaveBeenCalledTimes(3);
+    expect(requests[2]).toMatchObject({
+      href: "/activity",
+      phase: "route-tree",
+      priority: "low",
+    });
+
+    deferredRequests[2]?.resolve();
+    await flushScheduler();
+
+    expect(runPhase).toHaveBeenCalledTimes(4);
+    expect(requests[3]).toMatchObject({
+      href: "/activity",
+      phase: "segment",
+      priority: "low",
+    });
+  });
+
   it("starts low-priority route-tree work in batch order while preserving newest-first order within a batch", async () => {
     const { requests, runPhase, scheduler } = createSchedulerHarness();
     const firstBatch = createInstance("/batch-first");

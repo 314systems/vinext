@@ -34,6 +34,7 @@ type LinkSegmentPrefetchTaskStatus =
   | "queued"
   | "running"
   | "running-canceled"
+  | "running-dirty"
   | "completed";
 
 type LinkSegmentPrefetchTask = {
@@ -185,8 +186,20 @@ export function createLinkSegmentPrefetchScheduler(
       };
       tasksByInstance.set(instance, task);
     } else {
-      if (task.status === "running" || task.status === "running-canceled") {
-        task.status = "running";
+      if (
+        task.status === "running" ||
+        task.status === "running-canceled" ||
+        task.status === "running-dirty"
+      ) {
+        if (options.force === true) {
+          task.status = "running-dirty";
+          task.batchId = batchId;
+          task.forceSegmentCacheFetch = priority === "low" && hasRecentUserInteraction();
+          task.phase = "route-tree";
+          task.sortId = sortIdCounter++;
+        } else if (task.status !== "running-dirty") {
+          task.status = "running";
+        }
         task.priority = task === mostRecentIntentTask && priority === "low" ? "high" : priority;
         trackIntentTask(task);
         return;
@@ -214,7 +227,7 @@ export function createLinkSegmentPrefetchScheduler(
     if (task === undefined) return;
     if (task.status === "queued") {
       removeQueuedTask(task);
-    } else if (task.status === "running") {
+    } else if (task.status === "running" || task.status === "running-dirty") {
       task.status = "running-canceled";
     }
     if (mostRecentIntentTask === task) {
@@ -250,10 +263,15 @@ export function createLinkSegmentPrefetchScheduler(
         .catch(() => {})
         .finally(() => {
           const shouldContinue = currentTask.status === "running" && currentTask.instance.isVisible;
+          const shouldRestart =
+            currentTask.status === "running-dirty" && currentTask.instance.isVisible;
           currentTask.status = "idle";
           inProgress--;
 
-          if (shouldContinue && phase === "route-tree") {
+          if (shouldRestart) {
+            currentTask.phase = "route-tree";
+            enqueueTask(currentTask);
+          } else if (shouldContinue && phase === "route-tree") {
             currentTask.phase = "segment";
             enqueueTask(currentTask);
           } else if (shouldContinue && phase === "segment") {

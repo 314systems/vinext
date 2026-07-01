@@ -1586,6 +1586,79 @@ describe("Link prefetch scheduling", () => {
     }
   });
 
+  it("restarts in-flight cacheComponents prefetches after cache invalidation", async () => {
+    vi.stubEnv("__NEXT_CACHE_COMPONENTS", "true");
+    const observer = stubIntersectionObserver();
+    let releaseRouteTreeBody: (() => void) | undefined;
+    const routeTreeBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        releaseRouteTreeBody = () => {
+          controller.close();
+        };
+      },
+    });
+    const result = await renderIsolatedLink({
+      href: "/viewport-prefetch-target",
+      nodeEnv: "production",
+    });
+    const { getPrefetchCache, invalidatePrefetchCache } =
+      await import("../packages/vinext/src/shims/navigation.js");
+
+    result.fetch
+      .mockImplementationOnce(() => Promise.resolve(new Response(routeTreeBody)))
+      .mockImplementationOnce(() => Promise.resolve(new Response("rewarmed route tree")))
+      .mockImplementationOnce(() => Promise.resolve(new Response("rewarmed segment")));
+
+    try {
+      observer.dispatchIntersectingEntry(result.anchor);
+      await waitForFetchCalls(result.fetch, 1);
+
+      invalidatePrefetchCache();
+      result.capturedAnchorProps.onMouseEnter?.({ currentTarget: result.anchor });
+      pingVisibleLinksFromRuntime();
+      await flushPrefetchTasks();
+
+      expect(result.fetch).toHaveBeenCalledTimes(1);
+
+      if (releaseRouteTreeBody === undefined) {
+        throw new Error("Expected route-tree body release");
+      }
+      releaseRouteTreeBody();
+      await waitForFetchCalls(result.fetch, 3);
+      await flushPrefetchTasks(() => {
+        const entries = [...getPrefetchCache().values()];
+        return entries.length === 2 && entries.every((entry) => entry.pending === undefined);
+      });
+
+      const routeTreeInit = result.fetch.mock.calls[1]?.[1];
+      expect(routeTreeInit?.headers).toBeInstanceOf(Headers);
+      if (!(routeTreeInit?.headers instanceof Headers)) {
+        throw new Error("Expected rewarmed route-tree prefetch request headers");
+      }
+      expect(routeTreeInit.headers.get(NEXT_ROUTER_PREFETCH_HEADER)).toBe("1");
+      expect(routeTreeInit.headers.get(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER)).toBe("/_tree");
+      expect(routeTreeInit.headers.get(VINEXT_RSC_RENDER_MODE_HEADER)).toBe(
+        APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
+      );
+
+      const segmentInit = result.fetch.mock.calls[2]?.[1];
+      expect(segmentInit?.headers).toBeInstanceOf(Headers);
+      if (!(segmentInit?.headers instanceof Headers)) {
+        throw new Error("Expected rewarmed segment prefetch request headers");
+      }
+      expect(segmentInit.headers.get(NEXT_ROUTER_PREFETCH_HEADER)).toBe("1");
+      expect(segmentInit.headers.get(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER)).toBe("/_page");
+      expect(segmentInit.headers.get(VINEXT_RSC_RENDER_MODE_HEADER)).toBeNull();
+
+      const rewarmedEntries = [...getPrefetchCache().values()].filter(
+        (entry) => entry.outcome === "cache-seeded",
+      );
+      expect(rewarmedEntries).toHaveLength(2);
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
   it("starts non-cacheComponents App viewport prefetches without waiting for browser idle", async () => {
     vi.stubEnv("__NEXT_CACHE_COMPONENTS", "false");
     const observer = stubIntersectionObserver();
