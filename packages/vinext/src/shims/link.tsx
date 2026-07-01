@@ -395,8 +395,9 @@ function resolveFullAppRoutePrefetch(): {
  * For Pages Router: warms the page chunk, prefetches data only for SSG pages,
  * and falls back to a document prefetch hint when no page loader matches.
  *
- * Uses `requestIdleCallback` (or `setTimeout` fallback) to avoid blocking
- * the main thread during initial page load.
+ * App Router and high-priority prefetches start immediately. Low-priority
+ * Pages Router fallback prefetches use `requestIdleCallback` (or `setTimeout`
+ * fallback) to avoid blocking the main thread during initial page load.
  */
 function prefetchUrl(
   href: string,
@@ -436,14 +437,7 @@ function prefetchUrl(
     return;
   }
 
-  const schedule =
-    priority === "high"
-      ? (fn: () => void) => {
-          fn();
-        }
-      : (window.requestIdleCallback ?? ((fn: () => void) => setTimeout(fn, 100)));
-
-  schedule(() => {
+  const runPrefetch = () => {
     void (async () => {
       if (hasAppNavigationRuntime()) {
         if (isBotUserAgent(window.navigator?.userAgent ?? "")) return;
@@ -473,7 +467,11 @@ function prefetchUrl(
           PREFETCH_CACHE_TTL,
         } = navigation;
         const { createRscRequestHeaders, createRscRequestUrl } = rscCacheBusting;
-        const { NEXT_ROUTER_PREFETCH_HEADER, VINEXT_MOUNTED_SLOTS_HEADER } = headersModule;
+        const {
+          NEXT_ROUTER_PREFETCH_HEADER,
+          NEXT_ROUTER_SEGMENT_PREFETCH_HEADER,
+          VINEXT_MOUNTED_SLOTS_HEADER,
+        } = headersModule;
         // Hybrid ownership: skip the App RSC prefetch when Pages owns the
         // URL. The App's `__VINEXT_LINK_PREFETCH_ROUTES__` may include an
         // App catch-all that also matches the same path, so a naive
@@ -508,6 +506,7 @@ function prefetchUrl(
         }
         if (isOptimisticRouteShellPrefetch) {
           headers.set(NEXT_ROUTER_PREFETCH_HEADER, "1");
+          headers.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "/_tree");
         }
         // Distinguish the same visible URL when it is prefetched from different
         // request contexts such as /feed vs /gallery or different mounted slots.
@@ -549,6 +548,7 @@ function prefetchUrl(
                   renderMode: APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
                 });
                 shellHeaders.set(NEXT_ROUTER_PREFETCH_HEADER, "1");
+                shellHeaders.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "/_tree");
                 if (mountedSlotsHeader) {
                   shellHeaders.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
                 }
@@ -650,7 +650,15 @@ function prefetchUrl(
     })().catch((error) => {
       console.error("[vinext] RSC prefetch setup error:", error);
     });
-  });
+  };
+
+  if (priority === "high" || hasAppNavigationRuntime()) {
+    runPrefetch();
+    return;
+  }
+
+  const schedule = window.requestIdleCallback ?? ((fn: () => void) => setTimeout(fn, 100));
+  schedule(runPrefetch);
 }
 
 async function promotePrefetchEntriesForNavigation(href: string): Promise<void> {

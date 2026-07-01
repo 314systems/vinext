@@ -11,6 +11,7 @@ import {
 import { APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL } from "../packages/vinext/src/server/app-rsc-render-mode.js";
 import {
   NEXT_ROUTER_PREFETCH_HEADER,
+  NEXT_ROUTER_SEGMENT_PREFETCH_HEADER,
   VINEXT_RSC_RENDER_MODE_HEADER,
 } from "../packages/vinext/src/server/headers.js";
 import type { VinextLinkPrefetchRoute } from "../packages/vinext/src/client/vinext-next-data.js";
@@ -1283,6 +1284,34 @@ describe("Link prefetch scheduling", () => {
     };
   }
 
+  it("starts App Router viewport prefetches before browser idle callbacks", async () => {
+    const observer = stubIntersectionObserver();
+    const requestIdleCallback = vi.fn(() => 1);
+
+    const result = await renderIsolatedLink({
+      href: "/viewport-prefetch-target",
+      nodeEnv: "production",
+      windowOverrides: { requestIdleCallback },
+    });
+
+    try {
+      observer.dispatchIntersectingEntry(result.anchor);
+      await waitForFetchCalls(result.fetch, 1);
+
+      expect(requestIdleCallback).not.toHaveBeenCalled();
+      expectCanonicalRscFetchCall(
+        result.fetch.mock.calls[0],
+        "/viewport-prefetch-target",
+        expect.objectContaining({
+          credentials: "include",
+          priority: "low",
+        }),
+      );
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
   it("prefetches visible links in production with low priority", async () => {
     const observer = stubIntersectionObserver();
 
@@ -1547,6 +1576,52 @@ describe("Link prefetch scheduling", () => {
       expect((fetchInit?.headers as Headers | undefined)?.get(NEXT_ROUTER_PREFETCH_HEADER)).toBe(
         "1",
       );
+      expect(
+        (fetchInit?.headers as Headers | undefined)?.get(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER),
+      ).toBe("/_tree");
+      const { getPrefetchCache } = await import("../packages/vinext/src/shims/navigation.js");
+      const entry = Array.from(getPrefetchCache().values())[0];
+      expect(entry?.cacheForNavigation).toBe(false);
+      expect(entry?.optimisticRouteShell).toBe(true);
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it('treats prefetch="auto" as the default loading-shell prefetch mode', async () => {
+    // Ported from Next.js:
+    // test/e2e/app-dir/segment-cache/prefetch-auto/prefetch-auto.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/segment-cache/prefetch-auto/prefetch-auto.test.ts
+    const observer = stubIntersectionObserver();
+
+    const result = await renderIsolatedLink({
+      href: "/blog/hello",
+      nodeEnv: "production",
+      props: { prefetch: "auto" },
+    });
+
+    try {
+      observer.dispatchIntersectingEntry(result.anchor);
+      await waitForFetchCalls(result.fetch, 1);
+
+      expectCanonicalRscFetchCall(
+        result.fetch.mock.calls[0],
+        "/blog/hello",
+        expect.objectContaining({
+          credentials: "include",
+          priority: "low",
+        }),
+      );
+      const fetchInit = result.fetch.mock.calls[0]?.[1] as RequestInit | undefined;
+      expect((fetchInit?.headers as Headers | undefined)?.get(VINEXT_RSC_RENDER_MODE_HEADER)).toBe(
+        APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
+      );
+      expect((fetchInit?.headers as Headers | undefined)?.get(NEXT_ROUTER_PREFETCH_HEADER)).toBe(
+        "1",
+      );
+      expect(
+        (fetchInit?.headers as Headers | undefined)?.get(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER),
+      ).toBe("/_tree");
       const { getPrefetchCache } = await import("../packages/vinext/src/shims/navigation.js");
       const entry = Array.from(getPrefetchCache().values())[0];
       expect(entry?.cacheForNavigation).toBe(false);
