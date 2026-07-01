@@ -21,6 +21,14 @@ export const VISITED_RESPONSE_CACHE_TTL = 5 * 60_000;
 export const MAX_TRAVERSAL_CACHE_TTL = 30 * 60_000;
 export const visitedResponseCache = new Map<string, VisitedResponseCacheEntry>();
 
+type VisitedResponseCacheLookupOptions = {
+  mountedSlotsHeader?: string | null;
+  isEntryCompatible?: (
+    entry: VisitedResponseCacheEntry,
+    mountedSlotsHeader: string | null,
+  ) => boolean;
+};
+
 export function createVisitedResponseCacheEntry(options: {
   elements?: AppElements;
   fallbackTtlMs?: number;
@@ -83,6 +91,7 @@ export function findVisitedResponseCacheEntry(
   cache: Map<string, VisitedResponseCacheEntry>,
   rscUrl: string,
   interceptionContext: string | null,
+  options: VisitedResponseCacheLookupOptions = {},
 ): { cacheKey: string; entry: VisitedResponseCacheEntry } | null {
   const exactCacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
   const exactEntry = cache.get(exactCacheKey);
@@ -98,6 +107,13 @@ export function findVisitedResponseCacheEntry(
     if (source === null) continue;
     if (source.interceptionContext !== interceptionContext) continue;
     if (normalizeVisitedResponseCacheLookupUrl(source.rscUrl) !== normalizedTarget) continue;
+    if (
+      options.mountedSlotsHeader !== undefined &&
+      options.isEntryCompatible !== undefined &&
+      !options.isEntryCompatible(entry, options.mountedSlotsHeader)
+    ) {
+      continue;
+    }
     return { cacheKey, entry };
   }
 
@@ -108,8 +124,9 @@ export function deleteVisitedResponseCacheEntry(
   cache: Map<string, VisitedResponseCacheEntry>,
   rscUrl: string,
   interceptionContext: string | null,
+  options: VisitedResponseCacheLookupOptions = {},
 ): boolean {
-  const match = findVisitedResponseCacheEntry(cache, rscUrl, interceptionContext);
+  const match = findVisitedResponseCacheEntry(cache, rscUrl, interceptionContext, options);
   if (!match) return false;
   return cache.delete(match.cacheKey);
 }
@@ -133,7 +150,10 @@ export function claimVisitedResponseCacheEntryForPrefetch(
   interceptionContext: string | null,
   mountedSlotsHeader: string | null,
 ): boolean {
-  const match = findVisitedResponseCacheEntry(visitedResponseCache, rscUrl, interceptionContext);
+  const match = findVisitedResponseCacheEntry(visitedResponseCache, rscUrl, interceptionContext, {
+    mountedSlotsHeader,
+    isEntryCompatible: isVisitedResponseCacheEntryCompatibleForPrefetch,
+  });
   if (!match) return false;
 
   if (

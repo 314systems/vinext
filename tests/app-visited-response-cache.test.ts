@@ -210,4 +210,40 @@ describe("visited response cache freshness", () => {
     expect(cache.has(storedKey)).toBe(false);
     expect(findVisitedResponseCacheEntry(cache, "/dynamic?_rsc=new", null)).toBeNull();
   });
+
+  it("keeps normalized _rsc lookup scoped to compatible mounted-slot variants", () => {
+    const cache = new Map<string, ReturnType<typeof createVisitedResponseCacheEntry>>();
+    const modalEntry = createVisitedResponseCacheEntry({
+      now: 1_000_000,
+      mountedSlotsHeader: "slot:modal:/",
+      params: {},
+      response: createCachedResponse(),
+    });
+    const drawerEntry = createVisitedResponseCacheEntry({
+      now: 1_000_000,
+      mountedSlotsHeader: "slot:drawer:/",
+      params: {},
+      response: createCachedResponse(),
+    });
+    const modalKey = AppElementsWire.encodeCacheKey("/dynamic?_rsc=modal", null);
+    const drawerKey = AppElementsWire.encodeCacheKey("/dynamic?_rsc=drawer", null);
+    cache.set(modalKey, modalEntry);
+    cache.set(drawerKey, drawerEntry);
+
+    expect(
+      findVisitedResponseCacheEntry(cache, "/dynamic?_rsc=current", null, {
+        mountedSlotsHeader: "slot:drawer:/",
+        isEntryCompatible: isVisitedResponseCacheEntryCompatibleForNavigation,
+      }),
+    ).toEqual({ cacheKey: drawerKey, entry: drawerEntry });
+
+    expect(
+      deleteVisitedResponseCacheEntry(cache, "/dynamic?_rsc=current", null, {
+        mountedSlotsHeader: "slot:sidebar:/",
+        isEntryCompatible: isVisitedResponseCacheEntryCompatibleForNavigation,
+      }),
+    ).toBe(false);
+    expect(cache.has(modalKey)).toBe(true);
+    expect(cache.has(drawerKey)).toBe(true);
+  });
 });

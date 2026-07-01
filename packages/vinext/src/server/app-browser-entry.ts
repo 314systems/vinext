@@ -679,7 +679,10 @@ function readVisitedResponseCacheCandidate(
   navigationKind: NavigationKind,
 ): VisitedResponseCacheCandidate {
   const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
-  const match = findVisitedResponseCacheEntry(visitedResponseCache, rscUrl, interceptionContext);
+  const match = findVisitedResponseCacheEntry(visitedResponseCache, rscUrl, interceptionContext, {
+    mountedSlotsHeader,
+    isEntryCompatible: isVisitedResponseCacheEntryCompatibleForNavigation,
+  });
   if (!match) {
     return {
       cacheKey,
@@ -733,8 +736,15 @@ function applyVisitedResponseCacheCandidateDecision(
   return null;
 }
 
-function deleteVisitedResponse(rscUrl: string, interceptionContext: string | null): void {
-  deleteVisitedResponseCacheEntry(visitedResponseCache, rscUrl, interceptionContext);
+function deleteVisitedResponse(
+  rscUrl: string,
+  interceptionContext: string | null,
+  mountedSlotsHeader: string | null,
+): void {
+  deleteVisitedResponseCacheEntry(visitedResponseCache, rscUrl, interceptionContext, {
+    mountedSlotsHeader,
+    isEntryCompatible: isVisitedResponseCacheEntryCompatibleForNavigation,
+  });
 }
 
 function storeVisitedResponseSnapshot(
@@ -1865,7 +1875,7 @@ function bootstrapHydration(
           );
           if (cachedRenderOutcome === "no-commit") {
             if (!browserNavigationController.isCurrentNavigation(navId)) return;
-            deleteVisitedResponse(rscUrl, requestInterceptionContext);
+            deleteVisitedResponse(rscUrl, requestInterceptionContext, mountedSlotsHeader);
             continue;
           }
           return;
