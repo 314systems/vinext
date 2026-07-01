@@ -45,7 +45,9 @@ export function createRscReferenceValidationNormalizerPlugin(): Plugin {
   return {
     name: "vinext:rsc-reference-validation-normalizer",
     enforce: "pre",
-    apply: "serve",
+    apply(_config, env) {
+      return env.command === "serve" && env.isPreview !== true;
+    },
     configResolved(config) {
       rscApi = (
         config.plugins.find((plugin) => plugin.name === "rsc:minimal") as
@@ -53,22 +55,26 @@ export function createRscReferenceValidationNormalizerPlugin(): Plugin {
           | undefined
       )?.api;
     },
-    load(id) {
-      if (!id.startsWith(REFERENCE_VALIDATION_ID_PREFIX)) return null;
+    load: {
+      // oxlint-disable-next-line no-control-regex -- null byte prefix is intentional (Vite virtual module convention)
+      filter: { id: /^\u0000virtual:vite-rsc\/reference-validation\?/ },
+      handler(id) {
+        if (!id.startsWith(REFERENCE_VALIDATION_ID_PREFIX)) return null;
 
-      const query = parseReferenceValidationQuery(id);
-      if (!query) return null;
+        const query = parseReferenceValidationQuery(id);
+        if (!query) return null;
 
-      const manager = rscApi?.manager;
-      if (query.type === "client" && hasReference(manager?.clientReferenceMetaMap, query.id)) {
-        return "export {}";
-      }
+        const manager = rscApi?.manager;
+        if (query.type === "client" && hasReference(manager?.clientReferenceMetaMap, query.id)) {
+          return "export {}";
+        }
 
-      if (query.type === "server" && hasReference(manager?.serverReferenceMetaMap, query.id)) {
-        return "export {}";
-      }
+        if (query.type === "server" && hasReference(manager?.serverReferenceMetaMap, query.id)) {
+          return "export {}";
+        }
 
-      return null;
+        return null;
+      },
     },
   };
 }
