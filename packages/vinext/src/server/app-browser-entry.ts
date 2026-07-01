@@ -32,6 +32,7 @@ import {
   getClientNavigationRenderContext,
   getBfcacheIdMapContext,
   getPrefetchCache,
+  getRetainedPrefetchLayoutIdsHeader,
   hasPrefetchCacheEntryForNavigation,
   invalidatePrefetchCache,
   seedPrefetchResponseSnapshot,
@@ -103,6 +104,7 @@ import {
   AppElementsWire,
   getMountedSlotIdsHeader,
   resolveVisitedResponseInterceptionContext,
+  type AppElementValue,
   type AppElements,
   type AppWireElements,
 } from "./app-elements.js";
@@ -967,6 +969,62 @@ function decodeAppElementsPromise(payload: Promise<AppWireElements>): Promise<Ap
   return Promise.resolve(payload).then((elements) => AppElementsWire.decode(elements));
 }
 
+async function decodePrefetchCacheEntryElements(
+  entry: PrefetchCacheEntry,
+): Promise<AppElements | null> {
+  if (entry.elements) return entry.elements;
+  if (!entry.snapshot || entry.cacheForNavigation === false) return null;
+
+  try {
+    const elements = await decodeAppElementsPromise(
+      createFromFetch<AppWireElements>(Promise.resolve(restoreRscResponse(entry.snapshot))),
+    );
+    entry.elements = elements;
+    return elements;
+  } catch {
+    return null;
+  }
+}
+
+async function fillSkippedLayoutsFromPrefetchCache(
+  payload: Promise<AppElements>,
+): Promise<AppElements> {
+  const elements = await payload;
+  const metadata = AppElementsWire.readMetadata(elements);
+  const missingLayoutIds = metadata.skippedLayoutIds.filter(
+    (layoutId) => !Object.hasOwn(elements, layoutId),
+  );
+  if (missingLayoutIds.length === 0) return elements;
+
+  const missing = new Set(missingLayoutIds);
+  const merged: Record<string, AppElementValue> = { ...elements };
+  for (const entry of getPrefetchCache().values()) {
+    if (missing.size === 0) break;
+    if (entry.outcome !== "cache-seeded" || !entry.snapshot) continue;
+    const sourceElements = await decodePrefetchCacheEntryElements(entry);
+    if (!sourceElements) continue;
+
+    for (const layoutId of missing) {
+      if (!Object.hasOwn(sourceElements, layoutId)) continue;
+      merged[layoutId] = sourceElements[layoutId];
+      missing.delete(layoutId);
+    }
+  }
+
+  if (missing.size === missingLayoutIds.length) return elements;
+
+  const remainingSkippedLayoutIds = metadata.skippedLayoutIds.filter((layoutId) =>
+    missing.has(layoutId),
+  );
+  if (remainingSkippedLayoutIds.length > 0) {
+    merged[AppElementsWire.keys.skippedLayoutIds] = remainingSkippedLayoutIds;
+  } else {
+    delete merged[AppElementsWire.keys.skippedLayoutIds];
+  }
+
+  return merged as AppElements;
+}
+
 function BrowserRoot({
   hydrationCachePublication,
   initialElements,
@@ -1727,6 +1785,9 @@ function bootstrapHydration(
         const requestHeaders = createRscRequestHeaders({
           interceptionContext: requestInterceptionContext,
           mountedSlotsHeader,
+          retainedPrefetchLayoutsHeader: getRetainedPrefetchLayoutIdsHeader({
+            targetHref: url.href,
+          }),
           renderMode:
             navigationKind === "refresh" ? APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI : undefined,
         });
@@ -1834,9 +1895,11 @@ function bootstrapHydration(
           );
           const cachedPayload = cachedRoute.elements
             ? Promise.resolve(cachedRoute.elements)
-            : decodeAppElementsPromise(
-                createFromFetch<AppWireElements>(
-                  Promise.resolve(restoreRscResponse(cachedRoute.response)),
+            : fillSkippedLayoutsFromPrefetchCache(
+                decodeAppElementsPromise(
+                  createFromFetch<AppWireElements>(
+                    Promise.resolve(restoreRscResponse(cachedRoute.response)),
+                  ),
                 ),
               );
           if (!browserNavigationController.isCurrentNavigation(navId)) return;
@@ -2079,8 +2142,10 @@ function bootstrapHydration(
 
         if (!browserNavigationController.isCurrentNavigation(navId)) return;
 
-        const rscPayload = decodeAppElementsPromise(
-          createFromFetch<AppWireElements>(Promise.resolve(reactResponse)),
+        const rscPayload = fillSkippedLayoutsFromPrefetchCache(
+          decodeAppElementsPromise(
+            createFromFetch<AppWireElements>(Promise.resolve(reactResponse)),
+          ),
         );
 
         if (!browserNavigationController.isCurrentNavigation(navId)) return;

@@ -309,6 +309,7 @@ export type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
    * has a transient gap. Falls through to a fresh render instead.
    */
   renderedConcreteUrlPaths?: ReadonlySet<string>;
+  retainedPrefetchLayoutIds?: readonly string[];
   skipStaticParamsValidation?: boolean;
   staticParamsValidationParams?: AppPageParams;
   rootParams?: RootParams;
@@ -1017,6 +1018,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     middlewareContext: options.middlewareContext,
     navigationParams,
     params: options.params,
+    retainedPrefetchLayoutIds: options.retainedPrefetchLayoutIds,
     pprFallbackShellSignal,
     pprFallbackShellReactSignal,
     abortPprFallbackShell: activeFallbackShellState

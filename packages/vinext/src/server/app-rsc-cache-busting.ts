@@ -14,6 +14,7 @@ import {
   VINEXT_INTERCEPTION_CONTEXT_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
   NEXTJS_DEPLOYMENT_ID_HEADER,
+  VINEXT_RETAINED_PREFETCH_LAYOUTS_HEADER,
   VINEXT_RSC_RENDER_MODE_HEADER,
 } from "./headers.js";
 import { applyDeploymentIdHeader, getDeploymentId } from "../utils/deployment-id.js";
@@ -40,6 +41,7 @@ export const VINEXT_RSC_VARY_HEADER = [
   NEXT_URL_HEADER,
   VINEXT_INTERCEPTION_CONTEXT_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
+  VINEXT_RETAINED_PREFETCH_LAYOUTS_HEADER,
   VINEXT_RSC_RENDER_MODE_HEADER,
 ].join(", ");
 
@@ -50,6 +52,7 @@ type CreateRscRequestHeadersOptions = {
   clientReuseManifestHeader?: string | null;
   interceptionContext?: string | null;
   mountedSlotsHeader?: string | null;
+  retainedPrefetchLayoutsHeader?: string | null;
   renderMode?: AppRscRenderMode;
 };
 
@@ -184,6 +187,7 @@ function createCacheBustingInput(
     headers.get(NEXT_URL_HEADER),
     headers.get(VINEXT_INTERCEPTION_CONTEXT_HEADER),
     headers.get(VINEXT_MOUNTED_SLOTS_HEADER),
+    headers.get(VINEXT_RETAINED_PREFETCH_LAYOUTS_HEADER),
     ...(options.includeRenderModeHeader === false
       ? []
       : [normalizeRenderModeHeaderValue(headers.get(VINEXT_RSC_RENDER_MODE_HEADER))]),
@@ -305,6 +309,13 @@ export function createRscRequestHeaders(options: CreateRscRequestHeadersOptions 
     options.clientReuseManifestHeader !== null
   ) {
     headers.set(VINEXT_CLIENT_REUSE_MANIFEST_HEADER, options.clientReuseManifestHeader);
+  }
+
+  if (
+    options.retainedPrefetchLayoutsHeader !== undefined &&
+    options.retainedPrefetchLayoutsHeader !== null
+  ) {
+    headers.set(VINEXT_RETAINED_PREFETCH_LAYOUTS_HEADER, options.retainedPrefetchLayoutsHeader);
   }
 
   const renderMode = options.renderMode ?? APP_RSC_RENDER_MODE_NAVIGATION;

@@ -236,12 +236,14 @@ declare module "next/navigation" {
     contentType: string;
     dynamicStaleTimeSeconds?: number;
     expiresAt?: number;
+    layoutIds?: readonly string[];
     mountedSlotsHeader?: string | null;
     paramsHeader: string | null;
     url: string;
   };
   export type PrefetchCacheEntry = {
     cacheForNavigation?: boolean;
+    elements?: Record<string, unknown>;
     expiresAt?: number;
     invalidationTimer?: ReturnType<typeof setTimeout>;
     mountedSlotsHeader?: string | null;
@@ -258,6 +260,10 @@ declare module "next/navigation" {
   export function getPrefetchInterceptionContext(targetHref: string): string | null;
   export function getPrefetchCache(): Map<string, PrefetchCacheEntry>;
   export function getPrefetchedUrls(): Set<string>;
+  export function getRetainedPrefetchLayoutIdsHeader(options?: {
+    targetHref?: string;
+    targetParams?: Record<string, string | string[]> | null;
+  }): string | null;
   export function invalidatePrefetchCache(): void;
   export function resolvePrefetchCacheEntryMountedSlotsHeader(
     entry: PrefetchCacheEntry,
