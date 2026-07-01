@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Request, type Response } from "@playwright/test";
+import type { PrefetchCacheEntry } from "vinext/shims/navigation";
 import { waitForAppRouterHydration } from "../../helpers";
 
 const ROOT = "/nextjs-compat/prefetch-layout-sharing";
@@ -154,7 +155,7 @@ test.describe("Next.js compat: prefetch layout sharing", () => {
 
     await page.waitForFunction((root) => {
       const vinextWindow = window as typeof window & {
-        __VINEXT_RSC_PREFETCH_CACHE__?: Map<string, unknown>;
+        __VINEXT_RSC_PREFETCH_CACHE__?: Map<string, PrefetchCacheEntry>;
       };
       const keys = [...(vinextWindow.__VINEXT_RSC_PREFETCH_CACHE__?.keys() ?? [])].map(String);
       return (
@@ -165,7 +166,7 @@ test.describe("Next.js compat: prefetch layout sharing", () => {
 
     await page.evaluate((root) => {
       const vinextWindow = window as typeof window & {
-        __VINEXT_RSC_PREFETCH_CACHE__?: Map<string, unknown>;
+        __VINEXT_RSC_PREFETCH_CACHE__?: Map<string, PrefetchCacheEntry>;
         __VINEXT_RSC_PREFETCHED_URLS__?: Set<string>;
       };
       const cache = new Map(vinextWindow.__VINEXT_RSC_PREFETCH_CACHE__ ?? []);
@@ -197,7 +198,7 @@ test.describe("Next.js compat: prefetch layout sharing", () => {
 
     await page.waitForFunction((root) => {
       const vinextWindow = window as typeof window & {
-        __VINEXT_RSC_PREFETCH_CACHE__?: Map<string, unknown>;
+        __VINEXT_RSC_PREFETCH_CACHE__?: Map<string, PrefetchCacheEntry>;
       };
       const keys = [...(vinextWindow.__VINEXT_RSC_PREFETCH_CACHE__?.keys() ?? [])].map(String);
       return (
