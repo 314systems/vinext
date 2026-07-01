@@ -288,6 +288,7 @@ export type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
     mountedSlotsHeader?: string | null,
     renderMode?: AppRscRenderMode,
     interceptionContext?: string | null,
+    mountedSlotActiveRoutesHeader?: string | null,
   ) => string;
   isrSet: AppPageCacheSetter;
   loadSsrHandler: () => Promise<AppPageSsrHandler>;
@@ -629,6 +630,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
       interceptionContext: options.interceptionContext,
       middlewareHeaders: options.middlewareContext.headers,
       middlewareStatus: options.middlewareContext.status,
+      mountedSlotActiveRoutesHeader: options.mountedSlotActiveRoutesHeader,
       mountedSlotsHeader: options.mountedSlotsHeader,
       renderMode: options.renderMode,
       expireSeconds: options.expireSeconds,
@@ -1067,6 +1069,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     },
     dynamicStaleTimeSeconds: options.dynamicStaleTimeSeconds,
     revalidateSeconds: currentRevalidateSeconds,
+    mountedSlotActiveRoutesHeader: options.mountedSlotActiveRoutesHeader,
     mountedSlotsHeader: options.mountedSlotsHeader,
     renderMode: options.renderMode ?? APP_RSC_RENDER_MODE_NAVIGATION,
     renderErrorBoundaryResponse(renderError, errorOrigin) {

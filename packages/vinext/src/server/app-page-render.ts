@@ -154,6 +154,7 @@ type RenderAppPageLifecycleOptions = {
     mountedSlotsHeader?: string | null,
     renderMode?: AppRscRenderMode,
     interceptionContext?: string | null,
+    mountedSlotActiveRoutesHeader?: string | null,
   ) => string;
   isrSet: AppPageCacheSetter;
   interceptionContext?: string | null;
@@ -194,6 +195,7 @@ type RenderAppPageLifecycleOptions = {
   scriptNonce?: string;
   clientReuseManifest?: ClientReuseManifestParseResult;
   skipDisposition?: ClientReuseManifestSkipDisposition;
+  mountedSlotActiveRoutesHeader?: string | null;
   mountedSlotsHeader?: string | null;
   renderMode?: AppRscRenderMode;
   waitUntil?: (promise: Promise<void>) => void;
@@ -857,6 +859,7 @@ export async function renderAppPageLifecycle(
       isrRscKey: options.isrRscKey,
       isrSet: options.isrSet,
       interceptionContext: options.interceptionContext,
+      mountedSlotActiveRoutesHeader: options.mountedSlotActiveRoutesHeader,
       mountedSlotsHeader: options.mountedSlotsHeader,
       renderMode: options.renderMode,
       preserveClientResponseHeaders: rscResponsePolicy.cacheState !== "MISS",

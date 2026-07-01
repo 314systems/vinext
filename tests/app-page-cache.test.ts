@@ -551,6 +551,38 @@ describe("app page cache helpers", () => {
     expect(response?.headers.get("x-vinext-mounted-slots")).toBe("slot:auth:/");
   });
 
+  it("keys RSC cache reads by mounted-slot active-route header", async () => {
+    const response = await readAppPageCacheResponse({
+      cleanPathname: "/cached",
+      clearRequestContext() {},
+      isRscRequest: true,
+      async isrGet(key) {
+        expect(key).toBe("rsc:/cached:slot:auth:/:slot%3Aauth%3A%2F=route%3A%2Fdashboard");
+        return buildISRCacheEntry(
+          buildCachedAppPageValue("", new TextEncoder().encode("flight").buffer),
+        );
+      },
+      isrHtmlKey(pathname) {
+        return "html:" + pathname;
+      },
+      isrRscKey(pathname, mountedSlotsHeader, _renderMode, _interceptionContext, activeRoutes) {
+        return `rsc:${pathname}:${mountedSlotsHeader ?? "none"}:${activeRoutes ?? "none"}`;
+      },
+      async isrSet() {},
+      mountedSlotActiveRoutesHeader: "slot%3Aauth%3A%2F=route%3A%2Fdashboard",
+      mountedSlotsHeader: "slot:auth:/",
+      revalidateSeconds: 60,
+      async renderFreshPageForCache() {
+        throw new Error("should not render");
+      },
+      scheduleBackgroundRegeneration() {
+        throw new Error("should not schedule regeneration");
+      },
+    });
+
+    expect(response?.headers.get("x-vinext-cache")).toBe("HIT");
+  });
+
   it("serves stale RSC entries and regenerates only the matching RSC cache key", async () => {
     const scheduledRegenerations: Array<() => Promise<void>> = [];
     const isrRscKey = vi.fn(

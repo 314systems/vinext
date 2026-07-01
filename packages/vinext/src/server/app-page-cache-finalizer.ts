@@ -24,6 +24,7 @@ type AppPageRscCacheKeyBuilder = (
   mountedSlotsHeader?: string | null,
   renderMode?: AppRscRenderMode,
   interceptionContext?: string | null,
+  mountedSlotActiveRoutesHeader?: string | null,
 ) => string;
 type AppPageRequestCacheLife = {
   revalidate?: number;
@@ -69,6 +70,7 @@ type ScheduleAppPageRscCacheWriteOptions = {
   isrRscKey: AppPageRscCacheKeyBuilder;
   isrSet: AppPageCacheSetter;
   interceptionContext?: string | null;
+  mountedSlotActiveRoutesHeader?: string | null;
   mountedSlotsHeader?: string | null;
   renderMode?: AppRscRenderMode;
   preserveClientResponseHeaders?: boolean;
@@ -257,6 +259,7 @@ export function scheduleAppPageRscCacheWrite(
     options.mountedSlotsHeader,
     options.renderMode,
     options.interceptionContext,
+    options.mountedSlotActiveRoutesHeader,
   );
   const cachePromise = (async () => {
     try {

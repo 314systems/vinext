@@ -23,6 +23,7 @@ import { getCdnCacheAdapter } from "vinext/shims/cdn-cache";
 import { fnv1a64 } from "../utils/hash.js";
 import { getRequestExecutionContext } from "vinext/shims/request-context";
 import { reportRequestError, type OnRequestErrorContext } from "./instrumentation.js";
+import { normalizeMountedSlotActiveRoutesHeader } from "./app-mounted-slot-active-routes-header.js";
 import { normalizeMountedSlotsHeader } from "./app-mounted-slots-header.js";
 import {
   APP_RSC_RENDER_MODE_NAVIGATION,
@@ -403,8 +404,12 @@ export function appIsrRscKey(
   mountedSlotsHeader?: string | null,
   renderMode: AppRscRenderMode = APP_RSC_RENDER_MODE_NAVIGATION,
   interceptionContext?: string | null,
+  mountedSlotActiveRoutesHeader?: string | null,
 ): string {
   const normalizedMountedSlotsHeader = normalizeMountedSlotsHeader(mountedSlotsHeader);
+  const normalizedMountedSlotActiveRoutesHeader = normalizeMountedSlotActiveRoutesHeader(
+    mountedSlotActiveRoutesHeader,
+  );
   const sourceVariant =
     interceptionContext === undefined || interceptionContext === null
       ? null
@@ -412,6 +417,9 @@ export function appIsrRscKey(
   const variant = [
     sourceVariant ? `source:${fnv1a64(sourceVariant)}` : null,
     normalizedMountedSlotsHeader ? `slots:${fnv1a64(normalizedMountedSlotsHeader)}` : null,
+    normalizedMountedSlotActiveRoutesHeader
+      ? `active:${fnv1a64(normalizedMountedSlotActiveRoutesHeader)}`
+      : null,
     getRscRenderModeCacheVariant(renderMode),
   ]
     .filter((part) => part !== null)

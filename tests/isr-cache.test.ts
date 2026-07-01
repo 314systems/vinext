@@ -169,6 +169,44 @@ describe("App Router ISR cache key primitives", () => {
     expect(first).toMatch(/^app:\/feed:rsc:slots:[a-z0-9]+$/);
   });
 
+  it("keys mounted-slot active route RSC variants by normalized active-route header", () => {
+    delete process.env.__VINEXT_BUILD_ID;
+
+    const modalSlot = "slot:modal:/feed";
+    const sidebarSlot = "slot:sidebar:/feed";
+    const modalRoute = "route:/photos/[id]";
+    const sidebarRoute = "route:/feed";
+    const first = appIsrRscKey(
+      "/feed",
+      "slot:modal:/feed slot:sidebar:/feed",
+      undefined,
+      undefined,
+      `${encodeURIComponent(sidebarSlot)}=${encodeURIComponent(sidebarRoute)} ${encodeURIComponent(
+        modalSlot,
+      )}=${encodeURIComponent(modalRoute)}`,
+    );
+    const second = appIsrRscKey(
+      "/feed",
+      "slot:sidebar:/feed slot:modal:/feed",
+      undefined,
+      undefined,
+      `${encodeURIComponent(modalSlot)}=${encodeURIComponent(modalRoute)} ${encodeURIComponent(
+        sidebarSlot,
+      )}=${encodeURIComponent(sidebarRoute)}`,
+    );
+    const differentActiveRoute = appIsrRscKey(
+      "/feed",
+      "slot:modal:/feed slot:sidebar:/feed",
+      undefined,
+      undefined,
+      `${encodeURIComponent(modalSlot)}=${encodeURIComponent(sidebarRoute)}`,
+    );
+
+    expect(first).toBe(second);
+    expect(first).not.toBe(differentActiveRoute);
+    expect(first).toMatch(/^app:\/feed:rsc:slots:[a-z0-9]+:active:[a-z0-9]+$/);
+  });
+
   it("bounds RSC cache-key cardinality against attacker-supplied mounted-slot values", () => {
     // SECURITY-AUDIT-2026-05 F-PROD-1: an attacker who forges
     // X-Vinext-Mounted-Slots: <unique-value> must not be able to fan out

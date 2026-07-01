@@ -36,6 +36,7 @@ type AppPageRscCacheKeyBuilder = (
   mountedSlotsHeader?: string | null,
   renderMode?: AppRscRenderMode,
   interceptionContext?: string | null,
+  mountedSlotActiveRoutesHeader?: string | null,
 ) => string;
 export type AppPageCacheOutcomeMetric = Readonly<{
   artifact: "html" | "rsc";
@@ -92,6 +93,7 @@ type ReadAppPageCacheResponseOptions = {
   hasRequestSearchParams?: boolean;
   middlewareHeaders?: Headers | null;
   middlewareStatus?: number | null;
+  mountedSlotActiveRoutesHeader?: string | null;
   mountedSlotsHeader?: string | null;
   recordCacheOutcome?: AppPageCacheOutcomeRecorder;
   renderMode?: AppRscRenderMode;
@@ -314,6 +316,7 @@ export async function readAppPageCacheResponse(
         options.mountedSlotsHeader,
         options.renderMode,
         options.interceptionContext,
+        options.mountedSlotActiveRoutesHeader,
       )
     : options.isrHtmlKey(options.cleanPathname);
   const artifact = options.isRscRequest ? "rsc" : "html";
@@ -410,6 +413,7 @@ export async function readAppPageCacheResponse(
                   options.mountedSlotsHeader,
                   options.renderMode,
                   options.interceptionContext,
+                  options.mountedSlotActiveRoutesHeader,
                 ),
             buildAppPageCacheValue(
               "",
