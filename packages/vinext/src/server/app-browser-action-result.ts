@@ -39,8 +39,11 @@ export function shouldClearClientNavigationCachesForServerActionResult<TRoot>(
   result: AppBrowserServerActionResult<TRoot> | TRoot,
   revalidation: ServerActionRevalidationKind = "none",
 ): boolean {
-  if (revalidation !== "none") {
+  if (revalidation === "staticAndDynamic") {
     return true;
+  }
+  if (revalidation === "dynamicOnly") {
+    return false;
   }
 
   if (!isServerActionResult<TRoot>(result)) {

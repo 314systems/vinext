@@ -38,6 +38,7 @@ import {
 import { hasPendingAppRouterPageRedirect } from "../server/app-browser-mpa-navigation.js";
 import {
   VINEXT_DYNAMIC_STALE_TIME_HEADER,
+  VINEXT_MOUNTED_SLOT_ACTIVE_ROUTES_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_PARAMS_HEADER,
 } from "../server/headers.js";
@@ -940,6 +941,7 @@ export async function consumePrefetchResponseForNavigation(
 
 type NavigationListener = () => void;
 const _CLIENT_NAV_STATE_KEY = Symbol.for("vinext.clientNavigationState");
+const _MOUNTED_SLOT_ACTIVE_ROUTES_HEADER_KEY = Symbol.for("vinext.mountedSlotActiveRoutesHeader");
 const _MOUNTED_SLOTS_HEADER_KEY = Symbol.for("vinext.mountedSlotsHeader");
 
 type ClientNavigationState = {
@@ -967,8 +969,21 @@ type CommitClientNavigationStateOptions = {
 
 type ClientNavigationGlobal = typeof globalThis & {
   [_CLIENT_NAV_STATE_KEY]?: ClientNavigationState;
+  [_MOUNTED_SLOT_ACTIVE_ROUTES_HEADER_KEY]?: string | null;
   [_MOUNTED_SLOTS_HEADER_KEY]?: string | null;
 };
+
+export function setMountedSlotActiveRoutesHeader(header: string | null): void {
+  if (isServer) return;
+  const globalState = window as ClientNavigationGlobal;
+  globalState[_MOUNTED_SLOT_ACTIVE_ROUTES_HEADER_KEY] = header;
+}
+
+export function getMountedSlotActiveRoutesHeader(): string | null {
+  if (isServer) return null;
+  const globalState = window as ClientNavigationGlobal;
+  return globalState[_MOUNTED_SLOT_ACTIVE_ROUTES_HEADER_KEY] ?? null;
+}
 
 export function setMountedSlotsHeader(header: string | null): void {
   if (isServer) return;
@@ -1959,10 +1974,17 @@ const _appRouter: AppRouterInstance = {
       // prefetchRscResponse only manages the cache Map, not the URL set.
       const fullHref = toBrowserNavigationHref(prefetchHref, window.location.href, __basePath);
       const interceptionContext = getPrefetchInterceptionContext(fullHref);
+      const mountedSlotActiveRoutesHeader = getMountedSlotActiveRoutesHeader();
       const mountedSlotsHeader = getMountedSlotsHeader();
-      const headers = createRscRequestHeaders({ interceptionContext });
+      const headers = createRscRequestHeaders({
+        interceptionContext,
+        mountedSlotActiveRoutesHeader,
+      });
       if (mountedSlotsHeader) {
         headers.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
+      }
+      if (mountedSlotActiveRoutesHeader) {
+        headers.set(VINEXT_MOUNTED_SLOT_ACTIVE_ROUTES_HEADER, mountedSlotActiveRoutesHeader);
       }
       const rscUrl = await createRscRequestUrl(fullHref, headers);
       const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);

@@ -14,8 +14,10 @@ import {
   NEXT_ACTION_HEADER,
   RSC_ACTION_HEADER,
   VINEXT_INTERCEPTION_CONTEXT_HEADER,
+  VINEXT_MOUNTED_SLOT_ACTIVE_ROUTES_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
 } from "./headers.js";
+import { createMountedSlotActiveRoutesHeader } from "./app-mounted-slot-active-routes-header.js";
 import {
   NavigationTraceReasonCodes,
   createNavigationLifecycleTraceFields,
@@ -97,6 +99,7 @@ export type AppRouterState = {
   navigationSnapshot: ClientNavigationRenderSnapshot;
   rootLayoutTreePath: string | null;
   routeId: string;
+  skipVisibleLinkPrefetchPing?: boolean;
   slotBindings: readonly AppElementsSlotBinding[];
   visibleCommitVersion: number;
 };
@@ -116,6 +119,7 @@ export type AppRouterAction = {
   rootLayoutTreePath: string | null;
   reuseCurrentBfcacheIds: boolean;
   routeId: string;
+  skipVisibleLinkPrefetchPing?: boolean;
   skippedLayoutIds: readonly string[];
   slotBindings: readonly AppElementsSlotBinding[];
   type: "navigate" | "replace" | "traverse";
@@ -134,7 +138,10 @@ export type PendingNavigationCommit = {
 };
 
 export type AppNavigationPayloadOrigin = Readonly<
-  { origin: "committed-cache" } | { origin: "fresh" } | { origin: "visited-cache" }
+  | { origin: "committed-cache" }
+  | { origin: "fresh" }
+  | { origin: "prefetch-cache" }
+  | { origin: "visited-cache" }
 >;
 
 export const COMMITTED_CACHE_APP_NAVIGATION_PAYLOAD_ORIGIN: AppNavigationPayloadOrigin = {
@@ -143,6 +150,9 @@ export const COMMITTED_CACHE_APP_NAVIGATION_PAYLOAD_ORIGIN: AppNavigationPayload
 
 export const FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN: AppNavigationPayloadOrigin = {
   origin: "fresh",
+};
+export const PREFETCH_CACHE_APP_NAVIGATION_PAYLOAD_ORIGIN: AppNavigationPayloadOrigin = {
+  origin: "prefetch-cache",
 };
 export const VISITED_CACHE_APP_NAVIGATION_PAYLOAD_ORIGIN: AppNavigationPayloadOrigin = {
   origin: "visited-cache",
@@ -203,6 +213,7 @@ function requiresCacheEntryReuseProof(origin: AppNavigationPayloadOrigin): boole
   switch (origin.origin) {
     case "committed-cache":
     case "fresh":
+    case "prefetch-cache":
       return false;
     case "visited-cache":
       return true;
@@ -250,6 +261,7 @@ type ResolveServerActionRequestStateOptions = {
   basePath: string;
   elements: AppElements;
   previousNextUrl: string | null;
+  slotBindings?: readonly AppElementsSlotBinding[];
 };
 
 type ResolveServerActionRequestStateResult = {
@@ -287,7 +299,35 @@ export function resolveServerActionRequestState(
     headers.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
   }
 
+  const mountedSlotActiveRoutesHeader = createMountedSlotActiveRoutesHeader(
+    options.slotBindings ?? [],
+  );
+  if (mountedSlotActiveRoutesHeader !== null) {
+    headers.set(VINEXT_MOUNTED_SLOT_ACTIVE_ROUTES_HEADER, mountedSlotActiveRoutesHeader);
+  }
+
   return { headers };
+}
+
+export function createCommittedNavigationSnapshotElements(options: {
+  renderedElements: AppElements;
+  state: AppRouterState;
+}): AppElements {
+  const elements: Record<string, AppElements[keyof AppElements]> = {
+    ...options.state.elements,
+    [AppElementsWire.keys.layoutFlags]: options.state.layoutFlags,
+    [AppElementsWire.keys.layoutIds]: options.state.layoutIds,
+    [AppElementsWire.keys.skippedLayoutIds]: [],
+    [AppElementsWire.keys.slotBindings]: options.state.slotBindings,
+  };
+
+  for (const binding of options.state.slotBindings) {
+    if (binding.state !== "active" || !binding.activeRouteId) continue;
+    if (Object.hasOwn(options.renderedElements, binding.slotId)) continue;
+    delete elements[binding.slotId];
+  }
+
+  return elements;
 }
 
 export function resolvePendingNavigationCommitDispositionDecision(options: {
@@ -363,9 +403,14 @@ export function resolvePendingNavigationCommitDispositionDecision(options: {
     }),
   );
 
-  return mergeSkippedLayoutPreservation({
+  const withSkippedLayoutPreservation = mergeSkippedLayoutPreservation({
     currentState: options.currentState,
     decision,
+    pending: options.pending,
+  });
+  return mergeOmittedActiveSlotPreservation({
+    currentState: options.currentState,
+    decision: withSkippedLayoutPreservation,
     pending: options.pending,
   });
 }
@@ -632,6 +677,51 @@ function mergeSkippedLayoutSlotPreservation(options: {
   return preservePreviousSlotIds;
 }
 
+function mergeOmittedActiveSlotPreservation(options: {
+  currentState: AppRouterState;
+  decision: PendingNavigationCommitDispositionDecision;
+  pending: PendingNavigationCommit;
+}): PendingNavigationCommitDispositionDecision {
+  if (options.decision.disposition !== "dispatch") return options.decision;
+  if (options.pending.action.operation.lane === "refresh") return options.decision;
+
+  const currentBindingsBySlotId = new Map<string, AppElementsSlotBinding>();
+  for (const binding of options.currentState.slotBindings) {
+    if (binding.state !== "active" || !binding.activeRouteId) continue;
+    currentBindingsBySlotId.set(binding.slotId, binding);
+  }
+  if (currentBindingsBySlotId.size === 0) return options.decision;
+
+  const preservePreviousSlotIds = [...options.decision.preservePreviousSlotIds];
+  const seenSlotIds = new Set(preservePreviousSlotIds);
+  for (const binding of options.pending.action.slotBindings) {
+    if (binding.state !== "active" || !binding.activeRouteId) continue;
+    if (Object.hasOwn(options.pending.action.elements, binding.slotId)) continue;
+    if (!Object.hasOwn(options.currentState.elements, binding.slotId)) continue;
+
+    const currentBinding = currentBindingsBySlotId.get(binding.slotId);
+    if (
+      currentBinding?.activeRouteId !== binding.activeRouteId ||
+      currentBinding.ownerLayoutId !== binding.ownerLayoutId
+    ) {
+      continue;
+    }
+    if (seenSlotIds.has(binding.slotId)) continue;
+
+    preservePreviousSlotIds.push(binding.slotId);
+    seenSlotIds.add(binding.slotId);
+  }
+
+  if (preservePreviousSlotIds.length === options.decision.preservePreviousSlotIds.length) {
+    return options.decision;
+  }
+
+  return {
+    ...options.decision,
+    preservePreviousSlotIds,
+  };
+}
+
 export async function createPendingNavigationCommit(options: {
   currentState: AppRouterState;
   navigationCommitKind?: "authoritative" | "detached";
@@ -692,6 +782,7 @@ export async function createPendingNavigationCommit(options: {
       rootLayoutTreePath: metadata.rootLayoutTreePath,
       reuseCurrentBfcacheIds: options.reuseCurrentBfcacheIds ?? true,
       routeId: metadata.routeId,
+      ...(options.payloadOrigin.origin === "fresh" ? {} : { skipVisibleLinkPrefetchPing: true }),
       skippedLayoutIds: metadata.skippedLayoutIds,
       type: options.type,
     },

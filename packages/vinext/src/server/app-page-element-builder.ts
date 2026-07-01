@@ -16,11 +16,17 @@ import {
   type AppPageSlotOverride,
 } from "./app-page-route-wiring.js";
 import { AppElementsWire, type AppElements } from "./app-elements.js";
+import { parseMountedSlotActiveRoutesHeader } from "./app-mounted-slot-active-routes-header.js";
 import type { AppPageParams } from "./app-page-boundary.js";
 import { DEFAULT_GLOBAL_ERROR_MODULE } from "./default-global-error-module.js";
 import { matchRoutePattern } from "../routing/route-pattern.js";
 import type { MetadataFileRoute } from "./metadata-routes.js";
-import { APP_RSC_RENDER_MODE_NAVIGATION, type AppRscRenderMode } from "./app-rsc-render-mode.js";
+import {
+  APP_RSC_RENDER_MODE_ACTION_RERENDER_PRESERVE_UI,
+  APP_RSC_RENDER_MODE_NAVIGATION,
+  APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI,
+  type AppRscRenderMode,
+} from "./app-rsc-render-mode.js";
 import type { AppLayoutParamAccessTracker } from "./app-layout-param-observation.js";
 import { createAppPageRenderIdentity } from "./app-page-render-identity.js";
 import {
@@ -95,6 +101,8 @@ export type AppPagePageRequest<TModule extends AppPageModule = AppPageModule> = 
   request: Request;
   /** Normalized x-vinext-mounted-slots header value. */
   mountedSlotsHeader: string | null;
+  /** Normalized active route ids for mounted slots. */
+  mountedSlotActiveRoutesHeader?: string | null;
   /** Semantic RSC payload mode for this page render. */
   renderMode?: AppRscRenderMode;
   /** Observe page `searchParams` access for cache-safety classification. */
@@ -133,6 +141,11 @@ export type BuildPageElementsOptions<
   trailingSlash?: boolean;
   /** Serialized next.config `htmlLimitedBots` regexp source. */
   htmlLimitedBots?: string;
+  resolveRouteById?: (routeId: string) => {
+    params: AppPageParams;
+    route: AppPageBuildRoute<TModule, TErrorModule>;
+    routePath: string;
+  } | null;
 };
 
 type AppPageNavigationParamModule = {
@@ -141,13 +154,19 @@ type AppPageNavigationParamModule = {
 
 type AppPageNavigationParamSlot = {
   default?: AppPageNavigationParamModule | null;
+  id?: string | null;
+  layoutIndex?: number | null;
+  name?: string | null;
   page?: AppPageNavigationParamModule | null;
+  routeSegments?: readonly string[] | null;
   slotPatternParts?: readonly string[] | null;
   slotParamNames?: readonly string[] | null;
 };
 
 type AppPageNavigationParamRoute = {
+  layoutTreePositions?: readonly number[] | null;
   params?: readonly string[] | null;
+  routeSegments?: readonly string[] | null;
   slots?: Readonly<Record<string, AppPageNavigationParamSlot>> | null;
 };
 
@@ -195,6 +214,7 @@ export async function buildPageElements<
     searchParams,
     isRscRequest,
     mountedSlotsHeader,
+    mountedSlotActiveRoutesHeader,
     renderMode = APP_RSC_RENDER_MODE_NAVIGATION,
     observeMetadataSearchParamsAccess = false,
     observePageSearchParamsAccess = false,
@@ -356,7 +376,16 @@ export async function buildPageElements<
 
   const mountedSlotIds = mountedSlotsHeader ? new Set(mountedSlotsHeader.split(" ")) : null;
 
-  const slotOverrides = buildSlotOverrides(route, params, routePath, opts);
+  const slotOverrides = buildSlotOverrides(
+    route,
+    params,
+    routePath,
+    renderIdentity.routeId,
+    renderMode,
+    opts,
+    mountedSlotActiveRoutesHeader,
+    options.resolveRouteById,
+  );
   const metadataPlacement =
     hasDynamicMetadata &&
     shouldServeStreamingMetadata(
@@ -454,7 +483,15 @@ function buildSlotOverrides<TModule extends AppPageModule, TErrorModule extends 
   route: AppPageBuildRoute<TModule, TErrorModule>,
   routeParams: AppPageParams,
   routePath: string,
+  targetRouteId: string,
+  renderMode: AppRscRenderMode,
   opts?: AppPageInterceptOptions<TModule> | null,
+  mountedSlotActiveRoutesHeader?: string | null,
+  resolveRouteById?: (routeId: string) => {
+    params: AppPageParams;
+    route: AppPageBuildRoute<TModule, TErrorModule>;
+    routePath: string;
+  } | null,
 ): Readonly<Record<string, AppPageSlotOverride<TModule>>> | null {
   const overrides: Record<string, AppPageSlotOverride<TModule>> = {};
 
@@ -483,7 +520,84 @@ function buildSlotOverrides<TModule extends AppPageModule, TErrorModule extends 
     overrides[slotKey] = existing ? { ...existing, params: existing.params ?? params } : { params };
   }
 
+  const activeSlotRoutes = parseMountedSlotActiveRoutesHeader(mountedSlotActiveRoutesHeader);
+  if (activeSlotRoutes !== null) {
+    const shouldRerenderActiveSlots = shouldRerenderActiveMountedSlots(renderMode);
+    for (const [slotKey, slot] of Object.entries(route.slots ?? {})) {
+      const slotId = resolveRouteSlotId(route, slot);
+      const activeRouteId = activeSlotRoutes.get(slotId);
+      if (!activeRouteId) continue;
+
+      if (!shouldRerenderActiveSlots) {
+        const slotHasTargetPage = hasDefaultExport(slot.page);
+        if (activeRouteId === targetRouteId || !slotHasTargetPage) {
+          const existing = overrides[slotKey];
+          overrides[slotKey] = {
+            ...existing,
+            activeRouteId: existing?.activeRouteId ?? activeRouteId,
+            preserveMountedContent: existing?.preserveMountedContent ?? true,
+          };
+        }
+        continue;
+      }
+
+      if (!resolveRouteById) continue;
+      const activeRouteMatch = resolveRouteById(activeRouteId);
+      if (activeRouteMatch === null) continue;
+      const activeSlot = findRouteSlotById(activeRouteMatch.route, slotId);
+      if (!activeSlot?.slot.page) continue;
+
+      const activeSlotParams =
+        resolveSlotParamOverrides(activeRouteMatch.route, activeRouteMatch.routePath)?.[
+          activeSlot.slotKey
+        ] ?? activeRouteMatch.params;
+      const existing = overrides[slotKey];
+      overrides[slotKey] = {
+        ...existing,
+        activeRouteId: existing?.activeRouteId ?? activeRouteId,
+        pageModule: existing?.pageModule ?? activeSlot.slot.page,
+        params: existing?.params ?? activeSlotParams,
+        routeSegments: existing?.routeSegments ?? activeSlot.slot.routeSegments ?? null,
+      };
+    }
+  }
+
   return Object.keys(overrides).length > 0 ? overrides : null;
+}
+
+function shouldRerenderActiveMountedSlots(renderMode: AppRscRenderMode): boolean {
+  return (
+    renderMode === APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI ||
+    renderMode === APP_RSC_RENDER_MODE_ACTION_RERENDER_PRESERVE_UI
+  );
+}
+
+function resolveRouteSlotId(
+  route: AppPageNavigationParamRoute,
+  slot: AppPageNavigationParamSlot & { id?: string | null; layoutIndex?: number | null },
+): string {
+  if (slot.id) return slot.id;
+  const layoutIndex = slot.layoutIndex && slot.layoutIndex >= 0 ? slot.layoutIndex : 0;
+  const treePosition = route.layoutTreePositions?.[layoutIndex] ?? 0;
+  return AppElementsWire.encodeSlotId(
+    slot.name ?? "",
+    createAppPageTreePath(route.routeSegments, treePosition),
+  );
+}
+
+function findRouteSlotById<TModule extends AppPageModule, TErrorModule extends AppPageErrorModule>(
+  route: AppPageBuildRoute<TModule, TErrorModule>,
+  slotId: string,
+): {
+  slot: NonNullable<AppPageBuildRoute<TModule, TErrorModule>["slots"]>[string];
+  slotKey: string;
+} | null {
+  for (const [slotKey, slot] of Object.entries(route.slots ?? {})) {
+    if (resolveRouteSlotId(route, slot) === slotId) {
+      return { slot, slotKey };
+    }
+  }
+  return null;
 }
 
 export function resolveInterceptedSlotSegments(

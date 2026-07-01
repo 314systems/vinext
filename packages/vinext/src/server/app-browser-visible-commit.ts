@@ -164,14 +164,16 @@ function reduceApprovedVisibleCommitState(
             })
           : [];
       const preservedSlotOwnerElementIdSet = new Set(bfcacheCompatiblePreserveElementIds);
+      const targetLayoutIdSet = new Set(action.layoutIds);
       const preservePreviousSlotIds = action.reuseCurrentBfcacheIds
         ? commit.decision.preservePreviousSlotIds.filter((slotId) => {
             const targetBinding = action.slotBindings.find((binding) => binding.slotId === slotId);
-            return (
-              targetBinding?.ownerLayoutId !== null &&
-              targetBinding?.ownerLayoutId !== undefined &&
-              preservedSlotOwnerElementIdSet.has(targetBinding.ownerLayoutId)
-            );
+            const ownerLayoutId = targetBinding?.ownerLayoutId;
+            if (ownerLayoutId === null || ownerLayoutId === undefined) return false;
+            if (action.operation.lane === "hmr") {
+              return preservedSlotOwnerElementIdSet.has(ownerLayoutId);
+            }
+            return action.operation.lane !== "refresh" && targetLayoutIdSet.has(ownerLayoutId);
           })
         : [];
       const hmrPreservedSlotOwnerLayoutIds =
@@ -223,6 +225,7 @@ function reduceApprovedVisibleCommitState(
           renderId: action.renderId,
           rootLayoutTreePath: action.rootLayoutTreePath,
           routeId: action.routeId,
+          ...(action.skipVisibleLinkPrefetchPing ? { skipVisibleLinkPrefetchPing: true } : {}),
           slotBindings: mergeSlotBindings(
             state.slotBindings,
             action.slotBindings,

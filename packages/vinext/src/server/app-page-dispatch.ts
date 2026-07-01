@@ -293,6 +293,7 @@ export type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
   loadSsrHandler: () => Promise<AppPageSsrHandler>;
   middlewareContext: AppPageMiddlewareContext;
   mountedSlotsHeader?: string | null;
+  mountedSlotActiveRoutesHeader?: string | null;
   params: AppPageParams;
   pprFallbackCacheShells?: readonly AppPagePprFallbackCacheShell[] | null;
   pprFallbackShell?: {

@@ -11,6 +11,8 @@ import {
 import { APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL } from "../packages/vinext/src/server/app-rsc-render-mode.js";
 import {
   NEXT_ROUTER_PREFETCH_HEADER,
+  VINEXT_MOUNTED_SLOT_ACTIVE_ROUTES_HEADER,
+  VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_RSC_RENDER_MODE_HEADER,
 } from "../packages/vinext/src/server/headers.js";
 import type { VinextLinkPrefetchRoute } from "../packages/vinext/src/client/vinext-next-data.js";
@@ -57,7 +59,7 @@ const linkPrefetchRoutes = [
   { canPrefetchLoadingShell: false, patternParts: ["clothing", ":product"], isDynamic: true },
 ] satisfies VinextLinkPrefetchRoute[];
 
-function createTestNavigationRuntime(navigate: unknown) {
+function createTestNavigationRuntime(navigate: unknown, functions: Record<string, unknown> = {}) {
   return {
     bootstrap: {
       routeManifest: null,
@@ -65,6 +67,7 @@ function createTestNavigationRuntime(navigate: unknown) {
     },
     functions: {
       navigate,
+      ...functions,
     },
   };
 }
@@ -85,6 +88,7 @@ function pingVisibleLinksFromRuntime(): void {
 type MockReactAnchorCaptureOptions = {
   captureAnchor(type: unknown, props: unknown): void;
   captureEffect?: (effect: CapturedEffect) => void;
+  captureLayoutEffect?: (effect: CapturedEffect) => void;
   startTransition?: (callback: () => void) => void;
 };
 
@@ -109,15 +113,19 @@ function mockReactAnchorCaptureForLinkOnly_DO_NOT_REUSE(
     }) as typeof actual.createElement;
 
     const mockDefault = { ...actual, createElement };
-    if (options.captureEffect !== undefined) {
+    if (options.captureEffect !== undefined || options.captureLayoutEffect !== undefined) {
       const useEffect = (effect: CapturedEffect) => {
         options.captureEffect?.(effect);
+      };
+      const useLayoutEffect = (effect: CapturedEffect) => {
+        (options.captureLayoutEffect ?? options.captureEffect)?.(effect);
       };
       return {
         ...actual,
         createElement,
         useEffect,
-        default: { ...mockDefault, useEffect },
+        useLayoutEffect,
+        default: { ...mockDefault, useEffect, useLayoutEffect },
       };
     }
 
@@ -1124,6 +1132,7 @@ async function renderIsolatedLink(options: {
   nodeEnv: string;
   props?: Record<string, unknown>;
   requireRef?: boolean;
+  runtimeFunctions?: Record<string, unknown>;
   windowOverrides?: Record<string, unknown>;
 }) {
   vi.resetModules();
@@ -1134,6 +1143,7 @@ async function renderIsolatedLink(options: {
   vi.stubEnv("NODE_ENV", options.nodeEnv);
 
   const effects: CapturedEffect[] = [];
+  const layoutEffects: CapturedEffect[] = [];
   let capturedAnchorProps: CapturedAnchorProps | undefined;
 
   const captureAnchor = (type: unknown, props: unknown) => {
@@ -1146,6 +1156,9 @@ async function renderIsolatedLink(options: {
     captureAnchor,
     captureEffect(effect) {
       effects.push(effect);
+    },
+    captureLayoutEffect(effect) {
+      layoutEffects.push(effect);
     },
   });
 
@@ -1161,7 +1174,9 @@ async function renderIsolatedLink(options: {
     search: "",
   };
   const navigationRuntime =
-    options.appNavigation === false ? undefined : createTestNavigationRuntime(navigate);
+    options.appNavigation === false
+      ? undefined
+      : createTestNavigationRuntime(navigate, options.runtimeFunctions);
 
   vi.stubGlobal("fetch", fetch);
   vi.stubGlobal("document", {
@@ -1211,17 +1226,39 @@ async function renderIsolatedLink(options: {
     const anchor = { href: options.href } as HTMLAnchorElement;
     capturedAnchorProps.ref?.(anchor);
 
-    for (const effect of effects) {
-      effect();
-    }
+    const layoutCleanups = layoutEffects
+      .map((effect) => effect())
+      .filter((cleanup): cleanup is () => void => typeof cleanup === "function");
+    const effectCleanups = effects
+      .map((effect) => effect())
+      .filter((cleanup): cleanup is () => void => typeof cleanup === "function");
+
+    const cleanupEffects = () => {
+      for (const cleanup of effectCleanups.slice().reverse()) cleanup();
+    };
+    const cleanupLayoutEffects = () => {
+      for (const cleanup of layoutCleanups.slice().reverse()) cleanup();
+    };
+    const cleanupAllEffects = () => {
+      cleanupEffects();
+      cleanupLayoutEffects();
+    };
+
+    const restore = () => {
+      cleanupAllEffects();
+      restoreNodeEnv();
+    };
 
     return {
       anchor,
       capturedAnchorProps,
+      cleanupEffects,
+      cleanupLayoutEffects,
+      cleanupAllEffects,
       fetch,
       navigate,
       pagePrefetchLinks,
-      restoreNodeEnv,
+      restoreNodeEnv: restore,
     };
   } catch (error) {
     restoreNodeEnv();
@@ -1297,6 +1334,67 @@ describe("Link prefetch scheduling", () => {
       await waitForFetchCalls(result.fetch, 1);
 
       expect(observer.unobserve).not.toHaveBeenCalledWith(result.anchor);
+      expectCanonicalRscFetchCall(
+        result.fetch.mock.calls[0],
+        "/viewport-prefetch-target",
+        expect.objectContaining({
+          credentials: "include",
+          priority: "low",
+        }),
+      );
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("does not prefetch visible links already reusable from the visited cache", async () => {
+    const observer = stubIntersectionObserver();
+    const hasVisitedResponseForPrefetch = vi.fn(
+      (_rscUrl: string, _interceptionContext: string | null, _mountedSlotsHeader: string | null) =>
+        true,
+    );
+
+    const result = await renderIsolatedLink({
+      href: "/viewport-prefetch-target",
+      nodeEnv: "production",
+      runtimeFunctions: { hasVisitedResponseForPrefetch },
+    });
+
+    try {
+      observer.dispatchIntersectingEntry(result.anchor);
+      await flushPrefetchTasks();
+
+      expect(result.fetch).not.toHaveBeenCalled();
+      expect(hasVisitedResponseForPrefetch).toHaveBeenCalledTimes(1);
+      const call = hasVisitedResponseForPrefetch.mock.calls[0];
+      if (!call) throw new Error("Expected visited-cache prefetch predicate call");
+      const [rscUrl, interceptionContext, mountedSlotsHeader] = call;
+      expect(typeof rscUrl).toBe("string");
+      expect(new URL(String(rscUrl), "https://example.com").pathname).toBe(
+        "/viewport-prefetch-target",
+      );
+      expect(interceptionContext).toBeNull();
+      expect(mountedSlotsHeader).toBeNull();
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("starts App Router viewport prefetches before browser idle callbacks", async () => {
+    const observer = stubIntersectionObserver();
+    const requestIdleCallback = vi.fn(() => 1);
+
+    const result = await renderIsolatedLink({
+      href: "/viewport-prefetch-target",
+      nodeEnv: "production",
+      windowOverrides: { requestIdleCallback },
+    });
+
+    try {
+      observer.dispatchIntersectingEntry(result.anchor);
+      await waitForFetchCalls(result.fetch, 1);
+
+      expect(requestIdleCallback).not.toHaveBeenCalled();
       expectCanonicalRscFetchCall(
         result.fetch.mock.calls[0],
         "/viewport-prefetch-target",
@@ -1439,6 +1537,34 @@ describe("Link prefetch scheduling", () => {
       expect(result.fetch).toHaveBeenCalledTimes(2);
       expectCanonicalRscFetchCall(
         result.fetch.mock.calls[1],
+        "/viewport-prefetch-target",
+        expect.objectContaining({
+          credentials: "include",
+          priority: "low",
+        }),
+      );
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("coalesces same-tick visible App Router prefetch pings", async () => {
+    const observer = stubIntersectionObserver();
+
+    const result = await renderIsolatedLink({
+      href: "/viewport-prefetch-target",
+      nodeEnv: "production",
+    });
+
+    try {
+      observer.dispatchIntersectingEntry(result.anchor);
+      pingVisibleLinksFromRuntime();
+      await waitForFetchCalls(result.fetch, 1);
+      await flushPrefetchTasks();
+
+      expect(result.fetch).toHaveBeenCalledTimes(1);
+      expectCanonicalRscFetchCall(
+        result.fetch.mock.calls[0],
         "/viewport-prefetch-target",
         expect.objectContaining({
           credentials: "include",
@@ -1788,6 +1914,85 @@ describe("Link prefetch scheduling", () => {
       window.location.href = "https://example.com/intent-prefetch-target";
       window.location.pathname = "/intent-prefetch-target";
       window.location.search = "";
+
+      pingVisibleLinksFromRuntime();
+      await flushPrefetchTasks();
+
+      expect(result.fetch).not.toHaveBeenCalled();
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("includes mounted slot active routes on App Router prefetches", async () => {
+    const observer = stubIntersectionObserver();
+    const mountedSlotsHeader = "slot:navbar:/dashboard";
+    const mountedSlotActiveRoutesHeader = "slot%3Anavbar%3A%2Fdashboard=route%3A%2Fdashboard";
+    const result = await renderIsolatedLink({
+      href: "/intent-prefetch-target",
+      nodeEnv: "production",
+    });
+    const { setMountedSlotActiveRoutesHeader, setMountedSlotsHeader } =
+      await import("../packages/vinext/src/shims/navigation.js");
+
+    try {
+      setMountedSlotsHeader(mountedSlotsHeader);
+      setMountedSlotActiveRoutesHeader(mountedSlotActiveRoutesHeader);
+
+      observer.dispatchIntersectingEntry(result.anchor);
+      await waitForFetchCalls(result.fetch, 1);
+
+      const init = result.fetch.mock.calls[0]?.[1];
+      expect(init?.headers).toBeInstanceOf(Headers);
+      if (!(init?.headers instanceof Headers)) {
+        throw new Error("Expected prefetch request headers");
+      }
+      expect(init.headers.get(VINEXT_MOUNTED_SLOTS_HEADER)).toBe(mountedSlotsHeader);
+      expect(init.headers.get(VINEXT_MOUNTED_SLOT_ACTIVE_ROUTES_HEADER)).toBe(
+        mountedSlotActiveRoutesHeader,
+      );
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("cancels a pending visible prefetch when navigation makes it the current URL", async () => {
+    const observer = stubIntersectionObserver();
+    const result = await renderIsolatedLink({
+      href: "/intent-prefetch-target",
+      nodeEnv: "production",
+    });
+
+    try {
+      observer.dispatchIntersectingEntry(result.anchor);
+      window.location.href = "https://example.com/intent-prefetch-target";
+      window.location.pathname = "/intent-prefetch-target";
+      window.location.search = "";
+      await flushPrefetchTasks();
+
+      expect(result.fetch).not.toHaveBeenCalled();
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("removes unmounted visible links before runtime prefetch pings", async () => {
+    const observer = stubIntersectionObserver();
+    const result = await renderIsolatedLink({
+      href: "/intent-prefetch-target",
+      nodeEnv: "production",
+    });
+    const { getPrefetchCache, getPrefetchedUrls } =
+      await import("../packages/vinext/src/shims/navigation.js");
+
+    try {
+      observer.dispatchIntersectingEntry(result.anchor);
+      await waitForFetchCalls(result.fetch, 1);
+
+      getPrefetchCache().clear();
+      getPrefetchedUrls().clear();
+      result.fetch.mockClear();
+      result.cleanupLayoutEffects();
 
       pingVisibleLinksFromRuntime();
       await flushPrefetchTasks();

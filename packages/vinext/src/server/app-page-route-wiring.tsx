@@ -163,6 +163,7 @@ export type AppPageRouteWiringRoute<
 };
 
 export type AppPageSlotOverride<TModule extends AppPageModule = AppPageModule> = {
+  activeRouteId?: string | null;
   branchSegments?: readonly string[] | null;
   layoutSegments?: readonly (readonly string[])[] | null;
   layoutModules?: readonly (TModule | null | undefined)[] | null;
@@ -173,6 +174,7 @@ export type AppPageSlotOverride<TModule extends AppPageModule = AppPageModule> =
    */
   pageModule?: TModule | null;
   params?: AppPageParams;
+  preserveMountedContent?: boolean;
   props?: Readonly<Record<string, unknown>>;
   routeSegments?: readonly string[] | null;
 };
@@ -473,6 +475,7 @@ function resolveAppPageSlotBindingState(
   slot: AppPageRouteWiringSlot,
   override: AppPageSlotOverride | undefined,
 ): AppElementsSlotBinding["state"] {
+  if (override?.activeRouteId) return "active";
   const pageComponent = getDefaultExport(override?.pageModule) ?? getDefaultExport(slot.page);
   if (pageComponent) return "active";
   if (getDefaultExport(slot.default)) return "default";
@@ -515,9 +518,11 @@ function createAppPageSlotBindings<
     const state = resolveAppPageSlotBindingState(slot, override);
     const activeRouteId =
       state === "active"
-        ? options.interception?.slotId === slotId
-          ? options.interception.targetRouteId
-          : AppElementsWire.encodeRouteId(options.routePath, null)
+        ? override?.activeRouteId !== undefined && override.activeRouteId !== null
+          ? override.activeRouteId
+          : options.interception?.slotId === slotId
+            ? options.interception.targetRouteId
+            : AppElementsWire.encodeRouteId(options.routePath, null)
         : null;
     bindings.push({
       ...(activeRouteId !== null ? { activeRouteId } : {}),
@@ -808,6 +813,14 @@ export function buildAppPageElements<
     const overrideOrPageComponent =
       getDefaultExport(slotOverride?.pageModule) ?? getDefaultExport(slot.page);
     const defaultComponent = getDefaultExport(slot.default);
+
+    if (
+      slotOverride?.preserveMountedContent &&
+      options.isRscRequest &&
+      options.mountedSlotIds?.has(slotId)
+    ) {
+      continue;
+    }
 
     // On soft nav (RSC): omit key when only default.tsx exists and the slot is
     // already mounted on the client. Absent key means the browser retains prior

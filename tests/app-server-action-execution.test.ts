@@ -21,6 +21,7 @@ import {
   VINEXT_RSC_COMPATIBILITY_ID_HEADER,
   VINEXT_RSC_VARY_HEADER,
 } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
+import { APP_RSC_RENDER_MODE_ACTION_RERENDER_PRESERVE_UI } from "../packages/vinext/src/server/app-rsc-render-mode.js";
 import {
   getAndClearActionRevalidationKind,
   refresh,
@@ -270,6 +271,7 @@ function createRscOptions(
     },
     maxActionBodySize: 1024,
     maxActionBodySizeLabel: "1kb",
+    mountedSlotActiveRoutesHeader: null,
     middlewareHeaders: null,
     middlewareStatus: null,
     mountedSlotsHeader: null,
@@ -1441,8 +1443,10 @@ describe("app server action execution helpers", () => {
   // packages/next/src/server/app-render/action-handler.ts addRevalidationHeader()
   // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/app-render/action-handler.ts
   it("emits x-action-revalidated when a fetch action revalidates a path", async () => {
+    const buildPageElement = vi.fn(() => "dashboard:{}:none");
     const response = await handleServerActionRscRequest(
       createRscOptions({
+        buildPageElement,
         loadServerAction() {
           return Promise.resolve(async () => {
             await revalidatePath("/dashboard");
@@ -1454,6 +1458,11 @@ describe("app server action execution helpers", () => {
 
     expect(response?.status).toBe(200);
     expect(response?.headers.get("x-action-revalidated")).toBe("1");
+    expect(buildPageElement).toHaveBeenCalledWith(
+      expect.objectContaining({
+        renderMode: APP_RSC_RENDER_MODE_ACTION_RERENDER_PRESERVE_UI,
+      }),
+    );
   });
 
   it("renders same-origin action redirects as a single-pass Flight response", async () => {
@@ -1928,8 +1937,10 @@ describe("app server action execution helpers", () => {
   });
 
   it("emits dynamic-only x-action-revalidated when a fetch action refreshes", async () => {
+    const buildPageElement = vi.fn(() => "dashboard:{}:none");
     const response = await handleServerActionRscRequest(
       createRscOptions({
+        buildPageElement,
         loadServerAction() {
           return Promise.resolve(() => {
             refresh();
@@ -1941,6 +1952,11 @@ describe("app server action execution helpers", () => {
 
     expect(response?.status).toBe(200);
     expect(response?.headers.get("x-action-revalidated")).toBe("2");
+    expect(buildPageElement).toHaveBeenCalledWith(
+      expect.objectContaining({
+        renderMode: APP_RSC_RENDER_MODE_ACTION_RERENDER_PRESERVE_UI,
+      }),
+    );
   });
 
   // Ported from Next.js: test/e2e/app-dir/actions/app-action.test.ts

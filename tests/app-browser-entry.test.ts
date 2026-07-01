@@ -87,7 +87,9 @@ import {
   createInitialBfcacheIdMap,
   createNextBfcacheIdMap,
   FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
+  PREFETCH_CACHE_APP_NAVIGATION_PAYLOAD_ORIGIN,
   VISITED_CACHE_APP_NAVIGATION_PAYLOAD_ORIGIN,
+  createCommittedNavigationSnapshotElements,
   createPendingNavigationCommit,
   isCompleteAppPayloadMetadata,
   isCacheRestorableAppPayloadMetadata,
@@ -131,6 +133,7 @@ import {
   ACTION_REVALIDATED_HEADER,
   ACTION_REDIRECT_HEADER,
   ACTION_REDIRECT_TYPE_HEADER,
+  VINEXT_MOUNTED_SLOT_ACTIVE_ROUTES_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_PARAMS_HEADER,
 } from "../packages/vinext/src/server/headers.js";
@@ -1221,7 +1224,16 @@ describe("app browser entry navigation scheduling", () => {
         },
         "dynamicOnly",
       ),
-    ).toBe(true);
+    ).toBe(false);
+    expect(
+      shouldClearClientNavigationCachesForServerActionResult(
+        {
+          root: createResolvedElements("route:/settings", "/"),
+          returnValue: { ok: true, data: "action-result" },
+        },
+        "dynamicOnly",
+      ),
+    ).toBe(false);
   });
 
   it("schedules discarded action refreshes only for revalidated actions", () => {
@@ -2002,6 +2014,59 @@ describe("app browser entry state helpers", () => {
         },
       },
     ]);
+  });
+
+  it("marks cache-origin pending commits to skip visible-link prefetch pings", async () => {
+    const currentState = createState();
+    const nextElements = Promise.resolve(
+      createResolvedElements("route:/dashboard/settings", "/", null, {
+        "page:/dashboard/settings": React.createElement("main", null, "settings"),
+      }),
+    );
+    const navigationSnapshot = createClientNavigationRenderSnapshot(
+      "https://example.com/dashboard/settings",
+      {},
+    );
+
+    const cachedPending = await createPendingNavigationCommit({
+      currentState,
+      nextElements,
+      navigationSnapshot,
+      operationLane: "navigation",
+      renderId: 2,
+      payloadOrigin: VISITED_CACHE_APP_NAVIGATION_PAYLOAD_ORIGIN,
+      type: "navigate",
+    });
+    const prefetchedPending = await createPendingNavigationCommit({
+      currentState,
+      nextElements: Promise.resolve(
+        createResolvedElements("route:/dashboard/settings", "/", null, {
+          "page:/dashboard/settings": React.createElement("main", null, "settings"),
+        }),
+      ),
+      navigationSnapshot,
+      operationLane: "navigation",
+      renderId: 3,
+      payloadOrigin: PREFETCH_CACHE_APP_NAVIGATION_PAYLOAD_ORIGIN,
+      type: "navigate",
+    });
+    const freshPending = await createPendingNavigationCommit({
+      currentState,
+      nextElements: Promise.resolve(
+        createResolvedElements("route:/dashboard/settings", "/", null, {
+          "page:/dashboard/settings": React.createElement("main", null, "settings"),
+        }),
+      ),
+      navigationSnapshot,
+      operationLane: "navigation",
+      renderId: 4,
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
+      type: "navigate",
+    });
+
+    expect(cachedPending.action.skipVisibleLinkPrefetchPing).toBe(true);
+    expect(prefetchedPending.action.skipVisibleLinkPrefetchPing).toBe(true);
+    expect(freshPending.action.skipVisibleLinkPrefetchPing).toBeUndefined();
   });
 
   it("classifies complete dynamic payload metadata as client-cacheable", () => {
@@ -5723,6 +5788,235 @@ describe("app browser entry previousNextUrl helpers", () => {
     expect(nextState.slotBindings).toEqual([modalSlotBinding]);
   });
 
+  it("preserves omitted active parallel slots on approved navigate commits", async () => {
+    // Ported from Next.js:
+    // test/e2e/app-dir/segment-cache/refresh/segment-cache-refresh.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/segment-cache/refresh/segment-cache-refresh.test.ts
+    const dashboardLayoutId = "layout:/dashboard";
+    const navbarSlotId = "slot:navbar:/dashboard";
+    const mountedNavbar = React.createElement("nav", null, "mounted navbar");
+    const navbarBinding = {
+      activeRouteId: "route:/dashboard",
+      ownerLayoutId: dashboardLayoutId,
+      slotId: navbarSlotId,
+      state: "active",
+    } satisfies AppElementsSlotBinding;
+    const state = createState({
+      bfcacheIds: {
+        "layout:/": "0",
+        [dashboardLayoutId]: "_b_4_",
+        [navbarSlotId]: "_b_5_",
+      },
+      elements: createResolvedElements(
+        "route:/dashboard",
+        "/",
+        null,
+        {
+          "layout:/": React.createElement("div", null, "root layout"),
+          [dashboardLayoutId]: React.createElement("div", null, "dashboard layout"),
+          [navbarSlotId]: mountedNavbar,
+        },
+        ["layout:/", dashboardLayoutId],
+        [navbarBinding],
+      ),
+      layoutIds: ["layout:/", dashboardLayoutId],
+      navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/dashboard", {}),
+      routeId: "route:/dashboard",
+      slotBindings: [navbarBinding],
+    });
+    const pending = await createPendingNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
+      currentState: state,
+      nextElements: Promise.resolve(
+        createResolvedElements(
+          "route:/dashboard/analytics",
+          "/",
+          null,
+          {
+            "page:/dashboard/analytics": React.createElement("main", null, "analytics"),
+          },
+          ["layout:/", dashboardLayoutId],
+          [navbarBinding],
+        ),
+      ),
+      navigationSnapshot: createClientNavigationRenderSnapshot(
+        "https://example.com/dashboard/analytics",
+        {},
+      ),
+      operationLane: "navigation",
+      renderId: 1,
+      type: "navigate",
+    });
+
+    const approval = approvePendingNavigationCommit({
+      activeNavigationId: 1,
+      currentState: state,
+      pending,
+      routeManifest: createRouteManifestForPendingCommit(state, pending),
+      startedNavigationId: 1,
+      targetHref: "https://example.com/dashboard/analytics",
+    });
+
+    expect(approval.decision.disposition).toBe("commit");
+    if (approval.decision.disposition !== "commit" || approval.approvedCommit === null) {
+      throw new Error("Expected approved visible commit");
+    }
+    expect(approval.decision.preservePreviousSlotIds).toContain(navbarSlotId);
+
+    const nextState = applyApprovedVisibleCommit(state, approval.approvedCommit);
+    expect(nextState.elements[navbarSlotId]).toBe(mountedNavbar);
+    expect(nextState.slotBindings).toEqual([navbarBinding]);
+  });
+
+  it("omits preserved active parallel slot content from committed cache snapshots", async () => {
+    // Ported from Next.js:
+    // test/e2e/app-dir/segment-cache/refresh/segment-cache-refresh.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/segment-cache/refresh/segment-cache-refresh.test.ts
+    const dashboardLayoutId = "layout:/dashboard";
+    const navbarSlotId = "slot:navbar:/dashboard";
+    const mountedNavbar = React.createElement("nav", null, "mounted navbar");
+    const navbarBinding = {
+      activeRouteId: "route:/dashboard",
+      ownerLayoutId: dashboardLayoutId,
+      slotId: navbarSlotId,
+      state: "active",
+    } satisfies AppElementsSlotBinding;
+    const state = createState({
+      elements: createResolvedElements(
+        "route:/dashboard/analytics",
+        "/",
+        null,
+        {
+          "layout:/": React.createElement("div", null, "root layout"),
+          [dashboardLayoutId]: React.createElement("div", null, "dashboard layout"),
+          [navbarSlotId]: mountedNavbar,
+        },
+        ["layout:/", dashboardLayoutId],
+        [navbarBinding],
+      ),
+      layoutIds: ["layout:/", dashboardLayoutId],
+      navigationSnapshot: createClientNavigationRenderSnapshot(
+        "https://example.com/dashboard/analytics",
+        {},
+      ),
+      routeId: "route:/dashboard/analytics",
+      slotBindings: [navbarBinding],
+    });
+    const renderedElements = createResolvedElements(
+      "route:/dashboard/analytics",
+      "/",
+      null,
+      {
+        "page:/dashboard/analytics": React.createElement("main", null, "analytics"),
+      },
+      ["layout:/", dashboardLayoutId],
+      [navbarBinding],
+    );
+
+    const cachedElements = createCommittedNavigationSnapshotElements({
+      renderedElements,
+      state,
+    });
+
+    expect(Object.hasOwn(cachedElements, navbarSlotId)).toBe(false);
+    expect(AppElementsWire.readMetadata(cachedElements).slotBindings).toEqual([navbarBinding]);
+  });
+
+  it("preserves planner-approved default parallel slots when the owner layout remounts", async () => {
+    const oldFeedLayout = React.createElement("div", null, "old feed layout");
+    const newFeedLayout = React.createElement("div", null, "new feed layout");
+    const mountedSlot = React.createElement("div", null, "modal");
+    const modalSlotBinding = {
+      ownerLayoutId: "layout:/feed",
+      slotId: "slot:modal:/feed",
+      state: "active",
+    } satisfies AppElementsSlotBinding;
+    const state = createState({
+      bfcacheIds: {
+        "layout:/": "0",
+        "layout:/feed": "_b_4_",
+        "slot:modal:/feed": "_b_5_",
+      },
+      elements: createResolvedElements(
+        "route:/feed",
+        "/",
+        null,
+        {
+          "layout:/": React.createElement("div", null, "root layout"),
+          "layout:/feed": oldFeedLayout,
+          "slot:modal:/feed": mountedSlot,
+        },
+        ["layout:/", "layout:/feed"],
+        [modalSlotBinding],
+      ),
+      layoutIds: ["layout:/", "layout:/feed"],
+      navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/feed", {}),
+      routeId: "route:/feed",
+      slotBindings: [modalSlotBinding],
+    });
+    const pending = await createPendingNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
+      currentState: state,
+      navigationSnapshot: createClientNavigationRenderSnapshot(
+        "https://example.com/feed/comments",
+        {},
+      ),
+      nextElements: Promise.resolve(
+        createResolvedElements(
+          "route:/feed/comments",
+          "/",
+          null,
+          {
+            "layout:/feed": newFeedLayout,
+            "page:/feed/comments": React.createElement("main", null, "comments"),
+          },
+          ["layout:/", "layout:/feed"],
+          [
+            {
+              ownerLayoutId: "layout:/feed",
+              slotId: "slot:modal:/feed",
+              state: "default",
+            },
+          ],
+        ),
+      ),
+      operationLane: "navigation",
+      renderId: 1,
+      type: "navigate",
+    });
+    const approval = approvePendingNavigationCommit({
+      activeNavigationId: 1,
+      currentState: state,
+      pending,
+      routeManifest: createRouteManifestForPendingCommit(state, pending),
+      startedNavigationId: 1,
+      targetHref: "https://example.com/feed/comments",
+    });
+
+    expect(approval.decision.disposition).toBe("commit");
+    if (approval.decision.disposition !== "commit" || approval.approvedCommit === null) {
+      throw new Error("Expected approved visible commit");
+    }
+    expect(approval.decision.preserveElementIds).toContain("layout:/feed");
+    expect(approval.decision.preservePreviousSlotIds).toEqual(["slot:modal:/feed"]);
+
+    const commitWithRemountedOwnerLayout = {
+      ...approval.approvedCommit,
+      action: {
+        ...approval.approvedCommit.action,
+        bfcacheIds: {
+          ...approval.approvedCommit.action.bfcacheIds,
+          "layout:/feed": "_b_fresh_",
+        },
+      },
+    };
+    const nextState = applyApprovedVisibleCommit(state, commitWithRemountedOwnerLayout);
+
+    expect(nextState.elements["layout:/feed"]).toBe(newFeedLayout);
+    expect(nextState.elements["slot:modal:/feed"]).toBe(mountedSlot);
+    expect(nextState.slotBindings).toEqual([modalSlotBinding]);
+  });
+
   it("preserves bfcache ids for planner-approved default parallel slots", async () => {
     const modalSlotId = AppElementsWire.encodeSlotId("modal", "/feed");
     const mountedSlot = React.createElement("div", null, "modal");
@@ -8123,6 +8417,32 @@ describe("resolveServerActionRequestState", () => {
     expect(headers.get("X-Vinext-Mounted-Slots")).toBe(getMountedSlotIdsHeader(elements));
   });
 
+  it("derives mounted slot active routes from visible slot bindings", () => {
+    const slotId = "slot:navbar:/dashboard";
+    const elements: AppElements = createResolvedElements("route:/dashboard/analytics", "/", null, {
+      [slotId]: React.createElement("div", null, "navbar"),
+    });
+
+    const { headers } = resolveServerActionRequestState({
+      actionId: "action-z",
+      basePath: "",
+      elements,
+      previousNextUrl: null,
+      slotBindings: [
+        {
+          activeRouteId: "route:/dashboard",
+          ownerLayoutId: "layout:/dashboard",
+          slotId,
+          state: "active",
+        },
+      ],
+    });
+
+    expect(headers.get(VINEXT_MOUNTED_SLOT_ACTIVE_ROUTES_HEADER)).toBe(
+      "slot%3Anavbar%3A%2Fdashboard=route%3A%2Fdashboard",
+    );
+  });
+
   it("omits headers whose derived values are null", () => {
     const elements: AppElements = createResolvedElements("route:/settings", "/", null, {
       "slot:ghost:/": null,
@@ -8138,5 +8458,6 @@ describe("resolveServerActionRequestState", () => {
 
     expect(headers.has("X-Vinext-Interception-Context")).toBe(false);
     expect(headers.has("X-Vinext-Mounted-Slots")).toBe(false);
+    expect(headers.has(VINEXT_MOUNTED_SLOT_ACTIVE_ROUTES_HEADER)).toBe(false);
   });
 });

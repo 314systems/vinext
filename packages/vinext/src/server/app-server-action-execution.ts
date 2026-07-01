@@ -171,6 +171,7 @@ type BuildServerActionPageElementOptions<TRoute extends AppServerActionRoute, TI
   cleanPathname: string;
   interceptOpts: TInterceptOpts | undefined;
   isRscRequest: boolean;
+  mountedSlotActiveRoutesHeader: string | null;
   mountedSlotsHeader: string | null;
   params: AppPageParams;
   request: Request;
@@ -279,6 +280,7 @@ export type HandleServerActionRscRequestOptions<
   maxActionBodySizeLabel: string;
   middlewareHeaders: Headers | null;
   middlewareStatus: number | null | undefined;
+  mountedSlotActiveRoutesHeader: string | null;
   mountedSlotsHeader: string | null;
   readBodyWithLimit: ReadBodyWithLimit;
   readFormDataWithLimit: ReadFormDataWithLimit;
@@ -378,6 +380,10 @@ function resolveActionRevalidationKind(hasModifiedCookies: boolean): ActionReval
   // this matches the max-precedence semantics in markActionRevalidation.
   if (hasModifiedCookies) return ACTION_DID_REVALIDATE_STATIC_AND_DYNAMIC;
   return revalidationKind;
+}
+
+function resolveActionRerenderRenderMode(): AppRscRenderMode {
+  return APP_RSC_RENDER_MODE_ACTION_RERENDER_PRESERVE_UI;
 }
 
 function clearRejectedActionSideEffects(getAndClearPendingCookies: () => string[]): void {
@@ -1332,6 +1338,7 @@ export async function handleServerActionRscRequest<
               cleanPathname: targetPathname,
               interceptOpts: undefined,
               isRscRequest: true,
+              mountedSlotActiveRoutesHeader: null,
               mountedSlotsHeader: null,
               params: targetMatch.params,
               request: redirectRenderRequest,
@@ -1473,17 +1480,19 @@ export async function handleServerActionRscRequest<
       setCurrentFetchSoftTags(
         buildServerActionPageTags(actionRerenderTarget.route, options.cleanPathname),
       );
+      const actionRerenderRenderMode = resolveActionRerenderRenderMode();
       const buildActionRerenderElement = () =>
         options.buildPageElement({
           cleanPathname: options.cleanPathname,
           interceptOpts: actionRerenderTarget.interceptOpts,
           isRscRequest: options.isRscRequest,
+          mountedSlotActiveRoutesHeader: options.mountedSlotActiveRoutesHeader,
           mountedSlotsHeader: options.mountedSlotsHeader,
           params: actionRerenderTarget.params,
           request: options.request,
           route: actionRerenderTarget.route,
           searchParams: actionRerenderSearchParams,
-          renderMode: APP_RSC_RENDER_MODE_ACTION_RERENDER_PRESERVE_UI,
+          renderMode: actionRerenderRenderMode,
           observeMetadataSearchParamsAccess: actionRerenderDynamicConfig !== "force-static",
           observePageSearchParamsAccess: actionRerenderDynamicConfig !== "force-static",
         });

@@ -139,6 +139,7 @@ export async function invokeClientServerAction(
     basePath: deps.basePath,
     elements: actionInitiation.routerState.elements,
     previousNextUrl: actionInitiation.routerState.previousNextUrl,
+    slotBindings: actionInitiation.routerState.slotBindings,
   }).headers;
   const fetchResponse = await fetch(createServerActionRequestUrl(actionInitiation.path), {
     method: "POST",
@@ -177,7 +178,7 @@ export async function invokeClientServerAction(
   }
 
   const revalidation = parseServerActionRevalidationHeader(fetchResponse.headers);
-  if (revalidation !== "none") deps.clearClientNavigationCaches();
+  if (revalidation === "staticAndDynamic") deps.clearClientNavigationCaches();
   const invalidResponseError = await readInvalidServerActionResponseError(
     fetchResponse.clone(),
     actionRedirectTarget !== null,

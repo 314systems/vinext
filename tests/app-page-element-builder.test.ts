@@ -16,6 +16,7 @@ import { makeThenableParams } from "../packages/vinext/src/shims/thenable-params
 import { readStreamAsText } from "../packages/vinext/src/utils/text-stream.js";
 import { useSelectedLayoutSegments } from "../packages/vinext/src/shims/navigation.js";
 import { resolveAppPageRouteStateKey } from "../packages/vinext/src/server/app-page-segment-state.js";
+import { APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI } from "../packages/vinext/src/server/app-rsc-render-mode.js";
 
 // Import the function under test AFTER mocking dependencies.
 // eslint-disable-next-line import/first
@@ -74,7 +75,11 @@ function createBaseOptions(overrides?: {
   routePath?: string;
   opts?: Record<string, unknown> | null;
   searchParams?: URLSearchParams | null;
+  isRscRequest?: boolean;
   mountedSlotsHeader?: string | null;
+  mountedSlotActiveRoutesHeader?: string | null;
+  renderMode?: Parameters<typeof buildPageElements>[0]["pageRequest"]["renderMode"];
+  resolveRouteById?: Parameters<typeof buildPageElements>[0]["resolveRouteById"];
 }) {
   return {
     route:
@@ -84,15 +89,18 @@ function createBaseOptions(overrides?: {
     pageRequest: {
       opts: overrides?.opts ?? null,
       searchParams: overrides?.searchParams ?? null,
-      isRscRequest: false,
+      isRscRequest: overrides?.isRscRequest ?? false,
       request: new Request("http://localhost/test"),
       mountedSlotsHeader: overrides?.mountedSlotsHeader ?? null,
+      mountedSlotActiveRoutesHeader: overrides?.mountedSlotActiveRoutesHeader ?? null,
+      renderMode: overrides?.renderMode,
     },
     globalErrorModule: null,
     rootNotFoundModule: null,
     rootForbiddenModule: null,
     rootUnauthorizedModule: null,
     metadataRoutes: [],
+    resolveRouteById: overrides?.resolveRouteById,
   };
 }
 
@@ -650,6 +658,143 @@ describe("buildPageElements", () => {
         state: "active",
       },
     ]);
+  });
+
+  it("rerenders active mounted slots from their current route during refresh", async () => {
+    function Page(): React.ReactNode {
+      return React.createElement("div", null, "Page");
+    }
+    function Layout({
+      children,
+      navbar,
+    }: {
+      children?: React.ReactNode;
+      navbar?: React.ReactNode;
+    }): React.ReactNode {
+      return React.createElement("section", null, navbar, children);
+    }
+    function ActiveNavbar(): React.ReactNode {
+      return React.createElement("nav", null, "Active navbar");
+    }
+    function DefaultNavbar(): React.ReactNode {
+      return React.createElement("nav", null, "Default navbar");
+    }
+
+    const activeRoute = createSyntheticRoute({
+      page: createSyntheticPageModule(Page),
+      layouts: [createSyntheticPageModule(Layout), createSyntheticPageModule(Layout)],
+      layoutTreePositions: [0, 1],
+      routeSegments: ["dashboard"],
+      pattern: "/dashboard",
+      slots: {
+        "navbar@dashboard/@navbar": {
+          id: "slot:navbar:/dashboard",
+          name: "navbar",
+          layoutIndex: 1,
+          page: createSyntheticPageModule(ActiveNavbar),
+          routeSegments: ["dashboard"],
+        },
+      },
+    });
+    const targetRoute = createSyntheticRoute({
+      page: createSyntheticPageModule(Page),
+      layouts: [createSyntheticPageModule(Layout), createSyntheticPageModule(Layout)],
+      layoutTreePositions: [0, 1],
+      routeSegments: ["dashboard", "analytics"],
+      pattern: "/dashboard/analytics",
+      slots: {
+        "navbar@dashboard/@navbar": {
+          id: "slot:navbar:/dashboard",
+          name: "navbar",
+          default: createSyntheticPageModule(DefaultNavbar),
+          layoutIndex: 1,
+          routeSegments: null,
+        },
+      },
+    });
+
+    const result = await buildPageElements(
+      createBaseOptions({
+        route: targetRoute,
+        routePath: "/dashboard/analytics",
+        isRscRequest: true,
+        mountedSlotsHeader: "slot:navbar:/dashboard",
+        mountedSlotActiveRoutesHeader: "slot%3Anavbar%3A%2Fdashboard=route%3A%2Fdashboard",
+        renderMode: APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI,
+        resolveRouteById(routeId) {
+          return routeId === "route:/dashboard"
+            ? { route: activeRoute, params: {}, routePath: "/dashboard" }
+            : null;
+        },
+      }),
+    );
+
+    const html = await renderRouteEntry(result, "route:/dashboard/analytics");
+    expect(html).toContain("Active navbar");
+    expect(html).not.toContain("Default navbar");
+    expect((result as Record<string, unknown>)[APP_SLOT_BINDINGS_KEY]).toContainEqual({
+      activeRouteId: "route:/dashboard",
+      ownerLayoutId: "layout:/dashboard",
+      slotId: "slot:navbar:/dashboard",
+      state: "active",
+    });
+  });
+
+  it("preserves active mounted slots during ordinary navigation", async () => {
+    // Ported from Next.js:
+    // test/e2e/app-dir/segment-cache/refresh/segment-cache-refresh.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/segment-cache/refresh/segment-cache-refresh.test.ts
+    function Page(): React.ReactNode {
+      return React.createElement("div", null, "Page");
+    }
+    function Layout({
+      children,
+      navbar,
+    }: {
+      children?: React.ReactNode;
+      navbar?: React.ReactNode;
+    }): React.ReactNode {
+      return React.createElement("section", null, navbar, children);
+    }
+    function ActiveNavbar(): React.ReactNode {
+      return React.createElement("nav", null, "Fresh active navbar");
+    }
+
+    const route = createSyntheticRoute({
+      page: createSyntheticPageModule(Page),
+      layouts: [createSyntheticPageModule(Layout), createSyntheticPageModule(Layout)],
+      layoutTreePositions: [0, 1],
+      routeSegments: ["dashboard"],
+      pattern: "/dashboard",
+      slots: {
+        "navbar@dashboard/@navbar": {
+          id: "slot:navbar:/dashboard",
+          name: "navbar",
+          layoutIndex: 1,
+          page: createSyntheticPageModule(ActiveNavbar),
+          routeSegments: ["dashboard"],
+        },
+      },
+    });
+
+    const result = await buildPageElements(
+      createBaseOptions({
+        route,
+        routePath: "/dashboard",
+        isRscRequest: true,
+        mountedSlotsHeader: "slot:navbar:/dashboard",
+        mountedSlotActiveRoutesHeader: "slot%3Anavbar%3A%2Fdashboard=route%3A%2Fdashboard",
+      }),
+    );
+
+    const record = result as Record<string, unknown>;
+    expect(record["slot:navbar:/dashboard"]).toBeUndefined();
+    expect(record[APP_SLOT_BINDINGS_KEY]).toContainEqual({
+      activeRouteId: "route:/dashboard",
+      ownerLayoutId: "layout:/dashboard",
+      slotId: "slot:navbar:/dashboard",
+      state: "active",
+    });
   });
 
   it("marks intercepted slot override bindings as active", async () => {

@@ -12,6 +12,7 @@ import {
   RSC_HEADER,
   VINEXT_CLIENT_REUSE_MANIFEST_HEADER,
   VINEXT_INTERCEPTION_CONTEXT_HEADER,
+  VINEXT_MOUNTED_SLOT_ACTIVE_ROUTES_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_RSC_RENDER_MODE_HEADER,
 } from "./headers.js";
@@ -39,6 +40,7 @@ export const VINEXT_RSC_VARY_HEADER = [
   NEXT_URL_HEADER,
   VINEXT_INTERCEPTION_CONTEXT_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
+  VINEXT_MOUNTED_SLOT_ACTIVE_ROUTES_HEADER,
   VINEXT_RSC_RENDER_MODE_HEADER,
 ].join(", ");
 
@@ -48,6 +50,7 @@ const textEncoder = new TextEncoder();
 type CreateRscRequestHeadersOptions = {
   clientReuseManifestHeader?: string | null;
   interceptionContext?: string | null;
+  mountedSlotActiveRoutesHeader?: string | null;
   mountedSlotsHeader?: string | null;
   renderMode?: AppRscRenderMode;
 };
@@ -174,6 +177,7 @@ function createCacheBustingInput(
     headers.get(NEXT_URL_HEADER),
     headers.get(VINEXT_INTERCEPTION_CONTEXT_HEADER),
     headers.get(VINEXT_MOUNTED_SLOTS_HEADER),
+    headers.get(VINEXT_MOUNTED_SLOT_ACTIVE_ROUTES_HEADER),
     ...(options.includeRenderModeHeader === false
       ? []
       : [normalizeRenderModeHeaderValue(headers.get(VINEXT_RSC_RENDER_MODE_HEADER))]),
@@ -288,6 +292,13 @@ export function createRscRequestHeaders(options: CreateRscRequestHeadersOptions 
 
   if (options.mountedSlotsHeader !== undefined && options.mountedSlotsHeader !== null) {
     headers.set(VINEXT_MOUNTED_SLOTS_HEADER, options.mountedSlotsHeader);
+  }
+
+  if (
+    options.mountedSlotActiveRoutesHeader !== undefined &&
+    options.mountedSlotActiveRoutesHeader !== null
+  ) {
+    headers.set(VINEXT_MOUNTED_SLOT_ACTIVE_ROUTES_HEADER, options.mountedSlotActiveRoutesHeader);
   }
 
   if (

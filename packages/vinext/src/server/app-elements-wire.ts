@@ -198,6 +198,7 @@ type AppElementsMetadata = {
   interceptionContext: string | null;
   layoutIds: readonly string[];
   layoutFlags: LayoutFlags;
+  renderObservation?: RenderObservation;
   routeId: string;
   rootLayoutTreePath: string | null;
   skippedLayoutIds: readonly string[];
@@ -845,6 +846,7 @@ export function readAppElementsMetadata(
     dynamicStaleTime >= 0
       ? dynamicStaleTime
       : undefined;
+  const renderObservation = elements[APP_RENDER_OBSERVATION_KEY];
   const sourcePage = readSourcePageMetadata(elements[APP_SOURCE_PAGE_KEY]);
 
   return {
@@ -855,6 +857,9 @@ export function readAppElementsMetadata(
     interceptionContext: interceptionContext ?? null,
     layoutIds,
     layoutFlags,
+    ...(renderObservation && typeof renderObservation === "object"
+      ? { renderObservation: renderObservation as RenderObservation }
+      : {}),
     routeId,
     rootLayoutTreePath,
     skippedLayoutIds,

@@ -606,6 +606,13 @@ function matchRoute(url) {
   return __routeMatcher.matchRoute(url);
 }
 
+function resolveRouteById(routeId) {
+  const parsed = __AppElementsWire.parseElementKey(routeId);
+  if (parsed?.kind !== "route") return null;
+  const match = matchRoute(parsed.path);
+  return match ? { route: match.route, params: match.params, routePath: parsed.path } : null;
+}
+
 /**
  * Check if a pathname matches any intercepting route.
  * Returns the match info or null.
@@ -633,6 +640,7 @@ async function buildPageElements(route, params, routePath, pageRequest, layoutPa
     basePath: __basePath,
     trailingSlash: __trailingSlash,
     htmlLimitedBots: __htmlLimitedBots,
+    resolveRouteById,
   });
 }
 
@@ -736,6 +744,7 @@ export default createAppRscHandler({
     isRscRequest,
     middlewareContext,
     mountedSlotsHeader,
+    mountedSlotActiveRoutesHeader,
     params,
     pprFallbackCacheShells,
     pprFallbackShell,
@@ -793,6 +802,7 @@ export default createAppRscHandler({
           isRscRequest,
           request,
           mountedSlotsHeader,
+          mountedSlotActiveRoutesHeader,
           renderMode,
           observeMetadataSearchParamsAccess: buildOptions?.observeMetadataSearchParamsAccess === true,
           observePageSearchParamsAccess: buildOptions?.observePageSearchParamsAccess === true,
@@ -849,6 +859,7 @@ export default createAppRscHandler({
       },
       middlewareContext,
       mountedSlotsHeader,
+      mountedSlotActiveRoutesHeader,
       params,
       pprFallbackCacheShells,
       pprFallbackShell,
@@ -1040,6 +1051,7 @@ export default createAppRscHandler({
     isRscRequest,
     middlewareContext,
     mountedSlotsHeader,
+    mountedSlotActiveRoutesHeader,
     request,
     searchParams,
   }) {
@@ -1068,6 +1080,7 @@ export default createAppRscHandler({
         isRscRequest: actionIsRscRequest,
         request: actionRequest,
         mountedSlotsHeader: actionMountedSlotsHeader,
+        mountedSlotActiveRoutesHeader: actionMountedSlotActiveRoutesHeader,
         renderMode: actionRenderMode,
         observeMetadataSearchParamsAccess,
         observePageSearchParamsAccess,
@@ -1078,6 +1091,7 @@ export default createAppRscHandler({
           isRscRequest: actionIsRscRequest,
           request: actionRequest,
           mountedSlotsHeader: actionMountedSlotsHeader,
+          mountedSlotActiveRoutesHeader: actionMountedSlotActiveRoutesHeader,
           renderMode: actionRenderMode,
           observeMetadataSearchParamsAccess: observeMetadataSearchParamsAccess === true,
           observePageSearchParamsAccess: observePageSearchParamsAccess === true,
@@ -1128,6 +1142,7 @@ export default createAppRscHandler({
       middlewareHeaders: middlewareContext.headers,
       middlewareStatus: middlewareContext.status,
       mountedSlotsHeader,
+      mountedSlotActiveRoutesHeader,
       readBodyWithLimit: __readBodyWithLimit,
       readFormDataWithLimit: __readFormDataWithLimit,
       renderToReadableStream,
