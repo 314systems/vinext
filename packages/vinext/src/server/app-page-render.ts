@@ -364,7 +364,7 @@ function materializeConcreteLayoutFlags(input: {
     return input.layoutFlags;
   }
   const metadata = AppElementsWire.readMetadata(input.element);
-  if (metadata.sourcePage.includes("[")) {
+  if (metadata.sourcePage?.includes("[")) {
     return input.layoutFlags;
   }
 

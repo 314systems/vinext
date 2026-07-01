@@ -1567,7 +1567,7 @@ describe("layoutFlags injection into RSC payload", () => {
         "layout:/acme": "team-layout",
         "layout:/acme/dashboard": "project-layout",
         "page:/acme/dashboard": "project-page",
-      },
+      } as unknown as Record<string, ReactNode>,
       layoutCount: 3,
       navigationParams: { project: "dashboard", teamSlug: "acme" },
       probeLayoutAt: () => null,
@@ -1611,7 +1611,7 @@ describe("layoutFlags injection into RSC payload", () => {
         "layout:/globex": "team-layout",
         "layout:/globex/portal": "project-layout",
         "page:/globex/portal": "project-page",
-      },
+      } as unknown as Record<string, ReactNode>,
       getPageTags: () => [
         "/globex/portal",
         "_N_T_/globex/portal",
