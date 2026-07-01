@@ -36,7 +36,7 @@ type TsconfigPathResolution = {
   pathAliases: TsconfigPathAlias[];
 };
 
-export type TsconfigPathAlias = {
+type TsconfigPathAlias = {
   find: string;
   kind: "exact" | "prefix";
   replacement: string;
