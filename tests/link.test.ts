@@ -358,8 +358,8 @@ describe("Link App Router prefetch mode", () => {
       });
       expect(resolveAutoAppRoutePrefetch("/products/1")).toEqual({
         cacheForNavigation: true,
-        fallbackTtl: "dynamic",
-        minimumTtlMs: 0,
+        fallbackTtl: "static",
+        minimumTtlMs: undefined,
         prefetchShellFirst: false,
         shouldPrefetch: true,
       });
@@ -368,8 +368,8 @@ describe("Link App Router prefetch mode", () => {
       // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/segment-cache/client-params/client-params.test.ts
       expect(resolveAutoAppRoutePrefetch("/clothing/1")).toEqual({
         cacheForNavigation: true,
-        fallbackTtl: "dynamic",
-        minimumTtlMs: 0,
+        fallbackTtl: "static",
+        minimumTtlMs: undefined,
         prefetchShellFirst: false,
         shouldPrefetch: true,
       });

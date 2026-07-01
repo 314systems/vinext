@@ -1171,6 +1171,21 @@ describe("app page render lifecycle", () => {
     await expect(response.text()).resolves.toBe("flight-data");
   });
 
+  it("emits the configured dynamic stale time for force-dynamic RSC responses", async () => {
+    vi.stubEnv("__NEXT_CLIENT_ROUTER_DYNAMIC_STALETIME", "0");
+    const common = createCommonOptions();
+    const response = await renderAppPageLifecycle({
+      ...common.options,
+      consumeDynamicUsage: vi.fn(() => false),
+      isForceDynamic: true,
+      isProduction: true,
+      isRscRequest: true,
+      revalidateSeconds: null,
+    });
+    expect(response.headers.get(VINEXT_DYNAMIC_STALE_TIME_HEADER)).toBe("0");
+    await expect(response.text()).resolves.toBe("flight-data");
+  });
+
   it("omits the dynamic stale time header on static production default-config RSC responses", async () => {
     const common = createCommonOptions();
     const response = await renderAppPageLifecycle({

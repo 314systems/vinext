@@ -329,8 +329,8 @@ function resolveMatchedAutoAppRoutePrefetch(route: VinextLinkPrefetchRoute): {
     // fallbacks can be cached for navigation unless their active parallel
     // branches must be derived from the click-time target tree.
     cacheForNavigation: shouldCacheForNavigation,
-    fallbackTtl: shouldCacheForNavigation && route.isDynamic ? "dynamic" : "static",
-    minimumTtlMs: shouldCacheForNavigation && route.isDynamic ? 0 : undefined,
+    fallbackTtl: "static",
+    minimumTtlMs: undefined,
     prefetchShellFirst: !route.isDynamic,
     shouldPrefetch: true,
   };

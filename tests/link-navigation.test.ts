@@ -1706,7 +1706,7 @@ describe("Link prefetch scheduling", () => {
     }
   });
 
-  it("uses the dynamic stale time for automatic dynamic full prefetches without loading shells", async () => {
+  it("uses the static stale time for reusable automatic dynamic full prefetches", async () => {
     vi.stubEnv("__NEXT_CLIENT_ROUTER_DYNAMIC_STALETIME", "0");
     vi.stubEnv("__NEXT_CLIENT_ROUTER_STATIC_STALETIME", "300");
     vi.spyOn(Date, "now").mockReturnValue(1_000_000);
@@ -1726,7 +1726,7 @@ describe("Link prefetch scheduling", () => {
       await entry?.pending;
 
       expect(entry?.cacheForNavigation).toBe(true);
-      expect(entry?.expiresAt).toBe(1_000_000);
+      expect(entry?.expiresAt).toBe(1_300_000);
     } finally {
       result.restoreNodeEnv();
     }
