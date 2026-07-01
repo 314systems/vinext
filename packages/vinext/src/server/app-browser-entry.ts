@@ -40,6 +40,7 @@ import {
   pushHistoryStateWithoutNotify,
   replaceClientParamsWithoutNotify,
   replaceHistoryStateWithoutNotify,
+  resolveAppPrefetchSharedCacheKey,
   resolvePrefetchCacheEntryMountedSlotsHeader,
   restoreRscResponse,
   saveScrollPosition,
@@ -132,11 +133,11 @@ import {
   restoreSynchronousPopstateScrollPosition,
 } from "./app-browser-popstate.js";
 import {
+  DefaultGlobalError,
   DevRecoveryBoundary,
   GlobalErrorBoundary,
   RedirectBoundary,
 } from "vinext/shims/error-boundary";
-import DefaultGlobalError from "vinext/shims/default-global-error";
 import { AppRouterContext } from "vinext/shims/internal/app-router-context";
 import { BfcacheStateKeyMapContext, ElementsContext, Slot } from "vinext/shims/slot";
 import type { RouteManifest } from "../routing/app-route-graph.js";
@@ -464,6 +465,11 @@ async function learnOptimisticRouteTemplateFromPrefetch(options: {
   const elements = await decodeAppElementsPromise(
     createFromFetch<AppWireElements>(Promise.resolve(restoreRscResponse(options.entry.snapshot))),
   );
+  const preservePageElements =
+    options.entry.cacheForNavigation === false && options.entry.optimisticRouteShell !== true;
+  const variantKey = preservePageElements
+    ? (options.entry.runtimeTemplateVariantKey ?? options.entry.sharedCacheKey ?? null)
+    : null;
   const template = createOptimisticRouteTemplate({
     allowLoadingShell: options.entry.optimisticRouteShell === true,
     basePath: __basePath,
@@ -471,7 +477,10 @@ async function learnOptimisticRouteTemplateFromPrefetch(options: {
     href: options.entry.snapshot.url || source.rscUrl,
     interceptionContext: options.interceptionContext,
     mountedSlotsHeader: options.mountedSlotsHeader,
+    preservePageElements,
     routeManifest: options.routeManifest,
+    runtimeLoadingFallback: preservePageElements ? options.entry.runtimeLoadingFallback : null,
+    variantKey,
   });
   if (template === null) return false;
 
@@ -480,6 +489,7 @@ async function learnOptimisticRouteTemplateFromPrefetch(options: {
       interceptionContext: options.interceptionContext,
       mountedSlotsHeader: options.mountedSlotsHeader,
       routeId: template.routeId,
+      variantKey: template.variantKey,
     }),
     template,
   );
@@ -1760,6 +1770,13 @@ function bootstrapHydration(
           navigationKind,
           visitedResponse,
         });
+        const sharedPrefetchCacheKey = resolveAppPrefetchSharedCacheKey(url.href, "navigation");
+        const runtimeTemplateVariantKey =
+          sharedPrefetchCacheKey === null
+            ? null
+            : `${sharedPrefetchCacheKey}\0${
+                resolveAppPrefetchSharedCacheKey(url.href, "loading-shell") ?? ""
+              }`;
         let routeManifest = navigationKind === "navigate" ? getBrowserRouteManifest() : null;
         const hasPrefetchCandidate =
           prefetchProbeDecision.kind === "probe" &&
@@ -1767,7 +1784,7 @@ function bootstrapHydration(
             rscUrl,
             requestInterceptionContext,
             mountedSlotsHeader,
-            { notifyInvalidation: false },
+            { notifyInvalidation: false, sharedCacheKey: sharedPrefetchCacheKey },
           );
         const reuseDecision = navigationPlanner.classifyNavigationReuse({
           bypassNavigationCache: shouldBypassNavigationCache,
@@ -1882,6 +1899,7 @@ function bootstrapHydration(
             mountedSlotsHeader,
             {
               shouldConsume: () => browserNavigationController.isCurrentNavigation(navId),
+              sharedCacheKey: sharedPrefetchCacheKey,
             },
           );
           if (!browserNavigationController.isCurrentNavigation(navId)) return;
@@ -1928,8 +1946,8 @@ function bootstrapHydration(
               mountedSlotsHeader,
               routeManifest,
               templates: optimisticRouteTemplates,
+              variantKey: runtimeTemplateVariantKey,
             });
-
             if (optimisticPayload !== null) {
               detachedNavigationCommits = true;
               const optimisticNavigationSnapshot = createClientNavigationRenderSnapshot(

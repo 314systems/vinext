@@ -16,6 +16,10 @@ import {
   hasAppNavigationRuntime,
   type NavigationRuntimeVisibleCommitMode,
 } from "../client/navigation-runtime.js";
+import type {
+  VinextLinkPrefetchRoute,
+  VinextRuntimePrefetchLoadingFallback,
+} from "../client/vinext-next-data.js";
 import { notifyAppRouterTransitionStart } from "../client/instrumentation-client-state.js";
 import {
   clearAppNavigationFailureTarget,
@@ -48,6 +52,7 @@ import {
   withBasePath,
 } from "./url-utils.js";
 import { navigationPlanner } from "../server/navigation-planner.js";
+import { createRouteTrieCache, matchRouteWithTrie } from "../routing/route-matching.js";
 import { stripBasePath } from "../utils/base-path.js";
 import { isBotUserAgent } from "../utils/html-limited-bots.js";
 import { ReadonlyURLSearchParams } from "./readonly-url-search-params.js";
@@ -263,9 +268,14 @@ export type PrefetchCacheEntry = {
   outcome: "pending" | "cache-seeded";
   snapshot?: CachedRscResponse;
   pending?: Promise<void>;
+  runtimeLoadingFallback?: VinextRuntimePrefetchLoadingFallback | null;
+  runtimeTemplateVariantKey?: string | null;
+  sharedCacheKey?: string | null;
   size?: number;
   timestamp: number;
 };
+
+const appPrefetchRouteTrieCache = createRouteTrieCache<VinextLinkPrefetchRoute>();
 
 export function getCurrentInterceptionContext(): string | null {
   if (isServer) {
@@ -416,6 +426,53 @@ function parsePrefetchCacheKey(cacheKey: string): {
   };
 }
 
+function encodePrefetchParamValue(value: string | string[] | undefined): string {
+  if (Array.isArray(value)) return value.map(encodeURIComponent).join("/");
+  return encodeURIComponent(value ?? "");
+}
+
+export function resolveAppPrefetchSharedCacheKey(
+  href: string,
+  kind: "navigation" | "loading-shell" | "runtime",
+): string | null {
+  if (isServer) return null;
+  const routes = window.__VINEXT_LINK_PREFETCH_ROUTES__;
+  if (!routes) return null;
+
+  let url: URL;
+  try {
+    url = new URL(href, window.location.href);
+  } catch {
+    return null;
+  }
+  if (url.origin !== window.location.origin) return null;
+
+  const routeHref = `${stripBasePath(url.pathname, __basePath)}${url.search}`;
+  const match = matchRouteWithTrie(routeHref, routes, appPrefetchRouteTrieCache);
+  if (!match) return null;
+
+  const route = match.route;
+  const varyParamNames =
+    kind === "loading-shell"
+      ? route.loadingShellVaryParamNames
+      : kind === "runtime"
+        ? route.runtimePrefetchVaryParamNames
+        : route.prefetchVaryParamNames;
+  const varyParams = new Set(varyParamNames ?? []);
+  const keyParts = route.patternParts.map((part) => {
+    if (!part.startsWith(":")) return part;
+    const name = part.replace(/^:/, "").replace(/[+*]$/, "");
+    return varyParams.has(name) ? encodePrefetchParamValue(match.params[name]) : `:${name}`;
+  });
+  const search =
+    kind === "runtime" && route.runtimePrefetchVarySearchParams === true
+      ? url.search
+      : kind === "navigation" && route.prefetchVarySearchParams === true
+        ? url.search
+        : "";
+  return `${route.patternParts.join("/")}\0${keyParts.join("/")}${search}`;
+}
+
 function isPrefetchCacheEntryCompatibleWithMountedSlots(
   entry: PrefetchCacheEntry,
   mountedSlotsHeader: string | null,
@@ -437,13 +494,14 @@ function findPrefetchCacheEntryForNavigation(
   rscUrl: string,
   interceptionContext: string | null,
   mountedSlotsHeader: string | null,
+  options: { includeNonNavigation?: boolean; sharedCacheKey?: string | null } = {},
 ): { cacheKey: string; entry: PrefetchCacheEntry } | null {
   const exactCacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
   const cache = getPrefetchCache();
   const exactEntry = cache.get(exactCacheKey);
   if (
     exactEntry &&
-    exactEntry.cacheForNavigation !== false &&
+    (options.includeNonNavigation === true || exactEntry.cacheForNavigation !== false) &&
     isPrefetchCacheEntryCompatibleWithMountedSlots(exactEntry, mountedSlotsHeader)
   ) {
     return { cacheKey: exactCacheKey, entry: exactEntry };
@@ -454,11 +512,18 @@ function findPrefetchCacheEntryForNavigation(
 
   for (const [cacheKey, entry] of cache) {
     if (cacheKey === exactCacheKey) continue;
-    if (entry.cacheForNavigation === false) continue;
+    if (options.includeNonNavigation !== true && entry.cacheForNavigation === false) continue;
 
     const source = parsePrefetchCacheKey(cacheKey);
     if (source.interceptionContext !== interceptionContext) continue;
-    if (normalizeRscCacheLookupUrl(source.rscUrl) !== normalizedTarget) continue;
+    if (
+      normalizeRscCacheLookupUrl(source.rscUrl) !== normalizedTarget &&
+      (options.sharedCacheKey === null ||
+        options.sharedCacheKey === undefined ||
+        entry.sharedCacheKey !== options.sharedCacheKey)
+    ) {
+      continue;
+    }
     if (!isPrefetchCacheEntryCompatibleWithMountedSlots(entry, mountedSlotsHeader)) continue;
 
     return { cacheKey, entry };
@@ -471,12 +536,17 @@ export function hasPrefetchCacheEntryForNavigation(
   rscUrl: string,
   interceptionContext: string | null = null,
   mountedSlotsHeader: string | null = null,
-  options: { notifyInvalidation?: boolean } = {},
+  options: {
+    includeNonNavigation?: boolean;
+    notifyInvalidation?: boolean;
+    sharedCacheKey?: string | null;
+  } = {},
 ): boolean {
   const match = findPrefetchCacheEntryForNavigation(
     rscUrl,
     interceptionContext,
     mountedSlotsHeader,
+    options,
   );
   if (match === null) return false;
 
@@ -870,6 +940,9 @@ export function prefetchRscResponse(
     cacheForNavigation?: boolean;
     fallbackTtlMs?: number;
     optimisticRouteShell?: boolean;
+    runtimeLoadingFallback?: VinextRuntimePrefetchLoadingFallback | null;
+    runtimeTemplateVariantKey?: string | null;
+    sharedCacheKey?: string | null;
   } = {},
 ): void {
   const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
@@ -886,6 +959,9 @@ export function prefetchRscResponse(
     mountedSlotsHeader,
     optimisticRouteShell: behavior.optimisticRouteShell === true,
     outcome: "pending",
+    runtimeLoadingFallback: behavior.runtimeLoadingFallback ?? null,
+    runtimeTemplateVariantKey: behavior.runtimeTemplateVariantKey ?? null,
+    sharedCacheKey: behavior.sharedCacheKey ?? null,
     timestamp: now,
   };
   addPrefetchInvalidationCallback(entry, options?.onInvalidate);
@@ -938,6 +1014,7 @@ export function consumePrefetchResponse(
   rscUrl: string,
   interceptionContext: string | null = null,
   mountedSlotsHeader: string | null = null,
+  options: { sharedCacheKey?: string | null } = {},
 ): CachedRscResponse | null {
   const cache = getPrefetchCache();
   const exactCacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
@@ -954,6 +1031,7 @@ export function consumePrefetchResponse(
     rscUrl,
     interceptionContext,
     mountedSlotsHeader,
+    { sharedCacheKey: options.sharedCacheKey },
   );
   if (!match) return null;
   const { cacheKey, entry } = match;
@@ -1005,13 +1083,14 @@ export async function consumePrefetchResponseForNavigation(
   rscUrl: string,
   interceptionContext: string | null = null,
   mountedSlotsHeader: string | null = null,
-  options?: ConsumePrefetchResponseForNavigationOptions,
+  options?: ConsumePrefetchResponseForNavigationOptions & { sharedCacheKey?: string | null },
 ): Promise<CachedRscResponse | null> {
   const cache = getPrefetchCache();
   const match = findPrefetchCacheEntryForNavigation(
     rscUrl,
     interceptionContext,
     mountedSlotsHeader,
+    { sharedCacheKey: options?.sharedCacheKey },
   );
   if (!match) return null;
   const { cacheKey, entry } = match;
@@ -1023,7 +1102,9 @@ export async function consumePrefetchResponseForNavigation(
 
   if (options?.shouldConsume?.() === false) return null;
 
-  return consumePrefetchResponse(rscUrl, interceptionContext, mountedSlotsHeader);
+  return consumePrefetchResponse(rscUrl, interceptionContext, mountedSlotsHeader, {
+    sharedCacheKey: options?.sharedCacheKey,
+  });
 }
 
 // ---------------------------------------------------------------------------
