@@ -405,9 +405,10 @@ function resolveFullAppRoutePrefetch(): {
  * For Pages Router: warms the page chunk, prefetches data only for SSG pages,
  * and falls back to a document prefetch hint when no page loader matches.
  *
- * High-priority and Segment Cache scheduler phases start immediately. Other
- * low-priority prefetches use `requestIdleCallback` (or `setTimeout` fallback)
- * to avoid blocking the main thread during initial page load.
+ * High-priority, App Router runtime, and Segment Cache scheduler phases start
+ * immediately. Pages Router low-priority prefetches use `requestIdleCallback`
+ * (or `setTimeout` fallback) to avoid blocking the main thread during initial
+ * page load.
  */
 function prefetchUrl(
   href: string,
@@ -693,7 +694,7 @@ function prefetchUrl(
     priority === "high" ||
     mode === "route-tree" ||
     mode === "segment" ||
-    (hasAppNavigationRuntime() && String(process.env.__NEXT_CACHE_COMPONENTS) !== "false")
+    hasAppNavigationRuntime()
   ) {
     return runPrefetch();
   }
@@ -797,6 +798,8 @@ function usesSegmentCachePrefetchScheduler(instance: LinkPrefetchInstance): bool
   return (
     resolveCurrentLinkPrefetchRouterMode(instance) === "app" &&
     instance.mode === "auto" &&
+    // Next.js inlines __NEXT_CACHE_COMPONENTS as a boolean define; String()
+    // lets tests that stub the env with "true" share the production branch.
     String(process.env.__NEXT_CACHE_COMPONENTS) === "true"
   );
 }

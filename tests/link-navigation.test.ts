@@ -1586,14 +1586,10 @@ describe("Link prefetch scheduling", () => {
     }
   });
 
-  it("keeps non-cacheComponents App viewport prefetches deferred until idle", async () => {
+  it("starts non-cacheComponents App viewport prefetches without waiting for browser idle", async () => {
     vi.stubEnv("__NEXT_CACHE_COMPONENTS", "false");
     const observer = stubIntersectionObserver();
-    const idleCallbacks: Array<() => void> = [];
-    const requestIdleCallback = vi.fn((callback: () => void) => {
-      idleCallbacks.push(callback);
-      return idleCallbacks.length;
-    });
+    const requestIdleCallback = vi.fn();
     const result = await renderIsolatedLink({
       href: "/viewport-prefetch-target",
       nodeEnv: "production",
@@ -1602,14 +1598,9 @@ describe("Link prefetch scheduling", () => {
 
     try {
       observer.dispatchIntersectingEntry(result.anchor);
-      await flushPrefetchTasks();
-
-      expect(requestIdleCallback).toHaveBeenCalledTimes(1);
-      expect(result.fetch).not.toHaveBeenCalled();
-
-      idleCallbacks[0]?.();
       await waitForFetchCalls(result.fetch, 1);
 
+      expect(requestIdleCallback).not.toHaveBeenCalled();
       expectCanonicalRscFetchCall(
         result.fetch.mock.calls[0],
         "/viewport-prefetch-target",
