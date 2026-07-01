@@ -4,6 +4,7 @@ import path from "node:path";
 import { type ViteDevServer } from "vite";
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import vinext from "../packages/vinext/src/index.js";
+import { createRscReferenceValidationAliasPlugin } from "../packages/vinext/src/plugins/rsc-client-reference-loaders.js";
 import { APP_FIXTURE_DIR, fetchHtml, RSC_ENTRIES } from "./helpers.js";
 
 describe("RSC plugin auto-registration", () => {
@@ -47,6 +48,36 @@ describe("RSC plugin auto-registration", () => {
     const html = await res.text();
     expect(html).toContain("Blog Post");
     expect(html).toContain("auto-rsc-test");
+  });
+
+  it("accepts plugin-rsc dev reference validation ids decoded back to null bytes", () => {
+    const plugin = createRscReferenceValidationAliasPlugin();
+    const placeholderReferenceKey =
+      "/@id/__x00__virtual:vite-rsc/client-in-server-package-proxy/%2Fnode_modules%2Fvinext%2Fdist%2Fshims%2Fdefault-global-error.js";
+    const decodedReferenceKey = placeholderReferenceKey.replace("__x00__", "\0");
+    const validationId =
+      "\0virtual:vite-rsc/reference-validation?type=client&id=" +
+      encodeURIComponent(decodedReferenceKey) +
+      "&lang.js";
+
+    (plugin.configResolved as any)?.({
+      plugins: [
+        {
+          name: "rsc:minimal",
+          api: {
+            manager: {
+              clientReferenceMetaMap: {
+                "/node_modules/vinext/dist/shims/default-global-error.js": {
+                  referenceKey: placeholderReferenceKey,
+                },
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    expect((plugin.load as any)?.(validationId)).toBe("export {};");
   });
 
   it("serves the browser bootstrap in dev when deploymentId is configured", async () => {

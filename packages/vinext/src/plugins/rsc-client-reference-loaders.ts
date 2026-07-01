@@ -2,13 +2,22 @@ import type { Plugin } from "vite";
 import type { PluginApi } from "@vitejs/plugin-rsc";
 
 const CLIENT_REFERENCES_ID = "\0virtual:vite-rsc/client-references";
+const REFERENCE_VALIDATION_ID_PREFIX = "\0virtual:vite-rsc/reference-validation?";
 const RESOLVED_ID_PROXY_PREFIX = "virtual:vite-rsc/resolved-id/";
+const DEV_CLIENT_REFERENCE_WARMUP_IDS = Object.freeze([
+  "virtual:vite-rsc/remove-duplicate-server-css",
+]);
 
 type RscClientReferenceMeta = PluginApi["manager"]["clientReferenceMetaMap"][string];
 
 type RscPluginWithApi = Plugin & {
   api?: PluginApi;
 };
+
+function getRscApi(plugins: readonly Plugin[]): PluginApi | undefined {
+  return (plugins.find((plugin) => plugin.name === "rsc:minimal") as RscPluginWithApi | undefined)
+    ?.api;
+}
 
 function withResolvedIdProxy(resolvedId: string): string {
   return resolvedId.startsWith("\0")
@@ -46,24 +55,77 @@ function generateDirectClientReferenceLoaders(metas: RscClientReferenceMeta[]): 
   return `export default {\n${entries}\n};\n`;
 }
 
+async function warmupRscDevClientReferences(rscApi: PluginApi | undefined): Promise<void> {
+  const manager = rscApi?.manager;
+  if (!manager || manager.config.command !== "serve") return;
+
+  const rscEnv = manager.server?.environments["rsc"];
+  if (!rscEnv) return;
+
+  for (const source of DEV_CLIENT_REFERENCE_WARMUP_IDS) {
+    const resolved = await rscEnv.pluginContainer.resolveId(source, undefined);
+    await rscEnv.transformRequest(resolved?.id ?? source);
+  }
+}
+
+function parseReferenceValidationId(id: string): Record<string, string> | null {
+  if (!id.startsWith(REFERENCE_VALIDATION_ID_PREFIX)) return null;
+
+  const query = id.slice(REFERENCE_VALIDATION_ID_PREFIX.length);
+  return Object.fromEntries(new URLSearchParams(query));
+}
+
+function toNullBytePlaceholderReferenceKey(referenceKey: string): string | null {
+  if (!referenceKey.includes("\0")) return null;
+  return referenceKey.replaceAll("\0", "__x00__");
+}
+
+export function createRscReferenceValidationAliasPlugin(): Plugin {
+  let rscApi: PluginApi | undefined;
+
+  return {
+    name: "vinext:rsc-reference-validation-alias",
+    enforce: "pre",
+    apply: "serve",
+    configResolved(config) {
+      rscApi = getRscApi(config.plugins);
+    },
+    load(id) {
+      const parsed = parseReferenceValidationId(id);
+      if (parsed?.type !== "client" || !parsed.id) return null;
+
+      const aliasedReferenceKey = toNullBytePlaceholderReferenceKey(parsed.id);
+      if (!aliasedReferenceKey) return null;
+
+      const metas = Object.values(rscApi?.manager.clientReferenceMetaMap ?? {});
+      if (metas.some((meta) => meta.referenceKey === aliasedReferenceKey)) {
+        return "export {};";
+      }
+
+      return null;
+    },
+  };
+}
+
 export function createRscClientReferenceLoadersPlugin(): Plugin {
   let rscApi: PluginApi | undefined;
+  let devClientReferenceWarmup: Promise<void> | null = null;
 
   return {
     name: "vinext:rsc-client-reference-loaders",
     enforce: "post",
     configResolved(config) {
-      rscApi = (
-        config.plugins.find((plugin) => plugin.name === "rsc:minimal") as
-          | RscPluginWithApi
-          | undefined
-      )?.api;
+      rscApi = getRscApi(config.plugins);
     },
-    transform(_code, id) {
+    async transform(_code, id) {
       if (id !== CLIENT_REFERENCES_ID) return null;
 
       const manager = rscApi?.manager;
       if (!manager || manager.isScanBuild) return null;
+      if (!devClientReferenceWarmup) {
+        devClientReferenceWarmup = warmupRscDevClientReferences(rscApi).catch(() => {});
+      }
+      await devClientReferenceWarmup;
 
       // This post-transform runs after @vitejs/plugin-rsc has loaded the
       // client-reference virtual module and populated the manager metadata. The
