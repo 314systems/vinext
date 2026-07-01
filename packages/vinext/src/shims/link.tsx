@@ -506,13 +506,14 @@ function prefetchUrl(
         if (mountedSlotsHeader) {
           headers.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
         }
-        const shouldSendSegmentPrefetchHeaders = isOptimisticRouteShellPrefetch || mode === "auto";
         if (__prefetchInlining && autoPrefetch.cacheForNavigation) {
           headers.set(NEXT_ROUTER_PREFETCH_HEADER, "1");
           headers.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "/__PAGE__");
-        } else if (shouldSendSegmentPrefetchHeaders) {
+        } else if (isOptimisticRouteShellPrefetch) {
           headers.set(NEXT_ROUTER_PREFETCH_HEADER, "1");
           headers.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "/_tree");
+        } else if (mode === "auto") {
+          headers.set(NEXT_ROUTER_PREFETCH_HEADER, "1");
         }
         // Distinguish the same visible URL when it is prefetched from different
         // request contexts such as /feed vs /gallery or different mounted slots.
@@ -551,7 +552,7 @@ function prefetchUrl(
             renderMode: APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
           });
           shellHeaders.set(NEXT_ROUTER_PREFETCH_HEADER, "1");
-          shellHeaders.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "1");
+          shellHeaders.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "/_tree");
           if (mountedSlotsHeader) {
             shellHeaders.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
           }
@@ -593,7 +594,7 @@ function prefetchUrl(
             renderMode: APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
           });
           probeHeaders.set(NEXT_ROUTER_PREFETCH_HEADER, "1");
-          probeHeaders.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "1");
+          probeHeaders.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "/_tree");
           if (mountedSlotsHeader) {
             probeHeaders.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
           }

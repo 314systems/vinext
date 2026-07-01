@@ -1740,6 +1740,12 @@ describe("Link prefetch scheduling", () => {
       expect((fetchInit?.headers as Headers | undefined)?.get(VINEXT_RSC_RENDER_MODE_HEADER)).toBe(
         null,
       );
+      expect((fetchInit?.headers as Headers | undefined)?.get(NEXT_ROUTER_PREFETCH_HEADER)).toBe(
+        "1",
+      );
+      expect(
+        (fetchInit?.headers as Headers | undefined)?.get(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER),
+      ).toBeNull();
       const { getPrefetchCache } = await import("../packages/vinext/src/shims/navigation.js");
       const entry = Array.from(getPrefetchCache().values())[0];
       expect(entry?.cacheForNavigation).toBe(true);
