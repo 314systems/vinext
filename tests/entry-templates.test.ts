@@ -283,9 +283,11 @@ describe("App Router generated manifest construction", () => {
     const layoutPath = path.join(appDir, "runtime-prefetchable", "layout.tsx");
     const pagePath = path.join(appDir, "runtime-prefetchable", "page.tsx");
     const configPath = path.join(appDir, "runtime-prefetchable", "instant-config.ts");
+    const typedPagePath = path.join(appDir, "typed-runtime-prefetchable", "page.tsx");
 
     try {
       fs.mkdirSync(path.dirname(layoutPath), { recursive: true });
+      fs.mkdirSync(path.dirname(typedPagePath), { recursive: true });
       fs.writeFileSync(
         configPath,
         'export const runtimeInstant = { prefetch: "runtime" } as const;\n',
@@ -299,6 +301,14 @@ describe("App Router generated manifest construction", () => {
         ].join("\n"),
       );
       fs.writeFileSync(pagePath, "export default function Page() { return null; }\n");
+      fs.writeFileSync(
+        typedPagePath,
+        [
+          'type Instant = { prefetch: "runtime" | "static" };',
+          'export const unstable_instant: Instant = { prefetch: "runtime" };',
+          "export default function Page() { return null; }",
+        ].join("\n"),
+      );
 
       const code = generateBrowserEntry([
         {
@@ -309,10 +319,21 @@ describe("App Router generated manifest construction", () => {
           layouts: [layoutPath],
           routeSegments: ["runtime-prefetchable"],
         },
+        {
+          ...minimalAppRoutes[1],
+          pattern: "/typed-runtime-prefetchable",
+          patternParts: ["typed-runtime-prefetchable"],
+          pagePath: typedPagePath,
+          layouts: [],
+          routeSegments: ["typed-runtime-prefetchable"],
+        },
       ]);
 
       expect(code).toContain(
         '{"canPrefetchLoadingShell":false,"hasRuntimePrefetch":true,"prefetchMode":"inherited-runtime","patternParts":["runtime-prefetchable"],"isDynamic":false}',
+      );
+      expect(code).toContain(
+        '{"canPrefetchLoadingShell":false,"hasRuntimePrefetch":true,"prefetchMode":"runtime","patternParts":["typed-runtime-prefetchable"],"isDynamic":false}',
       );
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });

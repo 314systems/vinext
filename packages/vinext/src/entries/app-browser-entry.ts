@@ -190,7 +190,9 @@ function findConstInitializer(
   options: { exported: boolean },
 ): string | null {
   const prefix = options.exported ? String.raw`export\s+const` : String.raw`const`;
-  const match = new RegExp(`${prefix}\\s+${escapeRegExp(name)}\\s*=`, "m").exec(source);
+  const match = new RegExp(`${prefix}\\s+${escapeRegExp(name)}(?:\\s*:[^=;]+)?\\s*=`, "m").exec(
+    source,
+  );
   if (!match) return null;
   return readInitializerExpression(source, match.index + match[0].length);
 }
