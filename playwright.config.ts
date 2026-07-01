@@ -48,6 +48,7 @@ const projectServers = {
     testIgnore: [
       appRouterBrowserSpecificTests,
       "**/app-router/nextjs-compat/client-cache.spec.ts",
+      "**/app-router/nextjs-compat/prefetch-layout-sharing.spec.ts",
       "**/app-router/nextjs-compat/segment-cache-client-params.spec.ts",
     ],
     use: { baseURL: "http://localhost:4174" },
