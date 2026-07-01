@@ -322,12 +322,12 @@ function resolveMatchedAutoAppRoutePrefetch(route: VinextLinkPrefetchRoute): Aut
   const hasLoadingShell = route.canPrefetchLoadingShell;
   const requiresDynamicNavigationRequest = route.requiresDynamicNavigationRequest === true;
   return {
-    // Routes with loading boundaries or reachable dynamic request APIs prefetch
-    // only the static shell. The click still issues a live Flight request for
-    // dynamic holes, matching the Segment Cache's static-shell/dynamic-request
+    // Routes with loading boundaries, dynamic request APIs, or dynamic parallel
+    // slots prefetch only a shell. The click still issues a live Flight request
+    // for dynamic holes, matching the Segment Cache's static-shell/dynamic-request
     // split without implementing cacheComponents.
     cacheForNavigation: !hasLoadingShell && !requiresDynamicNavigationRequest,
-    prefetchDynamicShell: !hasLoadingShell && requiresDynamicNavigationRequest,
+    prefetchDynamicShell: !hasLoadingShell && route.prefetchDynamicShell === true,
     prefetchShellFirst: !route.isDynamic,
     shouldPrefetch: true,
   };

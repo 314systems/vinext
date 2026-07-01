@@ -68,14 +68,17 @@ export function toDocumentOnlyAppRoute(
   route: AppRoute,
   context = createDynamicRequestDetectionContext(),
 ): VinextLinkPrefetchRoute {
+  const prefetchDynamicShell = routeUsesDynamicRequestApi(route, context);
+  const requiresDynamicRequest =
+    (route.isDynamic && route.parallelSlots.length > 0) || prefetchDynamicShell;
+
   return {
     canPrefetchLoadingShell: false,
     documentOnly: true,
     patternParts: [...route.patternParts],
     isDynamic: route.isDynamic,
-    ...(requiresDynamicNavigationRequest(route, context)
-      ? { requiresDynamicNavigationRequest: true }
-      : {}),
+    ...(prefetchDynamicShell ? { prefetchDynamicShell: true } : {}),
+    ...(requiresDynamicRequest ? { requiresDynamicNavigationRequest: true } : {}),
   };
 }
 
@@ -432,25 +435,21 @@ function routeUsesDynamicRequestApi(
   return routeFiles.some((file) => fileUsesDynamicRequestApi(file, context, seen));
 }
 
-function requiresDynamicNavigationRequest(
-  route: AppRoute,
-  context: DynamicRequestDetectionContext,
-): boolean {
-  return route.parallelSlots.length > 0 || routeUsesDynamicRequestApi(route, context);
-}
-
 /** Project an `AppRoute` down to the public `VinextLinkPrefetchRoute` shape. */
 export function toLinkPrefetchRoute(
   route: AppRoute,
   context = createDynamicRequestDetectionContext(),
 ): VinextLinkPrefetchRoute {
+  const prefetchDynamicShell = routeUsesDynamicRequestApi(route, context);
+  const requiresDynamicRequest =
+    (route.isDynamic && route.parallelSlots.length > 0) || prefetchDynamicShell;
+
   return {
     canPrefetchLoadingShell: route.loadingPath !== null,
     patternParts: [...route.patternParts],
     isDynamic: route.isDynamic,
-    ...(requiresDynamicNavigationRequest(route, context)
-      ? { requiresDynamicNavigationRequest: true }
-      : {}),
+    ...(prefetchDynamicShell ? { prefetchDynamicShell: true } : {}),
+    ...(requiresDynamicRequest ? { requiresDynamicNavigationRequest: true } : {}),
   };
 }
 
