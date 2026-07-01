@@ -812,8 +812,9 @@ function scheduleSegmentCacheLinkPrefetch(
   instance: LinkPrefetchInstance,
   priority: "low" | "high",
   batchId?: number,
+  options?: { force?: boolean },
 ): void {
-  segmentCacheLinkPrefetchScheduler.schedule(instance, priority, batchId);
+  segmentCacheLinkPrefetchScheduler.schedule(instance, priority, batchId, options);
 }
 
 function cancelScheduledSegmentCacheLinkPrefetch(instance: LinkPrefetchInstance): void {
@@ -850,11 +851,13 @@ function registerVisibleLinkPing(): void {
   registerNavigationRuntimeFunctions({ pingVisibleLinks: pingVisibleLinkPrefetches });
 }
 
-function pingVisibleLinkPrefetches(): void {
+function pingVisibleLinkPrefetches(options: { force?: boolean } = {}): void {
+  const batchId =
+    options.force === true ? segmentCacheLinkPrefetchScheduler.createBatch() : undefined;
   for (const instance of visibleLinkPrefetches) {
     if (instance.isVisible && instance.routerMode === "app") {
       if (usesSegmentCachePrefetchScheduler(instance)) {
-        scheduleSegmentCacheLinkPrefetch(instance, "low");
+        scheduleSegmentCacheLinkPrefetch(instance, "low", batchId, options);
       } else {
         scheduleVisibleAppPrefetch(instance);
       }

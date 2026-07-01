@@ -139,8 +139,8 @@ describe("Link Segment Cache prefetch scheduler", () => {
     });
   });
 
-  it("does not restart a completed task", async () => {
-    const { deferredRequests, runPhase, scheduler } = createSchedulerHarness();
+  it("restarts a completed task only when forced", async () => {
+    const { deferredRequests, requests, runPhase, scheduler } = createSchedulerHarness();
     const instance = createInstance("/settings");
 
     scheduler.schedule(instance, "low", 1);
@@ -156,6 +156,26 @@ describe("Link Segment Cache prefetch scheduler", () => {
     await flushScheduler();
 
     expect(runPhase).toHaveBeenCalledTimes(2);
+
+    scheduler.schedule(instance, "low", 2, { force: true });
+    await flushScheduler();
+
+    expect(runPhase).toHaveBeenCalledTimes(3);
+    expect(requests[2]).toMatchObject({
+      href: "/settings",
+      phase: "route-tree",
+      priority: "low",
+    });
+
+    deferredRequests[2]?.resolve();
+    await flushScheduler();
+
+    expect(runPhase).toHaveBeenCalledTimes(4);
+    expect(requests[3]).toMatchObject({
+      href: "/settings",
+      phase: "segment",
+      priority: "low",
+    });
   });
 
   it("starts low-priority route-tree work in batch order while preserving newest-first order within a batch", async () => {

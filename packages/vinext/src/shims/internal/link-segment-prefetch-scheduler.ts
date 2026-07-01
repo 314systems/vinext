@@ -25,6 +25,7 @@ export type LinkSegmentPrefetchScheduler = {
     instance: LinkSegmentPrefetchInstance,
     priority: LinkSegmentPrefetchPriority,
     batchId?: number,
+    options?: { force?: boolean },
   ): void;
 };
 
@@ -169,6 +170,7 @@ export function createLinkSegmentPrefetchScheduler(
     instance: LinkSegmentPrefetchInstance,
     priority: LinkSegmentPrefetchPriority,
     batchId = tasksByInstance.get(instance)?.batchId ?? createBatch(),
+    options: { force?: boolean } = {},
   ): void {
     let task = tasksByInstance.get(instance) ?? null;
     if (task === null) {
@@ -189,7 +191,7 @@ export function createLinkSegmentPrefetchScheduler(
         trackIntentTask(task);
         return;
       }
-      if (task.status === "completed") {
+      if (task.status === "completed" && options.force !== true) {
         return;
       }
 

@@ -676,7 +676,7 @@ export function invalidatePrefetchCache(): void {
   }
   prefetched.clear();
   if (!isServer) {
-    getNavigationRuntime()?.functions.pingVisibleLinks?.();
+    getNavigationRuntime()?.functions.pingVisibleLinks?.({ force: true });
   }
 }
 
