@@ -2084,7 +2084,7 @@ describe("app page route wiring helpers", () => {
     expect(errorBoundary?.props.resetKey).toBe("slug|intro|d");
   });
 
-  it("nests user global errors inside the default global error fallback", () => {
+  it("nests user global errors inside the implicit default global error fallback", () => {
     function UserGlobalError() {
       return createElement("p", null, "User global error");
     }
@@ -2119,11 +2119,11 @@ describe("app page route wiring helpers", () => {
     const outerBoundary = findElementByTypeName(routeEntry, "GlobalErrorBoundary");
     const userBoundary = findElementByTypeName(outerBoundary?.props.children, "ErrorBoundary");
 
-    expect(getElementTypeName(outerBoundary?.props.fallback)).toBe("DefaultGlobalError");
+    expect(outerBoundary?.props.fallback).toBeUndefined();
     expect(userBoundary?.props.fallback).toBe(UserGlobalError);
   });
 
-  it("installs the default global error boundary without a user global error", () => {
+  it("installs the implicit default global error boundary without a user global error", () => {
     const elements = buildAppPageElements({
       element: createElement(PageProbe),
       makeThenableParams: (params) => Promise.resolve(params),
@@ -2148,7 +2148,7 @@ describe("app page route wiring helpers", () => {
     });
 
     const outerBoundary = findElementByTypeName(elements["route:/"], "GlobalErrorBoundary");
-    expect(getElementTypeName(outerBoundary?.props.fallback)).toBe("DefaultGlobalError");
+    expect(outerBoundary?.props.fallback).toBeUndefined();
   });
 
   it("interleaves templates with their corresponding layouts", async () => {

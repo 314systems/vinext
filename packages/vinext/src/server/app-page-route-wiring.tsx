@@ -26,7 +26,6 @@ import {
   UnauthorizedBoundary,
 } from "vinext/shims/error-boundary";
 import { AppRouterScrollTarget } from "vinext/shims/app-router-scroll";
-import DefaultGlobalError from "vinext/shims/default-global-error";
 import type { AppRouteSemanticIds } from "../routing/app-route-graph.js";
 import { LayoutSegmentProvider } from "vinext/shims/layout-segment-context";
 import {
@@ -84,7 +83,6 @@ type AppPageServerFunctionComponent = (
 ) => ReactNode | Promise<ReactNode>;
 type AppPageErrorComponent = ComponentType<{ error: unknown; reset: () => void }>;
 const APP_PAGE_LAYOUT_PROBE_CHILD = <Fragment />;
-const DEFAULT_GLOBAL_ERROR_COMPONENT = DefaultGlobalError as AppPageErrorComponent;
 const REACT_CLIENT_REFERENCE = Symbol.for("react.client.reference");
 
 type RuntimePrefetchableServerComponentProps = {
@@ -1294,7 +1292,7 @@ export function buildAppPageElements<
 
   const globalErrorComponent = getErrorBoundaryExport(options.globalErrorModule);
   routeChildren = (
-    <GlobalErrorBoundary fallback={DEFAULT_GLOBAL_ERROR_COMPONENT}>
+    <GlobalErrorBoundary>
       {globalErrorComponent ? (
         <ErrorBoundary fallback={globalErrorComponent}>{routeChildren}</ErrorBoundary>
       ) : (
