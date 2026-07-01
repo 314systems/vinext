@@ -1957,7 +1957,8 @@ function bootstrapHydration(
 
         let navResponse: Response | undefined;
         let navResponseExpiresAt: number | undefined;
-        let navResponseUrl: string | null = null;
+        let navResponseCacheUrl: string | null = null;
+        let navResponseClassificationUrl: string | null | undefined;
         let fallbackReuseDecision = reuseDecision;
         if (reuseDecision.kind === "consumePrefetch") {
           const prefetchedResponse = await consumePrefetchResponseForNavigation(
@@ -1973,12 +1974,23 @@ function bootstrapHydration(
           if (prefetchedResponse) {
             navResponse = restoreRscResponse(prefetchedResponse, false);
             navResponseExpiresAt = prefetchedResponse.expiresAt;
-            navResponseUrl = isAlternatePrefetchResponseUrl(
+            const isAlternatePrefetchResponse = isAlternatePrefetchResponseUrl(
               prefetchedResponse.url,
               additionalPrefetchRscUrls,
-            )
-              ? rscUrl
+            );
+            navResponseCacheUrl = isAlternatePrefetchResponse ? rscUrl : prefetchedResponse.url;
+            navResponseClassificationUrl = isAlternatePrefetchResponse
+              ? null
               : prefetchedResponse.url;
+            if (isAlternatePrefetchResponse) {
+              seedPrefetchResponseSnapshot(
+                rscUrl,
+                { ...prefetchedResponse, url: rscUrl },
+                requestInterceptionContext,
+                mountedSlotsHeader,
+                PREFETCH_CACHE_TTL,
+              );
+            }
           }
           if (!navResponse) {
             routeManifest = navigationKind === "navigate" ? getBrowserRouteManifest() : null;
@@ -2103,7 +2115,10 @@ function bootstrapHydration(
           redirectDepth: redirectCount,
           requestPreviousNextUrl,
           responseOk: navResponse.ok,
-          responseUrl: navResponseUrl ?? navResponse.url,
+          responseUrl:
+            navResponseClassificationUrl === undefined
+              ? navResponse.url
+              : navResponseClassificationUrl,
           source: "live",
           streamedRedirectTarget,
           streamedRedirectType,
@@ -2235,7 +2250,7 @@ function bootstrapHydration(
           const responseSnapshot = createCachedRscResponseSnapshot(
             navResponse,
             cacheBuffer,
-            navResponseUrl,
+            navResponseCacheUrl,
           );
           const { dynamicStaleTimeSeconds: _staticDynamicStaleTime, ...staticResponseSnapshot } =
             responseSnapshot;
