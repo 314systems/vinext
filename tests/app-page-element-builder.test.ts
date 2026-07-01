@@ -797,6 +797,59 @@ describe("buildPageElements", () => {
     });
   });
 
+  it("resolves active mounted slot ids from the last layout when graph slot ids are absent", async () => {
+    function Page(): React.ReactNode {
+      return React.createElement("div", null, "Page");
+    }
+    function Layout({
+      children,
+      navbar,
+    }: {
+      children?: React.ReactNode;
+      navbar?: React.ReactNode;
+    }): React.ReactNode {
+      return React.createElement("section", null, navbar, children);
+    }
+    function DefaultNavbar(): React.ReactNode {
+      return React.createElement("nav", null, "Default navbar");
+    }
+
+    const route = createSyntheticRoute({
+      page: createSyntheticPageModule(Page),
+      layouts: [createSyntheticPageModule(Layout), createSyntheticPageModule(Layout)],
+      layoutTreePositions: [0, 1],
+      routeSegments: ["dashboard", "settings"],
+      pattern: "/dashboard/settings",
+      slots: {
+        "navbar@dashboard/@navbar": {
+          name: "navbar",
+          default: createSyntheticPageModule(DefaultNavbar),
+          layoutIndex: -1,
+          routeSegments: null,
+        },
+      },
+    });
+
+    const result = await buildPageElements(
+      createBaseOptions({
+        route,
+        routePath: "/dashboard/settings",
+        isRscRequest: true,
+        mountedSlotsHeader: "slot:navbar:/dashboard",
+        mountedSlotActiveRoutesHeader: "slot%3Anavbar%3A%2Fdashboard=route%3A%2Fdashboard",
+      }),
+    );
+
+    const record = result as Record<string, unknown>;
+    expect(record["slot:navbar:/dashboard"]).toBeUndefined();
+    expect(record[APP_SLOT_BINDINGS_KEY]).toContainEqual({
+      activeRouteId: "route:/dashboard",
+      ownerLayoutId: "layout:/dashboard",
+      slotId: "slot:navbar:/dashboard",
+      state: "active",
+    });
+  });
+
   it("marks intercepted slot override bindings as active", async () => {
     function TestPage(): React.ReactNode {
       return React.createElement("div", null, "Hello");

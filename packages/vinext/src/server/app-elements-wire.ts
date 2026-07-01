@@ -803,6 +803,27 @@ function parseCacheEntryReuseProofMetadata(value: unknown): CacheEntryReuseProof
   return createMissingCacheEntryReuseProof();
 }
 
+function parseRenderObservationMetadata(value: unknown): RenderObservation | undefined {
+  if (value === undefined) return undefined;
+  if (!isUnknownRecord(value)) return undefined;
+  if (
+    typeof value.schemaVersion !== "number" ||
+    !isUnknownRecord(value.output) ||
+    typeof value.completeness !== "string" ||
+    !isUnknownRecord(value.boundaryOutcome) ||
+    !Array.isArray(value.requestApis) ||
+    !Array.isArray(value.dynamicFetches) ||
+    !Array.isArray(value.cacheTags) ||
+    !Array.isArray(value.pathTags) ||
+    typeof value.cacheability !== "string" ||
+    !isUnknownRecord(value.downgrade)
+  ) {
+    return undefined;
+  }
+
+  return value as RenderObservation;
+}
+
 export function readAppElementsMetadata(
   elements: Readonly<Record<string, unknown>>,
 ): AppElementsMetadata {
@@ -846,7 +867,7 @@ export function readAppElementsMetadata(
     dynamicStaleTime >= 0
       ? dynamicStaleTime
       : undefined;
-  const renderObservation = elements[APP_RENDER_OBSERVATION_KEY];
+  const renderObservation = parseRenderObservationMetadata(elements[APP_RENDER_OBSERVATION_KEY]);
   const sourcePage = readSourcePageMetadata(elements[APP_SOURCE_PAGE_KEY]);
 
   return {
@@ -857,9 +878,7 @@ export function readAppElementsMetadata(
     interceptionContext: interceptionContext ?? null,
     layoutIds,
     layoutFlags,
-    ...(renderObservation && typeof renderObservation === "object"
-      ? { renderObservation: renderObservation as RenderObservation }
-      : {}),
+    ...(renderObservation ? { renderObservation } : {}),
     routeId,
     rootLayoutTreePath,
     skippedLayoutIds,

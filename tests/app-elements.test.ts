@@ -970,6 +970,42 @@ describe("buildOutgoingAppPayload", () => {
     }
   });
 
+  it("reads only shape-safe render observation metadata", () => {
+    const renderObservation = buildRenderObservation({
+      boundaryOutcome: { kind: "success" },
+      cacheability: "public",
+      cacheTags: ["posts"],
+      completeness: "complete",
+      dynamicFetches: [],
+      output: {
+        kind: "app-rsc",
+        mountedSlotsFingerprint: null,
+        renderEpoch: null,
+        rootBoundaryId: "layout:/",
+        routeId: "route:/posts",
+      },
+      pathTags: ["/posts"],
+      requestApis: [{ kind: "headers", status: "notObserved" }],
+    });
+    const payload = {
+      [APP_ROUTE_KEY]: "route:/posts",
+      [APP_INTERCEPTION_CONTEXT_KEY]: null,
+      [APP_ROOT_LAYOUT_KEY]: "/",
+      [APP_RENDER_OBSERVATION_KEY]: renderObservation,
+    } satisfies Readonly<Record<string, unknown>>;
+
+    expect(AppElementsWire.readMetadata(payload).renderObservation).toEqual(renderObservation);
+    expect(
+      AppElementsWire.readMetadata({
+        ...payload,
+        [APP_RENDER_OBSERVATION_KEY]: {
+          ...renderObservation,
+          dynamicFetches: "https://api.example.test/posts",
+        },
+      }).renderObservation,
+    ).toBeUndefined();
+  });
+
   it("returns canonical record keys when no skip disposition is supplied", () => {
     const result = buildOutgoingAppPayload({
       element: { "layout:/": "root-layout", "page:/": "page" },

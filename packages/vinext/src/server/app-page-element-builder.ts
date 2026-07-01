@@ -577,8 +577,12 @@ function resolveRouteSlotId(
   slot: AppPageNavigationParamSlot & { id?: string | null; layoutIndex?: number | null },
 ): string {
   if (slot.id) return slot.id;
-  const layoutIndex = slot.layoutIndex && slot.layoutIndex >= 0 ? slot.layoutIndex : 0;
-  const treePosition = route.layoutTreePositions?.[layoutIndex] ?? 0;
+  const layoutPositions = route.layoutTreePositions;
+  const layoutIndex =
+    typeof slot.layoutIndex === "number" && slot.layoutIndex >= 0
+      ? slot.layoutIndex
+      : Math.max((layoutPositions?.length ?? 1) - 1, 0);
+  const treePosition = layoutPositions?.[layoutIndex] ?? layoutPositions?.at(-1) ?? 0;
   return AppElementsWire.encodeSlotId(
     slot.name ?? "",
     createAppPageTreePath(route.routeSegments, treePosition),
