@@ -1432,6 +1432,115 @@ describe("Link prefetch scheduling", () => {
     }
   });
 
+  it("continues cacheComponents segment prefetches when visibility returns during route-tree fetch", async () => {
+    vi.stubEnv("__NEXT_CACHE_COMPONENTS", "true");
+    const observer = stubIntersectionObserver();
+    let releaseRouteTreeBody: (() => void) | undefined;
+    const routeTreeBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        releaseRouteTreeBody = () => {
+          controller.close();
+        };
+      },
+    });
+    const result = await renderIsolatedLink({
+      href: "/viewport-prefetch-target",
+      nodeEnv: "production",
+    });
+
+    result.fetch
+      .mockImplementationOnce(() => Promise.resolve(new Response(routeTreeBody)))
+      .mockImplementationOnce(() => Promise.resolve(new Response("segment")));
+
+    try {
+      observer.dispatchIntersectingEntry(result.anchor);
+      await waitForFetchCalls(result.fetch, 1);
+
+      observer.dispatchIntersectingEntry(result.anchor, false);
+      await flushPrefetchTasks();
+      observer.dispatchIntersectingEntry(result.anchor, true);
+      await flushPrefetchTasks();
+
+      expect(result.fetch).toHaveBeenCalledTimes(1);
+
+      if (releaseRouteTreeBody === undefined) {
+        throw new Error("Expected route-tree body release");
+      }
+      releaseRouteTreeBody();
+      await waitForFetchCalls(result.fetch, 2);
+
+      const segmentInit = result.fetch.mock.calls[1]?.[1];
+      expect(segmentInit?.headers).toBeInstanceOf(Headers);
+      if (!(segmentInit?.headers instanceof Headers)) {
+        throw new Error("Expected segment prefetch request headers");
+      }
+      expect(segmentInit.headers.get(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER)).toBe("/_page");
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("does not restart completed cacheComponents prefetches on hover", async () => {
+    vi.stubEnv("__NEXT_CACHE_COMPONENTS", "true");
+    const observer = stubIntersectionObserver();
+    const result = await renderIsolatedLink({
+      href: "/viewport-prefetch-target",
+      nodeEnv: "production",
+    });
+
+    try {
+      observer.dispatchIntersectingEntry(result.anchor);
+      await waitForFetchCalls(result.fetch, 2);
+      await flushPrefetchTasks();
+
+      result.capturedAnchorProps.onMouseEnter?.({ currentTarget: result.anchor });
+      await flushPrefetchTasks();
+      pingVisibleLinksFromRuntime();
+      await flushPrefetchTasks();
+
+      expect(result.fetch).toHaveBeenCalledTimes(2);
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("keeps non-cacheComponents App viewport prefetches deferred until idle", async () => {
+    vi.stubEnv("__NEXT_CACHE_COMPONENTS", "false");
+    const observer = stubIntersectionObserver();
+    const idleCallbacks: Array<() => void> = [];
+    const requestIdleCallback = vi.fn((callback: () => void) => {
+      idleCallbacks.push(callback);
+      return idleCallbacks.length;
+    });
+    const result = await renderIsolatedLink({
+      href: "/viewport-prefetch-target",
+      nodeEnv: "production",
+      windowOverrides: { requestIdleCallback },
+    });
+
+    try {
+      observer.dispatchIntersectingEntry(result.anchor);
+      await flushPrefetchTasks();
+
+      expect(requestIdleCallback).toHaveBeenCalledTimes(1);
+      expect(result.fetch).not.toHaveBeenCalled();
+
+      idleCallbacks[0]?.();
+      await waitForFetchCalls(result.fetch, 1);
+
+      expectCanonicalRscFetchCall(
+        result.fetch.mock.calls[0],
+        "/viewport-prefetch-target",
+        expect.objectContaining({
+          credentials: "include",
+          priority: "low",
+        }),
+      );
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
   it("does not prefetch visible or hovered links for a bot user agent", async () => {
     // Ported from Next.js:
     // test/e2e/app-dir/app-prefetch/prefetching.test.ts
