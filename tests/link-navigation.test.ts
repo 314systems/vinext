@@ -1375,9 +1375,58 @@ describe("Link prefetch scheduling", () => {
       if (!(segmentInit?.headers instanceof Headers)) {
         throw new Error("Expected segment prefetch request headers");
       }
-      expect(segmentInit.headers.get(NEXT_ROUTER_PREFETCH_HEADER)).toBeNull();
+      expect(segmentInit.headers.get(NEXT_ROUTER_PREFETCH_HEADER)).toBe("1");
       expect(segmentInit.headers.get(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER)).toBe("/_page");
       expect(segmentInit.headers.get(VINEXT_RSC_RENDER_MODE_HEADER)).toBeNull();
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("keeps rescheduled cacheComponents prefetches blocked on the route-tree response", async () => {
+    // Ported from the hover-reschedule contract covered by Next.js:
+    // test/e2e/app-dir/segment-cache/prefetch-scheduling/prefetch-scheduling.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/segment-cache/prefetch-scheduling/prefetch-scheduling.test.ts
+    vi.stubEnv("__NEXT_CACHE_COMPONENTS", "true");
+    const observer = stubIntersectionObserver();
+    let releaseRouteTreeBody: (() => void) | undefined;
+    const routeTreeBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        releaseRouteTreeBody = () => {
+          controller.close();
+        };
+      },
+    });
+    const result = await renderIsolatedLink({
+      href: "/viewport-prefetch-target",
+      nodeEnv: "production",
+    });
+
+    result.fetch
+      .mockImplementationOnce(() => Promise.resolve(new Response(routeTreeBody)))
+      .mockImplementationOnce(() => Promise.resolve(new Response("segment")));
+
+    try {
+      observer.dispatchIntersectingEntry(result.anchor);
+      await waitForFetchCalls(result.fetch, 1);
+
+      result.capturedAnchorProps.onMouseEnter?.({ currentTarget: result.anchor });
+      await flushPrefetchTasks();
+
+      expect(result.fetch).toHaveBeenCalledTimes(1);
+
+      if (releaseRouteTreeBody === undefined) {
+        throw new Error("Expected route-tree body release");
+      }
+      releaseRouteTreeBody();
+      await waitForFetchCalls(result.fetch, 2);
+
+      const segmentInit = result.fetch.mock.calls[1]?.[1];
+      expect(segmentInit).toEqual(
+        expect.objectContaining({
+          priority: "high",
+        }),
+      );
     } finally {
       result.restoreNodeEnv();
     }
