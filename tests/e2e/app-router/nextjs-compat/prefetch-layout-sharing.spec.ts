@@ -134,6 +134,95 @@ test.describe("Next.js compat: prefetch layout sharing", () => {
     expect(rscRequestsAfterClick).toEqual([]);
   });
 
+  test("full prefetch falls back when the retained shared layout source is evicted before click", async ({
+    baseURL,
+    page,
+  }) => {
+    await page.goto(`${baseURL}${ROOT}`);
+    await waitForAppRouterHydration(page);
+
+    const oneResponse = await triggerAndReadRscResponses(page, `${ROOT}/shared-layout/one`, () =>
+      page.locator("#prefetch-layout-sharing-one-toggle").click(),
+    );
+    expect(oneResponse.body).toContain("Dynamic content from layout");
+
+    const twoResponse = await triggerAndReadRscResponses(page, `${ROOT}/shared-layout/two`, () =>
+      page.locator("#prefetch-layout-sharing-two-toggle").click(),
+    );
+    expect(twoResponse.body).not.toContain("Dynamic content from layout");
+    expect(twoResponse.body).toContain("Dynamic content from page two");
+
+    await page.waitForFunction((root) => {
+      const vinextWindow = window as typeof window & {
+        __VINEXT_RSC_PREFETCH_CACHE__?: Map<string, unknown>;
+      };
+      const keys = [...(vinextWindow.__VINEXT_RSC_PREFETCH_CACHE__?.keys() ?? [])].map(String);
+      return (
+        keys.some((key) => key.includes(`${root}/shared-layout/one`)) &&
+        keys.some((key) => key.includes(`${root}/shared-layout/two`))
+      );
+    }, ROOT);
+
+    await page.evaluate((root) => {
+      const vinextWindow = window as typeof window & {
+        __VINEXT_RSC_PREFETCH_CACHE__?: Map<string, unknown>;
+        __VINEXT_RSC_PREFETCHED_URLS__?: Set<string>;
+      };
+      const cache = new Map(vinextWindow.__VINEXT_RSC_PREFETCH_CACHE__ ?? []);
+      const prefetched = (vinextWindow.__VINEXT_RSC_PREFETCHED_URLS__ ??= new Set());
+      const pressureKey = `${root}/__vinext-test-pressure.rsc`;
+      cache.set(pressureKey, {
+        outcome: "cache-seeded",
+        snapshot: {
+          buffer: new ArrayBuffer(51 * 1024 * 1024),
+          contentType: "text/x-component",
+          mountedSlotsHeader: null,
+          paramsHeader: null,
+          url: pressureKey,
+        },
+        timestamp: Date.now(),
+      });
+      vinextWindow.__VINEXT_RSC_PREFETCH_CACHE__ = cache;
+      prefetched.add(pressureKey);
+      const router = (
+        window as typeof window & {
+          next?: { router?: { prefetch?: (href: string) => void } };
+        }
+      ).next?.router;
+      if (!router || typeof router.prefetch !== "function") {
+        throw new Error("window.next.router.prefetch is not installed");
+      }
+      router.prefetch(`${root}/dynamic-layout/a`);
+    }, ROOT);
+
+    await page.waitForFunction((root) => {
+      const vinextWindow = window as typeof window & {
+        __VINEXT_RSC_PREFETCH_CACHE__?: Map<string, unknown>;
+      };
+      const keys = [...(vinextWindow.__VINEXT_RSC_PREFETCH_CACHE__?.keys() ?? [])].map(String);
+      return (
+        !keys.some((key) => key.includes(`${root}/shared-layout/one`)) &&
+        !keys.some((key) => key.includes(`${root}/shared-layout/two`))
+      );
+    }, ROOT);
+
+    const rscRequestsAfterClick: string[] = [];
+    page.on("request", (request) => {
+      if (isRscRequestForPath(request, `${ROOT}/shared-layout/two`)) {
+        rscRequestsAfterClick.push(request.url());
+      }
+    });
+
+    await page.locator("#prefetch-layout-sharing-two-link").click();
+
+    await expect(page.locator("h2")).toHaveText("Shared layout");
+    await expect(page.locator("#work-unit-store-type")).toHaveText("workUnitStore.type: request");
+    await expect(page.locator("h1")).toHaveText("Page two");
+    await expect(page.locator("#dynamic-content-layout")).toHaveText("Dynamic content from layout");
+    await expect(page.locator("#dynamic-content-page")).toHaveText("Dynamic content from page two");
+    await expect.poll(() => rscRequestsAfterClick.length).toBeGreaterThan(0);
+  });
+
   // Ported from Next.js:
   // test/e2e/app-dir/segment-cache/prefetch-layout-sharing/prefetch-layout-sharing.test.ts
   // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/segment-cache/prefetch-layout-sharing/prefetch-layout-sharing.test.ts

@@ -709,6 +709,55 @@ describe("prefetch cache eviction", () => {
     expect(getPrefetchedUrls().has("/page-1.rsc")).toBe(true);
   });
 
+  it("evicts navigation-cacheable retained-layout dependents when their source layout is evicted", async () => {
+    const now = 1_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const sharedLayoutId = "layout:/shared-layout";
+    const sourceRscUrl = "/shared-layout/one.rsc";
+    const targetRscUrl = "/shared-layout/two.rsc";
+    const pressureRscUrl = "/pressure.rsc";
+
+    seedPrefetchResponseSnapshot(sourceRscUrl, {
+      buffer: new ArrayBuffer(46 * 1024 * 1024),
+      contentType: "text/x-component",
+      layoutIds: [sharedLayoutId],
+      mountedSlotsHeader: null,
+      paramsHeader: null,
+      url: sourceRscUrl,
+    });
+    prefetchRscResponse(
+      targetRscUrl,
+      Promise.resolve(
+        new Response("target", {
+          headers: { "content-type": "text/x-component" },
+        }),
+      ),
+      null,
+      null,
+      undefined,
+      { retainedLayoutIdsHeader: sharedLayoutId },
+    );
+    getPrefetchedUrls().add(targetRscUrl);
+    await waitForPrefetchSetup(
+      () => getPrefetchCache().get(targetRscUrl)?.outcome === "cache-seeded",
+    );
+
+    expect(hasPrefetchCacheEntryForNavigation(targetRscUrl, null, null)).toBe(true);
+
+    seedPrefetchResponseSnapshot(pressureRscUrl, {
+      buffer: new ArrayBuffer(5 * 1024 * 1024),
+      contentType: "text/x-component",
+      mountedSlotsHeader: null,
+      paramsHeader: null,
+      url: pressureRscUrl,
+    });
+
+    expect(getPrefetchCache().has(sourceRscUrl)).toBe(false);
+    expect(getPrefetchCache().has(targetRscUrl)).toBe(false);
+    expect(getPrefetchedUrls().has(targetRscUrl)).toBe(false);
+    expect(hasPrefetchCacheEntryForNavigation(targetRscUrl, null, null)).toBe(false);
+  });
+
   it("skips pending prefetches when byte LRU cleanup needs to free memory", async () => {
     const now = 1_000_000;
     vi.spyOn(Date, "now").mockReturnValue(now);

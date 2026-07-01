@@ -671,6 +671,7 @@ function prefetchUrl(
                     {
                       cacheForNavigation: false,
                       optimisticRouteShell: true,
+                      retainedLayoutIdsHeader: retainedPrefetchLayoutsHeader,
                     },
                   );
                   shellEntry = shellCache.get(shellCacheKey);
@@ -709,6 +710,7 @@ function prefetchUrl(
             cacheForNavigation: cachePrefetchForNavigation,
             fallbackTtlMs: PREFETCH_CACHE_TTL,
             optimisticRouteShell: isOptimisticRouteShellPrefetch || shouldUseRuntimePrefetchRender,
+            retainedLayoutIdsHeader: retainedPrefetchLayoutsHeader,
             runtimePrefetch: shouldUseRuntimePrefetchRender,
           },
         );

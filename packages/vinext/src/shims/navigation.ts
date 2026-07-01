@@ -280,6 +280,7 @@ export type PrefetchCacheEntry = {
   outcome: "pending" | "cache-seeded";
   snapshot?: CachedRscResponse;
   pending?: Promise<void>;
+  retainedLayoutDependencies?: readonly string[];
   size?: number;
   runtimePrefetch?: boolean;
   timestamp: number;
@@ -440,6 +441,25 @@ function parseLayoutIdsHeader(value: string | null): readonly string[] | undefin
   return ids.length === 0 ? undefined : ids;
 }
 
+function parseRetainedLayoutDependencies(
+  value: string | null | undefined,
+  snapshotLayoutIds: readonly string[] | undefined,
+): readonly string[] | undefined {
+  if (!value) return undefined;
+
+  const snapshotLayouts = new Set(snapshotLayoutIds ?? []);
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const token of value.trim().split(/\s+/)) {
+    if (!token || seen.has(token)) continue;
+    if (AppElementsWire.parseElementKey(token)?.kind !== "layout") continue;
+    if (snapshotLayouts.has(token)) continue;
+    seen.add(token);
+    ids.push(token);
+  }
+  return ids.length === 0 ? undefined : ids;
+}
+
 export function resolveCachedRscResponseTtlMs(
   cached: Pick<CachedRscResponse, "dynamicStaleTimeSeconds">,
   fallbackTtlMs: number,
@@ -557,6 +577,46 @@ function isPrefetchCacheEntryCompatibleWithMountedSlots(
   return (entry.snapshot?.mountedSlotsHeader ?? null) === mountedSlotsHeader;
 }
 
+function hasUsablePrefetchLayoutProvider(
+  cache: Map<string, PrefetchCacheEntry>,
+  layoutId: string,
+  now: number,
+): boolean {
+  for (const entry of cache.values()) {
+    if (entry.cacheForNavigation === false) continue;
+    if (entry.outcome !== "cache-seeded" || !entry.snapshot) continue;
+    if (resolvePrefetchCacheEntryExpiresAt(entry) <= now) continue;
+    if (entry.snapshot.layoutIds?.includes(layoutId)) return true;
+  }
+  return false;
+}
+
+function arePrefetchLayoutDependenciesSatisfied(
+  cache: Map<string, PrefetchCacheEntry>,
+  entry: PrefetchCacheEntry,
+): boolean {
+  const dependencies = entry.retainedLayoutDependencies;
+  if (dependencies === undefined || dependencies.length === 0) return true;
+
+  const now = Date.now();
+  for (const layoutId of dependencies) {
+    if (!hasUsablePrefetchLayoutProvider(cache, layoutId, now)) return false;
+  }
+  return true;
+}
+
+function isPrefetchCacheEntryReusableForNavigation(
+  cache: Map<string, PrefetchCacheEntry>,
+  entry: PrefetchCacheEntry,
+  mountedSlotsHeader: string | null,
+): boolean {
+  return (
+    entry.cacheForNavigation !== false &&
+    isPrefetchCacheEntryCompatibleWithMountedSlots(entry, mountedSlotsHeader) &&
+    arePrefetchLayoutDependenciesSatisfied(cache, entry)
+  );
+}
+
 function findPrefetchCacheEntryForNavigation(
   rscUrl: string,
   interceptionContext: string | null,
@@ -567,8 +627,7 @@ function findPrefetchCacheEntryForNavigation(
   const exactEntry = cache.get(exactCacheKey);
   if (
     exactEntry &&
-    exactEntry.cacheForNavigation !== false &&
-    isPrefetchCacheEntryCompatibleWithMountedSlots(exactEntry, mountedSlotsHeader)
+    isPrefetchCacheEntryReusableForNavigation(cache, exactEntry, mountedSlotsHeader)
   ) {
     return { cacheKey: exactCacheKey, entry: exactEntry };
   }
@@ -578,12 +637,11 @@ function findPrefetchCacheEntryForNavigation(
 
   for (const [cacheKey, entry] of cache) {
     if (cacheKey === exactCacheKey) continue;
-    if (entry.cacheForNavigation === false) continue;
 
     const source = parsePrefetchCacheKey(cacheKey);
     if (source.interceptionContext !== interceptionContext) continue;
     if (normalizeRscCacheLookupUrl(source.rscUrl) !== normalizedTarget) continue;
-    if (!isPrefetchCacheEntryCompatibleWithMountedSlots(entry, mountedSlotsHeader)) continue;
+    if (!isPrefetchCacheEntryReusableForNavigation(cache, entry, mountedSlotsHeader)) continue;
 
     return { cacheKey, entry };
   }
@@ -748,6 +806,27 @@ function deletePrefetchCacheEntry(
   } else {
     clearPrefetchInvalidation(entry);
     entry.onInvalidateCallbacks = undefined;
+  }
+
+  deleteUnsatisfiedPrefetchLayoutDependents(cache, prefetched, notify);
+}
+
+function deleteUnsatisfiedPrefetchLayoutDependents(
+  cache: Map<string, PrefetchCacheEntry>,
+  prefetched: Set<string>,
+  notify: boolean,
+): void {
+  const staleDependents: Array<[string, PrefetchCacheEntry]> = [];
+  for (const [dependentKey, dependentEntry] of cache) {
+    const dependencies = dependentEntry.retainedLayoutDependencies;
+    if (dependencies === undefined || dependencies.length === 0) continue;
+    if (arePrefetchLayoutDependenciesSatisfied(cache, dependentEntry)) continue;
+    staleDependents.push([dependentKey, dependentEntry]);
+  }
+
+  for (const [dependentKey, dependentEntry] of staleDependents) {
+    if (cache.get(dependentKey) !== dependentEntry) continue;
+    deletePrefetchCacheEntry(cache, prefetched, dependentKey, dependentEntry, notify);
   }
 }
 
@@ -999,6 +1078,7 @@ export function prefetchRscResponse(
     cacheForNavigation?: boolean;
     fallbackTtlMs?: number;
     optimisticRouteShell?: boolean;
+    retainedLayoutIdsHeader?: string | null;
     runtimePrefetch?: boolean;
   } = {},
 ): void {
@@ -1016,6 +1096,10 @@ export function prefetchRscResponse(
     mountedSlotsHeader,
     optimisticRouteShell: behavior.optimisticRouteShell === true,
     outcome: "pending",
+    retainedLayoutDependencies: parseRetainedLayoutDependencies(
+      behavior.retainedLayoutIdsHeader,
+      undefined,
+    ),
     runtimePrefetch: behavior.runtimePrefetch === true,
     timestamp: now,
   };
@@ -1028,6 +1112,10 @@ export function prefetchRscResponse(
         if (cache.get(cacheKey) !== entry) return;
         const previousSize = getPrefetchCacheEntrySize(entry);
         entry.snapshot = snapshot;
+        entry.retainedLayoutDependencies = parseRetainedLayoutDependencies(
+          behavior.retainedLayoutIdsHeader,
+          snapshot.layoutIds,
+        );
         entry.size = snapshot.buffer.byteLength;
         adjustPrefetchCacheByteSize(cache, entry.size - previousSize);
         entry.expiresAt = resolvePrefetchedRscResponseExpiresAt(
@@ -2184,11 +2272,12 @@ const _appRouter: AppRouterInstance = {
       const fullHref = toBrowserNavigationHref(prefetchHref, window.location.href, __basePath);
       const interceptionContext = getPrefetchInterceptionContext(fullHref);
       const mountedSlotsHeader = getMountedSlotsHeader();
+      const retainedPrefetchLayoutsHeader = getRetainedPrefetchLayoutIdsHeader({
+        targetHref: fullHref,
+      });
       const headers = createRscRequestHeaders({
         interceptionContext,
-        retainedPrefetchLayoutsHeader: getRetainedPrefetchLayoutIdsHeader({
-          targetHref: fullHref,
-        }),
+        retainedPrefetchLayoutsHeader,
       });
       if (mountedSlotsHeader) {
         headers.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
@@ -2215,6 +2304,7 @@ const _appRouter: AppRouterInstance = {
         interceptionContext,
         mountedSlotsHeader,
         options,
+        { retainedLayoutIdsHeader: retainedPrefetchLayoutsHeader },
       );
     })().catch((error) => {
       console.error("[vinext] RSC prefetch setup error:", error);

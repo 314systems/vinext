@@ -252,6 +252,9 @@ declare module "next/navigation" {
     outcome: "pending" | "cache-seeded";
     snapshot?: CachedRscResponse;
     pending?: Promise<void>;
+    retainedLayoutDependencies?: readonly string[];
+    runtimePrefetch?: boolean;
+    size?: number;
     timestamp: number;
   };
   export const MAX_PREFETCH_CACHE_SIZE: number;
@@ -299,6 +302,8 @@ declare module "next/navigation" {
       cacheForNavigation?: boolean;
       fallbackTtlMs?: number;
       optimisticRouteShell?: boolean;
+      retainedLayoutIdsHeader?: string | null;
+      runtimePrefetch?: boolean;
     },
   ): void;
   export function consumePrefetchResponse(
