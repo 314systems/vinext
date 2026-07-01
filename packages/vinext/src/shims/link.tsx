@@ -64,6 +64,7 @@ import {
   type PendingLinkSetter,
 } from "./internal/link-status-registry.js";
 import { getCurrentRoutePathnameForWarning } from "./internal/route-pattern-for-warning.js";
+import { scheduleAppPrefetchFetch } from "./internal/app-prefetch-fetch-queue.js";
 
 type NavigateEvent = {
   url: URL;
@@ -513,7 +514,8 @@ function prefetchUrl(
         if (mountedSlotsHeader) {
           headers.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
         }
-        if (isOptimisticRouteShellPrefetch) {
+        const shouldSendSegmentPrefetchHeaders = isOptimisticRouteShellPrefetch || mode === "auto";
+        if (mode === "route-tree") {
           headers.set(NEXT_ROUTER_PREFETCH_HEADER, "1");
           headers.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "/_tree");
         } else if (mode === "segment") {
@@ -522,6 +524,9 @@ function prefetchUrl(
           // per-segment payloads, so this marker distinguishes the second
           // scheduler phase without claiming a concrete Next.js segment key.
           headers.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "/_page");
+        } else if (shouldSendSegmentPrefetchHeaders) {
+          headers.set(NEXT_ROUTER_PREFETCH_HEADER, "1");
+          headers.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "1");
         }
         // Distinguish the same visible URL when it is prefetched from different
         // request contexts such as /feed vs /gallery or different mounted slots.
@@ -564,7 +569,10 @@ function prefetchUrl(
                   renderMode: APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
                 });
                 shellHeaders.set(NEXT_ROUTER_PREFETCH_HEADER, "1");
-                shellHeaders.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "/_tree");
+                shellHeaders.set(
+                  NEXT_ROUTER_SEGMENT_PREFETCH_HEADER,
+                  __prefetchInlining ? "/_tree" : "1",
+                );
                 if (mountedSlotsHeader) {
                   shellHeaders.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
                 }
@@ -579,14 +587,16 @@ function prefetchUrl(
                   getPrefetchedUrls().add(shellCacheKey);
                   prefetchRscResponse(
                     shellRscUrl,
-                    Promise.resolve().then(() =>
-                      fetch(shellRscUrl, {
-                        headers: shellHeaders,
-                        credentials: "include",
-                        priority,
-                        // @ts-expect-error — purpose is a valid fetch option in some browsers
-                        purpose: "prefetch",
-                      }),
+                    scheduleAppPrefetchFetch(
+                      () =>
+                        fetch(shellRscUrl, {
+                          headers: shellHeaders,
+                          credentials: "include",
+                          priority,
+                          // @ts-expect-error — purpose is a valid fetch option in some browsers
+                          purpose: "prefetch",
+                        }),
+                      priority,
                     ),
                     interceptionContext,
                     mountedSlotsHeader,
@@ -599,21 +609,29 @@ function prefetchUrl(
                   shellEntry = shellCache.get(shellCacheKey);
                 }
                 await shellEntry?.pending?.catch(() => {});
-                return fetch(rscUrl, {
-                  headers,
-                  credentials: "include",
+                return scheduleAppPrefetchFetch(
+                  () =>
+                    fetch(rscUrl, {
+                      headers,
+                      credentials: "include",
+                      priority,
+                      // @ts-expect-error — purpose is a valid fetch option in some browsers
+                      purpose: "prefetch",
+                    }),
                   priority,
-                  // @ts-expect-error — purpose is a valid fetch option in some browsers
-                  purpose: "prefetch",
-                });
+                );
               })()
-            : fetch(rscUrl, {
-                headers,
-                credentials: "include",
+            : scheduleAppPrefetchFetch(
+                () =>
+                  fetch(rscUrl, {
+                    headers,
+                    credentials: "include",
+                    priority,
+                    // @ts-expect-error — purpose is a valid fetch option in some browsers
+                    purpose: "prefetch",
+                  }),
                 priority,
-                // @ts-expect-error — purpose is a valid fetch option in some browsers
-                purpose: "prefetch",
-              });
+              );
         prefetchRscResponse(
           rscUrl,
           fetchPromise,
@@ -671,7 +689,12 @@ function prefetchUrl(
     return promise;
   };
 
-  if (priority === "high" || mode === "route-tree" || mode === "segment") {
+  if (
+    priority === "high" ||
+    mode === "route-tree" ||
+    mode === "segment" ||
+    (hasAppNavigationRuntime() && String(process.env.__NEXT_CACHE_COMPONENTS) !== "false")
+  ) {
     return runPrefetch();
   }
 
@@ -724,6 +747,7 @@ type LinkPrefetchInstance = {
   isVisible: boolean;
   mode: LinkPrefetchMode;
   pagesRouteHref?: string;
+  queuedViewportPrefetch: boolean;
   routerMode: LinkPrefetchRouterMode;
   scheduledTask: LinkPrefetchTask | null;
   viewportPrefetched: boolean;
@@ -731,6 +755,28 @@ type LinkPrefetchInstance = {
 
 const observedLinkPrefetches = new WeakMap<Element, LinkPrefetchInstance>();
 const visibleLinkPrefetches = new Set<LinkPrefetchInstance>();
+const visibleAppPrefetchQueue: LinkPrefetchInstance[] = [];
+let visibleAppPrefetchDrainScheduled = false;
+
+function drainVisibleAppPrefetchQueue(): void {
+  visibleAppPrefetchDrainScheduled = false;
+  while (true) {
+    const instance = visibleAppPrefetchQueue.pop();
+    if (!instance) return;
+    instance.queuedViewportPrefetch = false;
+    if (!instance.isVisible || instance.routerMode !== "app") continue;
+    prefetchUrl(instance.href, instance.mode, "low", instance.pagesRouteHref);
+  }
+}
+
+function scheduleVisibleAppPrefetch(instance: LinkPrefetchInstance): void {
+  if (instance.queuedViewportPrefetch) return;
+  instance.queuedViewportPrefetch = true;
+  visibleAppPrefetchQueue.push(instance);
+  if (visibleAppPrefetchDrainScheduled) return;
+  visibleAppPrefetchDrainScheduled = true;
+  queueMicrotask(drainVisibleAppPrefetchQueue);
+}
 
 type LinkPrefetchTask = {
   instance: LinkPrefetchInstance;
@@ -949,8 +995,10 @@ function setVisibleLinkPrefetch(
     if (instance.routerMode === "pages" && instance.viewportPrefetched) return;
     if (usesSegmentCachePrefetchScheduler(instance)) {
       scheduleSegmentCacheLinkPrefetch(instance, "low", batchId);
+    } else if (instance.routerMode === "app") {
+      scheduleVisibleAppPrefetch(instance);
     } else {
-      void prefetchUrl(instance.href, instance.mode, "low", instance.pagesRouteHref);
+      prefetchUrl(instance.href, instance.mode, "low", instance.pagesRouteHref);
     }
     instance.viewportPrefetched = true;
   } else {
@@ -972,7 +1020,7 @@ function pingVisibleLinkPrefetches(): void {
       if (usesSegmentCachePrefetchScheduler(instance)) {
         scheduleSegmentCacheLinkPrefetch(instance, "low");
       } else {
-        void prefetchUrl(instance.href, instance.mode, "low", instance.pagesRouteHref);
+        scheduleVisibleAppPrefetch(instance);
       }
     }
   }
@@ -1294,6 +1342,7 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
               basePath: __basePath,
               currentOrigin: window.location.origin,
             }) ?? undefined),
+      queuedViewportPrefetch: false,
       routerMode: getLinkPrefetchRouterMode(),
       scheduledTask: null,
       viewportPrefetched: false,
@@ -1306,6 +1355,7 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
       cancelScheduledSegmentCacheLinkPrefetch(instance);
       observedLinkPrefetches.delete(node);
       visibleLinkPrefetches.delete(instance);
+      instance.isVisible = false;
     };
   }, [shouldViewportPrefetch, prefetchMode, normalizedHref, normalizedRouteHref]);
 
