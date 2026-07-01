@@ -104,7 +104,6 @@ import {
   AppElementsWire,
   getMountedSlotIdsHeader,
   resolveVisitedResponseInterceptionContext,
-  type AppElementValue,
   type AppElements,
   type AppWireElements,
 } from "./app-elements.js";
@@ -168,6 +167,7 @@ import { APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI } from "./app-rsc-render-mode.j
 import { blockDangerousStreamedRscRedirect } from "./app-browser-rsc-redirect.js";
 import {
   createOptimisticRouteTemplate,
+  fillSkippedLayoutsFromElementSources,
   getOptimisticPrefetchSourceKey,
   getOptimisticRouteTemplateKey,
   resolveOptimisticNavigationPayload,
@@ -463,8 +463,10 @@ async function learnOptimisticRouteTemplateFromPrefetch(options: {
   }
   if (options.interceptionContext !== null) return false;
 
-  const elements = await decodeAppElementsPromise(
-    createFromFetch<AppWireElements>(Promise.resolve(restoreRscResponse(options.entry.snapshot))),
+  const elements = await fillSkippedLayoutsFromPrefetchCache(
+    decodeAppElementsPromise(
+      createFromFetch<AppWireElements>(Promise.resolve(restoreRscResponse(options.entry.snapshot))),
+    ),
   );
   const template = createOptimisticRouteTemplate({
     allowLoadingShell: options.entry.optimisticRouteShell === true,
@@ -473,6 +475,7 @@ async function learnOptimisticRouteTemplateFromPrefetch(options: {
     href: options.entry.snapshot.url || source.rscUrl,
     interceptionContext: options.interceptionContext,
     mountedSlotsHeader: options.mountedSlotsHeader,
+    preservePageElements: options.entry.runtimePrefetch === true,
     routeManifest: options.routeManifest,
   });
   if (template === null) return false;
@@ -997,7 +1000,7 @@ async function fillSkippedLayoutsFromPrefetchCache(
   if (missingLayoutIds.length === 0) return elements;
 
   const missing = new Set(missingLayoutIds);
-  const merged: Record<string, AppElementValue> = { ...elements };
+  const sources: AppElements[] = [];
   for (const entry of getPrefetchCache().values()) {
     if (missing.size === 0) break;
     if (entry.outcome !== "cache-seeded" || !entry.snapshot) continue;
@@ -1006,23 +1009,13 @@ async function fillSkippedLayoutsFromPrefetchCache(
 
     for (const layoutId of missing) {
       if (!Object.hasOwn(sourceElements, layoutId)) continue;
-      merged[layoutId] = sourceElements[layoutId];
+      sources.push(sourceElements);
       missing.delete(layoutId);
     }
   }
 
   if (missing.size === missingLayoutIds.length) return elements;
-
-  const remainingSkippedLayoutIds = metadata.skippedLayoutIds.filter((layoutId) =>
-    missing.has(layoutId),
-  );
-  if (remainingSkippedLayoutIds.length > 0) {
-    merged[AppElementsWire.keys.skippedLayoutIds] = remainingSkippedLayoutIds;
-  } else {
-    delete merged[AppElementsWire.keys.skippedLayoutIds];
-  }
-
-  return merged as AppElements;
+  return fillSkippedLayoutsFromElementSources(elements, sources);
 }
 
 function BrowserRoot({
@@ -2166,7 +2159,7 @@ function bootstrapHydration(
           activeTraversalIntent,
           scrollIntent,
           restoredBfcacheIds,
-          reuseCurrentBfcacheIds,
+          detachedNavigationCommits ? false : reuseCurrentBfcacheIds,
           visibleCommitMode,
           (state) => {
             committedState = state;

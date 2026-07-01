@@ -15,6 +15,7 @@ import { VINEXT_RSC_COMPATIBILITY_ID_HEADER } from "../packages/vinext/src/serve
 import {
   VINEXT_DYNAMIC_STALE_TIME_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
+  VINEXT_RSC_LAYOUT_IDS_HEADER,
 } from "../packages/vinext/src/server/headers.js";
 
 type Navigation = typeof import("../packages/vinext/src/shims/navigation.js");
@@ -1013,7 +1014,27 @@ describe("prefetch cache eviction", () => {
     expect(consumePrefetchResponse(rscUrl, null, snapshot.mountedSlotsHeader)).toBeNull();
   });
 
-  it("does not sweep expired entries on under-budget cache writes", () => {
+  it("round-trips retained layout ids when restoring cached RSC responses", async () => {
+    const snapshot = {
+      buffer: new TextEncoder().encode("flight").buffer,
+      contentType: "text/x-component",
+      layoutIds: ["layout:/", "layout:/segment-config/runtime-prefetchable"],
+      mountedSlotsHeader: null,
+      paramsHeader: null,
+      url: "/segment-config/runtime-prefetchable.rsc",
+    };
+
+    const restored = restoreRscResponse(snapshot);
+
+    expect(restored.headers.get(VINEXT_RSC_LAYOUT_IDS_HEADER)).toBe(
+      "layout:/ layout:/segment-config/runtime-prefetchable",
+    );
+
+    const resnapshot = await snapshotRscResponse(restored);
+    expect(resnapshot.layoutIds).toEqual(snapshot.layoutIds);
+  });
+
+  it("does not sweep when cache is below capacity", () => {
     // Use fixed arbitrary values to avoid any dependency on the real wall clock
     const now = 1_000_000;
     const expired = now - PREFETCH_CACHE_TTL - 1_000;

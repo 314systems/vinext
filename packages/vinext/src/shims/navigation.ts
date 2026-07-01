@@ -281,6 +281,7 @@ export type PrefetchCacheEntry = {
   snapshot?: CachedRscResponse;
   pending?: Promise<void>;
   size?: number;
+  runtimePrefetch?: boolean;
   timestamp: number;
 };
 
@@ -971,6 +972,9 @@ export function restoreRscResponse(cached: CachedRscResponse, copy = true): Resp
   if (cached.paramsHeader != null) {
     headers.set(VINEXT_PARAMS_HEADER, cached.paramsHeader);
   }
+  if (cached.layoutIds !== undefined && cached.layoutIds.length > 0) {
+    headers.set(VINEXT_RSC_LAYOUT_IDS_HEADER, cached.layoutIds.join(" "));
+  }
 
   return new Response(copy ? cached.buffer.slice(0) : cached.buffer, {
     status: 200,
@@ -995,6 +999,7 @@ export function prefetchRscResponse(
     cacheForNavigation?: boolean;
     fallbackTtlMs?: number;
     optimisticRouteShell?: boolean;
+    runtimePrefetch?: boolean;
   } = {},
 ): void {
   const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
@@ -1011,6 +1016,7 @@ export function prefetchRscResponse(
     mountedSlotsHeader,
     optimisticRouteShell: behavior.optimisticRouteShell === true,
     outcome: "pending",
+    runtimePrefetch: behavior.runtimePrefetch === true,
     timestamp: now,
   };
   addPrefetchInvalidationCallback(entry, options?.onInvalidate);

@@ -1,4 +1,11 @@
-import { Fragment, createElement, isValidElement, type ReactElement, type ReactNode } from "react";
+import {
+  Fragment,
+  Suspense,
+  createElement,
+  isValidElement,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { describe, expect, it } from "vite-plus/test";
 import { useSelectedLayoutSegments } from "../packages/vinext/src/shims/navigation.js";
 import {
@@ -23,6 +30,7 @@ import {
 import { createAppLayoutParamAccessTracker } from "../packages/vinext/src/server/app-layout-param-observation.js";
 import {
   APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
+  APP_RSC_RENDER_MODE_PREFETCH_RUNTIME,
   APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI,
 } from "../packages/vinext/src/server/app-rsc-render-mode.js";
 import { makeThenableParams } from "../packages/vinext/src/shims/thenable-params.js";
@@ -936,6 +944,64 @@ describe("app page route wiring helpers", () => {
     const html = await renderRouteEntry(elements, "route:/dashboard");
 
     expect(html).not.toContain("Page");
+  });
+
+  it("renders static layout fallbacks while preserving runtime-prefetchable page content", async () => {
+    function LayoutRuntimeContent() {
+      return createElement("p", null, "Layout runtime content");
+    }
+    function StaticShellLayout(props: Record<string, unknown>) {
+      return createElement(
+        "section",
+        null,
+        createElement("p", null, "Static layout shell"),
+        createElement(
+          Suspense,
+          { fallback: createElement("p", null, "Layout runtime fallback") },
+          createElement(LayoutRuntimeContent),
+        ),
+        readChildren(props.children),
+      );
+    }
+    function RuntimePage() {
+      return createElement("main", null, "Runtime page content");
+    }
+
+    const elements = buildAppPageElements({
+      element: createElement(RuntimePage),
+      makeThenableParams(params) {
+        return Promise.resolve(params);
+      },
+      matchedParams: {},
+      resolvedMetadata: null,
+      resolvedViewport: {},
+      route: {
+        error: null,
+        errors: [null],
+        layoutTreePositions: [0],
+        layouts: [{ default: StaticShellLayout }],
+        loading: null,
+        notFound: null,
+        notFounds: [null],
+        page: {
+          default: RuntimePage,
+          unstable_instant: { prefetch: "runtime" },
+        },
+        routeSegments: ["dashboard"],
+        templateTreePositions: [],
+        templates: [],
+      },
+      routePath: "/dashboard",
+      rootNotFoundModule: null,
+      renderMode: APP_RSC_RENDER_MODE_PREFETCH_RUNTIME,
+    });
+
+    const html = await renderRouteEntry(elements, "route:/dashboard");
+
+    expect(html).toContain("Static layout shell");
+    expect(html).toContain("Layout runtime fallback");
+    expect(html).toContain("Runtime page content");
+    expect(html).not.toContain("Layout runtime content");
   });
 
   it("uses override params for slot segment maps when an override page is active", async () => {

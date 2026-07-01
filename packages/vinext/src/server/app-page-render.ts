@@ -513,7 +513,6 @@ function createRenderLifecycleSkipDisposition(input: {
 function createRetainedPrefetchLayoutSkipDisposition(input: {
   element: ReactNode | Readonly<Record<string, ReactNode>>;
   isRscRequest: boolean;
-  layoutFlags: Readonly<Record<string, "s" | "d">>;
   retainedPrefetchLayoutIds: readonly string[] | undefined;
 }): ClientReuseManifestSkipDisposition | undefined {
   if (
@@ -530,7 +529,6 @@ function createRetainedPrefetchLayoutSkipDisposition(input: {
   for (const layoutId of input.retainedPrefetchLayoutIds) {
     if (seen.has(layoutId)) continue;
     if (AppElementsWire.parseElementKey(layoutId)?.kind !== "layout") continue;
-    if (!Object.hasOwn(input.layoutFlags, layoutId)) continue;
     if (!Object.hasOwn(input.element, layoutId)) continue;
     seen.add(layoutId);
     skippedEntryIds.push(layoutId);
@@ -743,7 +741,6 @@ export async function renderAppPageLifecycle(
     createRetainedPrefetchLayoutSkipDisposition({
       element: options.element,
       isRscRequest: options.isRscRequest,
-      layoutFlags,
       retainedPrefetchLayoutIds: options.retainedPrefetchLayoutIds,
     }),
   );
@@ -789,6 +786,18 @@ export async function renderAppPageLifecycle(
       return (await pendingResult).prelude;
     }
 
+    if (options.pprFallbackShellSignal) {
+      const reactSignal = options.pprFallbackShellReactSignal ?? options.pprFallbackShellSignal;
+      const stream = options.renderToReadableStream(outgoingElement, {
+        onError: rscErrorTracker.onRenderError,
+        signal: reactSignal,
+      });
+      if (options.abortPprFallbackShell) {
+        setTimeout(options.abortPprFallbackShell, 0);
+      }
+      return stream;
+    }
+
     return options.renderToReadableStream(outgoingElement, {
       onError: rscErrorTracker.onRenderError,
     });
@@ -821,7 +830,7 @@ export async function renderAppPageLifecycle(
     });
   const rscCapture = pprFallbackShellRsc
     ? {
-        ssrStream: createBufferedRscStream(false),
+        ssrStream: createBufferedRscStream(options.isRscRequest),
         ...(shouldCaptureRscForCacheMetadata ? { sideStream: createBufferedRscStream(true) } : {}),
       }
     : teeAppPageRscStreamForCapture(rscStream, shouldCaptureRscForCacheMetadata);

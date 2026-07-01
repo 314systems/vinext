@@ -314,16 +314,21 @@ function getLinkPrefetchRouterMode(): LinkPrefetchRouterMode {
 
 function resolveMatchedAutoAppRoutePrefetch(route: VinextLinkPrefetchRoute): {
   cacheForNavigation: boolean;
+  cacheWithRetainedLayouts: boolean;
+  prefetchMode: "auto" | "inherited-runtime" | "runtime" | "static";
   prefetchShellFirst: boolean;
   shouldPrefetch: boolean;
 } {
   const hasLoadingShell = route.canPrefetchLoadingShell;
   return {
-    // Automatic prefetches are only unsafe as authoritative navigation
-    // payloads for dynamic routes whose active parallel branches must be
-    // derived from the click-time target tree. Other concrete dynamic URLs can
-    // match Next.js's full-prefetch behavior, including client-param routes.
+    // Vinext does not yet have Next.js's full per-segment runtime-prefetch tree.
+    // Routes with loading boundaries prefetch a shell first so navigation can
+    // commit loading.js immediately. Automatic prefetches are only unsafe as
+    // authoritative navigation payloads for dynamic routes whose active parallel
+    // branches must be derived from the click-time target tree.
     cacheForNavigation: !hasLoadingShell && route.requiresDynamicNavigationRequest !== true,
+    cacheWithRetainedLayouts: route.hasRuntimePrefetch === true,
+    prefetchMode: route.prefetchMode ?? "auto",
     prefetchShellFirst: !route.isDynamic,
     shouldPrefetch: true,
   };
@@ -346,26 +351,52 @@ export function canAutoPrefetchFullAppRoute(href: string): boolean {
 
 export function resolveAutoAppRoutePrefetch(href: string): {
   cacheForNavigation: boolean;
+  cacheWithRetainedLayouts: boolean;
+  prefetchMode: "auto" | "inherited-runtime" | "runtime" | "static";
   prefetchShellFirst: boolean;
   shouldPrefetch: boolean;
 } {
   if (typeof window === "undefined") {
-    return { cacheForNavigation: false, prefetchShellFirst: false, shouldPrefetch: false };
+    return {
+      cacheForNavigation: false,
+      cacheWithRetainedLayouts: false,
+      prefetchMode: "auto",
+      prefetchShellFirst: false,
+      shouldPrefetch: false,
+    };
   }
 
   const routes = window.__VINEXT_LINK_PREFETCH_ROUTES__;
   if (!routes) {
-    return { cacheForNavigation: false, prefetchShellFirst: false, shouldPrefetch: false };
+    return {
+      cacheForNavigation: false,
+      cacheWithRetainedLayouts: false,
+      prefetchMode: "auto",
+      prefetchShellFirst: false,
+      shouldPrefetch: false,
+    };
   }
 
   const routeHref = toSameOriginRouteHref(href);
   if (routeHref === null) {
-    return { cacheForNavigation: false, prefetchShellFirst: false, shouldPrefetch: false };
+    return {
+      cacheForNavigation: false,
+      cacheWithRetainedLayouts: false,
+      prefetchMode: "auto",
+      prefetchShellFirst: false,
+      shouldPrefetch: false,
+    };
   }
 
   const match = matchRouteWithTrie(routeHref, routes, linkPrefetchRouteTrieCache);
   if (!match) {
-    return { cacheForNavigation: false, prefetchShellFirst: false, shouldPrefetch: false };
+    return {
+      cacheForNavigation: false,
+      cacheWithRetainedLayouts: false,
+      prefetchMode: "auto",
+      prefetchShellFirst: false,
+      shouldPrefetch: false,
+    };
   }
 
   return resolveMatchedAutoAppRoutePrefetch(match.route);
@@ -373,11 +404,15 @@ export function resolveAutoAppRoutePrefetch(href: string): {
 
 function resolveFullAppRoutePrefetch(): {
   cacheForNavigation: true;
+  cacheWithRetainedLayouts: true;
+  prefetchMode: "auto";
   prefetchShellFirst: boolean;
   shouldPrefetch: true;
 } {
   return {
     cacheForNavigation: true,
+    cacheWithRetainedLayouts: true,
+    prefetchMode: "auto",
     prefetchShellFirst: true,
     shouldPrefetch: true,
   };
@@ -453,7 +488,11 @@ function prefetchUrl(
           navigation,
           { AppElementsWire },
           rscCacheBusting,
-          { APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL },
+          {
+            APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
+            APP_RSC_RENDER_MODE_PREFETCH_RUNTIME,
+            APP_RSC_RENDER_MODE_PREFETCH_STATIC,
+          },
           headersModule,
           { resolveHybridClientRouteOwner },
         ] = await Promise.all([
@@ -496,33 +535,61 @@ function prefetchUrl(
           mode === "auto"
             ? resolveAutoAppRoutePrefetch(prefetchHref)
             : mode === "full-after-shell"
-              ? { cacheForNavigation: true, prefetchShellFirst: true, shouldPrefetch: true }
+              ? {
+                  cacheForNavigation: true,
+                  cacheWithRetainedLayouts: true,
+                  prefetchMode: "auto" as const,
+                  prefetchShellFirst: true,
+                  shouldPrefetch: true,
+                }
               : resolveFullAppRoutePrefetch();
         if (!autoPrefetch.shouldPrefetch) return;
 
         const interceptionContext = getPrefetchInterceptionContext(fullHref);
         const mountedSlotsHeader = getMountedSlotsHeader();
-        const isOptimisticRouteShellPrefetch = !autoPrefetch.cacheForNavigation;
+        const retainedPrefetchLayoutsHeader = getRetainedPrefetchLayoutIdsHeader({
+          targetHref: fullHref,
+        });
+        const shouldUseStaticPrefetchRender =
+          mode === "auto" &&
+          retainedPrefetchLayoutsHeader !== null &&
+          autoPrefetch.prefetchMode !== "runtime";
+        const shouldUseRuntimePrefetchRender =
+          mode === "auto" &&
+          retainedPrefetchLayoutsHeader !== null &&
+          autoPrefetch.prefetchMode === "runtime";
+        const isOptimisticRouteShellPrefetch =
+          !autoPrefetch.cacheForNavigation && !shouldUseStaticPrefetchRender;
         if (isOptimisticRouteShellPrefetch && interceptionContext !== null) return;
         const headers = createRscRequestHeaders({
           interceptionContext,
-          renderMode: isOptimisticRouteShellPrefetch
-            ? APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL
-            : undefined,
+          renderMode: shouldUseRuntimePrefetchRender
+            ? APP_RSC_RENDER_MODE_PREFETCH_RUNTIME
+            : shouldUseStaticPrefetchRender
+              ? APP_RSC_RENDER_MODE_PREFETCH_STATIC
+              : isOptimisticRouteShellPrefetch
+                ? APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL
+                : undefined,
         });
         if (mountedSlotsHeader) {
           headers.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
         }
-        const retainedPrefetchLayoutsHeader = getRetainedPrefetchLayoutIdsHeader({
-          targetHref: fullHref,
-        });
         if (retainedPrefetchLayoutsHeader) {
           headers.set(VINEXT_RETAINED_PREFETCH_LAYOUTS_HEADER, retainedPrefetchLayoutsHeader);
         }
         const cachePrefetchForNavigation =
-          autoPrefetch.cacheForNavigation && !(mode === "auto" && retainedPrefetchLayoutsHeader);
+          autoPrefetch.cacheForNavigation &&
+          !shouldUseRuntimePrefetchRender &&
+          !(
+            mode === "auto" &&
+            retainedPrefetchLayoutsHeader &&
+            !autoPrefetch.cacheWithRetainedLayouts
+          );
         const shouldSendSegmentPrefetchHeaders = isOptimisticRouteShellPrefetch || mode === "auto";
-        if (shouldSendSegmentPrefetchHeaders) {
+        if (shouldUseRuntimePrefetchRender) {
+          headers.set(NEXT_ROUTER_PREFETCH_HEADER, "2");
+          headers.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "1");
+        } else if (shouldSendSegmentPrefetchHeaders || shouldUseStaticPrefetchRender) {
           headers.set(NEXT_ROUTER_PREFETCH_HEADER, "1");
           headers.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "1");
         }
@@ -641,7 +708,8 @@ function prefetchUrl(
           {
             cacheForNavigation: cachePrefetchForNavigation,
             fallbackTtlMs: PREFETCH_CACHE_TTL,
-            optimisticRouteShell: isOptimisticRouteShellPrefetch,
+            optimisticRouteShell: isOptimisticRouteShellPrefetch || shouldUseRuntimePrefetchRender,
+            runtimePrefetch: shouldUseRuntimePrefetchRender,
           },
         );
       } else if (HAS_PAGES_ROUTER && window.__NEXT_DATA__) {
@@ -684,15 +752,7 @@ function prefetchUrl(
     })().catch((error) => {
       console.error("[vinext] RSC prefetch setup error:", error);
     });
-  };
-
-  if (priority === "high" || hasAppNavigationRuntime()) {
-    runPrefetch();
-    return;
-  }
-
-  const schedule = window.requestIdleCallback ?? ((fn: () => void) => setTimeout(fn, 100));
-  schedule(runPrefetch);
+  });
 }
 
 async function promotePrefetchEntriesForNavigation(href: string): Promise<void> {
