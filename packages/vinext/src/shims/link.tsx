@@ -764,9 +764,7 @@ function prefetchUrl(
           __prefetchInlining && mode === "auto" && autoPrefetch.prefetchShellFirst;
         const gateViaLoadingShell = mode === "full-after-shell" && autoPrefetch.prefetchShellFirst;
         const fetchPromise =
-          cacheForNavigation &&
-          !renderLoadingShell &&
-          (gateViaRouteTree || gateViaLoadingShell)
+          cacheForNavigation && !renderLoadingShell && (gateViaRouteTree || gateViaLoadingShell)
             ? (async () => {
                 if (gateViaLoadingShell) {
                   await fetchLoadingShellForReuse();
