@@ -365,7 +365,10 @@ import {
   resolveAppPageChildSegments as __resolveAppPageChildSegments,
 } from ${JSON.stringify(appPageRouteWiringPath)};
 import { buildPageElements as __buildPageElements } from ${JSON.stringify(appPageElementBuilderPath)};
-import { buildAppPageProbes as __buildAppPageProbes } from ${JSON.stringify(appPageProbePath)};
+import {
+  buildAppPageProbes as __buildAppPageProbes,
+  renderAppPageForLoadingShellProbe as __renderAppPageForLoadingShellProbe,
+} from ${JSON.stringify(appPageProbePath)};
 import {
   dispatchAppPage as __dispatchAppPage,
 } from ${JSON.stringify(appPageDispatchPath)};
@@ -887,6 +890,13 @@ export default createAppRscHandler({
           matchedParams: params,
           makeThenableParams,
         }));
+      },
+      probePageLoadingShellFallback(probeSearchParams = searchParams) {
+        return __renderAppPageForLoadingShellProbe({
+          pageComponent: PageComponent,
+          asyncRouteParams: _asyncRouteParams,
+          searchParams: probeSearchParams,
+        });
       },
       renderErrorBoundaryPage(renderErr, errorOrigin) {
         const __activeIntercept = findIntercept(cleanPathname, interceptionContext);
