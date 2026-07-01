@@ -183,6 +183,35 @@ describe("App Router prefetch vary analysis", () => {
     expect(route.prefetchVarySearchParams).toBe(true);
   });
 
+  it("tracks params read from awaited member expressions", () => {
+    const pagePath = writeSource(
+      "page.tsx",
+      `export default async function Page({ params }: { params: Promise<{ category: string; itemId: string }> }) {
+        const itemId = (await params).itemId;
+        return <div>{itemId}</div>;
+      }`,
+    );
+
+    const route = toLinkPrefetchRoute(createRoute({ pagePath }));
+
+    expect(route.prefetchVaryParamNames).toEqual(["itemId"]);
+  });
+
+  it("tracks params destructured from awaited aliases", () => {
+    const pagePath = writeSource(
+      "page.tsx",
+      `export default async function Page({ params }: { params: Promise<{ category: string; itemId: string }> }) {
+        const resolved = await params;
+        const { itemId } = resolved;
+        return <div>{itemId}</div>;
+      }`,
+    );
+
+    const route = toLinkPrefetchRoute(createRoute({ pagePath }));
+
+    expect(route.prefetchVaryParamNames).toEqual(["itemId"]);
+  });
+
   it("marks Object.assign param and searchParam copies as varying", () => {
     const pagePath = writeSource(
       "page.tsx",
@@ -301,6 +330,75 @@ describe("App Router prefetch vary analysis", () => {
     );
 
     expect(route.canPrefetchStaticRoute).toBe(true);
+    expect(route.requiresDynamicNavigationRequest).toBe(true);
+  });
+
+  it("does not truncate static analysis on local connection helpers", () => {
+    const pagePath = writeSource(
+      "page.tsx",
+      `function connection() {
+        return Promise.resolve();
+      }
+
+      export function generateStaticParams() {
+        return [{ category: "books" }];
+      }
+
+      export default async function Page({ params }: { params: Promise<{ category: string; itemId: string }> }) {
+        await connection();
+        const { itemId } = await params;
+        return <div>{itemId}</div>;
+      }`,
+    );
+
+    const route = toLinkPrefetchRoute(createRoute({ pagePath }));
+
+    expect(route.prefetchVaryParamNames).toEqual(["itemId"]);
+    expect(route.requiresDynamicNavigationRequest).toBeUndefined();
+  });
+
+  it("does not truncate static analysis on non-Next connection imports", () => {
+    const pagePath = writeSource(
+      "page.tsx",
+      `import { connection } from "./db";
+
+      export function generateStaticParams() {
+        return [{ category: "books" }];
+      }
+
+      export default async function Page({ params }: { params: Promise<{ category: string; itemId: string }> }) {
+        await connection();
+        const { itemId } = await params;
+        return <div>{itemId}</div>;
+      }`,
+    );
+
+    const route = toLinkPrefetchRoute(createRoute({ pagePath }));
+
+    expect(route.prefetchVaryParamNames).toEqual(["itemId"]);
+    expect(route.requiresDynamicNavigationRequest).toBeUndefined();
+  });
+
+  it("uses aliased next/server.js connection imports as the static analysis cutoff", () => {
+    const pagePath = writeSource(
+      "page.tsx",
+      `import { connection as waitForRequest } from "next/server.js";
+
+      export function generateStaticParams() {
+        return [{ category: "books" }];
+      }
+
+      export default async function Page({ params }: { params: Promise<{ category: string; itemId: string }> }) {
+        const { category } = await params;
+        await waitForRequest();
+        const { itemId } = await params;
+        return <div>{category}:{itemId}</div>;
+      }`,
+    );
+
+    const route = toLinkPrefetchRoute(createRoute({ pagePath }));
+
+    expect(route.prefetchVaryParamNames).toEqual(["category"]);
     expect(route.requiresDynamicNavigationRequest).toBe(true);
   });
 

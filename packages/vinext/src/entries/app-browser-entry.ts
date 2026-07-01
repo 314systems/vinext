@@ -165,7 +165,26 @@ function nextNonWhitespaceIndex(source: string, index: number): number {
   return cursor;
 }
 
+function collectNextServerConnectionIdentifiers(source: string): Set<string> {
+  const identifiers = new Set<string>();
+  const importPattern = /\bimport\s*\{([^}]+)\}\s*from\s*["']next\/server(?:\.js)?["']/g;
+
+  for (const match of source.matchAll(importPattern)) {
+    for (const specifier of (match[1] ?? "").split(",")) {
+      const importName = specifier.trim().match(/^connection(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
+      if (importName) {
+        identifiers.add(importName[1] ?? "connection");
+      }
+    }
+  }
+
+  return identifiers;
+}
+
 function findConnectionCallIndex(source: string): number | null {
+  const connectionIdentifiers = collectNextServerConnectionIdentifiers(source);
+  if (connectionIdentifiers.size === 0) return null;
+
   const allowedPreviousIdentifiers = new Set(["await", "return", "void", "yield"]);
   const allowedPreviousPunctuation = new Set(["", "(", "{", "[", "=", ":", ",", ";", "?", "!"]);
   let previousToken = "";
@@ -180,7 +199,7 @@ function findConnectionCallIndex(source: string): number | null {
 
     const identifier = readIdentifier(source, index);
     if (identifier !== null) {
-      if (identifier === "connection") {
+      if (connectionIdentifiers.has(identifier)) {
         const nextIndex = nextNonWhitespaceIndex(source, index + identifier.length);
         if (
           source[nextIndex] === "(" &&
@@ -372,6 +391,22 @@ function collectParamAccesses(source: string, paramNames: readonly string[]): Se
     if (
       new RegExp(
         String.raw`\{[^}]*\b${escaped}\b[^}]*\}\s*=\s*await\s+${paramPromiseSourcePattern}\b`,
+      ).test(region)
+    ) {
+      accessed.add(name);
+      continue;
+    }
+    if (
+      new RegExp(String.raw`\{[^}]*\b${escaped}\b[^}]*\}\s*=\s*${paramSourcePattern}\b`).test(
+        region,
+      )
+    ) {
+      accessed.add(name);
+      continue;
+    }
+    if (
+      new RegExp(
+        String.raw`\(\s*await\s+${paramPromiseSourcePattern}\s*\)\s*\.\s*${escaped}\b`,
       ).test(region)
     ) {
       accessed.add(name);
