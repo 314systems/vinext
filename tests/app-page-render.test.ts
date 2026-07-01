@@ -552,6 +552,41 @@ describe("app page render lifecycle", () => {
     expect(baseOnError).toHaveBeenCalledWith(notFoundError, null, null);
   });
 
+  it("reads prefetch dynamic-shell RSC until the fallback-shell abort signal", async () => {
+    const common = createCommonOptions();
+    const abortController = new AbortController();
+
+    const response = await renderAppPageLifecycle({
+      ...common.options,
+      abortPprFallbackShell() {
+        setTimeout(() => abortController.abort(), 70);
+      },
+      hasLoadingBoundary: true,
+      isRscRequest: true,
+      pprFallbackShellSignal: abortController.signal,
+      renderMode: APP_RSC_RENDER_MODE_PREFETCH_DYNAMIC_SHELL,
+      renderToReadableStream() {
+        const timers: Array<ReturnType<typeof setTimeout>> = [];
+        return new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("static-shell"));
+            timers.push(
+              setTimeout(() => controller.enqueue(new TextEncoder().encode("-late")), 40),
+              setTimeout(() => controller.close(), 120),
+            );
+          },
+          cancel() {
+            for (const timer of timers) {
+              clearTimeout(timer);
+            }
+          },
+        });
+      },
+    });
+
+    await expect(response.text()).resolves.toBe("static-shell-late");
+  });
+
   it("returns RSC responses and schedules an ISR cache write through waitUntil", async () => {
     const common = createCommonOptions();
     const consumeDynamicUsage = vi.fn(() => false);

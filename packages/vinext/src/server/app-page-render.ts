@@ -210,19 +210,37 @@ type RenderAppPageLifecycleOptions = {
 
 async function readAppPageInitialBinaryStream(
   stream: ReadableStream<Uint8Array>,
+  signal?: AbortSignal,
 ): Promise<ArrayBuffer> {
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
 
   try {
     while (true) {
-      const idle = Symbol("idle");
-      const result = await Promise.race([
-        reader.read(),
-        new Promise<typeof idle>((resolve) => setTimeout(() => resolve(idle), 25)),
-      ]);
+      const aborted = Symbol("aborted");
+      let removeAbortListener = () => {};
+      const abortPromise =
+        signal === undefined
+          ? null
+          : new Promise<typeof aborted>((resolve) => {
+              const onAbort = () => resolve(aborted);
+              if (signal.aborted) {
+                resolve(aborted);
+                return;
+              }
+              signal.addEventListener("abort", onAbort, { once: true });
+              removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+            });
+      let result: ReadableStreamReadResult<Uint8Array> | typeof aborted;
+      try {
+        result = await (abortPromise === null
+          ? reader.read()
+          : Promise.race([reader.read(), abortPromise]));
+      } finally {
+        removeAbortListener();
+      }
 
-      if (result === idle || result.done) {
+      if (result === aborted || result.done) {
         break;
       }
 
@@ -815,7 +833,12 @@ export async function renderAppPageLifecycle(
   });
 
   if (isPrefetchDynamicShell) {
-    pprFallbackShellRsc = new Uint8Array(await readAppPageInitialBinaryStream(rscStream));
+    if (options.abortPprFallbackShell) {
+      setTimeout(options.abortPprFallbackShell, 0);
+    }
+    pprFallbackShellRsc = new Uint8Array(
+      await readAppPageInitialBinaryStream(rscStream, options.pprFallbackShellSignal),
+    );
   } else if (options.pprFallbackShellSignal) {
     try {
       pprFallbackShellRsc = new Uint8Array(await readAppPageBinaryStream(rscStream));
