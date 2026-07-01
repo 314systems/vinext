@@ -250,6 +250,7 @@ declare module "next/navigation" {
     outcome: "pending" | "cache-seeded";
     snapshot?: CachedRscResponse;
     pending?: Promise<void>;
+    prefetchKind?: "loading-shell" | "navigation" | "route-tree";
     timestamp: number;
   };
   export const MAX_PREFETCH_CACHE_SIZE: number;
@@ -294,6 +295,7 @@ declare module "next/navigation" {
       fallbackTtlMs?: number;
       minimumTtlMs?: number;
       optimisticRouteShell?: boolean;
+      prefetchKind?: "loading-shell" | "navigation" | "route-tree";
     },
   ): void;
   export function consumePrefetchResponse(
