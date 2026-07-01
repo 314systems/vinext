@@ -758,6 +758,61 @@ describe("prefetch cache eviction", () => {
     expect(hasPrefetchCacheEntryForNavigation(targetRscUrl, null, null)).toBe(false);
   });
 
+  it("stops byte LRU cleanup after retained-layout cascade deletion frees enough memory", () => {
+    const now = 1_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const oneMiB = 1024 * 1024;
+    const sharedLayoutId = "layout:/shared-layout";
+    const sourceRscUrl = "/shared-layout/one.rsc";
+    const dependentRscUrl = "/shared-layout/two.rsc";
+
+    const cache = getPrefetchCache();
+    const prefetched = getPrefetchedUrls();
+    cache.set(sourceRscUrl, {
+      outcome: "cache-seeded",
+      snapshot: {
+        buffer: new ArrayBuffer(oneMiB),
+        contentType: "text/x-component",
+        layoutIds: [sharedLayoutId],
+        paramsHeader: null,
+        url: sourceRscUrl,
+      },
+      timestamp: now,
+    });
+    prefetched.add(sourceRscUrl);
+    cache.set(dependentRscUrl, {
+      cacheForNavigation: true,
+      outcome: "cache-seeded",
+      retainedLayoutDependencies: [sharedLayoutId],
+      snapshot: {
+        buffer: new ArrayBuffer(40 * oneMiB),
+        contentType: "text/x-component",
+        paramsHeader: null,
+        url: dependentRscUrl,
+      },
+      timestamp: now,
+    });
+    prefetched.add(dependentRscUrl);
+
+    fillCache(6, now, "/survivor-", 2 * oneMiB);
+
+    seedPrefetchResponseSnapshot("/pressure.rsc", {
+      buffer: new ArrayBuffer(oneMiB),
+      contentType: "text/x-component",
+      mountedSlotsHeader: null,
+      paramsHeader: null,
+      url: "/pressure.rsc",
+    });
+
+    expect(cache.has(sourceRscUrl)).toBe(false);
+    expect(cache.has(dependentRscUrl)).toBe(false);
+    for (let i = 0; i < 6; i++) {
+      expect(cache.has(`/survivor-${i}.rsc`)).toBe(true);
+      expect(prefetched.has(`/survivor-${i}.rsc`)).toBe(true);
+    }
+    expect(cache.has("/pressure.rsc")).toBe(true);
+  });
+
   it("skips pending prefetches when byte LRU cleanup needs to free memory", async () => {
     const now = 1_000_000;
     vi.spyOn(Date, "now").mockReturnValue(now);

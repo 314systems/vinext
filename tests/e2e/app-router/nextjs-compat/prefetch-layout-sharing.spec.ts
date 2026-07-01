@@ -169,8 +169,10 @@ test.describe("Next.js compat: prefetch layout sharing", () => {
         __VINEXT_RSC_PREFETCH_CACHE__?: Map<string, PrefetchCacheEntry>;
         __VINEXT_RSC_PREFETCHED_URLS__?: Set<string>;
       };
-      const cache = new Map(vinextWindow.__VINEXT_RSC_PREFETCH_CACHE__ ?? []);
-      const prefetched = (vinextWindow.__VINEXT_RSC_PREFETCHED_URLS__ ??= new Set());
+      const cache = new Map<string, PrefetchCacheEntry>(
+        vinextWindow.__VINEXT_RSC_PREFETCH_CACHE__ ?? [],
+      );
+      const prefetched = (vinextWindow.__VINEXT_RSC_PREFETCHED_URLS__ ??= new Set<string>());
       const pressureKey = `${root}/__vinext-test-pressure.rsc`;
       cache.set(pressureKey, {
         outcome: "cache-seeded",

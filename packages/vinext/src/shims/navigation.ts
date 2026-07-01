@@ -740,7 +740,10 @@ function evictPrefetchCacheIfNeeded(): void {
   if (totalSize <= MAX_PREFETCH_CACHE_SIZE) return;
 
   let inspectedEntries = 0;
-  while (totalSize > PREFETCH_CACHE_EVICTION_TARGET_SIZE && inspectedEntries < cache.size) {
+  while (
+    getPrefetchCacheByteSize(cache) > PREFETCH_CACHE_EVICTION_TARGET_SIZE &&
+    inspectedEntries < cache.size
+  ) {
     const oldest = cache.keys().next().value;
     if (oldest !== undefined) {
       const entry = cache.get(oldest);
@@ -751,7 +754,6 @@ function evictPrefetchCacheIfNeeded(): void {
           inspectedEntries += 1;
           continue;
         }
-        totalSize -= entrySize;
         deletePrefetchCacheEntry(cache, prefetched, oldest, entry, true);
         inspectedEntries = 0;
       } else {
