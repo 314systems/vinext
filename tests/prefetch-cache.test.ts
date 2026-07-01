@@ -345,6 +345,30 @@ describe("prefetch cache eviction", () => {
     expect(prefetched.has(rscUrl)).toBe(true);
   });
 
+  it("keeps route-tree prefetch responses out of navigation consumption", async () => {
+    const routeTreeUrl = "/dashboard.rsc?_rsc=tree";
+    const deferred = createDeferredResponse();
+
+    prefetchRscResponse(routeTreeUrl, deferred.promise, null, null, undefined, {
+      cacheForNavigation: false,
+      prefetchKind: "route-tree",
+    });
+
+    deferred.resolve(new Response("tree", { headers: { "content-type": "text/x-component" } }));
+    await waitForPrefetchSetup(
+      () =>
+        getPrefetchCache().get(routeTreeUrl)?.outcome === "cache-seeded" &&
+        getPrefetchCache().get(routeTreeUrl)?.pending === undefined,
+    );
+
+    const entry = getPrefetchCache().get(routeTreeUrl);
+    expect(entry?.prefetchKind).toBe("route-tree");
+    expect(entry?.optimisticRouteShell).toBe(false);
+    expect(hasPrefetchCacheEntryForNavigation("/dashboard.rsc", null, null)).toBe(false);
+    expect(consumePrefetchResponse("/dashboard.rsc", null, null)).toBeNull();
+    expect(getPrefetchCache().has(routeTreeUrl)).toBe(true);
+  });
+
   it("derives the interception context from the current pathname", () => {
     (globalThis as any).window.location.pathname = "/feed";
 
@@ -975,6 +999,47 @@ describe("prefetch cache eviction", () => {
     expect(onInvalidate).not.toHaveBeenCalled();
     expect(getPrefetchCache().has(rscUrl)).toBe(false);
     expect(getPrefetchedUrls().has(rscUrl)).toBe(false);
+  });
+
+  it("reuses a prefetched response through an alternate rewritten RSC URL", async () => {
+    const cache = getPrefetchCache();
+    const prefetched = getPrefetchedUrls();
+    const now = 1_000_000;
+    const sourceRscUrl = "/segment-cache/page-with-dynamic-head?_rsc=source";
+    const rewriteRscUrl = "/segment-cache/rewrite-to-page-with-dynamic-head?_rsc=rewrite";
+    const sourceCacheKey = AppElementsWire.encodeCacheKey(sourceRscUrl, null);
+    const snapshot = {
+      buffer: new TextEncoder().encode("dynamic-title-flight").buffer,
+      contentType: "text/x-component",
+      mountedSlotsHeader: null,
+      paramsHeader: null,
+      url: sourceRscUrl,
+    };
+
+    cache.set(sourceCacheKey, {
+      expiresAt: now + PREFETCH_CACHE_TTL,
+      outcome: "cache-seeded",
+      snapshot,
+      timestamp: now,
+    });
+    prefetched.add(sourceCacheKey);
+    vi.spyOn(Date, "now").mockReturnValue(now);
+
+    expect(
+      hasPrefetchCacheEntryForNavigation(rewriteRscUrl, null, null, {
+        additionalRscUrls: [sourceRscUrl],
+      }),
+    ).toBe(true);
+
+    await expect(
+      consumePrefetchResponseForNavigation(rewriteRscUrl, null, null, {
+        additionalRscUrls: [sourceRscUrl],
+      }),
+    ).resolves.toEqual({
+      ...snapshot,
+      expiresAt: now + PREFETCH_CACHE_TTL,
+    });
+    expect(cache.has(sourceCacheKey)).toBe(false);
   });
 
   it("preserves the original expiry when consuming a prefetched response", () => {
