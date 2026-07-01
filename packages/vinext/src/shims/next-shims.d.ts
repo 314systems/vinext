@@ -255,6 +255,7 @@ declare module "next/navigation" {
     retainedLayoutDependencies?: readonly string[];
     runtimePrefetch?: boolean;
     size?: number;
+    prefetchKind?: "loading-shell" | "navigation" | "route-tree";
     timestamp: number;
   };
   export const MAX_PREFETCH_CACHE_SIZE: number;
@@ -304,6 +305,7 @@ declare module "next/navigation" {
       optimisticRouteShell?: boolean;
       retainedLayoutIdsHeader?: string | null;
       runtimePrefetch?: boolean;
+      prefetchKind?: "loading-shell" | "navigation" | "route-tree";
     },
   ): void;
   export function consumePrefetchResponse(

@@ -270,6 +270,8 @@ export type PrefetchOptions = {
   onInvalidate?: () => void;
 };
 
+export type PrefetchCacheKind = "loading-shell" | "navigation" | "route-tree";
+
 export type PrefetchCacheEntry = {
   cacheForNavigation?: boolean;
   elements?: AppElements;
@@ -282,6 +284,7 @@ export type PrefetchCacheEntry = {
   snapshot?: CachedRscResponse;
   pending?: Promise<void>;
   retainedLayoutDependencies?: readonly string[];
+  prefetchKind?: PrefetchCacheKind;
   size?: number;
   runtimePrefetch?: boolean;
   timestamp: number;
@@ -641,26 +644,34 @@ function findPrefetchCacheEntryForNavigation(
   rscUrl: string,
   interceptionContext: string | null,
   mountedSlotsHeader: string | null,
+  additionalRscUrls: readonly string[] = [],
 ): { cacheKey: string; entry: PrefetchCacheEntry } | null {
-  const exactCacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
+  const rscUrls = [rscUrl, ...additionalRscUrls];
   const cache = getPrefetchCache();
-  const exactEntry = cache.get(exactCacheKey);
-  if (
-    exactEntry &&
-    isPrefetchCacheEntryReusableForNavigation(cache, exactEntry, mountedSlotsHeader)
-  ) {
-    return { cacheKey: exactCacheKey, entry: exactEntry };
+
+  for (const lookupRscUrl of rscUrls) {
+    const exactCacheKey = AppElementsWire.encodeCacheKey(lookupRscUrl, interceptionContext);
+    const exactEntry = cache.get(exactCacheKey);
+    if (
+      exactEntry &&
+      isPrefetchCacheEntryReusableForNavigation(cache, exactEntry, mountedSlotsHeader)
+    ) {
+      return { cacheKey: exactCacheKey, entry: exactEntry };
+    }
   }
 
-  const normalizedTarget = normalizeRscCacheLookupUrl(rscUrl);
-  if (normalizedTarget === null) return null;
+  const normalizedTargets = new Set(
+    rscUrls
+      .map((lookupRscUrl) => normalizeRscCacheLookupUrl(lookupRscUrl))
+      .filter((lookupRscUrl): lookupRscUrl is string => lookupRscUrl !== null),
+  );
+  if (normalizedTargets.size === 0) return null;
 
   for (const [cacheKey, entry] of cache) {
-    if (cacheKey === exactCacheKey) continue;
-
     const source = parsePrefetchCacheKey(cacheKey);
     if (source.interceptionContext !== interceptionContext) continue;
-    if (normalizeRscCacheLookupUrl(source.rscUrl) !== normalizedTarget) continue;
+    const normalizedSource = normalizeRscCacheLookupUrl(source.rscUrl);
+    if (normalizedSource === null || !normalizedTargets.has(normalizedSource)) continue;
     if (!isPrefetchCacheEntryReusableForNavigation(cache, entry, mountedSlotsHeader)) continue;
 
     return { cacheKey, entry };
@@ -673,12 +684,13 @@ export function hasPrefetchCacheEntryForNavigation(
   rscUrl: string,
   interceptionContext: string | null = null,
   mountedSlotsHeader: string | null = null,
-  options: { notifyInvalidation?: boolean } = {},
+  options: { additionalRscUrls?: readonly string[]; notifyInvalidation?: boolean } = {},
 ): boolean {
   const match = findPrefetchCacheEntryForNavigation(
     rscUrl,
     interceptionContext,
     mountedSlotsHeader,
+    options.additionalRscUrls,
   );
   if (match === null) return false;
 
@@ -1102,6 +1114,7 @@ export function prefetchRscResponse(
     optimisticRouteShell?: boolean;
     retainedLayoutIdsHeader?: string | null;
     runtimePrefetch?: boolean;
+    prefetchKind?: PrefetchCacheKind;
   } = {},
 ): void {
   const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
@@ -1123,6 +1136,9 @@ export function prefetchRscResponse(
       undefined,
     ),
     runtimePrefetch: behavior.runtimePrefetch === true,
+    prefetchKind:
+      behavior.prefetchKind ??
+      (behavior.optimisticRouteShell === true ? "loading-shell" : "navigation"),
     timestamp: now,
   };
   addPrefetchInvalidationCallback(entry, options?.onInvalidate);
@@ -1199,12 +1215,20 @@ export function consumePrefetchResponse(
   if (!match) return null;
   const { cacheKey, entry } = match;
 
+  return consumeMatchedPrefetchResponse(cacheKey, entry, mountedSlotsHeader);
+}
+
+function consumeMatchedPrefetchResponse(
+  cacheKey: string,
+  entry: PrefetchCacheEntry,
+  mountedSlotsHeader: string | null,
+): CachedRscResponse | null {
   // Skip in-flight snapshots and error-path residue where pending cleared
   // without a successful transition to a cache-seeded entry.
   if (entry.pending || entry.outcome !== "cache-seeded") return null;
   if (entry.cacheForNavigation === false) return null;
 
-  deletePrefetchCacheEntry(cache, getPrefetchedUrls(), cacheKey, entry, false);
+  deletePrefetchCacheEntry(getPrefetchCache(), getPrefetchedUrls(), cacheKey, entry, false);
 
   if (entry.snapshot) {
     if (!isPrefetchCacheEntryCompatibleWithMountedSlots(entry, mountedSlotsHeader)) {
@@ -1239,6 +1263,7 @@ export function consumePrefetchResponse(
  * one in-flight network request that navigation should share.
  */
 type ConsumePrefetchResponseForNavigationOptions = {
+  additionalRscUrls?: readonly string[];
   shouldConsume?: () => boolean;
 };
 
@@ -1253,6 +1278,7 @@ export async function consumePrefetchResponseForNavigation(
     rscUrl,
     interceptionContext,
     mountedSlotsHeader,
+    options?.additionalRscUrls,
   );
   if (!match) return null;
   const { cacheKey, entry } = match;
@@ -1264,7 +1290,7 @@ export async function consumePrefetchResponseForNavigation(
 
   if (options?.shouldConsume?.() === false) return null;
 
-  return consumePrefetchResponse(rscUrl, interceptionContext, mountedSlotsHeader);
+  return consumeMatchedPrefetchResponse(cacheKey, entry, mountedSlotsHeader);
 }
 
 // ---------------------------------------------------------------------------
