@@ -139,6 +139,48 @@ describe("Link Segment Cache prefetch scheduler", () => {
     });
   });
 
+  it("preserves a forced route-tree restart across visibility cancellation and re-entry", async () => {
+    const { deferredRequests, requests, runPhase, scheduler } = createSchedulerHarness();
+    const instance = createInstance("/alerts");
+
+    scheduler.schedule(instance, "low", 1);
+    await flushScheduler();
+
+    scheduler.schedule(instance, "low", 2, { force: true });
+    instance.isVisible = false;
+    scheduler.cancel(instance);
+    instance.isVisible = true;
+    scheduler.schedule(instance, "low", 2);
+    await flushScheduler();
+
+    expect(runPhase).toHaveBeenCalledTimes(1);
+    expect(requests[0]).toMatchObject({
+      href: "/alerts",
+      phase: "route-tree",
+      priority: "low",
+    });
+
+    deferredRequests[0]?.resolve();
+    await flushScheduler();
+
+    expect(runPhase).toHaveBeenCalledTimes(2);
+    expect(requests[1]).toMatchObject({
+      href: "/alerts",
+      phase: "route-tree",
+      priority: "low",
+    });
+
+    deferredRequests[1]?.resolve();
+    await flushScheduler();
+
+    expect(runPhase).toHaveBeenCalledTimes(3);
+    expect(requests[2]).toMatchObject({
+      href: "/alerts",
+      phase: "segment",
+      priority: "low",
+    });
+  });
+
   it("restarts a completed task only when forced", async () => {
     const { deferredRequests, requests, runPhase, scheduler } = createSchedulerHarness();
     const instance = createInstance("/settings");

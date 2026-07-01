@@ -832,10 +832,11 @@ function setVisibleLinkPrefetch(
   instance.isVisible = isVisible;
   if (isVisible) {
     visibleLinkPrefetches.add(instance);
-    if (instance.routerMode === "pages" && instance.viewportPrefetched) return;
+    const routerMode = resolveCurrentLinkPrefetchRouterMode(instance);
+    if (routerMode === "pages" && instance.viewportPrefetched) return;
     if (usesSegmentCachePrefetchScheduler(instance)) {
       scheduleSegmentCacheLinkPrefetch(instance, "low", batchId);
-    } else if (resolveCurrentLinkPrefetchRouterMode(instance) === "app") {
+    } else if (routerMode === "app") {
       scheduleVisibleAppPrefetch(instance);
     } else {
       void prefetchUrl(instance.href, instance.mode, "low", instance.pagesRouteHref);

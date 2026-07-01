@@ -34,6 +34,7 @@ type LinkSegmentPrefetchTaskStatus =
   | "queued"
   | "running"
   | "running-canceled"
+  | "running-canceled-dirty"
   | "running-dirty"
   | "completed";
 
@@ -189,14 +190,20 @@ export function createLinkSegmentPrefetchScheduler(
       if (
         task.status === "running" ||
         task.status === "running-canceled" ||
+        task.status === "running-canceled-dirty" ||
         task.status === "running-dirty"
       ) {
         if (options.force === true) {
-          task.status = "running-dirty";
+          task.status =
+            task.status === "running-canceled" || task.status === "running-canceled-dirty"
+              ? "running-canceled-dirty"
+              : "running-dirty";
           task.batchId = batchId;
           task.forceSegmentCacheFetch = priority === "low" && hasRecentUserInteraction();
           task.phase = "route-tree";
           task.sortId = sortIdCounter++;
+        } else if (task.status === "running-canceled-dirty") {
+          task.status = "running-dirty";
         } else if (task.status !== "running-dirty") {
           task.status = "running";
         }
@@ -228,7 +235,7 @@ export function createLinkSegmentPrefetchScheduler(
     if (task.status === "queued") {
       removeQueuedTask(task);
     } else if (task.status === "running" || task.status === "running-dirty") {
-      task.status = "running-canceled";
+      task.status = task.status === "running-dirty" ? "running-canceled-dirty" : "running-canceled";
     }
     if (mostRecentIntentTask === task) {
       mostRecentIntentTask = null;
@@ -264,7 +271,9 @@ export function createLinkSegmentPrefetchScheduler(
         .finally(() => {
           const shouldContinue = currentTask.status === "running" && currentTask.instance.isVisible;
           const shouldRestart =
-            currentTask.status === "running-dirty" && currentTask.instance.isVisible;
+            (currentTask.status === "running-dirty" ||
+              currentTask.status === "running-canceled-dirty") &&
+            currentTask.instance.isVisible;
           currentTask.status = "idle";
           inProgress--;
 
