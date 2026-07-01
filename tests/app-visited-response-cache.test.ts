@@ -3,8 +3,11 @@ import {
   MAX_TRAVERSAL_CACHE_TTL,
   VISITED_RESPONSE_CACHE_TTL,
   createVisitedResponseCacheEntry,
+  deleteVisitedResponseCacheEntry,
+  findVisitedResponseCacheEntry,
   isVisitedResponseCacheEntryFresh,
 } from "../packages/vinext/src/server/app-visited-response-cache.js";
+import { AppElementsWire } from "../packages/vinext/src/server/app-elements.js";
 import type { CachedRscResponse } from "../packages/vinext/src/shims/navigation.js";
 import type { AppElements } from "../packages/vinext/src/server/app-elements.js";
 
@@ -142,5 +145,25 @@ describe("visited response cache freshness", () => {
         now,
       }),
     ).toBe(false);
+  });
+
+  it("finds and deletes normalized _rsc variants", () => {
+    const cache = new Map<string, ReturnType<typeof createVisitedResponseCacheEntry>>();
+    const entry = createVisitedResponseCacheEntry({
+      now: 1_000_000,
+      params: {},
+      response: createCachedResponse(),
+    });
+    const storedKey = AppElementsWire.encodeCacheKey("/dynamic?_rsc=old", null);
+    cache.set(storedKey, entry);
+
+    expect(findVisitedResponseCacheEntry(cache, "/dynamic?_rsc=new", null)).toEqual({
+      cacheKey: storedKey,
+      entry,
+    });
+
+    expect(deleteVisitedResponseCacheEntry(cache, "/dynamic?_rsc=new", null)).toBe(true);
+    expect(cache.has(storedKey)).toBe(false);
+    expect(findVisitedResponseCacheEntry(cache, "/dynamic?_rsc=new", null)).toBeNull();
   });
 });

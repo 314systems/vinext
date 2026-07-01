@@ -378,7 +378,7 @@ function resolveFullAppRoutePrefetch(): {
 } {
   return {
     cacheForNavigation: true,
-    prefetchShellFirst: true,
+    prefetchShellFirst: false,
     shouldPrefetch: true,
   };
 }
@@ -449,6 +449,7 @@ function prefetchUrl(
           { APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL },
           headersModule,
           { resolveHybridClientRouteOwner },
+          { hasVisitedResponseCacheEntryForPrefetch },
         ] = await Promise.all([
           import("./navigation.js"),
           import("../server/app-elements.js"),
@@ -456,6 +457,7 @@ function prefetchUrl(
           import("../server/app-rsc-render-mode.js"),
           import("../server/headers.js"),
           import("./internal/hybrid-client-route-owner.js"),
+          import("../server/app-visited-response-cache.js"),
         ]);
         const {
           getPrefetchInterceptionContext,
@@ -524,6 +526,12 @@ function prefetchUrl(
         if (
           autoPrefetch.cacheForNavigation &&
           hasPrefetchCacheEntryForNavigation(rscUrl, interceptionContext, mountedSlotsHeader)
+        ) {
+          return;
+        }
+        if (
+          autoPrefetch.cacheForNavigation &&
+          hasVisitedResponseCacheEntryForPrefetch(rscUrl, interceptionContext, mountedSlotsHeader)
         ) {
           return;
         }

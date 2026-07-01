@@ -1621,7 +1621,7 @@ describe("Link prefetch scheduling", () => {
     }
   });
 
-  it("full-prefetches visible dynamic links when prefetch is explicitly true", async () => {
+  it("full-prefetches visible dynamic links directly when prefetch is explicitly true", async () => {
     const observer = stubIntersectionObserver();
 
     const result = await renderIsolatedLink({
@@ -1633,25 +1633,78 @@ describe("Link prefetch scheduling", () => {
     try {
       expect(observer.observe).toHaveBeenCalledWith(result.anchor);
       observer.dispatchIntersectingEntry(result.anchor);
-      await waitForFetchCalls(result.fetch, 2);
+      await waitForFetchCalls(result.fetch, 1);
 
+      // Ported from Next.js:
+      // test/e2e/app-dir/segment-cache/force-stale/force-stale.test.ts
+      // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/segment-cache/force-stale/force-stale.test.ts
       expect(observer.unobserve).not.toHaveBeenCalledWith(result.anchor);
       expectCanonicalRscFetchCall(
-        result.fetch.mock.calls[1],
+        result.fetch.mock.calls[0],
         "/blog/hello",
         expect.objectContaining({
           credentials: "include",
           priority: "low",
         }),
       );
-      const shellFetchInit = result.fetch.mock.calls[0]?.[1] as RequestInit | undefined;
-      expect(
-        (shellFetchInit?.headers as Headers | undefined)?.get(VINEXT_RSC_RENDER_MODE_HEADER),
-      ).toBe(APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL);
-      const fetchInit = result.fetch.mock.calls[1]?.[1] as RequestInit | undefined;
+      const fetchInit = result.fetch.mock.calls[0]?.[1] as RequestInit | undefined;
       expect(
         (fetchInit?.headers as Headers | undefined)?.get(VINEXT_RSC_RENDER_MODE_HEADER),
       ).toBeNull();
+      expect((fetchInit?.headers as Headers | undefined)?.get(NEXT_ROUTER_PREFETCH_HEADER)).toBe(
+        null,
+      );
+      const { getPrefetchCache } = await import("../packages/vinext/src/shims/navigation.js");
+      const entry = Array.from(getPrefetchCache().values())[0];
+      expect(entry?.cacheForNavigation).toBe(true);
+      expect(entry?.optimisticRouteShell).toBe(false);
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("reuses visited response cache before issuing a full prefetch request", async () => {
+    const observer = stubIntersectionObserver();
+
+    const result = await renderIsolatedLink({
+      href: "/blog/hello",
+      nodeEnv: "production",
+      props: { prefetch: true },
+    });
+    const [{ AppElementsWire }, visitedCache] = await Promise.all([
+      import("../packages/vinext/src/server/app-elements.js"),
+      import("../packages/vinext/src/server/app-visited-response-cache.js"),
+    ]);
+    const now = 1_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const visitedUrl = "/blog/hello?_rsc=visited";
+    const visitedEntry = visitedCache.createVisitedResponseCacheEntry({
+      fallbackTtlMs: 0,
+      now,
+      params: {},
+      response: {
+        buffer: new TextEncoder().encode("flight").buffer,
+        contentType: "text/x-component",
+        mountedSlotsHeader: null,
+        paramsHeader: null,
+        url: visitedUrl,
+      },
+    });
+    visitedCache.visitedResponseCache.set(
+      AppElementsWire.encodeCacheKey(visitedUrl, null),
+      visitedEntry,
+    );
+
+    try {
+      vi.spyOn(Date, "now").mockReturnValue(now + 1);
+      observer.dispatchIntersectingEntry(result.anchor);
+      await flushPrefetchTasks();
+      await flushPrefetchTasks();
+
+      // Ported from Next.js:
+      // test/e2e/app-dir/segment-cache/force-stale/force-stale.test.ts
+      // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/segment-cache/force-stale/force-stale.test.ts
+      expect(result.fetch).not.toHaveBeenCalled();
     } finally {
       result.restoreNodeEnv();
     }

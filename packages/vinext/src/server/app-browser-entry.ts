@@ -123,8 +123,12 @@ import {
 } from "./app-browser-state.js";
 import { AppBrowserHistoryController } from "./app-browser-history-controller.js";
 import {
+  clearVisitedResponseCache,
   createVisitedResponseCacheEntry,
+  deleteVisitedResponseCacheEntry,
+  findVisitedResponseCacheEntry,
   isVisitedResponseCacheEntryFresh,
+  visitedResponseCache,
   type VisitedResponseCacheEntry,
 } from "./app-visited-response-cache.js";
 import {
@@ -318,7 +322,6 @@ function isRouterStatePromise(
 }
 
 let latestClientParams: Record<string, string | string[]> = {};
-const visitedResponseCache = new Map<string, VisitedResponseCacheEntry>();
 let clientNavigationCacheGeneration = 0;
 // Sticky bit: stays true once BrowserRoot has committed at least once. Used by
 // the HMR handler to distinguish "still hydrating" (wait) from "was up, then
@@ -405,10 +408,6 @@ function stageClientParams(params: Record<string, string | string[]>): void {
   // module-level value after their async request boundary.
   latestClientParams = params;
   replaceClientParamsWithoutNotify(params);
-}
-
-function clearVisitedResponseCache(): void {
-  visitedResponseCache.clear();
 }
 
 function clearPrefetchState(): void {
@@ -679,8 +678,8 @@ function readVisitedResponseCacheCandidate(
   navigationKind: NavigationKind,
 ): VisitedResponseCacheCandidate {
   const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
-  const cached = visitedResponseCache.get(cacheKey);
-  if (!cached) {
+  const match = findVisitedResponseCacheEntry(visitedResponseCache, rscUrl, interceptionContext);
+  if (!match) {
     return {
       cacheKey,
       entry: null,
@@ -692,15 +691,16 @@ function readVisitedResponseCacheCandidate(
   }
 
   return {
-    cacheKey,
-    entry: cached,
+    cacheKey: match.cacheKey,
+    entry: match.entry,
     facts: {
       candidate: "present",
-      fresh: isVisitedResponseCacheEntryFresh(cached, {
+      fresh: isVisitedResponseCacheEntryFresh(match.entry, {
         navigationKind,
         now: Date.now(),
       }),
-      mountedSlotsMatch: cached.mountedSlotsHeader === mountedSlotsHeader,
+      mountedSlotsMatch:
+        match.entry.elements !== undefined || match.entry.mountedSlotsHeader === mountedSlotsHeader,
       navigationKind,
     },
   };
@@ -731,7 +731,7 @@ function applyVisitedResponseCacheCandidateDecision(
 }
 
 function deleteVisitedResponse(rscUrl: string, interceptionContext: string | null): void {
-  visitedResponseCache.delete(AppElementsWire.encodeCacheKey(rscUrl, interceptionContext));
+  deleteVisitedResponseCacheEntry(visitedResponseCache, rscUrl, interceptionContext);
 }
 
 function storeVisitedResponseSnapshot(
