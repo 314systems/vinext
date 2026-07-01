@@ -115,6 +115,75 @@ describe("App Router prefetch vary analysis", () => {
     expect(route.prefetchVarySearchParams).toBe(true);
   });
 
+  it("tracks params read from an object props argument", () => {
+    const pagePath = writeSource(
+      "page.tsx",
+      `export default async function Page(props: { params: Promise<{ category: string; itemId: string }> }) {
+        const { itemId } = await props.params;
+        return <div>{itemId}</div>;
+      }`,
+    );
+
+    const route = toLinkPrefetchRoute(createRoute({ pagePath }));
+
+    expect(route.prefetchVaryParamNames).toEqual(["itemId"]);
+  });
+
+  it("marks helper-passed object props params as varying by all known params", () => {
+    const pagePath = writeSource(
+      "page.tsx",
+      `export default function Page(props: { params: Promise<{ category: string; itemId: string }> }) {
+        return <div>{readItem(props.params)}</div>;
+      }
+
+      async function readItem(input: Promise<{ category: string; itemId: string }>) {
+        return (await input).itemId;
+      }`,
+    );
+
+    const route = toLinkPrefetchRoute(createRoute({ pagePath }));
+
+    expect(route.prefetchVaryParamNames).toEqual(["category", "itemId"]);
+  });
+
+  it("marks object props searchParams reads as varying by query", () => {
+    const pagePath = writeSource(
+      "page.tsx",
+      `export default async function Page(props: { searchParams: Promise<{ foo?: string }> }) {
+        const query = await props.searchParams;
+        return <div>{query.foo}</div>;
+      }`,
+    );
+
+    const route = toLinkPrefetchRoute(
+      createRoute({ pagePath, params: [], patternParts: ["target"] }),
+    );
+
+    expect(route.prefetchVarySearchParams).toBe(true);
+  });
+
+  it("marks Object.assign param and searchParam copies as varying", () => {
+    const pagePath = writeSource(
+      "page.tsx",
+      `export default async function Page({
+        params,
+        searchParams,
+      }: {
+        params: Promise<{ category: string; itemId: string }>;
+        searchParams: Promise<{ foo?: string }>;
+      }) {
+        const paramCopy = Object.assign({}, await params);
+        const queryCopy = Object.assign({}, await searchParams);
+        return <div>{paramCopy.itemId}:{queryCopy.foo}</div>;
+      }`,
+    );
+
+    const route = toLinkPrefetchRoute(createRoute({ pagePath }));
+
+    expect(route.prefetchVaryParamNames).toEqual(["category", "itemId"]);
+    expect(route.prefetchVarySearchParams).toBe(true);
+  });
+
   it("does not treat client module param reads as server segment variation", () => {
     const layoutPath = writeSource(
       "layout.tsx",

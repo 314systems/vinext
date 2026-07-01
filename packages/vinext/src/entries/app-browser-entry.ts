@@ -211,31 +211,57 @@ function collectPropAliases(source: string, propName: string): string[] {
   );
 }
 
+function propMemberSourcePattern(propName: string): string {
+  return String.raw`\b[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*\s*\.\s*${escapeRegExp(propName)}\b`;
+}
+
+function hasPropMemberSource(source: string, propName: string): boolean {
+  return new RegExp(propMemberSourcePattern(propName)).test(source);
+}
+
+function sourcePattern(
+  identifiers: readonly string[],
+  memberPropName: string,
+  source: string,
+): string {
+  const patterns = identifiers.map((name) => String.raw`\b${escapeRegExp(name)}\b`);
+  if (hasPropMemberSource(source, memberPropName)) {
+    patterns.push(propMemberSourcePattern(memberPropName));
+  }
+  return `(?:${patterns.join("|")})`;
+}
+
 function collectParamAccesses(source: string, paramNames: readonly string[]): Set<string> {
   const region = staticPrefetchRegion(source);
   const accessed = new Set<string>();
   const paramPropAliases = collectPropAliases(region, "params");
-  const paramPromiseSources = ["params", ...paramPropAliases].map(escapeRegExp);
-  const paramPromiseSourcePattern = `(?:${paramPromiseSources.join("|")})`;
+  const paramPromiseSourcePattern = sourcePattern(
+    ["params", ...paramPropAliases],
+    "params",
+    region,
+  );
   const awaitedParamAliases = Array.from(
     region.matchAll(
       new RegExp(
-        String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+${paramPromiseSourcePattern}\b`,
+        String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+${paramPromiseSourcePattern}`,
         "g",
       ),
     ),
     (match) => match[1],
   );
-  const paramSources = ["params", ...paramPropAliases, ...awaitedParamAliases].map(escapeRegExp);
-  const paramSourcePattern = `(?:${paramSources.join("|")})`;
+  const paramSourcePattern = sourcePattern(
+    ["params", ...paramPropAliases, ...awaitedParamAliases],
+    "params",
+    region,
+  );
   const enumeratesParams = new RegExp(
-    String.raw`(?:\{\s*\.\.\.\s*${paramSourcePattern}\s*\}|\bObject\.(?:keys|values|entries|assign)\s*\(\s*${paramSourcePattern}\b)`,
+    String.raw`(?:\{\s*\.\.\.\s*${paramSourcePattern}\s*\}|\bObject\.(?:keys|values|entries)\s*\(\s*(?:await\s+)?${paramSourcePattern}|\bObject\.assign\s*\([^)]*(?:await\s+)?${paramSourcePattern})`,
   ).test(region);
   const computedParamAccess = new RegExp(
     String.raw`(?:\b${paramSourcePattern}\s*\[|\bReflect\.get\s*\(\s*${paramSourcePattern}\b)`,
   ).test(region);
   const passesParamsToHelper = new RegExp(
-    String.raw`\b[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?\(\s*(?:await\s+params|${paramSourcePattern})\b`,
+    String.raw`\b[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?\(\s*(?:await\s+${paramPromiseSourcePattern}|${paramSourcePattern})`,
   ).test(region);
 
   // Unknown computed or helper reads must over-vary instead of sharing the wrong segment.
@@ -298,29 +324,34 @@ function mergeAccesses(target: Set<string>, source: Set<string>): void {
 function sourceAccessesSearchParams(source: string): boolean {
   const region = staticPrefetchRegion(source);
   const searchParamPropAliases = collectPropAliases(region, "searchParams");
-  const searchParamPromiseSources = ["searchParams", ...searchParamPropAliases].map(escapeRegExp);
-  const searchParamPromiseSourcePattern = `(?:${searchParamPromiseSources.join("|")})`;
+  const searchParamPromiseSourcePattern = sourcePattern(
+    ["searchParams", ...searchParamPropAliases],
+    "searchParams",
+    region,
+  );
   const awaitedSearchParamAliases = Array.from(
     region.matchAll(
       new RegExp(
-        String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+${searchParamPromiseSourcePattern}\b`,
+        String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+${searchParamPromiseSourcePattern}`,
         "g",
       ),
     ),
     (match) => match[1],
   );
-  const searchParamSources = [
+  const searchParamSourcePattern = sourcePattern(
+    ["searchParams", ...searchParamPropAliases, ...awaitedSearchParamAliases],
     "searchParams",
-    ...searchParamPropAliases,
-    ...awaitedSearchParamAliases,
-  ].map(escapeRegExp);
-  const searchParamSourcePattern = `(?:${searchParamSources.join("|")})`;
+    region,
+  );
   return (
-    new RegExp(String.raw`\bawait\s+${searchParamPromiseSourcePattern}\b`).test(region) ||
+    new RegExp(String.raw`\bawait\s+${searchParamPromiseSourcePattern}`).test(region) ||
     new RegExp(String.raw`\b${searchParamSourcePattern}\s*(?:\.|\[)`).test(region) ||
     new RegExp(
-      String.raw`\bObject\.(?:keys|values|entries|assign)\s*\(\s*(?:await\s+)?${searchParamSourcePattern}\b`,
+      String.raw`\bObject\.(?:keys|values|entries)\s*\(\s*(?:await\s+)?${searchParamSourcePattern}`,
     ).test(region) ||
+    new RegExp(String.raw`\bObject\.assign\s*\([^)]*(?:await\s+)?${searchParamSourcePattern}`).test(
+      region,
+    ) ||
     new RegExp(String.raw`\{\s*\.\.\.\s*(?:await\s+)?${searchParamSourcePattern}\s*\}`).test(
       region,
     ) ||
