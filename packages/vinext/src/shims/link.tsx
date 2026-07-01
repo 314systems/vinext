@@ -328,18 +328,24 @@ function getLinkPrefetchRouterMode(): LinkPrefetchRouterMode {
   return hasAppNavigationRuntime() ? "app" : "pages";
 }
 
-function resolveMatchedAutoAppRoutePrefetch(route: VinextLinkPrefetchRoute): {
+function resolveMatchedAutoAppRoutePrefetch(
+  route: VinextLinkPrefetchRoute,
+  hasInterceptionContext = false,
+): {
   cacheForNavigation: boolean;
   prefetchShellFirst: boolean;
   shouldPrefetch: boolean;
 } {
   const hasLoadingShell = route.canPrefetchLoadingShell;
   return {
-    // Automatic prefetches are only unsafe as authoritative navigation
-    // payloads for dynamic routes whose active parallel branches must be
-    // derived from the click-time target tree. Other concrete dynamic URLs can
-    // match Next.js's full-prefetch behavior, including client-param routes.
-    cacheForNavigation: !hasLoadingShell && route.requiresDynamicNavigationRequest !== true,
+    // Next.js fully prefetches static routes, even when a loading boundary is
+    // present. Intercepted targets and dynamic routes with loading boundaries
+    // prefetch only the shell so navigation can commit loading.js in the active
+    // source tree. Exact dynamic URLs can use a full prefetch unless their
+    // active parallel branches must be derived from the click-time target tree.
+    cacheForNavigation:
+      (!hasLoadingShell || (!route.isDynamic && !hasInterceptionContext)) &&
+      route.requiresDynamicNavigationRequest !== true,
     prefetchShellFirst: !route.isDynamic,
     shouldPrefetch: true,
   };
@@ -360,7 +366,10 @@ export function canAutoPrefetchFullAppRoute(href: string): boolean {
   return resolveAutoAppRoutePrefetch(href).cacheForNavigation;
 }
 
-export function resolveAutoAppRoutePrefetch(href: string): {
+export function resolveAutoAppRoutePrefetch(
+  href: string,
+  hasInterceptionContext = false,
+): {
   cacheForNavigation: boolean;
   prefetchShellFirst: boolean;
   shouldPrefetch: boolean;
@@ -384,7 +393,7 @@ export function resolveAutoAppRoutePrefetch(href: string): {
     return { cacheForNavigation: false, prefetchShellFirst: false, shouldPrefetch: false };
   }
 
-  const prefetch = resolveMatchedAutoAppRoutePrefetch(match.route);
+  const prefetch = resolveMatchedAutoAppRoutePrefetch(match.route, hasInterceptionContext);
   const url = new URL(routeHref, "http://vinext.local");
   if (url.search !== "") {
     return {
@@ -529,15 +538,15 @@ function prefetchUrl(
           ? hybridRouteOwner!.resolveHybridClientRewriteHref(fullHref, __basePath)
           : null;
         const prefetchPolicyHref = rewrittenPrefetchHref ?? prefetchHref;
+        const interceptionContext = getPrefetchInterceptionContext(fullHref);
         const autoPrefetch =
           mode === "auto"
-            ? resolveAutoAppRoutePrefetch(prefetchPolicyHref)
+            ? resolveAutoAppRoutePrefetch(prefetchPolicyHref, interceptionContext !== null)
             : mode === "full-after-shell"
               ? { cacheForNavigation: true, prefetchShellFirst: true, shouldPrefetch: true }
               : resolveFullAppRoutePrefetch();
         if (!autoPrefetch.shouldPrefetch) return;
 
-        const interceptionContext = getPrefetchInterceptionContext(fullHref);
         const mountedSlotsHeader = getMountedSlotsHeader();
         const isOptimisticRouteShellPrefetch = !autoPrefetch.cacheForNavigation;
         const hasSearchParams = new URL(fullHref, window.location.href).search !== "";

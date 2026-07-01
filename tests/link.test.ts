@@ -302,7 +302,7 @@ describe("Link App Router prefetch mode", () => {
       expect(canAutoPrefetchFullAppRoute("/docs/a/b")).toBe(false);
       expect(canAutoPrefetchFullAppRoute("/products/1")).toBe(true);
       expect(canAutoPrefetchFullAppRoute("/teams/vercel/dashboard")).toBe(false);
-      expect(canAutoPrefetchFullAppRoute("/settings")).toBe(false);
+      expect(canAutoPrefetchFullAppRoute("/settings")).toBe(true);
       expect(canAutoPrefetchFullAppRoute("/missing")).toBe(false);
     } finally {
       if (originalWindow === undefined) {
@@ -313,7 +313,7 @@ describe("Link App Router prefetch mode", () => {
     }
   });
 
-  it("shell-prefetches dynamic routes that require fresh navigation and routes with loading boundaries", () => {
+  it("full-prefetches static routes with loading boundaries while preserving dynamic shell-only prefetch", () => {
     const originalWindow = globalThis.window;
     (globalThis as any).window = {
       location: {
@@ -347,7 +347,7 @@ describe("Link App Router prefetch mode", () => {
         shouldPrefetch: true,
       });
       expect(resolveAutoAppRoutePrefetch("/settings")).toEqual({
-        cacheForNavigation: false,
+        cacheForNavigation: true,
         prefetchShellFirst: true,
         shouldPrefetch: true,
       });
