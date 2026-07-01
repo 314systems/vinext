@@ -517,6 +517,7 @@ function prefetchUrl(
           headers.set(NEXT_ROUTER_PREFETCH_HEADER, "1");
           headers.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "/_tree");
         } else if (mode === "segment") {
+          headers.set(NEXT_ROUTER_PREFETCH_HEADER, "1");
           headers.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "/_page");
         }
         // Distinguish the same visible URL when it is prefetched from different
@@ -525,11 +526,12 @@ function prefetchUrl(
         const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
         const prefetched = getPrefetchedUrls();
         if (prefetched.has(cacheKey)) {
+          const existing = getPrefetchCache().get(cacheKey);
           if (!autoPrefetch.cacheForNavigation) {
+            await existing?.pending?.catch(() => {});
             return;
           }
 
-          const existing = getPrefetchCache().get(cacheKey);
           if (existing?.cacheForNavigation === false) {
             existing.cacheForNavigation = true;
           }
