@@ -371,21 +371,14 @@ export function resolveAutoAppRoutePrefetch(href: string): {
   return resolveMatchedAutoAppRoutePrefetch(match.route);
 }
 
-function resolveFullAppRoutePrefetch(href: string): {
+function resolveFullAppRoutePrefetch(): {
   cacheForNavigation: true;
   prefetchShellFirst: boolean;
   shouldPrefetch: true;
 } {
-  const routes = typeof window === "undefined" ? undefined : window.__VINEXT_LINK_PREFETCH_ROUTES__;
-  const routeHref = routes === undefined ? null : toSameOriginRouteHref(href);
-  const match =
-    routes === undefined || routeHref === null
-      ? null
-      : matchRouteWithTrie(routeHref, routes, linkPrefetchRouteTrieCache);
-
   return {
     cacheForNavigation: true,
-    prefetchShellFirst: match?.route.canPrefetchLoadingShell === true,
+    prefetchShellFirst: true,
     shouldPrefetch: true,
   };
 }
@@ -499,7 +492,7 @@ function prefetchUrl(
             ? resolveAutoAppRoutePrefetch(prefetchPolicyHref)
             : mode === "full-after-shell"
               ? { cacheForNavigation: true, prefetchShellFirst: true, shouldPrefetch: true }
-              : resolveFullAppRoutePrefetch(prefetchHref);
+              : resolveFullAppRoutePrefetch();
         if (!autoPrefetch.shouldPrefetch) return;
 
         const interceptionContext = getPrefetchInterceptionContext(fullHref);

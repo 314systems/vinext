@@ -1759,28 +1759,35 @@ describe("Link prefetch scheduling", () => {
 
     try {
       observer.dispatchIntersectingEntry(result.anchor);
-      await waitForFetchCalls(result.fetch, 1);
 
       // Ported from Next.js:
       // test/e2e/app-dir/searchparams-reuse-loading/searchparams-reuse-loading.test.ts
       // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/searchparams-reuse-loading/searchparams-reuse-loading.test.ts
+      const fullFetchCall = await waitForFetchCall(result.fetch, (call) => {
+        const input = call[0];
+        if (typeof input !== "string") return false;
+        return new URL(input, "https://example.com").pathname === "/blog/hello";
+      });
       expectCanonicalRscFetchCall(
-        result.fetch.mock.calls[0],
+        fullFetchCall,
         "/blog/hello",
         expect.objectContaining({
           credentials: "include",
           priority: "low",
         }),
       );
-      const fetchInit = result.fetch.mock.calls[0]?.[1] as RequestInit | undefined;
+      const fetchInit = fullFetchCall[1] as RequestInit | undefined;
       expect(
         (fetchInit?.headers as Headers | undefined)?.get(VINEXT_RSC_RENDER_MODE_HEADER),
       ).toBeNull();
       const shellFetchCall = await waitForFetchCall(result.fetch, (call) => {
+        const input = call[0];
         const init = call[1] as RequestInit | undefined;
         return (
+          typeof input === "string" &&
+          new URL(input, "https://example.com").pathname === "/blog/hello" &&
           (init?.headers as Headers | undefined)?.get?.(VINEXT_RSC_RENDER_MODE_HEADER) ===
-          APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL
+            APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL
         );
       });
       const shellFetchInit = shellFetchCall?.[1] as RequestInit | undefined;

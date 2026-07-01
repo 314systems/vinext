@@ -77,7 +77,8 @@ describe("RSC plugin auto-registration", () => {
       ],
     });
 
-    expect((plugin.load as any)?.(validationId)).toBe("export {}");
+    const loadHook = typeof plugin.load === "function" ? plugin.load : plugin.load?.handler;
+    expect(loadHook?.call({} as never, validationId)).toBe("export {}");
   });
 
   it("serves the browser bootstrap in dev when deploymentId is configured", async () => {
