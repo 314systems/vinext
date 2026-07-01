@@ -1383,6 +1383,41 @@ describe("Link prefetch scheduling", () => {
     }
   });
 
+  it("uses the cacheComponents scheduler when the app runtime registers after the Link", async () => {
+    vi.stubEnv("__NEXT_CACHE_COMPONENTS", "true");
+    const observer = stubIntersectionObserver();
+    const result = await renderIsolatedLink({
+      appNavigation: false,
+      href: "/viewport-prefetch-target",
+      nodeEnv: "production",
+    });
+
+    try {
+      Reflect.set(
+        window,
+        Symbol.for("vinext.navigationRuntime"),
+        createTestNavigationRuntime(vi.fn()),
+      );
+
+      observer.dispatchIntersectingEntry(result.anchor);
+      await waitForFetchCalls(result.fetch, 1);
+
+      const routeTreeInit = result.fetch.mock.calls[0]?.[1];
+      expect(routeTreeInit?.headers).toBeInstanceOf(Headers);
+      if (!(routeTreeInit?.headers instanceof Headers)) {
+        throw new Error("Expected route-tree prefetch request headers");
+      }
+      expect(routeTreeInit.headers.get(NEXT_ROUTER_PREFETCH_HEADER)).toBe("1");
+      expect(routeTreeInit.headers.get(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER)).toBe("/_tree");
+      expect(routeTreeInit.headers.get(VINEXT_RSC_RENDER_MODE_HEADER)).toBe(
+        APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
+      );
+      await waitForFetchCalls(result.fetch, 2);
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
   it("keeps rescheduled cacheComponents prefetches blocked on the route-tree response", async () => {
     // Ported from the hover-reschedule contract covered by Next.js:
     // test/e2e/app-dir/segment-cache/prefetch-scheduling/prefetch-scheduling.test.ts
@@ -1780,7 +1815,7 @@ describe("Link prefetch scheduling", () => {
       );
       expect(
         (fetchInit?.headers as Headers | undefined)?.get(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER),
-      ).toBe("1");
+      ).toBe("/_tree");
       const { getPrefetchCache } = await import("../packages/vinext/src/shims/navigation.js");
       const entry = Array.from(getPrefetchCache().values())[0];
       expect(entry?.cacheForNavigation).toBe(false);

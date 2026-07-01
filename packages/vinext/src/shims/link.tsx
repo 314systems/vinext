@@ -514,8 +514,7 @@ function prefetchUrl(
         if (mountedSlotsHeader) {
           headers.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
         }
-        const shouldSendSegmentPrefetchHeaders = isOptimisticRouteShellPrefetch || mode === "auto";
-        if (shouldSendSegmentPrefetchHeaders) {
+        if (mode === "route-tree") {
           headers.set(NEXT_ROUTER_PREFETCH_HEADER, "1");
           headers.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "/_tree");
         } else if (mode === "segment") {
@@ -524,6 +523,9 @@ function prefetchUrl(
           // per-segment payloads, so this marker distinguishes the second
           // scheduler phase without claiming a concrete Next.js segment key.
           headers.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "/_page");
+        } else if (isOptimisticRouteShellPrefetch) {
+          headers.set(NEXT_ROUTER_PREFETCH_HEADER, "1");
+          headers.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "/_tree");
         }
         // Distinguish the same visible URL when it is prefetched from different
         // request contexts such as /feed vs /gallery or different mounted slots.
@@ -753,7 +755,7 @@ function drainVisibleAppPrefetchQueue(): void {
     const instance = visibleAppPrefetchQueue.pop();
     if (!instance) return;
     instance.queuedViewportPrefetch = false;
-    if (!instance.isVisible || instance.routerMode !== "app") continue;
+    if (!instance.isVisible || resolveCurrentLinkPrefetchRouterMode(instance) !== "app") continue;
     void prefetchUrl(instance.href, instance.mode, "low", instance.pagesRouteHref);
   }
 }
@@ -791,10 +793,17 @@ let lastLinkPrefetchUserInteractionAt = 0;
 
 function usesSegmentCachePrefetchScheduler(instance: LinkPrefetchInstance): boolean {
   return (
-    instance.routerMode === "app" &&
+    resolveCurrentLinkPrefetchRouterMode(instance) === "app" &&
     instance.mode === "auto" &&
     String(process.env.__NEXT_CACHE_COMPONENTS) === "true"
   );
+}
+
+function resolveCurrentLinkPrefetchRouterMode(
+  instance: LinkPrefetchInstance,
+): LinkPrefetchRouterMode {
+  if (instance.routerMode === "app" || hasAppNavigationRuntime()) return "app";
+  return "pages";
 }
 
 function scheduleMicrotaskForLinkPrefetch(fn: () => void): void {
@@ -1009,7 +1018,7 @@ function setVisibleLinkPrefetch(
     if (instance.routerMode === "pages" && instance.viewportPrefetched) return;
     if (usesSegmentCachePrefetchScheduler(instance)) {
       scheduleSegmentCacheLinkPrefetch(instance, "low", batchId);
-    } else if (instance.routerMode === "app") {
+    } else if (resolveCurrentLinkPrefetchRouterMode(instance) === "app") {
       scheduleVisibleAppPrefetch(instance);
     } else {
       void prefetchUrl(instance.href, instance.mode, "low", instance.pagesRouteHref);
