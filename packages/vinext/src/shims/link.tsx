@@ -410,6 +410,7 @@ function prefetchUrl(
   mode: LinkPrefetchMode,
   priority: "low" | "high" = "low",
   pagesRouteHref?: string,
+  options: { forceSegmentCacheFetch?: boolean } = {},
 ): Promise<void> | undefined {
   if (typeof window === "undefined") return;
 
@@ -531,7 +532,7 @@ function prefetchUrl(
         const prefetched = getPrefetchedUrls();
         if (prefetched.has(cacheKey)) {
           const existing = getPrefetchCache().get(cacheKey);
-          if (!autoPrefetch.cacheForNavigation) {
+          if (!autoPrefetch.cacheForNavigation && !options.forceSegmentCacheFetch) {
             await existing?.pending?.catch(() => {});
             return;
           }
@@ -769,6 +770,7 @@ function scheduleVisibleAppPrefetch(instance: LinkPrefetchInstance): void {
 type LinkPrefetchTask = {
   instance: LinkPrefetchInstance;
   batchId: number;
+  forceSegmentCacheFetch: boolean;
   phase: "route-tree" | "segment";
   priority: "low" | "high";
   sortId: number;
@@ -784,6 +786,8 @@ let scheduledLinkPrefetchSortId = 0;
 let scheduledLinkPrefetchInProgress = 0;
 let scheduledLinkPrefetchPendingMicrotask = false;
 let mostRecentIntentPrefetchTask: LinkPrefetchTask | null = null;
+let linkPrefetchUserInteractionListenersRegistered = false;
+let lastLinkPrefetchUserInteractionAt = 0;
 
 function usesSegmentCachePrefetchScheduler(instance: LinkPrefetchInstance): boolean {
   return (
@@ -829,6 +833,25 @@ function scheduleLinkPrefetchQueue(delayUntilNextTask = false): void {
     return;
   }
   scheduleMicrotaskForLinkPrefetch(processLinkPrefetchQueue);
+}
+
+function markLinkPrefetchUserInteraction(): void {
+  lastLinkPrefetchUserInteractionAt = Date.now();
+}
+
+function hasRecentLinkPrefetchUserInteraction(): boolean {
+  return Date.now() - lastLinkPrefetchUserInteractionAt < 1_000;
+}
+
+function registerLinkPrefetchUserInteractionListeners(): void {
+  if (typeof window === "undefined" || linkPrefetchUserInteractionListenersRegistered) return;
+  linkPrefetchUserInteractionListenersRegistered = true;
+  window.addEventListener("pointerdown", markLinkPrefetchUserInteraction, true);
+  window.addEventListener("mousedown", markLinkPrefetchUserInteraction, true);
+  window.addEventListener("click", markLinkPrefetchUserInteraction, true);
+  window.addEventListener("input", markLinkPrefetchUserInteraction, true);
+  window.addEventListener("change", markLinkPrefetchUserInteraction, true);
+  window.addEventListener("keydown", markLinkPrefetchUserInteraction, true);
 }
 
 function compareLinkPrefetchTasks(a: LinkPrefetchTask, b: LinkPrefetchTask): number {
@@ -884,6 +907,7 @@ function scheduleSegmentCacheLinkPrefetch(
     task = {
       instance,
       batchId,
+      forceSegmentCacheFetch: priority === "low" && hasRecentLinkPrefetchUserInteraction(),
       phase: "route-tree",
       priority,
       sortId: scheduledLinkPrefetchSortId++,
@@ -908,6 +932,7 @@ function scheduleSegmentCacheLinkPrefetch(
     task.batchId = batchId;
     task.canceled = false;
     task.completed = false;
+    task.forceSegmentCacheFetch = priority === "low" && hasRecentLinkPrefetchUserInteraction();
     task.phase = "route-tree";
     task.priority = task === mostRecentIntentPrefetchTask && priority === "low" ? "high" : priority;
     task.sortId = scheduledLinkPrefetchSortId++;
@@ -949,6 +974,7 @@ function processLinkPrefetchQueue(): void {
       mode,
       currentTask.priority,
       currentTask.instance.pagesRouteHref,
+      { forceSegmentCacheFetch: currentTask.forceSegmentCacheFetch },
     );
 
     Promise.resolve(promise)
@@ -1017,6 +1043,7 @@ function pingVisibleLinkPrefetches(): void {
 function getSharedObserver(): IntersectionObserver | null {
   if (typeof window === "undefined" || typeof IntersectionObserver === "undefined") return null;
   if (sharedObserver) return sharedObserver;
+  registerLinkPrefetchUserInteractionListeners();
 
   sharedObserver = new IntersectionObserver(
     (entries) => {
