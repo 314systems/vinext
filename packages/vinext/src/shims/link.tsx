@@ -401,9 +401,9 @@ function resolveFullAppRoutePrefetch(): {
  * For Pages Router: warms the page chunk, prefetches data only for SSG pages,
  * and falls back to a document prefetch hint when no page loader matches.
  *
- * App Router and high-priority prefetches start immediately. Low-priority
- * Pages Router fallback prefetches use `requestIdleCallback` (or `setTimeout`
- * fallback) to avoid blocking the main thread during initial page load.
+ * High-priority and Segment Cache scheduler phases start immediately. Other
+ * low-priority prefetches use `requestIdleCallback` (or `setTimeout` fallback)
+ * to avoid blocking the main thread during initial page load.
  */
 function prefetchUrl(
   href: string,
@@ -518,6 +518,9 @@ function prefetchUrl(
           headers.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "/_tree");
         } else if (mode === "segment") {
           headers.set(NEXT_ROUTER_PREFETCH_HEADER, "1");
+          // Vinext serves one unified page payload instead of Next.js's real
+          // per-segment payloads, so this marker distinguishes the second
+          // scheduler phase without claiming a concrete Next.js segment key.
           headers.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "/_page");
         }
         // Distinguish the same visible URL when it is prefetched from different
@@ -668,7 +671,7 @@ function prefetchUrl(
     return promise;
   };
 
-  if (priority === "high" || hasAppNavigationRuntime()) {
+  if (priority === "high" || mode === "route-tree" || mode === "segment") {
     return runPrefetch();
   }
 
@@ -736,7 +739,9 @@ type LinkPrefetchTask = {
   priority: "low" | "high";
   sortId: number;
   canceled: boolean;
+  completed: boolean;
   queued: boolean;
+  running: boolean;
 };
 
 const scheduledLinkPrefetches: LinkPrefetchTask[] = [];
@@ -769,7 +774,7 @@ function scheduleMicrotaskForLinkPrefetch(fn: () => void): void {
 }
 
 function pushLinkPrefetchTask(task: LinkPrefetchTask): void {
-  if (!task.queued) {
+  if (!task.queued && !task.running && !task.completed) {
     task.queued = true;
     scheduledLinkPrefetches.push(task);
   }
@@ -849,12 +854,26 @@ function scheduleSegmentCacheLinkPrefetch(
       priority,
       sortId: scheduledLinkPrefetchSortId++,
       canceled: false,
+      completed: false,
       queued: false,
+      running: false,
     };
     instance.scheduledTask = task;
   } else {
+    if (task.running) {
+      task.canceled = false;
+      task.priority =
+        task === mostRecentIntentPrefetchTask && priority === "low" ? "high" : priority;
+      trackIntentLinkPrefetchTask(task);
+      return;
+    }
+    if (task.completed) {
+      return;
+    }
+
     task.batchId = batchId;
     task.canceled = false;
+    task.completed = false;
     task.phase = "route-tree";
     task.priority = task === mostRecentIntentPrefetchTask && priority === "low" ? "high" : priority;
     task.sortId = scheduledLinkPrefetchSortId++;
@@ -881,13 +900,14 @@ function processLinkPrefetchQueue(): void {
   let task = peekNextRunnableLinkPrefetchTask();
   while (task !== null) {
     removeLinkPrefetchTask(task);
-    if (task.canceled || !task.instance.isVisible) {
+    if (task.canceled || task.running || !task.instance.isVisible) {
       task = peekNextRunnableLinkPrefetchTask();
       continue;
     }
 
     const currentTask = task;
     scheduledLinkPrefetchInProgress++;
+    currentTask.running = true;
     const phase = currentTask.phase;
     const mode: LinkPrefetchMode = phase === "route-tree" ? "route-tree" : "segment";
     const promise = prefetchUrl(
@@ -900,10 +920,16 @@ function processLinkPrefetchQueue(): void {
     Promise.resolve(promise)
       .catch(() => {})
       .finally(() => {
+        currentTask.running = false;
         scheduledLinkPrefetchInProgress--;
         if (!currentTask.canceled && currentTask.instance.isVisible && phase === "route-tree") {
           currentTask.phase = "segment";
           pushLinkPrefetchTask(currentTask);
+        } else if (!currentTask.canceled && phase === "segment") {
+          currentTask.completed = true;
+          if (mostRecentIntentPrefetchTask === currentTask) {
+            mostRecentIntentPrefetchTask = null;
+          }
         }
         scheduleLinkPrefetchQueue();
       });
@@ -1284,14 +1310,18 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
   }, [shouldViewportPrefetch, prefetchMode, normalizedHref, normalizedRouteHref]);
 
   const prefetchOnIntent = useCallback(() => {
+    const routerMode = getLinkPrefetchRouterMode();
     if (
       !canLinkIntentPrefetch({
         nodeEnv: process.env.NODE_ENV,
         prefetch: prefetchProp,
         isDangerous,
-        routerMode: getLinkPrefetchRouterMode(),
+        routerMode,
       })
     ) {
+      return;
+    }
+    if (routerMode === "app" && isBotUserAgent(window.navigator?.userAgent ?? "")) {
       return;
     }
     const intentMode = unstable_dynamicOnHover ? "full-after-shell" : prefetchMode;
