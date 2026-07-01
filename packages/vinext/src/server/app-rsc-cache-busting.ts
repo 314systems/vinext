@@ -327,7 +327,7 @@ export async function createRscRequestUrl(href: string, headers: Headers): Promi
   return `${url.pathname}${url.search}`;
 }
 
-export function createLegacyRscRequestUrl(href: string, headers: Headers): string {
+export function createAuthoritativeRscRequestUrl(href: string, headers: Headers): string {
   const url = new URL(toRscRequestPath(href), "http://vinext.local");
   const hash = computeLegacyRscCacheBustingSearchParam(headers);
   setRscCacheBustingSearchParam(url, hash);
