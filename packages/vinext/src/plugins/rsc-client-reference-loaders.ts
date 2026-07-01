@@ -2,7 +2,6 @@ import type { Plugin } from "vite";
 import type { PluginApi } from "@vitejs/plugin-rsc";
 
 const CLIENT_REFERENCES_ID = "\0virtual:vite-rsc/client-references";
-const REFERENCE_VALIDATION_ID_PREFIX = "\0virtual:vite-rsc/reference-validation?";
 const RESOLVED_ID_PROXY_PREFIX = "virtual:vite-rsc/resolved-id/";
 const DEV_CLIENT_REFERENCE_WARMUP_IDS = Object.freeze([
   "virtual:vite-rsc/remove-duplicate-server-css",
@@ -66,45 +65,6 @@ async function warmupRscDevClientReferences(rscApi: PluginApi | undefined): Prom
     const resolved = await rscEnv.pluginContainer.resolveId(source, undefined);
     await rscEnv.transformRequest(resolved?.id ?? source);
   }
-}
-
-function parseReferenceValidationId(id: string): Record<string, string> | null {
-  if (!id.startsWith(REFERENCE_VALIDATION_ID_PREFIX)) return null;
-
-  const query = id.slice(REFERENCE_VALIDATION_ID_PREFIX.length);
-  return Object.fromEntries(new URLSearchParams(query));
-}
-
-function toNullBytePlaceholderReferenceKey(referenceKey: string): string | null {
-  if (!referenceKey.includes("\0")) return null;
-  return referenceKey.replaceAll("\0", "__x00__");
-}
-
-export function createRscReferenceValidationAliasPlugin(): Plugin {
-  let rscApi: PluginApi | undefined;
-
-  return {
-    name: "vinext:rsc-reference-validation-alias",
-    enforce: "pre",
-    apply: "serve",
-    configResolved(config) {
-      rscApi = getRscApi(config.plugins);
-    },
-    load(id) {
-      const parsed = parseReferenceValidationId(id);
-      if (parsed?.type !== "client" || !parsed.id) return null;
-
-      const aliasedReferenceKey = toNullBytePlaceholderReferenceKey(parsed.id);
-      if (!aliasedReferenceKey) return null;
-
-      const metas = Object.values(rscApi?.manager.clientReferenceMetaMap ?? {});
-      if (metas.some((meta) => meta.referenceKey === aliasedReferenceKey)) {
-        return "export {};";
-      }
-
-      return null;
-    },
-  };
 }
 
 export function createRscClientReferenceLoadersPlugin(): Plugin {

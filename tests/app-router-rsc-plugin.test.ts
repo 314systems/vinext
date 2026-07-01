@@ -4,7 +4,7 @@ import path from "node:path";
 import { type ViteDevServer } from "vite";
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import vinext from "../packages/vinext/src/index.js";
-import { createRscReferenceValidationAliasPlugin } from "../packages/vinext/src/plugins/rsc-client-reference-loaders.js";
+import { createRscReferenceValidationNormalizerPlugin } from "../packages/vinext/src/plugins/rsc-reference-validation-normalizer.js";
 import { APP_FIXTURE_DIR, fetchHtml, RSC_ENTRIES } from "./helpers.js";
 
 describe("RSC plugin auto-registration", () => {
@@ -51,7 +51,7 @@ describe("RSC plugin auto-registration", () => {
   });
 
   it("accepts plugin-rsc dev reference validation ids decoded back to null bytes", () => {
-    const plugin = createRscReferenceValidationAliasPlugin();
+    const plugin = createRscReferenceValidationNormalizerPlugin();
     const placeholderReferenceKey =
       "/@id/__x00__virtual:vite-rsc/client-in-server-package-proxy/%2Fnode_modules%2Fvinext%2Fdist%2Fshims%2Fdefault-global-error.js";
     const decodedReferenceKey = placeholderReferenceKey.replace("__x00__", "\0");
@@ -77,7 +77,7 @@ describe("RSC plugin auto-registration", () => {
       ],
     });
 
-    expect((plugin.load as any)?.(validationId)).toBe("export {};");
+    expect((plugin.load as any)?.(validationId)).toBe("export {}");
   });
 
   it("serves the browser bootstrap in dev when deploymentId is configured", async () => {
