@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { LinkAccordion } from "../components/link-accordion";
+
 export const unstable_dynamicStaleTime = 30;
 export const dynamic = "force-dynamic";
 
@@ -8,6 +10,9 @@ export default async function ClientCacheTarget({ params }: { params: Promise<{ 
 
   return (
     <main>
+      <LinkAccordion href="/nextjs-compat/client-cache">
+        To client cache home with accordion
+      </LinkAccordion>
       <Link href="/nextjs-compat/client-cache" prefetch={false} id="client-cache-back">
         Back to client cache home
       </Link>

@@ -124,6 +124,8 @@ import {
 import { AppBrowserHistoryController } from "./app-browser-history-controller.js";
 import {
   createVisitedResponseCacheEntry,
+  deleteVisitedResponseCacheEntry,
+  findVisitedResponseCacheEntry,
   isVisitedResponseCacheEntryFresh,
   type VisitedResponseCacheEntry,
 } from "./app-visited-response-cache.js";
@@ -679,8 +681,8 @@ function readVisitedResponseCacheCandidate(
   navigationKind: NavigationKind,
 ): VisitedResponseCacheCandidate {
   const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
-  const cached = visitedResponseCache.get(cacheKey);
-  if (!cached) {
+  const match = findVisitedResponseCacheEntry(visitedResponseCache, rscUrl, interceptionContext);
+  if (!match) {
     return {
       cacheKey,
       entry: null,
@@ -692,15 +694,16 @@ function readVisitedResponseCacheCandidate(
   }
 
   return {
-    cacheKey,
-    entry: cached,
+    cacheKey: match.cacheKey,
+    entry: match.entry,
     facts: {
       candidate: "present",
-      fresh: isVisitedResponseCacheEntryFresh(cached, {
+      fresh: isVisitedResponseCacheEntryFresh(match.entry, {
         navigationKind,
         now: Date.now(),
       }),
-      mountedSlotsMatch: cached.mountedSlotsHeader === mountedSlotsHeader,
+      mountedSlotsMatch:
+        match.entry.elements !== undefined || match.entry.mountedSlotsHeader === mountedSlotsHeader,
       navigationKind,
     },
   };
@@ -731,7 +734,7 @@ function applyVisitedResponseCacheCandidateDecision(
 }
 
 function deleteVisitedResponse(rscUrl: string, interceptionContext: string | null): void {
-  visitedResponseCache.delete(AppElementsWire.encodeCacheKey(rscUrl, interceptionContext));
+  deleteVisitedResponseCacheEntry(visitedResponseCache, rscUrl, interceptionContext);
 }
 
 function storeVisitedResponseSnapshot(
@@ -742,6 +745,7 @@ function storeVisitedResponseSnapshot(
   prefetchFallbackTtlMs: number = DYNAMIC_NAVIGATION_CACHE_TTL,
   requestMountedSlotsHeader: string | null = snapshot.mountedSlotsHeader ?? null,
   elements?: AppElements,
+  seedPrefetchCache: boolean = true,
 ): () => void {
   const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
   visitedResponseCache.delete(cacheKey);
@@ -756,18 +760,22 @@ function storeVisitedResponseSnapshot(
     response: snapshot,
   });
   visitedResponseCache.set(cacheKey, entry);
-  seedPrefetchResponseSnapshot(
-    rscUrl,
-    snapshot,
-    interceptionContext,
-    requestMountedSlotsHeader,
-    prefetchFallbackTtlMs,
-  );
+  if (seedPrefetchCache) {
+    seedPrefetchResponseSnapshot(
+      rscUrl,
+      snapshot,
+      interceptionContext,
+      requestMountedSlotsHeader,
+      prefetchFallbackTtlMs,
+    );
+  }
   return () => {
     if (visitedResponseCache.get(cacheKey) === entry) {
       visitedResponseCache.delete(cacheKey);
     }
-    deletePrefetchResponseSnapshot(rscUrl, snapshot, interceptionContext);
+    if (seedPrefetchCache) {
+      deletePrefetchResponseSnapshot(rscUrl, snapshot, interceptionContext);
+    }
   };
 }
 
@@ -1506,24 +1514,18 @@ function bootstrapHydration(
           : DYNAMIC_NAVIGATION_CACHE_TTL;
       hydrationCachePublication.publish(() => {
         if (cacheGeneration !== clientNavigationCacheGeneration) return () => {};
-        if (isCacheRestorableAppPayloadMetadata(metadata)) {
-          return storeVisitedResponseSnapshot(
-            rscUrl,
-            metadata.interceptionContext,
-            snapshot,
-            initialParams,
-            fallbackTtlMs,
-            mountedSlotsHeader,
-          );
-        }
-        seedPrefetchResponseSnapshot(
+        // Initial hydration seeds the visited/BFCache path, not Link's
+        // prefetch cache; a later visible Link should still prefetch.
+        return storeVisitedResponseSnapshot(
           rscUrl,
-          snapshot,
           metadata.interceptionContext,
-          mountedSlotsHeader,
+          snapshot,
+          initialParams,
           fallbackTtlMs,
+          mountedSlotsHeader,
+          elements,
+          false,
         );
-        return () => deletePrefetchResponseSnapshot(rscUrl, snapshot, metadata.interceptionContext);
       });
     })
     .catch(() => {});

@@ -94,10 +94,30 @@ async function navigateHome(page: Page): Promise<void> {
   await expect(page.locator("#client-cache-home")).toBeVisible();
 }
 
+async function navigateHomeFromNoLoading(page: Page): Promise<void> {
+  await page.click("#client-cache-no-loading-back");
+  await expect(page.locator("#client-cache-home")).toBeVisible();
+}
+
 async function navigateTo(page: Page, selector: string, id: string): Promise<string> {
   await page.click(selector);
   await expect(page.locator("#client-cache-id")).toHaveText(id);
   return readRandom(page);
+}
+
+async function readNoLoadingRandom(page: Page): Promise<string> {
+  return page.locator("#client-cache-no-loading-random").innerText();
+}
+
+async function navigateToNoLoading(page: Page): Promise<string> {
+  await page.click("#client-cache-no-loading-auto");
+  await expect(page.locator("#client-cache-no-loading-id")).toHaveText("1");
+  return readNoLoadingRandom(page);
+}
+
+async function revealAccordionLink(page: Page, href: string) {
+  await page.locator(`[data-link-accordion="${href}"]`).click();
+  return page.locator(`a[data-link-accordion-anchor="${href}"]`);
 }
 
 function requestsFor(requests: RscRequest[], pathname: string): RscRequest[] {
@@ -162,6 +182,24 @@ test.describe("Next.js compat: client cache", () => {
     expect(requestsFor(requests, `${ROOT}/1`)).toEqual([]);
   });
 
+  test("dynamic auto full cache without loading expires immediately", async ({ page }) => {
+    // Ported from Next.js:
+    // test/e2e/app-dir/app-client-cache/client-cache.experimental.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/app-client-cache/client-cache.experimental.test.ts
+    const requests = trackRscRequests(page);
+    await openHome(page);
+
+    const initial = await navigateToNoLoading(page);
+    await navigateHomeFromNoLoading(page);
+
+    requests.length = 0;
+    const renewed = await navigateToNoLoading(page);
+    expect(renewed).not.toBe(initial);
+    expect(requestsFor(requests, `${ROOT}/no-loading/1`).some((request) => !request.partial)).toBe(
+      true,
+    );
+  });
+
   test("parallel-slot state changes independently and the full payload remains reusable", async ({
     page,
   }) => {
@@ -187,6 +225,33 @@ test.describe("Next.js compat: client cache", () => {
     await expect(page.locator("#client-cache-breadcrumbs")).toHaveText('Catchall {"id":"0"}');
     expect(reused).toBe(initial);
     expect(requestsFor(requests, `${ROOT}/0`)).toEqual([]);
+  });
+
+  test("full prefetch navigation resets page client state between parallel-slot pages", async ({
+    page,
+  }) => {
+    // Ported from Next.js:
+    // test/e2e/app-dir/app-client-cache/client-cache.parallel-routes.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/app-client-cache/client-cache.parallel-routes.test.ts
+    await page.clock.install();
+    const requests = trackRscRequests(page);
+    await openHome(page);
+
+    const targetLink = await revealAccordionLink(page, `${ROOT}/0`);
+    await expect
+      .poll(() => requestsFor(requests, `${ROOT}/0`).some((request) => !request.partial))
+      .toBe(true);
+
+    requests.length = 0;
+    await targetLink.click();
+    await expect(page.locator("#client-cache-id")).toHaveText("0");
+    expect(requestsFor(requests, `${ROOT}/0`)).toEqual([]);
+
+    const homeLink = await revealAccordionLink(page, ROOT);
+    await expect(homeLink).toBeVisible();
+    await expect
+      .poll(() => requestsFor(requests, ROOT).some((request) => !request.partial))
+      .toBe(true);
   });
 
   test("initial hydration seeds the visited cache for later client navigation", async ({

@@ -292,6 +292,7 @@ declare module "next/navigation" {
     behavior?: {
       cacheForNavigation?: boolean;
       fallbackTtlMs?: number;
+      minimumTtlMs?: number;
       optimisticRouteShell?: boolean;
     },
   ): void;
