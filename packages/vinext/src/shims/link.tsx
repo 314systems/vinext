@@ -590,6 +590,14 @@ function prefetchUrl(
                   shellEntry = shellCache.get(shellCacheKey);
                 }
                 await shellEntry?.pending?.catch(() => {});
+                const settledShellEntry = shellCache.get(shellCacheKey);
+                if (
+                  settledShellEntry?.outcome !== "cache-seeded" ||
+                  settledShellEntry.expiresAt === undefined ||
+                  settledShellEntry.expiresAt <= Date.now()
+                ) {
+                  throw new Error("Unable to upgrade prefetch without a fresh shell payload");
+                }
                 return fetch(rscUrl, {
                   headers,
                   credentials: "include",

@@ -1962,6 +1962,46 @@ describe("Link prefetch scheduling", () => {
     }
   });
 
+  it("does not cache a dynamic-on-hover payload when its shell prefetch fails", async () => {
+    const observer = stubIntersectionObserver();
+    const result = await renderIsolatedLink({
+      href: "/blog/hello",
+      nodeEnv: "production",
+      props: { unstable_dynamicOnHover: true },
+    });
+    const { getPrefetchCache } = await import("../packages/vinext/src/shims/navigation.js");
+
+    result.fetch.mockImplementation(() =>
+      Promise.resolve(new Response("shell failed", { status: 500 })),
+    );
+
+    try {
+      observer.dispatchIntersectingEntry(result.anchor);
+      await waitForFetchCalls(result.fetch, 1);
+
+      result.capturedAnchorProps.onMouseEnter?.({ currentTarget: result.anchor });
+      await waitForFetchCalls(result.fetch, 2);
+      await flushPrefetchTasks();
+      await flushPrefetchTasks();
+
+      expect(result.fetch).toHaveBeenCalledTimes(2);
+      for (const [, init] of result.fetch.mock.calls) {
+        const headers = (init as RequestInit | undefined)?.headers;
+        expect(headers).toBeInstanceOf(Headers);
+        expect((headers as Headers).get(VINEXT_RSC_RENDER_MODE_HEADER)).toBe(
+          APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
+        );
+      }
+      expect(
+        [...getPrefetchCache().values()].some(
+          (entry) => entry.cacheForNavigation === true && entry.optimisticRouteShell !== true,
+        ),
+      ).toBe(false);
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
   it("does not issue a prefetchInlining shell request for dynamic routes without loading shells", async () => {
     vi.stubEnv("__VINEXT_PREFETCH_INLINING", "true");
     const observer = stubIntersectionObserver();
