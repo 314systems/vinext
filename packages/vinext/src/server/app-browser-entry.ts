@@ -127,6 +127,7 @@ import {
   createVisitedResponseCacheEntry,
   deleteVisitedResponseCacheEntry,
   findVisitedResponseCacheEntry,
+  isVisitedResponseCacheEntryCompatibleForNavigation,
   isVisitedResponseCacheEntryFresh,
   visitedResponseCache,
   type VisitedResponseCacheEntry,
@@ -699,8 +700,10 @@ function readVisitedResponseCacheCandidate(
         navigationKind,
         now: Date.now(),
       }),
-      mountedSlotsMatch:
-        match.entry.elements !== undefined || match.entry.mountedSlotsHeader === mountedSlotsHeader,
+      mountedSlotsMatch: isVisitedResponseCacheEntryCompatibleForNavigation(
+        match.entry,
+        mountedSlotsHeader,
+      ),
       navigationKind,
     },
   };

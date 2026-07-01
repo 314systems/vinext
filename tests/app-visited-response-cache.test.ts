@@ -5,6 +5,8 @@ import {
   createVisitedResponseCacheEntry,
   deleteVisitedResponseCacheEntry,
   findVisitedResponseCacheEntry,
+  isVisitedResponseCacheEntryCompatibleForNavigation,
+  isVisitedResponseCacheEntryCompatibleForPrefetch,
   isVisitedResponseCacheEntryFresh,
 } from "../packages/vinext/src/server/app-visited-response-cache.js";
 import { AppElementsWire } from "../packages/vinext/src/server/app-elements.js";
@@ -108,6 +110,22 @@ describe("visited response cache freshness", () => {
     });
 
     expect(entry.elements).toBe(elements);
+  });
+
+  it("keeps navigation mounted-slot matching strict for entries carrying decoded elements", () => {
+    const elements = { "page:/dynamic": "cached page" } satisfies AppElements;
+    const entry = createVisitedResponseCacheEntry({
+      elements,
+      now: 1_000_000,
+      mountedSlotsHeader: null,
+      params: {},
+      response: createCachedResponse(),
+    });
+
+    // Entries with decoded elements may satisfy a future full-prefetch claim,
+    // but a soft navigation must still respect its current mounted slot context.
+    expect(isVisitedResponseCacheEntryCompatibleForNavigation(entry, "slot:modal")).toBe(false);
+    expect(isVisitedResponseCacheEntryCompatibleForPrefetch(entry, "slot:modal")).toBe(true);
   });
 
   it("keeps traversal restores independent from dynamic stale expiry", () => {

@@ -79,20 +79,6 @@ function normalizeVisitedResponseCacheLookupUrl(rscUrl: string): string | null {
   }
 }
 
-function parseVisitedResponseCacheKey(cacheKey: string): {
-  interceptionContext: string | null;
-  rscUrl: string;
-} {
-  const separatorIndex = cacheKey.indexOf("\0");
-  if (separatorIndex === -1) {
-    return { interceptionContext: null, rscUrl: cacheKey };
-  }
-  return {
-    interceptionContext: cacheKey.slice(separatorIndex + 1),
-    rscUrl: cacheKey.slice(0, separatorIndex),
-  };
-}
-
 export function findVisitedResponseCacheEntry(
   cache: Map<string, VisitedResponseCacheEntry>,
   rscUrl: string,
@@ -108,7 +94,8 @@ export function findVisitedResponseCacheEntry(
   if (normalizedTarget === null) return null;
 
   for (const [cacheKey, entry] of cache) {
-    const source = parseVisitedResponseCacheKey(cacheKey);
+    const source = AppElementsWire.decodeCacheKey(cacheKey);
+    if (source === null) continue;
     if (source.interceptionContext !== interceptionContext) continue;
     if (normalizeVisitedResponseCacheLookupUrl(source.rscUrl) !== normalizedTarget) continue;
     return { cacheKey, entry };
@@ -127,7 +114,21 @@ export function deleteVisitedResponseCacheEntry(
   return cache.delete(match.cacheKey);
 }
 
-export function hasVisitedResponseCacheEntryForPrefetch(
+export function isVisitedResponseCacheEntryCompatibleForNavigation(
+  entry: VisitedResponseCacheEntry,
+  mountedSlotsHeader: string | null,
+): boolean {
+  return entry.mountedSlotsHeader === mountedSlotsHeader;
+}
+
+export function isVisitedResponseCacheEntryCompatibleForPrefetch(
+  entry: VisitedResponseCacheEntry,
+  mountedSlotsHeader: string | null,
+): boolean {
+  return entry.elements !== undefined || entry.mountedSlotsHeader === mountedSlotsHeader;
+}
+
+export function claimVisitedResponseCacheEntryForPrefetch(
   rscUrl: string,
   interceptionContext: string | null,
   mountedSlotsHeader: string | null,
@@ -145,7 +146,7 @@ export function hasVisitedResponseCacheEntryForPrefetch(
     return false;
   }
 
-  if (match.entry.elements === undefined && match.entry.mountedSlotsHeader !== mountedSlotsHeader) {
+  if (!isVisitedResponseCacheEntryCompatibleForPrefetch(match.entry, mountedSlotsHeader)) {
     return false;
   }
 

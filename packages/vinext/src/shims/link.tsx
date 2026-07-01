@@ -371,14 +371,21 @@ export function resolveAutoAppRoutePrefetch(href: string): {
   return resolveMatchedAutoAppRoutePrefetch(match.route);
 }
 
-function resolveFullAppRoutePrefetch(): {
+function resolveFullAppRoutePrefetch(href: string): {
   cacheForNavigation: true;
   prefetchShellFirst: boolean;
   shouldPrefetch: true;
 } {
+  const routes = typeof window === "undefined" ? undefined : window.__VINEXT_LINK_PREFETCH_ROUTES__;
+  const routeHref = routes === undefined ? null : toSameOriginRouteHref(href);
+  const match =
+    routes === undefined || routeHref === null
+      ? null
+      : matchRouteWithTrie(routeHref, routes, linkPrefetchRouteTrieCache);
+
   return {
     cacheForNavigation: true,
-    prefetchShellFirst: false,
+    prefetchShellFirst: match?.route.canPrefetchLoadingShell === true,
     shouldPrefetch: true,
   };
 }
@@ -449,7 +456,7 @@ function prefetchUrl(
           { APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL },
           headersModule,
           { resolveHybridClientRouteOwner },
-          { hasVisitedResponseCacheEntryForPrefetch },
+          { claimVisitedResponseCacheEntryForPrefetch },
         ] = await Promise.all([
           import("./navigation.js"),
           import("../server/app-elements.js"),
@@ -486,7 +493,7 @@ function prefetchUrl(
             ? resolveAutoAppRoutePrefetch(prefetchHref)
             : mode === "full-after-shell"
               ? { cacheForNavigation: true, prefetchShellFirst: true, shouldPrefetch: true }
-              : resolveFullAppRoutePrefetch();
+              : resolveFullAppRoutePrefetch(prefetchHref);
         if (!autoPrefetch.shouldPrefetch) return;
 
         const interceptionContext = getPrefetchInterceptionContext(fullHref);
@@ -531,7 +538,7 @@ function prefetchUrl(
         }
         if (
           autoPrefetch.cacheForNavigation &&
-          hasVisitedResponseCacheEntryForPrefetch(rscUrl, interceptionContext, mountedSlotsHeader)
+          claimVisitedResponseCacheEntryForPrefetch(rscUrl, interceptionContext, mountedSlotsHeader)
         ) {
           return;
         }

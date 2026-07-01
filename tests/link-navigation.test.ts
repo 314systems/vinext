@@ -1625,7 +1625,7 @@ describe("Link prefetch scheduling", () => {
     const observer = stubIntersectionObserver();
 
     const result = await renderIsolatedLink({
-      href: "/blog/hello",
+      href: "/products/1",
       nodeEnv: "production",
       props: { prefetch: true },
     });
@@ -1641,7 +1641,7 @@ describe("Link prefetch scheduling", () => {
       expect(observer.unobserve).not.toHaveBeenCalledWith(result.anchor);
       expectCanonicalRscFetchCall(
         result.fetch.mock.calls[0],
-        "/blog/hello",
+        "/products/1",
         expect.objectContaining({
           credentials: "include",
           priority: "low",
@@ -1658,6 +1658,51 @@ describe("Link prefetch scheduling", () => {
       const entry = Array.from(getPrefetchCache().values())[0];
       expect(entry?.cacheForNavigation).toBe(true);
       expect(entry?.optimisticRouteShell).toBe(false);
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("prefetches a loading shell before a full payload for explicit prefetch routes with loading boundaries", async () => {
+    const observer = stubIntersectionObserver();
+
+    const result = await renderIsolatedLink({
+      href: "/blog/hello",
+      nodeEnv: "production",
+      props: { prefetch: true },
+    });
+
+    try {
+      observer.dispatchIntersectingEntry(result.anchor);
+      await waitForFetchCalls(result.fetch, 2);
+
+      // Ported from Next.js:
+      // test/e2e/app-dir/searchparams-reuse-loading/searchparams-reuse-loading.test.ts
+      // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/searchparams-reuse-loading/searchparams-reuse-loading.test.ts
+      const shellFetchInit = result.fetch.mock.calls[0]?.[1] as RequestInit | undefined;
+      if (!(shellFetchInit?.headers instanceof Headers)) {
+        throw new Error("Expected loading-shell prefetch request headers");
+      }
+      expect(shellFetchInit.headers.get(VINEXT_RSC_RENDER_MODE_HEADER)).toBe(
+        APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
+      );
+      expect(shellFetchInit.headers.get(NEXT_ROUTER_PREFETCH_HEADER)).toBe("1");
+
+      expectCanonicalRscFetchCall(
+        result.fetch.mock.calls[1],
+        "/blog/hello",
+        expect.objectContaining({
+          credentials: "include",
+          priority: "low",
+        }),
+      );
+      const fullFetchInit = result.fetch.mock.calls[1]?.[1] as RequestInit | undefined;
+      expect(
+        (fullFetchInit?.headers as Headers | undefined)?.get(VINEXT_RSC_RENDER_MODE_HEADER),
+      ).toBe(null);
+      expect(
+        (fullFetchInit?.headers as Headers | undefined)?.get(NEXT_ROUTER_PREFETCH_HEADER),
+      ).toBe(null);
     } finally {
       result.restoreNodeEnv();
     }
@@ -1714,7 +1759,7 @@ describe("Link prefetch scheduling", () => {
     const observer = stubIntersectionObserver();
 
     const result = await renderIsolatedLink({
-      href: "/blog/hello",
+      href: "/products/1",
       nodeEnv: "production",
       props: { prefetch: true },
     });
@@ -1725,7 +1770,7 @@ describe("Link prefetch scheduling", () => {
     ]);
     const now = 1_000_000;
     vi.spyOn(Date, "now").mockReturnValue(now);
-    const visitedUrl = "/blog/hello?_rsc=visited";
+    const visitedUrl = "/products/1?_rsc=visited";
     const visitedEntry = visitedCache.createVisitedResponseCacheEntry({
       fallbackTtlMs: 0,
       now,
@@ -1754,7 +1799,7 @@ describe("Link prefetch scheduling", () => {
       // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/segment-cache/force-stale/force-stale.test.ts
       expectCanonicalRscFetchCall(
         result.fetch.mock.calls[0],
-        "/blog/hello",
+        "/products/1",
         expect.objectContaining({
           credentials: "include",
           priority: "low",
