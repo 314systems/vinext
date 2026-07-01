@@ -2149,7 +2149,7 @@ describe("Link prefetch scheduling", () => {
       );
       expect(
         (fetchInit?.headers as Headers | undefined)?.get(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER),
-      ).toBe("/_tree");
+      ).toBe("1");
       const { getPrefetchCache } = await import("../packages/vinext/src/shims/navigation.js");
       const entry = Array.from(getPrefetchCache().values())[0];
       expect(entry?.cacheForNavigation).toBe(false);

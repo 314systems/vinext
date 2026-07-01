@@ -536,7 +536,7 @@ function prefetchUrl(
           headers.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "/__PAGE__");
         } else if (shouldSendSegmentPrefetchHeaders) {
           headers.set(NEXT_ROUTER_PREFETCH_HEADER, "1");
-          headers.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "/_tree");
+          headers.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "1");
         }
         // Distinguish the same visible URL when it is prefetched from different
         // request contexts such as /feed vs /gallery or different mounted slots.
@@ -576,7 +576,7 @@ function prefetchUrl(
             renderMode: APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
           });
           shellHeaders.set(NEXT_ROUTER_PREFETCH_HEADER, "1");
-          shellHeaders.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "/_tree");
+          shellHeaders.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "1");
           if (mountedSlotsHeader) {
             shellHeaders.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
           }
@@ -618,7 +618,7 @@ function prefetchUrl(
             renderMode: APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
           });
           probeHeaders.set(NEXT_ROUTER_PREFETCH_HEADER, "1");
-          probeHeaders.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "/_tree");
+          probeHeaders.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "1");
           if (mountedSlotsHeader) {
             probeHeaders.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
           }
