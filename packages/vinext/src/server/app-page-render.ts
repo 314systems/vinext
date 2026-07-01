@@ -558,6 +558,8 @@ function mergeSkipDispositions(
     skippedEntryIds.push(id);
   }
 
+  // Downstream transport only observes enabled + skippedEntryIds; the concrete
+  // skip reason is collapsed when multiple skip sources contribute entries.
   return {
     code: "SKIP_RETAINED_PREFETCH_LAYOUTS",
     enabled: true,
