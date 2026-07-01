@@ -1323,6 +1323,66 @@ describe("Link prefetch scheduling", () => {
     }
   });
 
+  it("splits cacheComponents auto prefetches into route-tree and segment phases", async () => {
+    // Ported from the request-order contract covered by Next.js:
+    // test/e2e/app-dir/segment-cache/prefetch-scheduling/prefetch-scheduling.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/segment-cache/prefetch-scheduling/prefetch-scheduling.test.ts
+    vi.stubEnv("__NEXT_CACHE_COMPONENTS", "true");
+    const observer = stubIntersectionObserver();
+    let releaseRouteTreeBody: (() => void) | undefined;
+    const routeTreeBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        releaseRouteTreeBody = () => {
+          controller.close();
+        };
+      },
+    });
+    const result = await renderIsolatedLink({
+      href: "/viewport-prefetch-target",
+      nodeEnv: "production",
+    });
+
+    result.fetch
+      .mockImplementationOnce(() => Promise.resolve(new Response(routeTreeBody)))
+      .mockImplementationOnce(() => Promise.resolve(new Response("segment")));
+
+    try {
+      observer.dispatchIntersectingEntry(result.anchor);
+      await waitForFetchCalls(result.fetch, 1);
+
+      const routeTreeInit = result.fetch.mock.calls[0]?.[1];
+      expect(routeTreeInit?.headers).toBeInstanceOf(Headers);
+      if (!(routeTreeInit?.headers instanceof Headers)) {
+        throw new Error("Expected route-tree prefetch request headers");
+      }
+      expect(routeTreeInit.headers.get(NEXT_ROUTER_PREFETCH_HEADER)).toBe("1");
+      expect(routeTreeInit.headers.get(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER)).toBe("/_tree");
+      expect(routeTreeInit.headers.get(VINEXT_RSC_RENDER_MODE_HEADER)).toBe(
+        APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
+      );
+
+      await flushPrefetchTasks();
+      expect(result.fetch).toHaveBeenCalledTimes(1);
+
+      if (releaseRouteTreeBody === undefined) {
+        throw new Error("Expected route-tree body release");
+      }
+      releaseRouteTreeBody();
+      await waitForFetchCalls(result.fetch, 2);
+
+      const segmentInit = result.fetch.mock.calls[1]?.[1];
+      expect(segmentInit?.headers).toBeInstanceOf(Headers);
+      if (!(segmentInit?.headers instanceof Headers)) {
+        throw new Error("Expected segment prefetch request headers");
+      }
+      expect(segmentInit.headers.get(NEXT_ROUTER_PREFETCH_HEADER)).toBeNull();
+      expect(segmentInit.headers.get(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER)).toBe("/_page");
+      expect(segmentInit.headers.get(VINEXT_RSC_RENDER_MODE_HEADER)).toBeNull();
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
   it("does not prefetch visible or hovered links for a bot user agent", async () => {
     // Ported from Next.js:
     // test/e2e/app-dir/app-prefetch/prefetching.test.ts
