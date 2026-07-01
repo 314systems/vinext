@@ -33,6 +33,7 @@ import {
   createRscRequestHeaders,
   createRscRequestUrl,
   stripRscCacheBustingSearchParam,
+  stripRscSuffix,
   VINEXT_RSC_COMPATIBILITY_ID_HEADER,
   VINEXT_RSC_CONTENT_TYPE,
 } from "../server/app-rsc-cache-busting.js";
@@ -519,11 +520,18 @@ export function getRetainedPrefetchLayoutIdsHeader(
   const seen = new Set<string>();
   const now = Date.now();
   const targetParams = options.targetParams ?? resolveTargetParamsFromHref(options.targetHref);
+  const normalizedTargetUrl = normalizeRetainedPrefetchTargetUrl(options.targetHref);
 
-  for (const entry of getPrefetchCache().values()) {
+  for (const [cacheKey, entry] of getPrefetchCache()) {
     if (entry.cacheForNavigation === false) continue;
     if (entry.outcome !== "cache-seeded" || !entry.snapshot) continue;
     if (resolvePrefetchCacheEntryExpiresAt(entry) <= now) continue;
+    if (
+      normalizedTargetUrl !== null &&
+      normalizeRscCacheLookupUrl(parsePrefetchCacheKey(cacheKey).rscUrl) === normalizedTargetUrl
+    ) {
+      continue;
+    }
 
     for (const layoutId of entry.snapshot.layoutIds ?? []) {
       if (seen.has(layoutId)) continue;
@@ -540,7 +548,19 @@ function normalizeRscCacheLookupUrl(rscUrl: string): string | null {
   try {
     const url = new URL(rscUrl, "http://vinext.local");
     stripRscCacheBustingSearchParam(url);
-    return `${url.pathname}${url.search}`;
+    return `${stripRscSuffix(url.pathname)}${url.search}`;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeRetainedPrefetchTargetUrl(href: string | undefined): string | null {
+  if (isServer || !href) return null;
+
+  try {
+    const url = new URL(href, window.location.href);
+    stripRscCacheBustingSearchParam(url);
+    return `${stripRscSuffix(url.pathname)}${url.search}`;
   } catch {
     return null;
   }

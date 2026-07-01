@@ -35,6 +35,7 @@ let hasPrefetchCacheEntryForNavigation: Navigation["hasPrefetchCacheEntryForNavi
 let appRouterInstance: Navigation["appRouterInstance"];
 let consumePrefetchResponseForNavigation: Navigation["consumePrefetchResponseForNavigation"];
 let seedPrefetchResponseSnapshot: Navigation["seedPrefetchResponseSnapshot"];
+let getRetainedPrefetchLayoutIdsHeader: Navigation["getRetainedPrefetchLayoutIdsHeader"];
 
 beforeEach(async () => {
   // Set window BEFORE importing so isServer evaluates to false
@@ -71,6 +72,7 @@ beforeEach(async () => {
   appRouterInstance = nav.appRouterInstance;
   consumePrefetchResponseForNavigation = nav.consumePrefetchResponseForNavigation;
   seedPrefetchResponseSnapshot = nav.seedPrefetchResponseSnapshot;
+  getRetainedPrefetchLayoutIdsHeader = nav.getRetainedPrefetchLayoutIdsHeader;
 });
 
 afterEach(() => {
@@ -756,6 +758,36 @@ describe("prefetch cache eviction", () => {
     expect(getPrefetchCache().has(targetRscUrl)).toBe(false);
     expect(getPrefetchedUrls().has(targetRscUrl)).toBe(false);
     expect(hasPrefetchCacheEntryForNavigation(targetRscUrl, null, null)).toBe(false);
+  });
+
+  it("does not retain layout ids from a cached payload for the same target URL", () => {
+    const now = 1_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const sharedLayoutId = "layout:/shared-layout";
+
+    seedPrefetchResponseSnapshot("/shared-layout/one.rsc?_rsc=same", {
+      buffer: new ArrayBuffer(1024),
+      contentType: "text/x-component",
+      layoutIds: [sharedLayoutId],
+      mountedSlotsHeader: null,
+      paramsHeader: null,
+      url: "/shared-layout/one.rsc?_rsc=same",
+    });
+    seedPrefetchResponseSnapshot("/shared-layout/two.rsc?_rsc=sibling", {
+      buffer: new ArrayBuffer(1024),
+      contentType: "text/x-component",
+      layoutIds: [sharedLayoutId],
+      mountedSlotsHeader: null,
+      paramsHeader: null,
+      url: "/shared-layout/two.rsc?_rsc=sibling",
+    });
+
+    expect(getRetainedPrefetchLayoutIdsHeader({ targetHref: "/shared-layout/one" })).toBe(
+      sharedLayoutId,
+    );
+
+    getPrefetchCache().delete("/shared-layout/two.rsc?_rsc=sibling");
+    expect(getRetainedPrefetchLayoutIdsHeader({ targetHref: "/shared-layout/one" })).toBeNull();
   });
 
   it("stops byte LRU cleanup after retained-layout cascade deletion frees enough memory", () => {

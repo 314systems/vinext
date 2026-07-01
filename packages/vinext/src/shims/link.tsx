@@ -609,12 +609,10 @@ function prefetchUrl(
           }
         }
         // A single freshness-aware gate covers both an exact prior prefetch and
-        // an equivalent `_rsc` variant; the helper also deletes any stale exact
-        // entry, so a stale `prefetched` member is harmlessly re-added below.
-        if (
-          cachePrefetchForNavigation &&
-          hasPrefetchCacheEntryForNavigation(rscUrl, interceptionContext, mountedSlotsHeader)
-        ) {
+        // an equivalent `_rsc` variant. This also skips non-navigation static
+        // retained-layout prefetches when a complete target payload is already
+        // reusable for navigation.
+        if (hasPrefetchCacheEntryForNavigation(rscUrl, interceptionContext, mountedSlotsHeader)) {
           return;
         }
         prefetched.add(cacheKey);

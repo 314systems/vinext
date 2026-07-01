@@ -2174,13 +2174,13 @@ function bootstrapHydration(
           detachedNavigationCommits ? "authoritative" : undefined,
         );
         if (renderOutcome !== "committed") return;
-        // Don't cache the response if this navigation was superseded during
-        // renderNavigationPayload's await — the elements were never dispatched.
-        if (!browserNavigationController.isCurrentNavigation(navId)) return;
         // Store the visited response only after renderNavigationPayload succeeds.
         // If we stored it before and renderNavigationPayload threw, a future
         // back/forward navigation could replay a snapshot from a navigation that
-        // never actually rendered successfully.
+        // never actually rendered successfully. Once the visible commit lands,
+        // a later ordinary navigation must not cancel publication of this
+        // response snapshot; the generation checks below still prevent stale
+        // tails from republishing after refresh invalidation.
         try {
           const renderedElements = await rscPayload;
           if (navigationCacheGeneration !== clientNavigationCacheGeneration) return;
