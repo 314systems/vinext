@@ -1,7 +1,7 @@
 "use client";
 
-export type LinkSegmentPrefetchPhase = "route-tree" | "segment";
-export type LinkSegmentPrefetchPriority = "low" | "high";
+type LinkSegmentPrefetchPhase = "route-tree" | "segment";
+type LinkSegmentPrefetchPriority = "low" | "high";
 
 export type LinkSegmentPrefetchPhaseRequest = {
   href: string;
