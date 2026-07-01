@@ -185,6 +185,17 @@ describe("navigationPlanner prefetch reuse classification", () => {
     });
   });
 
+  it("fetches fresh when navigation options disable the optimistic shell", () => {
+    const decision = classifyReuse({
+      optimisticRouteShell: { reason: "disabledByNavigationOptions", status: "unavailable" },
+    });
+
+    expect(decision).toMatchObject({
+      kind: "fetchFresh",
+      reason: "disabledByNavigationOptions",
+    });
+  });
+
   it("fetches fresh for bypassed navigate misses without an optimistic shell candidate", () => {
     const decision = classifyReuse({
       bypassNavigationCache: true,
