@@ -689,7 +689,12 @@ function prefetchUrl(
     return promise;
   };
 
-  if (priority === "high" || mode === "route-tree" || mode === "segment") {
+  if (
+    priority === "high" ||
+    mode === "route-tree" ||
+    mode === "segment" ||
+    (hasAppNavigationRuntime() && String(process.env.__NEXT_CACHE_COMPONENTS) !== "false")
+  ) {
     return runPrefetch();
   }
 
