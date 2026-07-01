@@ -1710,6 +1710,61 @@ describe("Link prefetch scheduling", () => {
     }
   });
 
+  it("expires visited response cache reuse for full prefetches after the static stale time", async () => {
+    const observer = stubIntersectionObserver();
+
+    const result = await renderIsolatedLink({
+      href: "/blog/hello",
+      nodeEnv: "production",
+      props: { prefetch: true },
+    });
+    const [{ AppElementsWire }, navigation, visitedCache] = await Promise.all([
+      import("../packages/vinext/src/server/app-elements.js"),
+      import("../packages/vinext/src/shims/navigation.js"),
+      import("../packages/vinext/src/server/app-visited-response-cache.js"),
+    ]);
+    const now = 1_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const visitedUrl = "/blog/hello?_rsc=visited";
+    const visitedEntry = visitedCache.createVisitedResponseCacheEntry({
+      fallbackTtlMs: 0,
+      now,
+      params: {},
+      response: {
+        buffer: new TextEncoder().encode("flight").buffer,
+        contentType: "text/x-component",
+        dynamicStaleTimeSeconds: 0,
+        mountedSlotsHeader: null,
+        paramsHeader: null,
+        url: visitedUrl,
+      },
+    });
+    visitedCache.visitedResponseCache.set(
+      AppElementsWire.encodeCacheKey(visitedUrl, null),
+      visitedEntry,
+    );
+
+    try {
+      vi.spyOn(Date, "now").mockReturnValue(now + navigation.PREFETCH_CACHE_TTL + 1);
+      observer.dispatchIntersectingEntry(result.anchor);
+      await waitForFetchCalls(result.fetch, 1);
+
+      // Ported from Next.js:
+      // test/e2e/app-dir/segment-cache/force-stale/force-stale.test.ts
+      // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/segment-cache/force-stale/force-stale.test.ts
+      expectCanonicalRscFetchCall(
+        result.fetch.mock.calls[0],
+        "/blog/hello",
+        expect.objectContaining({
+          credentials: "include",
+          priority: "low",
+        }),
+      );
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
   it("does not prefetch visible links in development", async () => {
     // Next.js disables App Router viewport prefetching in development:
     // https://github.com/vercel/next.js/blob/canary/packages/next/src/client/components/links.ts

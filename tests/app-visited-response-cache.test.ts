@@ -8,6 +8,7 @@ import {
   isVisitedResponseCacheEntryFresh,
 } from "../packages/vinext/src/server/app-visited-response-cache.js";
 import { AppElementsWire } from "../packages/vinext/src/server/app-elements.js";
+import { PREFETCH_CACHE_TTL } from "../packages/vinext/src/shims/navigation.js";
 import type { CachedRscResponse } from "../packages/vinext/src/shims/navigation.js";
 import type { AppElements } from "../packages/vinext/src/server/app-elements.js";
 
@@ -127,6 +128,31 @@ describe("visited response cache freshness", () => {
       isVisitedResponseCacheEntryFresh(entry, {
         navigationKind: "traverse",
         now: now + MAX_TRAVERSAL_CACHE_TTL,
+      }),
+    ).toBe(false);
+  });
+
+  it("uses static prefetch freshness for full-prefetch visited response reuse", () => {
+    // Mirrors Next.js Segment Cache BFCache full-prefetch reuse:
+    // packages/next/src/client/components/segment-cache/cache.ts
+    const now = 1_000_000;
+    const entry = createVisitedResponseCacheEntry({
+      fallbackTtlMs: 0,
+      now,
+      params: {},
+      response: createCachedResponse({ dynamicStaleTimeSeconds: 0 }),
+    });
+
+    expect(
+      isVisitedResponseCacheEntryFresh(entry, {
+        navigationKind: "prefetch",
+        now: now + PREFETCH_CACHE_TTL,
+      }),
+    ).toBe(true);
+    expect(
+      isVisitedResponseCacheEntryFresh(entry, {
+        navigationKind: "prefetch",
+        now: now + PREFETCH_CACHE_TTL + 1,
       }),
     ).toBe(false);
   });

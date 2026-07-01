@@ -1,8 +1,12 @@
-import { resolveCachedRscResponseExpiresAt, type CachedRscResponse } from "vinext/shims/navigation";
+import {
+  PREFETCH_CACHE_TTL,
+  resolveCachedRscResponseExpiresAt,
+  type CachedRscResponse,
+} from "vinext/shims/navigation";
 import { AppElementsWire, type AppElements } from "./app-elements.js";
 import { stripRscCacheBustingSearchParam } from "./app-rsc-cache-busting.js";
 
-type VisitedResponseCacheNavigationKind = "navigate" | "refresh" | "traverse";
+type VisitedResponseCacheNavigationKind = "navigate" | "prefetch" | "refresh" | "traverse";
 
 export type VisitedResponseCacheEntry = {
   createdAt: number;
@@ -52,6 +56,10 @@ export function isVisitedResponseCacheEntryFresh(
 
   if (options.navigationKind === "traverse") {
     return options.now - entry.createdAt < MAX_TRAVERSAL_CACHE_TTL;
+  }
+
+  if (options.navigationKind === "prefetch") {
+    return options.now <= entry.createdAt + PREFETCH_CACHE_TTL;
   }
 
   return entry.expiresAt > options.now;
@@ -129,7 +137,7 @@ export function hasVisitedResponseCacheEntryForPrefetch(
 
   if (
     !isVisitedResponseCacheEntryFresh(match.entry, {
-      navigationKind: "traverse",
+      navigationKind: "prefetch",
       now: Date.now(),
     })
   ) {
