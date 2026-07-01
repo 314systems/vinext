@@ -137,9 +137,76 @@ function serverPrefetchSource(source: string): string {
   return sourceHasUseClientDirective(source) ? "" : source;
 }
 
+function readIdentifier(source: string, index: number): string | null {
+  const match = /[A-Za-z_$][\w$]*/.exec(source.slice(index));
+  return match?.index === 0 ? match[0] : null;
+}
+
+function skipsQuotedSource(source: string, index: number): number {
+  const quote = source[index];
+  let cursor = index + 1;
+  while (cursor < source.length) {
+    const char = source[cursor];
+    if (char === "\\") {
+      cursor += 2;
+      continue;
+    }
+    if (char === quote) return cursor + 1;
+    cursor++;
+  }
+  return source.length;
+}
+
+function nextNonWhitespaceIndex(source: string, index: number): number {
+  let cursor = index;
+  while (cursor < source.length && /\s/.test(source[cursor] ?? "")) {
+    cursor++;
+  }
+  return cursor;
+}
+
+function findConnectionCallIndex(source: string): number | null {
+  const allowedPreviousIdentifiers = new Set(["await", "return", "void", "yield"]);
+  const allowedPreviousPunctuation = new Set(["", "(", "{", "[", "=", ":", ",", ";", "?", "!"]);
+  let previousToken = "";
+  let index = 0;
+
+  while (index < source.length) {
+    const char = source[index];
+    if (char === '"' || char === "'" || char === "`") {
+      index = skipsQuotedSource(source, index);
+      continue;
+    }
+
+    const identifier = readIdentifier(source, index);
+    if (identifier !== null) {
+      if (identifier === "connection") {
+        const nextIndex = nextNonWhitespaceIndex(source, index + identifier.length);
+        if (
+          source[nextIndex] === "(" &&
+          (allowedPreviousIdentifiers.has(previousToken) ||
+            allowedPreviousPunctuation.has(previousToken))
+        ) {
+          return index;
+        }
+      }
+      previousToken = identifier;
+      index += identifier.length;
+      continue;
+    }
+
+    if (!/\s/.test(char ?? "")) {
+      previousToken = char ?? "";
+    }
+    index++;
+  }
+
+  return null;
+}
+
 function staticPrefetchRegion(source: string): string {
-  const connectionMatch = /\bconnection\s*\(/.exec(source);
-  return connectionMatch?.index === undefined ? source : source.slice(0, connectionMatch.index);
+  const connectionIndex = findConnectionCallIndex(source);
+  return connectionIndex === null ? source : source.slice(0, connectionIndex);
 }
 
 function findExportedFunctionBodyStart(source: string, functionName: string): number | null {
@@ -231,15 +298,44 @@ function sourcePattern(
   return `(?:${patterns.join("|")})`;
 }
 
+function collectSourceAliases(
+  source: string,
+  identifiers: readonly string[],
+  memberPropName: string,
+): string[] {
+  const aliases: string[] = [];
+  const seen = new Set(identifiers);
+
+  for (;;) {
+    const sourceExpressionPattern = sourcePattern(Array.from(seen), memberPropName, source);
+    const discovered = Array.from(
+      source.matchAll(
+        new RegExp(
+          String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*${sourceExpressionPattern}\b`,
+          "g",
+        ),
+      ),
+      (match) => match[1],
+    ).filter((alias) => !seen.has(alias));
+
+    if (discovered.length === 0) return aliases;
+    for (const alias of discovered) {
+      seen.add(alias);
+      aliases.push(alias);
+    }
+  }
+}
+
 function collectParamAccesses(source: string, paramNames: readonly string[]): Set<string> {
   const region = staticPrefetchRegion(source);
   const accessed = new Set<string>();
   const paramPropAliases = collectPropAliases(region, "params");
-  const paramPromiseSourcePattern = sourcePattern(
-    ["params", ...paramPropAliases],
+  const paramPromiseIdentifiers = [
     "params",
-    region,
-  );
+    ...paramPropAliases,
+    ...collectSourceAliases(region, ["params", ...paramPropAliases], "params"),
+  ];
+  const paramPromiseSourcePattern = sourcePattern(paramPromiseIdentifiers, "params", region);
   const awaitedParamAliases = Array.from(
     region.matchAll(
       new RegExp(
@@ -250,7 +346,7 @@ function collectParamAccesses(source: string, paramNames: readonly string[]): Se
     (match) => match[1],
   );
   const paramSourcePattern = sourcePattern(
-    ["params", ...paramPropAliases, ...awaitedParamAliases],
+    [...paramPromiseIdentifiers, ...awaitedParamAliases],
     "params",
     region,
   );
@@ -324,8 +420,13 @@ function mergeAccesses(target: Set<string>, source: Set<string>): void {
 function sourceAccessesSearchParams(source: string): boolean {
   const region = staticPrefetchRegion(source);
   const searchParamPropAliases = collectPropAliases(region, "searchParams");
+  const searchParamPromiseIdentifiers = [
+    "searchParams",
+    ...searchParamPropAliases,
+    ...collectSourceAliases(region, ["searchParams", ...searchParamPropAliases], "searchParams"),
+  ];
   const searchParamPromiseSourcePattern = sourcePattern(
-    ["searchParams", ...searchParamPropAliases],
+    searchParamPromiseIdentifiers,
     "searchParams",
     region,
   );
@@ -339,7 +440,7 @@ function sourceAccessesSearchParams(source: string): boolean {
     (match) => match[1],
   );
   const searchParamSourcePattern = sourcePattern(
-    ["searchParams", ...searchParamPropAliases, ...awaitedSearchParamAliases],
+    [...searchParamPromiseIdentifiers, ...awaitedSearchParamAliases],
     "searchParams",
     region,
   );
@@ -374,7 +475,7 @@ function sourceHasGenerateStaticParams(source: string): boolean {
 }
 
 function sourceHasConnectionCall(source: string): boolean {
-  return /\bconnection\s*\(/.test(source);
+  return findConnectionCallIndex(source) !== null;
 }
 
 function sourceHasSuspenseFallback(source: string): boolean {

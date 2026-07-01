@@ -162,6 +162,27 @@ describe("App Router prefetch vary analysis", () => {
     expect(route.prefetchVarySearchParams).toBe(true);
   });
 
+  it("tracks object props params and searchParams promise aliases", () => {
+    const pagePath = writeSource(
+      "page.tsx",
+      `export default async function Page(props: {
+        params: Promise<{ category: string; itemId: string }>;
+        searchParams: Promise<{ foo?: string }>;
+      }) {
+        const routeParams = props.params;
+        const queryPromise = props.searchParams;
+        const { itemId } = await routeParams;
+        const query = await queryPromise;
+        return <div>{itemId}:{query.foo}</div>;
+      }`,
+    );
+
+    const route = toLinkPrefetchRoute(createRoute({ pagePath }));
+
+    expect(route.prefetchVaryParamNames).toEqual(["itemId"]);
+    expect(route.prefetchVarySearchParams).toBe(true);
+  });
+
   it("marks Object.assign param and searchParam copies as varying", () => {
     const pagePath = writeSource(
       "page.tsx",
@@ -294,6 +315,21 @@ describe("App Router prefetch vary analysis", () => {
         myConnection();
         const { itemId } = await params;
         return <div>{itemId}</div>;
+      }`,
+    );
+
+    const route = toLinkPrefetchRoute(createRoute({ pagePath }));
+
+    expect(route.prefetchVaryParamNames).toEqual(["itemId"]);
+  });
+
+  it("does not truncate static analysis on connection text", () => {
+    const pagePath = writeSource(
+      "page.tsx",
+      `export default async function Page({ params }: { params: Promise<{ category: string; itemId: string }> }) {
+        const docs = "Call connection() to opt into dynamic rendering";
+        const { itemId } = await params;
+        return <div>{docs}<code>connection()</code>{itemId}</div>;
       }`,
     );
 
