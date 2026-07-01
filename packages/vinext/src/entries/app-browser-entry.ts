@@ -190,11 +190,60 @@ function findConstInitializer(
   options: { exported: boolean },
 ): string | null {
   const prefix = options.exported ? String.raw`export\s+const` : String.raw`const`;
-  const match = new RegExp(`${prefix}\\s+${escapeRegExp(name)}(?:\\s*:[^=;]+)?\\s*=`, "m").exec(
-    source,
-  );
+  const match = new RegExp(`${prefix}\\s+${escapeRegExp(name)}\\b`, "m").exec(source);
   if (!match) return null;
-  return readInitializerExpression(source, match.index + match[0].length);
+  const initializerStart = readConstInitializerStart(source, match.index + match[0].length);
+  if (initializerStart === null) return null;
+  return readInitializerExpression(source, initializerStart);
+}
+
+function readConstInitializerStart(source: string, startIndex: number): number | null {
+  let index = skipWhitespace(source, startIndex);
+  if (source[index] === "=") return index + 1;
+  if (source[index] !== ":") return null;
+
+  index++;
+  let quote: string | null = null;
+  let escaped = false;
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  let parenDepth = 0;
+  let angleDepth = 0;
+  for (; index < source.length; index++) {
+    const char = source[index];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'" || char === "`") {
+      quote = char;
+      continue;
+    }
+    if (char === "{") braceDepth++;
+    if (char === "}") braceDepth--;
+    if (char === "[") bracketDepth++;
+    if (char === "]") bracketDepth--;
+    if (char === "(") parenDepth++;
+    if (char === ")") parenDepth--;
+    if (char === "<") angleDepth++;
+    if (char === ">" && angleDepth > 0) angleDepth--;
+    const inNestedType = braceDepth > 0 || bracketDepth > 0 || parenDepth > 0 || angleDepth > 0;
+    if (char === ";" && !inNestedType) return null;
+    if (char === "=" && !inNestedType && source[index + 1] !== ">") return index + 1;
+  }
+  return null;
+}
+
+function skipWhitespace(source: string, startIndex: number): number {
+  let index = startIndex;
+  while (/\s/.test(source[index] ?? "")) index++;
+  return index;
 }
 
 function findDefaultExportExpression(source: string): string | null {
