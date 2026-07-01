@@ -492,7 +492,11 @@ function prefetchUrl(
         }
         const autoPrefetch =
           mode === "route-tree" || mode === "segment"
-            ? { cacheForNavigation: false, prefetchShellFirst: false, shouldPrefetch: true }
+            ? {
+                cacheForNavigation: mode === "segment",
+                prefetchShellFirst: false,
+                shouldPrefetch: true,
+              }
             : mode === "auto"
               ? resolveAutoAppRoutePrefetch(prefetchHref)
               : mode === "full-after-shell"
@@ -765,7 +769,7 @@ function drainVisibleAppPrefetchQueue(): void {
     if (!instance) return;
     instance.queuedViewportPrefetch = false;
     if (!instance.isVisible || instance.routerMode !== "app") continue;
-    prefetchUrl(instance.href, instance.mode, "low", instance.pagesRouteHref);
+    void prefetchUrl(instance.href, instance.mode, "low", instance.pagesRouteHref);
   }
 }
 
@@ -998,7 +1002,7 @@ function setVisibleLinkPrefetch(
     } else if (instance.routerMode === "app") {
       scheduleVisibleAppPrefetch(instance);
     } else {
-      prefetchUrl(instance.href, instance.mode, "low", instance.pagesRouteHref);
+      void prefetchUrl(instance.href, instance.mode, "low", instance.pagesRouteHref);
     }
     instance.viewportPrefetched = true;
   } else {
