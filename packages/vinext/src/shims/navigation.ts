@@ -258,6 +258,8 @@ export type PrefetchOptions = {
   onInvalidate?: () => void;
 };
 
+export type PrefetchCacheKind = "loading-shell" | "navigation" | "route-tree";
+
 export type PrefetchCacheEntry = {
   cacheForNavigation?: boolean;
   expiresAt?: number;
@@ -271,6 +273,7 @@ export type PrefetchCacheEntry = {
   runtimeLoadingFallback?: VinextRuntimePrefetchLoadingFallback | null;
   runtimeTemplateVariantKey?: string | null;
   sharedCacheKey?: string | null;
+  prefetchKind?: PrefetchCacheKind;
   size?: number;
   timestamp: number;
 };
@@ -494,36 +497,46 @@ function findPrefetchCacheEntryForNavigation(
   rscUrl: string,
   interceptionContext: string | null,
   mountedSlotsHeader: string | null,
-  options: { includeNonNavigation?: boolean; sharedCacheKey?: string | null } = {},
+  options: {
+    additionalRscUrls?: readonly string[];
+    includeNonNavigation?: boolean;
+    sharedCacheKey?: string | null;
+  } = {},
 ): { cacheKey: string; entry: PrefetchCacheEntry } | null {
-  const exactCacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
   const cache = getPrefetchCache();
-  const exactEntry = cache.get(exactCacheKey);
-  if (
-    exactEntry &&
-    (options.includeNonNavigation === true || exactEntry.cacheForNavigation !== false) &&
-    isPrefetchCacheEntryCompatibleWithMountedSlots(exactEntry, mountedSlotsHeader)
-  ) {
-    return { cacheKey: exactCacheKey, entry: exactEntry };
+  const rscUrls = [rscUrl, ...(options.additionalRscUrls ?? [])];
+
+  for (const lookupRscUrl of rscUrls) {
+    const exactCacheKey = AppElementsWire.encodeCacheKey(lookupRscUrl, interceptionContext);
+    const exactEntry = cache.get(exactCacheKey);
+    if (
+      exactEntry &&
+      (options.includeNonNavigation === true || exactEntry.cacheForNavigation !== false) &&
+      isPrefetchCacheEntryCompatibleWithMountedSlots(exactEntry, mountedSlotsHeader)
+    ) {
+      return { cacheKey: exactCacheKey, entry: exactEntry };
+    }
   }
 
-  const normalizedTarget = normalizeRscCacheLookupUrl(rscUrl);
-  if (normalizedTarget === null) return null;
+  const normalizedTargets = new Set(
+    rscUrls
+      .map((lookupRscUrl) => normalizeRscCacheLookupUrl(lookupRscUrl))
+      .filter((lookupRscUrl): lookupRscUrl is string => lookupRscUrl !== null),
+  );
+  if (normalizedTargets.size === 0) return null;
 
   for (const [cacheKey, entry] of cache) {
-    if (cacheKey === exactCacheKey) continue;
     if (options.includeNonNavigation !== true && entry.cacheForNavigation === false) continue;
 
     const source = parsePrefetchCacheKey(cacheKey);
     if (source.interceptionContext !== interceptionContext) continue;
-    if (
-      normalizeRscCacheLookupUrl(source.rscUrl) !== normalizedTarget &&
-      (options.sharedCacheKey === null ||
-        options.sharedCacheKey === undefined ||
-        entry.sharedCacheKey !== options.sharedCacheKey)
-    ) {
-      continue;
-    }
+    const normalizedSource = normalizeRscCacheLookupUrl(source.rscUrl);
+    const matchesKnownUrl = normalizedSource !== null && normalizedTargets.has(normalizedSource);
+    const matchesSharedCacheKey =
+      options.sharedCacheKey !== null &&
+      options.sharedCacheKey !== undefined &&
+      entry.sharedCacheKey === options.sharedCacheKey;
+    if (!matchesKnownUrl && !matchesSharedCacheKey) continue;
     if (!isPrefetchCacheEntryCompatibleWithMountedSlots(entry, mountedSlotsHeader)) continue;
 
     return { cacheKey, entry };
@@ -537,6 +550,7 @@ export function hasPrefetchCacheEntryForNavigation(
   interceptionContext: string | null = null,
   mountedSlotsHeader: string | null = null,
   options: {
+    additionalRscUrls?: readonly string[];
     includeNonNavigation?: boolean;
     notifyInvalidation?: boolean;
     sharedCacheKey?: string | null;
@@ -943,6 +957,7 @@ export function prefetchRscResponse(
     runtimeLoadingFallback?: VinextRuntimePrefetchLoadingFallback | null;
     runtimeTemplateVariantKey?: string | null;
     sharedCacheKey?: string | null;
+    prefetchKind?: PrefetchCacheKind;
   } = {},
 ): void {
   const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
@@ -962,6 +977,9 @@ export function prefetchRscResponse(
     runtimeLoadingFallback: behavior.runtimeLoadingFallback ?? null,
     runtimeTemplateVariantKey: behavior.runtimeTemplateVariantKey ?? null,
     sharedCacheKey: behavior.sharedCacheKey ?? null,
+    prefetchKind:
+      behavior.prefetchKind ??
+      (behavior.optimisticRouteShell === true ? "loading-shell" : "navigation"),
     timestamp: now,
   };
   addPrefetchInvalidationCallback(entry, options?.onInvalidate);
@@ -1036,12 +1054,20 @@ export function consumePrefetchResponse(
   if (!match) return null;
   const { cacheKey, entry } = match;
 
+  return consumeMatchedPrefetchResponse(cacheKey, entry, mountedSlotsHeader);
+}
+
+function consumeMatchedPrefetchResponse(
+  cacheKey: string,
+  entry: PrefetchCacheEntry,
+  mountedSlotsHeader: string | null,
+): CachedRscResponse | null {
   // Skip in-flight snapshots and error-path residue where pending cleared
   // without a successful transition to a cache-seeded entry.
   if (entry.pending || entry.outcome !== "cache-seeded") return null;
   if (entry.cacheForNavigation === false) return null;
 
-  deletePrefetchCacheEntry(cache, getPrefetchedUrls(), cacheKey, entry, false);
+  deletePrefetchCacheEntry(getPrefetchCache(), getPrefetchedUrls(), cacheKey, entry, false);
 
   if (entry.snapshot) {
     if (!isPrefetchCacheEntryCompatibleWithMountedSlots(entry, mountedSlotsHeader)) {
@@ -1076,6 +1102,8 @@ export function consumePrefetchResponse(
  * one in-flight network request that navigation should share.
  */
 type ConsumePrefetchResponseForNavigationOptions = {
+  additionalRscUrls?: readonly string[];
+  sharedCacheKey?: string | null;
   shouldConsume?: () => boolean;
 };
 
@@ -1083,14 +1111,17 @@ export async function consumePrefetchResponseForNavigation(
   rscUrl: string,
   interceptionContext: string | null = null,
   mountedSlotsHeader: string | null = null,
-  options?: ConsumePrefetchResponseForNavigationOptions & { sharedCacheKey?: string | null },
+  options?: ConsumePrefetchResponseForNavigationOptions,
 ): Promise<CachedRscResponse | null> {
   const cache = getPrefetchCache();
   const match = findPrefetchCacheEntryForNavigation(
     rscUrl,
     interceptionContext,
     mountedSlotsHeader,
-    { sharedCacheKey: options?.sharedCacheKey },
+    {
+      additionalRscUrls: options?.additionalRscUrls,
+      sharedCacheKey: options?.sharedCacheKey,
+    },
   );
   if (!match) return null;
   const { cacheKey, entry } = match;
@@ -1102,9 +1133,7 @@ export async function consumePrefetchResponseForNavigation(
 
   if (options?.shouldConsume?.() === false) return null;
 
-  return consumePrefetchResponse(rscUrl, interceptionContext, mountedSlotsHeader, {
-    sharedCacheKey: options?.sharedCacheKey,
-  });
+  return consumeMatchedPrefetchResponse(cacheKey, entry, mountedSlotsHeader);
 }
 
 // ---------------------------------------------------------------------------
