@@ -767,10 +767,14 @@ export async function renderAppPageLifecycle(
     requestInfo: unknown,
     errorContext: unknown,
   ): unknown => {
+    const specialError = resolveAppPageSpecialError(error);
+    if (specialError !== null && isPrefetchDynamicShell) {
+      return rscErrorTracker.onRenderError(error, requestInfo, errorContext);
+    }
     if (options.pprFallbackShellSignal?.aborted) {
       return getDigestForWellKnownError(error);
     }
-    if (resolveAppPageSpecialError(error) !== null) {
+    if (specialError !== null) {
       return rscErrorTracker.onRenderError(error, requestInfo, errorContext);
     }
     const digest = getDigestForWellKnownError(error);

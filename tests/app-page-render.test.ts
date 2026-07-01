@@ -22,6 +22,7 @@ import type { LayoutClassificationOptions } from "../packages/vinext/src/server/
 import { createClientReuseManifestHeaderFromVisibleAppState } from "../packages/vinext/src/server/app-browser-client-reuse-manifest.js";
 import { createAppLayoutParamAccessTracker } from "../packages/vinext/src/server/app-layout-param-observation.js";
 import { renderAppPageLifecycle } from "../packages/vinext/src/server/app-page-render.js";
+import { APP_RSC_RENDER_MODE_PREFETCH_DYNAMIC_SHELL } from "../packages/vinext/src/server/app-rsc-render-mode.js";
 import {
   parseClientReuseManifestHeader,
   type ClientReuseManifestParseResult,
@@ -522,6 +523,33 @@ describe("app page render lifecycle", () => {
       kind: "http-access-fallback",
       statusCode: 404,
     });
+  });
+
+  it("captures prefetch dynamic-shell special errors even when a fallback-shell signal is aborted", async () => {
+    const common = createCommonOptions();
+    const notFoundError = Object.assign(new Error("NEXT_NOT_FOUND"), { digest: "NEXT_NOT_FOUND" });
+    const abortController = new AbortController();
+    abortController.abort();
+    const baseOnError = vi.fn(() => "NEXT_NOT_FOUND");
+
+    const response = await renderAppPageLifecycle({
+      ...common.options,
+      createRscOnErrorHandler() {
+        return baseOnError;
+      },
+      hasLoadingBoundary: true,
+      isRscRequest: true,
+      pprFallbackShellSignal: abortController.signal,
+      renderMode: APP_RSC_RENDER_MODE_PREFETCH_DYNAMIC_SHELL,
+      renderToReadableStream(_element, opts) {
+        expect(opts.onError(notFoundError, null, null)).toBe("NEXT_NOT_FOUND");
+        return createStream(["flight-data"]);
+      },
+    });
+
+    await expect(response.text()).resolves.toBe("flight-data");
+    expect(baseOnError).toHaveBeenCalledTimes(1);
+    expect(baseOnError).toHaveBeenCalledWith(notFoundError, null, null);
   });
 
   it("returns RSC responses and schedules an ISR cache write through waitUntil", async () => {

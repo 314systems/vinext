@@ -186,6 +186,11 @@ describe("App Router generated manifest construction", () => {
       path.join(appDir, "alias-streaming", "page.tsx"),
       'import { AliasedStreamingText } from "@/lib/aliased-streaming-text";\nexport default function Page() { return <AliasedStreamingText />; }\n',
     );
+    fs.mkdirSync(path.join(appDir, "alias-cookies"), { recursive: true });
+    fs.writeFileSync(
+      path.join(appDir, "alias-cookies", "page.tsx"),
+      'import { cookies as getCookies } from "next/headers";\nexport default async function Page() { await getCookies(); return null; }\n',
+    );
     fs.mkdirSync(path.join(appDir, "overlapping-alias-streaming"), { recursive: true });
     fs.writeFileSync(
       path.join(appDir, "overlapping-alias-streaming", "page.tsx"),
@@ -319,6 +324,30 @@ describe("App Router generated manifest construction", () => {
         siblingIntercepts: [],
       },
       {
+        pattern: "/alias-cookies",
+        patternParts: ["alias-cookies"],
+        pagePath: path.join(appDir, "alias-cookies", "page.tsx"),
+        routePath: null,
+        layouts: [],
+        templates: [],
+        parallelSlots: [],
+        loadingPath: null,
+        errorPath: null,
+        layoutErrorPaths: [],
+        notFoundPath: null,
+        notFoundPaths: [],
+        forbiddenPaths: [],
+        forbiddenPath: null,
+        unauthorizedPaths: [],
+        unauthorizedPath: null,
+        routeSegments: ["alias-cookies"],
+        templateTreePositions: [],
+        layoutTreePositions: [],
+        isDynamic: false,
+        params: [],
+        siblingIntercepts: [],
+      },
+      {
         pattern: "/package-subpath",
         patternParts: ["package-subpath"],
         pagePath: path.join(appDir, "package-subpath", "page.tsx"),
@@ -389,6 +418,9 @@ describe("App Router generated manifest construction", () => {
     // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/segment-cache/basic/segment-cache-basic.test.ts
     expect(code).toContain(
       '{"canPrefetchLoadingShell":false,"patternParts":["alias-streaming"],"isDynamic":false,"requiresDynamicNavigationRequest":true}',
+    );
+    expect(code).toContain(
+      '{"canPrefetchLoadingShell":false,"patternParts":["alias-cookies"],"isDynamic":false,"requiresDynamicNavigationRequest":true}',
     );
     expect(code).toContain(
       '{"canPrefetchLoadingShell":false,"patternParts":["overlapping-alias-streaming"],"isDynamic":false,"requiresDynamicNavigationRequest":true}',

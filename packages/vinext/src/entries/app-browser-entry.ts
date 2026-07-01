@@ -80,7 +80,14 @@ export function toDocumentOnlyAppRoute(
 }
 
 const dynamicRequestApiPattern =
-  /\b(?:connection|headers|cookies|draftMode|noStore|unstable_noStore)\s*\(/;
+  /\b(?:connection|headers|cookies|draftMode|noStore|unstable_noStore)\s*(?:\?\.)?\s*\(/;
+const dynamicRequestApiModules = new Map([
+  ["next/cache", new Set(["noStore", "unstable_noStore"])],
+  ["next/headers", new Set(["headers", "cookies", "draftMode"])],
+  ["next/server", new Set(["connection"])],
+]);
+const staticImportPattern = /import\s+(?!type\b)([\s\S]*?)\s+from\s*["']([^"']+)["']/g;
+const reExportPattern = /export\s+(?!type\b)([\s\S]*?)\s+from\s*["']([^"']+)["']/g;
 const importSpecifierPattern =
   /(?:import|export)\s+(?:[^'"]*?\s+from\s*)?["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)/g;
 const routeSourceExtensions = [".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs"];
@@ -230,6 +237,107 @@ function isAliasShapedLocalSpecifier(specifier: string): boolean {
   );
 }
 
+function normalizeDynamicRequestApiModule(specifier: string): string {
+  return specifier.endsWith(".js") ? specifier.slice(0, -".js".length) : specifier;
+}
+
+function getDynamicRequestApiExports(specifier: string): Set<string> | null {
+  return dynamicRequestApiModules.get(normalizeDynamicRequestApiModule(specifier)) ?? null;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+}
+
+function stripBlockAndLineComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n\r]*/g, "");
+}
+
+function splitImportSpecifiers(specifiers: string): string[] {
+  return specifiers
+    .split(",")
+    .map((specifier) => specifier.trim())
+    .filter(Boolean);
+}
+
+function getNamedImportLocalBindings(importClause: string, exportedApis: Set<string>): Set<string> {
+  const localBindings = new Set<string>();
+  const namedMatch = /\{([\s\S]*?)\}/.exec(importClause);
+  if (!namedMatch) return localBindings;
+
+  for (const specifier of splitImportSpecifiers(namedMatch[1] ?? "")) {
+    const match = /^(?:type\s+)?([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/.exec(specifier);
+    if (!match) continue;
+    const importedName = match[1] ?? "";
+    if (exportedApis.has(importedName)) {
+      localBindings.add(match[2] ?? importedName);
+    }
+  }
+
+  return localBindings;
+}
+
+function getNamespaceImportBinding(importClause: string): string | null {
+  return /\*\s+as\s+([A-Za-z_$][\w$]*)/.exec(importClause)?.[1] ?? null;
+}
+
+function sourceCallsImportedBinding(source: string, binding: string): boolean {
+  const escaped = escapeRegExp(binding);
+  return new RegExp(`(?<![\\w$.:])${escaped}\\s*(?:\\?\\.)?\\s*\\(`).test(source);
+}
+
+function sourceCallsNamespaceImport(
+  source: string,
+  namespace: string,
+  exportedApis: Set<string>,
+): boolean {
+  const escapedNamespace = escapeRegExp(namespace);
+  const escapedApis = [...exportedApis].map(escapeRegExp).join("|");
+  return new RegExp(
+    `(?<![\\w$])${escapedNamespace}\\s*\\.\\s*(?:${escapedApis})\\s*(?:\\?\\.)?\\s*\\(`,
+  ).test(source);
+}
+
+function sourceUsesImportedDynamicRequestApi(source: string): boolean {
+  const sourceWithoutComments = stripBlockAndLineComments(source);
+
+  staticImportPattern.lastIndex = 0;
+  for (;;) {
+    const match = staticImportPattern.exec(sourceWithoutComments);
+    if (!match) break;
+    const importClause = match[1] ?? "";
+    const exportedApis = getDynamicRequestApiExports(match[2] ?? "");
+    if (!exportedApis) continue;
+
+    const namespace = getNamespaceImportBinding(importClause);
+    if (namespace && sourceCallsNamespaceImport(sourceWithoutComments, namespace, exportedApis)) {
+      return true;
+    }
+
+    for (const binding of getNamedImportLocalBindings(importClause, exportedApis)) {
+      if (sourceCallsImportedBinding(sourceWithoutComments, binding)) {
+        return true;
+      }
+    }
+  }
+
+  // Re-exported dynamic request APIs can be called under arbitrary aliases from
+  // downstream modules. Keep these modules on the dynamic request path instead
+  // of caching a potentially request-scoped prefetch artifact.
+  reExportPattern.lastIndex = 0;
+  for (;;) {
+    const match = reExportPattern.exec(sourceWithoutComments);
+    if (!match) break;
+    const exportedApis = getDynamicRequestApiExports(match[2] ?? "");
+    if (!exportedApis) continue;
+    if (getNamedImportLocalBindings(match[1] ?? "", exportedApis).size > 0) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function resolveRouteImport(
   fromFile: string,
   specifier: string,
@@ -283,6 +391,7 @@ function fileUsesDynamicRequestApi(
   }
 
   if (dynamicRequestApiPattern.test(source)) return true;
+  if (sourceUsesImportedDynamicRequestApi(source)) return true;
 
   importSpecifierPattern.lastIndex = 0;
   for (;;) {
