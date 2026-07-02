@@ -86,6 +86,11 @@ function shouldHandleNavigation(event: MouseEvent<HTMLAnchorElement>): boolean {
   );
 }
 
+function isExternalDocumentHref(href: string): boolean {
+  const url = new URL(href, window.location.href);
+  return url.origin !== window.location.origin;
+}
+
 const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
   {
     href,
@@ -119,10 +124,19 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
     }
 
     if (!documentHref || !shouldHandleNavigation(event)) return;
+    if (isExternalDocumentHref(documentHref)) {
+      if (replace) {
+        event.preventDefault();
+        window.location.replace(documentHref);
+      }
+      return;
+    }
+
     if (onNavigate) {
       let prevented = false;
+      const url = new URL(documentHref, window.location.href);
       onNavigate({
-        url: new URL(documentHref, window.location.href),
+        url,
         preventDefault() {
           prevented = true;
         },
