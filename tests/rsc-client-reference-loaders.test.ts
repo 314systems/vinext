@@ -1,5 +1,12 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vite-plus/test";
-import { clientReferencesRequireRouterRuntime } from "../packages/vinext/src/plugins/rsc-client-reference-loaders.js";
+import type { Plugin } from "vite";
+import {
+  clientReferencesRequireRouterRuntime,
+  createRscClientReferenceLoadersPlugin,
+} from "../packages/vinext/src/plugins/rsc-client-reference-loaders.js";
 
 function createSourceReader(entries: Record<string, string[] | null>) {
   return async (id: string) => entries[id] ?? null;
@@ -77,5 +84,94 @@ describe("client reference router runtime analysis", () => {
         routerRuntimeModuleIds,
       }),
     ).resolves.toBe(true);
+  });
+
+  it("detects direct router module ids even when Vite adds a query", async () => {
+    await expect(
+      clientReferencesRequireRouterRuntime({
+        clientReferenceIds: ["/repo/app/counter.tsx"],
+        readImportSpecifiers: createSourceReader({
+          "/repo/app/counter.tsx": ["./navigation"],
+        }),
+        resolveImport: createResolver({
+          "/repo/app/counter.tsx:./navigation": "/repo/packages/vinext/src/shims/navigation.ts?v=1",
+        }),
+        internalRoot,
+        routerRuntimeImportSpecifiers,
+        routerRuntimeModuleIds,
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("handles cycles in router-independent client reference graphs", async () => {
+    await expect(
+      clientReferencesRequireRouterRuntime({
+        clientReferenceIds: ["/repo/app/a.tsx"],
+        readImportSpecifiers: createSourceReader({
+          "/repo/app/a.tsx": ["./b"],
+          "/repo/app/b.tsx": ["./a"],
+        }),
+        resolveImport: createResolver({
+          "/repo/app/a.tsx:./b": "/repo/app/b.tsx",
+          "/repo/app/b.tsx:./a": "/repo/app/a.tsx",
+        }),
+        internalRoot,
+        routerRuntimeImportSpecifiers,
+        routerRuntimeModuleIds,
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("falls back to the full runtime for external dependencies", async () => {
+    await expect(
+      clientReferencesRequireRouterRuntime({
+        clientReferenceIds: ["/repo/app/counter.tsx"],
+        readImportSpecifiers: createSourceReader({
+          "/repo/app/counter.tsx": ["external-package"],
+        }),
+        resolveImport: async () => ({ id: "external-package", external: true }),
+        internalRoot,
+        routerRuntimeImportSpecifiers,
+        routerRuntimeModuleIds,
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("detects static CommonJS router requires through the scan plugin", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-client-ref-scan-"));
+    try {
+      const clientReferenceId = path.join(root, "counter.js");
+      await fs.writeFile(
+        clientReferenceId,
+        `"use client";\nconst navigation = require("next/navigation");\nexport { navigation };\n`,
+      );
+
+      let required: boolean | undefined;
+      const plugin = createRscClientReferenceLoadersPlugin({
+        internalRoot,
+        routerRuntimeImportSpecifiers: ["next/navigation"],
+        routerRuntimeModuleIds,
+        onClientRouterRuntimeAnalysis(value) {
+          required = value;
+        },
+      }) as Plugin;
+      const manager = {
+        isScanBuild: true,
+        clientReferenceMetaMap: { [clientReferenceId]: {} },
+        serverReferenceMetaMap: {},
+      };
+
+      await (plugin.configResolved as Function).call(plugin, {
+        plugins: [{ name: "rsc:minimal", api: { manager } }],
+      });
+      await (plugin.generateBundle as Function).call({
+        environment: { name: "rsc" },
+        resolve: async () => null,
+      });
+
+      expect(required).toBe(true);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });

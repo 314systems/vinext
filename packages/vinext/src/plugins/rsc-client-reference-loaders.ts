@@ -145,6 +145,13 @@ function collectImportSpecifiers(code: string, id: string): string[] | null {
       } else if (node.type === "ImportExpression") {
         const source = getStaticString(node.source);
         if (source !== null) imports.add(source);
+      } else if (node.type === "CallExpression") {
+        const callee = isAstRecord(node.callee) ? node.callee : null;
+        if (callee?.type === "Identifier" && callee.name === "require") {
+          const firstArg = nodeArray(node.arguments)[0];
+          const source = getStaticString(firstArg);
+          if (source !== null) imports.add(source);
+        }
       }
       forEachAstChild(node, visit);
     };
