@@ -68,7 +68,6 @@ import {
   consumeAppRouterScrollIntent,
   type AppRouterScrollIntent,
 } from "vinext/shims/app-router-scroll-state";
-import { resolveHybridClientRewriteHref } from "vinext/shims/internal/hybrid-client-route-owner";
 import { installWindowNext, setWindowNextInternalSourcePage } from "../client/window-next.js";
 import {
   chunksToReadableStream,
@@ -189,6 +188,8 @@ import { hasServerActions, loadServerActionClient } from "virtual:vinext-app-cap
 
 type SearchParamInput = ConstructorParameters<typeof URLSearchParams>[0];
 type DevErrorOverlayModule = typeof import("../client/dev-error-overlay.js");
+type HybridClientRouteOwnerModule =
+  typeof import("vinext/shims/internal/hybrid-client-route-owner");
 
 type ServerActionResult = AppBrowserServerActionResult<AppWireElements>;
 
@@ -226,6 +227,31 @@ const CLIENT_RSC_COMPATIBILITY_ID = getVinextRscCompatibilityId();
 const optimisticRouteTemplates = new Map<string, OptimisticRouteTemplate>();
 const optimisticRouteTemplateSources = new Set<string>();
 const optimisticRouteTemplateLearning = new Map<string, Promise<void>>();
+let hybridClientRouteOwnerModulePromise: Promise<HybridClientRouteOwnerModule> | null = null;
+
+function hasClientRewrites(): boolean {
+  const rewrites = window.__VINEXT_CLIENT_REWRITES__;
+  return (
+    rewrites !== undefined &&
+    (rewrites.beforeFiles.length > 0 ||
+      rewrites.afterFiles.length > 0 ||
+      rewrites.fallback.length > 0)
+  );
+}
+
+function loadHybridClientRouteOwnerModule(): Promise<HybridClientRouteOwnerModule> {
+  hybridClientRouteOwnerModulePromise ??= import("vinext/shims/internal/hybrid-client-route-owner");
+  return hybridClientRouteOwnerModulePromise;
+}
+
+function resolveHybridClientRewriteHrefForNavigation(
+  href: string,
+): string | null | Promise<string | null> {
+  if (!hasClientRewrites()) return null;
+  return loadHybridClientRouteOwnerModule().then((module) =>
+    module.resolveHybridClientRewriteHref(href, __basePath),
+  );
+}
 
 function claimInitialAppRouterBootstrap(): boolean {
   if (window.__VINEXT_RSC_ROOT__ || window.__VINEXT_RSC_BOOTSTRAP_STATE__) {
@@ -1770,10 +1796,15 @@ function bootstrapHydration(
             navigationKind === "refresh" ? APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI : undefined,
         });
         const rscUrl = await createRscRequestUrl(url.pathname + url.search, requestHeaders);
-        const rewrittenNavigationHref =
+        const rewrittenNavigationHrefResult =
           navigationKind === "navigate"
-            ? resolveHybridClientRewriteHref(currentHref, __basePath)
+            ? resolveHybridClientRewriteHrefForNavigation(currentHref)
             : null;
+        const rewrittenNavigationHref =
+          rewrittenNavigationHrefResult instanceof Promise
+            ? await rewrittenNavigationHrefResult
+            : rewrittenNavigationHrefResult;
+        if (!browserNavigationController.isCurrentNavigation(navId)) return;
         const additionalPrefetchRscUrls =
           rewrittenNavigationHref && rewrittenNavigationHref !== currentHref
             ? [await createRscRequestUrl(rewrittenNavigationHref, requestHeaders)]
