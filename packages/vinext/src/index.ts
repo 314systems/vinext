@@ -6374,6 +6374,7 @@ export const loadServerActionClient = ${
       createRscClientReferenceLoadersPlugin({
         internalRoot: path.resolve(__dirname),
         routerRuntimeModuleIds: [
+          resolveShimModulePath(_shimsDir, "link"),
           resolveShimModulePath(_shimsDir, "navigation"),
           resolveShimModulePath(_shimsDir, "router"),
           resolveShimModulePath(_shimsDir, "form"),

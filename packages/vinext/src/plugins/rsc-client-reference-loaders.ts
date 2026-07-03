@@ -63,6 +63,7 @@ async function analyzeClientReferences(
 
   for (const clientReferenceId of options.clientReferenceIds) {
     const rootId = cleanModuleId(clientReferenceId);
+    if (routerRuntimeModuleIds.has(rootId)) return true;
     if (isWithinRoot(rootId, internalRoot)) continue;
 
     const pending = [clientReferenceId];
@@ -86,7 +87,12 @@ async function analyzeClientReferences(
         if (options.routerRuntimeImportSpecifiers.has(source)) return true;
         if (source.startsWith("node:")) continue;
 
-        const resolved = await options.resolveImport(source, cleanId);
+        let resolved: Awaited<ReturnType<typeof options.resolveImport>>;
+        try {
+          resolved = await options.resolveImport(source, cleanId);
+        } catch {
+          return true;
+        }
         if (resolved === null || resolved.external) return true;
         pending.push(resolved.id);
       }

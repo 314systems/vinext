@@ -22,9 +22,25 @@ function createResolver(entries: Record<string, string>) {
 describe("client reference router runtime analysis", () => {
   const internalRoot = "/repo/packages/vinext/src";
   const routerRuntimeImportSpecifiers = new Set(["next/navigation"]);
-  const routerRuntimeModuleIds = ["/repo/packages/vinext/src/shims/navigation.ts"];
+  const routerRuntimeModuleIds = [
+    "/repo/packages/vinext/src/shims/link.tsx",
+    "/repo/packages/vinext/src/shims/navigation.ts",
+  ];
 
-  it("ignores vinext-owned client references", async () => {
+  it("ignores vinext-owned client references that are not router runtime modules", async () => {
+    await expect(
+      clientReferencesRequireRouterRuntime({
+        clientReferenceIds: ["/repo/packages/vinext/src/shims/error-boundary.tsx"],
+        readImportSpecifiers: createSourceReader({}),
+        resolveImport: createResolver({}),
+        internalRoot,
+        routerRuntimeImportSpecifiers,
+        routerRuntimeModuleIds,
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("keeps the full runtime for vinext-owned router client references", async () => {
     await expect(
       clientReferencesRequireRouterRuntime({
         clientReferenceIds: ["/repo/packages/vinext/src/shims/link.tsx"],
@@ -34,7 +50,7 @@ describe("client reference router runtime analysis", () => {
         routerRuntimeImportSpecifiers,
         routerRuntimeModuleIds,
       }),
-    ).resolves.toBe(false);
+    ).resolves.toBe(true);
   });
 
   it("detects transitive router imports from user client references", async () => {
@@ -130,6 +146,23 @@ describe("client reference router runtime analysis", () => {
           "/repo/app/counter.tsx": ["external-package"],
         }),
         resolveImport: async () => ({ id: "external-package", external: true }),
+        internalRoot,
+        routerRuntimeImportSpecifiers,
+        routerRuntimeModuleIds,
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("falls back to the full runtime when import resolution fails", async () => {
+    await expect(
+      clientReferencesRequireRouterRuntime({
+        clientReferenceIds: ["/repo/app/counter.tsx"],
+        readImportSpecifiers: createSourceReader({
+          "/repo/app/counter.tsx": ["my-differentiated-files/browser"],
+        }),
+        resolveImport: async () => {
+          throw new Error("No known conditions for ./browser specifier.");
+        },
         internalRoot,
         routerRuntimeImportSpecifiers,
         routerRuntimeModuleIds,
