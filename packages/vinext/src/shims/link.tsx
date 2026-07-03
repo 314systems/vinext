@@ -63,8 +63,16 @@ import {
   setLinkForCurrentNavigation,
   type PendingLinkSetter,
 } from "./internal/link-status-registry.js";
+import {
+  resolveHybridClientRouteOwnerPrecheck,
+  type HybridClientOwner,
+} from "./internal/hybrid-client-route-owner-direct.js";
 import { getCurrentRoutePathnameForWarning } from "./internal/route-pattern-for-warning.js";
 import { scheduleAppPrefetchFetch } from "./internal/app-prefetch-fetch-queue.js";
+
+type HybridClientRouteOwnerModule = typeof import("./internal/hybrid-client-route-owner.js");
+
+let hybridClientRouteOwnerModulePromise: Promise<HybridClientRouteOwnerModule> | null = null;
 
 type NavigateEvent = {
   url: URL;
@@ -163,6 +171,22 @@ const __basePath: string = process.env.__NEXT_ROUTER_BASEPATH ?? "";
 const __trailingSlash: boolean = process.env.__VINEXT_TRAILING_SLASH === "true";
 const __prefetchInlining: boolean = process.env.__VINEXT_PREFETCH_INLINING === "true";
 const linkPrefetchRouteTrieCache = createRouteTrieCache<VinextLinkPrefetchRoute>();
+
+function loadHybridClientRouteOwnerModule(): Promise<HybridClientRouteOwnerModule> {
+  hybridClientRouteOwnerModulePromise ??= import("./internal/hybrid-client-route-owner.js");
+  return hybridClientRouteOwnerModulePromise;
+}
+
+function resolveLinkHybridClientRouteOwner(
+  href: string,
+  basePath: string,
+): HybridClientOwner | null | Promise<HybridClientOwner | null> {
+  const precheck = resolveHybridClientRouteOwnerPrecheck(href, basePath);
+  if (precheck.kind === "resolved") return precheck.owner;
+  return loadHybridClientRouteOwnerModule().then((module) =>
+    module.resolveHybridClientRouteOwner(href, basePath),
+  );
+}
 
 function resolveHref(href: LinkProps["href"]): string {
   if (typeof href === "string") return href;
@@ -1427,13 +1451,12 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
     // is no RSC stream to suspend on, so the soft-navigation bookkeeping
     // (`setPending`, `setLinkForCurrentNavigation`) would be a no-op at best
     // and a stale `useLinkStatus` indicator at worst.
-    const hybridOwner =
+    const hybridOwnerResult =
       HAS_PAGES_ROUTER && hasAppNavigationRuntime
-        ? (await import("./internal/hybrid-client-route-owner.js")).resolveHybridClientRouteOwner(
-            navigateHref,
-            __basePath,
-          )
+        ? resolveLinkHybridClientRouteOwner(navigateHref, __basePath)
         : null;
+    const hybridOwner =
+      hybridOwnerResult instanceof Promise ? await hybridOwnerResult : hybridOwnerResult;
     if (
       HAS_PAGES_ROUTER &&
       hasAppNavigationRuntime &&

@@ -139,6 +139,7 @@ import {
 } from "vinext/shims/error-boundary";
 import DefaultGlobalError from "vinext/shims/default-global-error";
 import { AppRouterContext } from "vinext/shims/internal/app-router-context";
+import { hasPotentialHybridClientRewrite } from "vinext/shims/internal/hybrid-client-route-owner-direct";
 import { BfcacheStateKeyMapContext, ElementsContext, Slot } from "vinext/shims/slot";
 import type { RouteManifest } from "../routing/app-route-graph.js";
 import {
@@ -229,16 +230,6 @@ const optimisticRouteTemplateSources = new Set<string>();
 const optimisticRouteTemplateLearning = new Map<string, Promise<void>>();
 let hybridClientRouteOwnerModulePromise: Promise<HybridClientRouteOwnerModule> | null = null;
 
-function hasClientRewrites(): boolean {
-  const rewrites = window.__VINEXT_CLIENT_REWRITES__;
-  return (
-    rewrites !== undefined &&
-    (rewrites.beforeFiles.length > 0 ||
-      rewrites.afterFiles.length > 0 ||
-      rewrites.fallback.length > 0)
-  );
-}
-
 function loadHybridClientRouteOwnerModule(): Promise<HybridClientRouteOwnerModule> {
   hybridClientRouteOwnerModulePromise ??= import("vinext/shims/internal/hybrid-client-route-owner");
   return hybridClientRouteOwnerModulePromise;
@@ -247,7 +238,7 @@ function loadHybridClientRouteOwnerModule(): Promise<HybridClientRouteOwnerModul
 function resolveHybridClientRewriteHrefForNavigation(
   href: string,
 ): string | null | Promise<string | null> {
-  if (!hasClientRewrites()) return null;
+  if (!hasPotentialHybridClientRewrite(href, __basePath)) return null;
   return loadHybridClientRouteOwnerModule().then((module) =>
     module.resolveHybridClientRewriteHref(href, __basePath),
   );

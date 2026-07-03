@@ -58,7 +58,7 @@ import { markPprFallbackShellDynamicBoundary } from "./ppr-fallback-shell.js";
 import { AppRouterContext, type AppRouterInstance } from "./internal/app-router-context.js";
 import { getPagesNavigationContext as _getPagesNavigationContext } from "./internal/pages-router-accessor.js";
 import {
-  resolveDirectHybridClientRouteOwner,
+  resolveHybridClientRouteOwnerPrecheck,
   type HybridClientOwner,
 } from "./internal/hybrid-client-route-owner-direct.js";
 import { retryScrollTo, scrollToHashTarget } from "./hash-scroll.js";
@@ -87,16 +87,6 @@ type HybridClientRouteOwnerModule = typeof import("./internal/hybrid-client-rout
 
 let hybridClientRouteOwnerModulePromise: Promise<HybridClientRouteOwnerModule> | null = null;
 
-function hasClientRewrites(): boolean {
-  const rewrites = window.__VINEXT_CLIENT_REWRITES__;
-  return (
-    rewrites !== undefined &&
-    (rewrites.beforeFiles.length > 0 ||
-      rewrites.afterFiles.length > 0 ||
-      rewrites.fallback.length > 0)
-  );
-}
-
 function loadHybridClientRouteOwnerModule(): Promise<HybridClientRouteOwnerModule> {
   hybridClientRouteOwnerModulePromise ??= import("./internal/hybrid-client-route-owner.js");
   return hybridClientRouteOwnerModulePromise;
@@ -106,7 +96,8 @@ function resolveAppHybridClientRouteOwner(
   href: string,
   basePath: string,
 ): HybridClientOwner | null | Promise<HybridClientOwner | null> {
-  if (!hasClientRewrites()) return resolveDirectHybridClientRouteOwner(href, basePath);
+  const precheck = resolveHybridClientRouteOwnerPrecheck(href, basePath);
+  if (precheck.kind === "resolved") return precheck.owner;
   return loadHybridClientRouteOwnerModule().then((module) =>
     module.resolveHybridClientRouteOwner(href, basePath),
   );
