@@ -197,6 +197,106 @@ describe("server action owner manifest", () => {
     );
   });
 
+  it("follows narrowed imports through package intermediaries in development", async () => {
+    const app = await fixture({
+      "app/page.tsx": `import { action1 } from "server-action-wrapper"; export default function Page() { return action1; }`,
+      "node_modules/server-action-wrapper/index.js": `import { action1 } from "server-action-mod"; export { action1 };`,
+      "node_modules/server-action-wrapper/package.json": `{"name":"server-action-wrapper","type":"module"}`,
+      "node_modules/server-action-mod/index.js": `'use server'; export async function action1() {}`,
+      "node_modules/server-action-mod/package.json": `{"name":"server-action-mod","type":"module"}`,
+    });
+    const wrapperEntry = path.join(app.root, "node_modules/server-action-wrapper/index.js");
+    const actionEntry = path.join(app.root, "node_modules/server-action-mod/index.js");
+    const resolve = async (specifier: string, importer?: string) => {
+      if (specifier === "server-action-wrapper") return { id: wrapperEntry };
+      if (specifier === "server-action-mod") return { id: actionEntry };
+      return app.resolve(specifier, importer);
+    };
+
+    const manifest = await buildStaticActionOwnerManifest({
+      mode: "development",
+      root: app.root,
+      routes: [route("/", path.join(app.root, "app/page.tsx"))],
+      resolve,
+    });
+
+    expect(
+      manifest[`/${path.relative(app.root, actionEntry).replaceAll(path.sep, "/")}#action1`],
+    ).toEqual(["/"]);
+  });
+
+  it.each([
+    [
+      "default export",
+      `import action from "server-action-mod"; export default action;`,
+      `import action from "server-action-wrapper"; export default function Page() { return action; }`,
+      "default",
+    ],
+    [
+      "exported declaration",
+      `import { action1 } from "server-action-mod"; export const wrapped = action1;`,
+      `import { wrapped } from "server-action-wrapper"; export default function Page() { return wrapped; }`,
+      "action1",
+    ],
+  ])(
+    "follows %s package intermediaries in development",
+    async (_name, wrapperSource, pageSource, exportName) => {
+      const app = await fixture({
+        "app/page.tsx": pageSource,
+        "node_modules/server-action-wrapper/index.js": wrapperSource,
+        "node_modules/server-action-wrapper/package.json": `{"name":"server-action-wrapper","type":"module"}`,
+        "node_modules/server-action-mod/index.js": `'use server'; export default async function action() {} export async function action1() {}`,
+        "node_modules/server-action-mod/package.json": `{"name":"server-action-mod","type":"module"}`,
+      });
+      const wrapperEntry = path.join(app.root, "node_modules/server-action-wrapper/index.js");
+      const actionEntry = path.join(app.root, "node_modules/server-action-mod/index.js");
+      const resolve = async (specifier: string, importer?: string) => {
+        if (specifier === "server-action-wrapper") return { id: wrapperEntry };
+        if (specifier === "server-action-mod") return { id: actionEntry };
+        return app.resolve(specifier, importer);
+      };
+
+      const manifest = await buildStaticActionOwnerManifest({
+        mode: "development",
+        root: app.root,
+        routes: [route("/", path.join(app.root, "app/page.tsx"))],
+        resolve,
+      });
+
+      expect(
+        manifest[
+          `/${path.relative(app.root, actionEntry).replaceAll(path.sep, "/")}#${exportName}`
+        ],
+      ).toEqual(["/"]);
+    },
+  );
+
+  it("does not assign unrelated package actions through a narrowed intermediary", async () => {
+    const app = await fixture({
+      "app/page.tsx": `import { action1 } from "server-action-wrapper"; export default function Page() { return action1; }`,
+      "node_modules/server-action-wrapper/index.js": `import { action1, action2 } from "server-action-mod"; export { action1, action2 };`,
+      "node_modules/server-action-wrapper/package.json": `{"name":"server-action-wrapper","type":"module"}`,
+      "node_modules/server-action-mod/index.js": `'use server'; export async function action1() {} export async function action2() {}`,
+      "node_modules/server-action-mod/package.json": `{"name":"server-action-mod","type":"module"}`,
+    });
+    const wrapperEntry = path.join(app.root, "node_modules/server-action-wrapper/index.js");
+    const actionEntry = path.join(app.root, "node_modules/server-action-mod/index.js");
+    const resolve = async (specifier: string, importer?: string) => {
+      if (specifier === "server-action-wrapper") return { id: wrapperEntry };
+      if (specifier === "server-action-mod") return { id: actionEntry };
+      return app.resolve(specifier, importer);
+    };
+    const manifest = await buildStaticActionOwnerManifest({
+      mode: "development",
+      root: app.root,
+      routes: [route("/", path.join(app.root, "app/page.tsx"))],
+      resolve,
+    });
+    const actionKey = `/${path.relative(app.root, actionEntry).replaceAll(path.sep, "/")}`;
+    expect(manifest[`${actionKey}#action1`]).toEqual(["/"]);
+    expect(manifest[`${actionKey}#action2`]).toBeUndefined();
+  });
+
   it("does not mistake inline action directives for module-level directives", async () => {
     const app = await fixture({
       "app/page.tsx": `export default function Page() {\n  async function action() {\n    "use server";\n  }\n  return action;\n}`,

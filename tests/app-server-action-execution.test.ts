@@ -1732,10 +1732,11 @@ describe("app server action execution helpers", () => {
     if (!renderRequest) throw new Error("Expected redirect render request");
 
     expect(renderRequest.method).toBe("GET");
-    expect(renderRequest.url).toBe("https://example.com/redirect-target?from=action");
+    expect(renderRequest.url).toBe("https://example.com/redirect-target?from=action&_rsc");
+    expect(renderRequest.headers.get("rsc")).toBe("1");
     expect(renderRequest.headers.get("next-action")).toBeNull();
     expect(renderRequest.headers.get("x-rsc-action")).toBeNull();
-    expect(renderRequest.headers.get("rsc")).toBeNull();
+    expect(renderRequest.headers.get("rsc")).toBe("1");
     expect(renderRequest.headers.get("content-type")).toBeNull();
     expect(renderRequest.headers.get("origin")).toBeNull();
     expect(renderRequest.headers.get("cookie")).toBe(

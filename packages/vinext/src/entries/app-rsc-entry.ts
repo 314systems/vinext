@@ -49,14 +49,6 @@ const metadataRouteResponsePath = resolveEntryPath(
   "../server/metadata-route-response.js",
   import.meta.url,
 );
-const appServerActionExecutionPath = resolveEntryPath(
-  "../server/app-server-action-execution.js",
-  import.meta.url,
-);
-const appActionForwardingPath = resolveEntryPath(
-  "../server/app-action-forwarding.js",
-  import.meta.url,
-);
 const appRscErrorsPath = resolveEntryPath("../server/app-rsc-errors.js", import.meta.url);
 const appPageExecutionPath = resolveEntryPath("../server/app-page-execution.js", import.meta.url);
 const appFallbackRendererPath = resolveEntryPath(
@@ -309,6 +301,7 @@ const prerenderToReadableStream = createRscPrerenderer(async (model, options) =>
 import { createElement } from "react";
 import { getNavigationContext as _getNavigationContext } from "next/navigation";
 import { configureMemoryCacheHandler as __configureMemoryCacheHandler } from "vinext/shims/cache-handler";
+import { getRequestExecutionContext as __getRequestExecutionContext } from "vinext/shims/request-context";
 import { headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, consumeInvalidDynamicUsageError, setHeadersAccessPhase } from "next/headers";
 import { mergeMetadata, resolveModuleMetadata, mergeViewport, resolveModuleViewport } from "vinext/metadata";
 ${
@@ -339,8 +332,8 @@ ${
 const __loadAppRouteHandlerDispatch = () => import(${JSON.stringify(appRouteHandlerDispatchPath)});
 ${
   hasServerActions
-    ? `const __loadAppServerActionExecution = () => import(${JSON.stringify(appServerActionExecutionPath)});
-const __loadAppActionForwarding = () => import(${JSON.stringify(appActionForwardingPath)});`
+    ? `const __loadAppServerActionExecution = () => import("vinext/internal/server/app-server-action-execution");
+const __loadAppActionForwarding = () => import("vinext/internal/server/app-action-forwarding");`
     : ""
 }
 ${
@@ -1063,11 +1056,23 @@ const __appRscHandler = createAppRscHandler({
     const __forwardResponse = await __forwardServerActionIfNeeded({
       actionId,
       actionOwners: __VINEXT_ACTION_OWNERS(),
+      allowedOrigins: __allowedOrigins,
       basePath: __basePath,
       clearRequestContext: __clearRequestContext,
       currentRoutePattern: __currentActionMatch?.route.pattern ?? null,
       dispatch(__forwardRequest) {
-        return __appRscHandler(__forwardRequest, { actionForwarded: true });
+        const __executionContext = __getRequestExecutionContext();
+        return __appRscHandler(
+          __forwardRequest,
+          __executionContext
+            ? {
+                actionForwarded: true,
+                cache: __executionContext.cache,
+                passThroughOnException: __executionContext.passThroughOnException?.bind(__executionContext),
+                waitUntil: __executionContext.waitUntil.bind(__executionContext),
+              }
+            : { actionForwarded: true },
+        );
       },
       middlewareContext,
       request,
@@ -1078,7 +1083,7 @@ const __appRscHandler = createAppRscHandler({
       readActionBodyWithLimit: __readBodyWithLimit,
       readActionFormDataWithLimit: __readFormDataWithLimit,
     } = await __loadAppServerActionExecution();
-    const __actionMatch = matchRoute(cleanPathname);
+    const __actionMatch = __currentActionMatch;
     if (__actionMatch) await __ensureRouteLoaded(__actionMatch.route);
     const __actionIsEdgeRuntime = __actionMatch
       ? __isEdgeRuntime(__resolveRouteRuntime(__actionMatch.route))

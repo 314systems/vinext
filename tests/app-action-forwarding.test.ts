@@ -18,6 +18,7 @@ function options(overrides: Record<string, unknown> = {}) {
   return {
     actionId: "action-key#submit",
     actionOwners: { "action-key#submit": ["/teams/:team/actions"] },
+    allowedOrigins: [],
     basePath: "/base",
     clearRequestContext() {},
     currentRoutePattern: "/source",
@@ -129,13 +130,65 @@ describe("server action forwarding", () => {
     expect(capturedHeaders.has("set-cookie")).toBe(false);
   });
 
-  it("fails closed for unknown actions and forwarding loops", async () => {
+  it("applies middleware cookie deletions to the forwarded request", async () => {
+    const middlewareHeaders = new Headers({
+      "set-cookie": "session=; Path=/; Max-Age=0",
+    });
+    let forwardedCookie = "";
+
+    await forwardServerActionIfNeeded(
+      options({
+        async dispatch(nextRequest: Request) {
+          forwardedCookie = nextRequest.headers.get("cookie") ?? "";
+          return new Response("flight", {
+            headers: { "content-type": "text/x-component" },
+          });
+        },
+        middlewareContext: {
+          headers: middlewareHeaders,
+          requestHeaders: null,
+          status: null,
+        },
+        request: request({ cookie: "session=old; theme=dark" }),
+      }),
+    );
+
+    expect(forwardedCookie).not.toContain("session=");
+    expect(forwardedCookie).toContain("theme=dark");
+  });
+
+  it.each([
+    "session=; Path=/; Max-Age=-1",
+    "session=; Path=/; Expires=Wed, 01 Jan 2020 00:00:00 GMT",
+  ])("applies middleware cookie deletion from %s", async (setCookie) => {
+    let forwardedCookie = "";
+    await forwardServerActionIfNeeded(
+      options({
+        async dispatch(nextRequest: Request) {
+          forwardedCookie = nextRequest.headers.get("cookie") ?? "";
+          return new Response("flight", {
+            headers: { "content-type": "text/x-component" },
+          });
+        },
+        middlewareContext: {
+          headers: new Headers({ "set-cookie": setCookie }),
+          requestHeaders: null,
+          status: null,
+        },
+        request: request({ cookie: "session=old; theme=dark" }),
+      }),
+    );
+    expect(forwardedCookie).not.toContain("session=");
+    expect(forwardedCookie).toContain("theme=dark");
+  });
+
+  it("fails closed for unknown actions and forwarded requests that missed their owner", async () => {
     const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
     const clearRequestContext = vi.fn();
     const unknown = await forwardServerActionIfNeeded(
       options({ actionId: "unknown#action", clearRequestContext }),
     );
-    const loop = await forwardServerActionIfNeeded(
+    const forwarded = await forwardServerActionIfNeeded(
       options({
         clearRequestContext,
         request: request({ [ACTION_FORWARDED_HEADER]: "1" }),
@@ -143,9 +196,9 @@ describe("server action forwarding", () => {
     );
 
     expect(unknown?.status).toBe(404);
-    expect(loop?.status).toBe(404);
+    expect(await forwarded?.text()).toBe("{}");
     expect(clearRequestContext).toHaveBeenCalledTimes(2);
-    expect(warning).toHaveBeenCalledTimes(2);
+    expect(warning).toHaveBeenCalledTimes(1);
     warning.mockRestore();
   });
 

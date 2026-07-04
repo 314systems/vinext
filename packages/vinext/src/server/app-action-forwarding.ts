@@ -2,11 +2,13 @@ import { RequestCookies, ResponseCookies } from "vinext/shims/internal/cookies";
 import { patternToNextFormat } from "../routing/route-validation.js";
 import { buildRequestHeadersFromMiddlewareResponse } from "../utils/middleware-request-headers.js";
 import type { AppMiddlewareContext } from "./app-middleware.js";
+import { getSetCookieName } from "./cookie-utils.js";
 import { ACTION_FORWARDED_HEADER } from "./headers.js";
 import {
   createServerActionNotFoundResponse,
   getServerActionNotFoundMessage,
 } from "./server-action-not-found.js";
+import { validateCsrfOrigin } from "./request-pipeline.js";
 
 const ACTION_FORWARD_FORBIDDEN_HEADERS = new Set([
   "accept-encoding",
@@ -25,6 +27,7 @@ type ActionOwnerManifest = Readonly<Record<string, readonly string[]>>;
 type ForwardServerActionOptions = {
   actionId: string;
   actionOwners: ActionOwnerManifest | null;
+  allowedOrigins: string[];
   basePath: string;
   clearRequestContext: () => void;
   currentRoutePattern: string | null;
@@ -33,12 +36,39 @@ type ForwardServerActionOptions = {
   request: Request;
 };
 
+function deletesCookie(setCookie: string, now: number): boolean {
+  for (const attribute of setCookie.split(";").slice(1)) {
+    const equalsIndex = attribute.indexOf("=");
+    if (equalsIndex === -1) continue;
+    const name = attribute.slice(0, equalsIndex).trim().toLowerCase();
+    const value = attribute.slice(equalsIndex + 1).trim();
+    if (name === "max-age") {
+      const maxAge = Number(value);
+      if (Number.isFinite(maxAge) && maxAge <= 0) return true;
+    }
+    if (name === "expires") {
+      const expiresAt = Date.parse(value);
+      if (Number.isFinite(expiresAt) && expiresAt <= now) return true;
+    }
+  }
+  return false;
+}
+
 function mergeActionForwardCookies(requestHeaders: Headers, responseHeaders: Headers): void {
   const requestCookies = new RequestCookies(requestHeaders);
+  const deletedCookieNames = new Set<string>();
+  const now = Date.now();
+  for (const setCookie of responseHeaders.getSetCookie()) {
+    const name = getSetCookieName(setCookie);
+    if (!name) continue;
+    if (deletesCookie(setCookie, now)) {
+      deletedCookieNames.add(name);
+      requestCookies.delete(name);
+    }
+  }
   const responseCookies = new ResponseCookies(responseHeaders);
   for (const cookie of responseCookies.getAll()) {
-    if (cookie.value === undefined) requestCookies.delete(cookie.name);
-    else requestCookies.set(cookie);
+    if (!deletedCookieNames.has(cookie.name)) requestCookies.set(cookie);
   }
   requestHeaders.set("cookie", requestCookies.toString());
 }
@@ -98,6 +128,9 @@ export async function forwardServerActionIfNeeded(
 ): Promise<Response | null> {
   if (!options.actionOwners) return null;
 
+  const csrfResponse = validateCsrfOrigin(options.request, options.allowedOrigins);
+  if (csrfResponse) return csrfResponse;
+
   const ownerPatterns = actionOwnerPatterns(options.actionOwners, options.actionId);
   if (
     ownerPatterns &&
@@ -108,10 +141,14 @@ export async function forwardServerActionIfNeeded(
   }
 
   const ownerPath = ownerPatterns?.[0];
-  if (!ownerPath || options.request.headers.get(ACTION_FORWARDED_HEADER)) {
+  if (!ownerPath) {
     console.warn(getServerActionNotFoundMessage(options.actionId));
     options.clearRequestContext();
     return createServerActionNotFoundResponse();
+  }
+  if (options.request.headers.get(ACTION_FORWARDED_HEADER)) {
+    options.clearRequestContext();
+    return emptyActionForwardResponse();
   }
 
   const forwardUrl = new URL(options.request.url);

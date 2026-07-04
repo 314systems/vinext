@@ -1002,6 +1002,11 @@ const _appBrowserServerActionClientPath = resolveShimModulePath(
   "app-browser-server-action-client",
 );
 const _appRscHandlerPath = resolveShimModulePath(_serverDir, "app-rsc-handler");
+const _appActionForwardingPath = resolveShimModulePath(_serverDir, "app-action-forwarding");
+const _appServerActionExecutionPath = resolveShimModulePath(
+  _serverDir,
+  "app-server-action-execution",
+);
 const _pagesClientAssetsPath = resolveShimModulePath(_serverDir, "pages-client-assets");
 // Source checkouts resolve to TypeScript and must stay in Vite's graph so tests
 // do not execute a stale dist build. Published packages resolve to emitted JS,
@@ -3322,7 +3327,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         // direct @vercel/og imports in metadata routes, and \0-prefixed
         // re-imports from @vitejs/plugin-rsc.
         filter: {
-          id: /(?:next\/|vinext\/(?:shims\/|server\/app-rsc-handler)|virtual:vinext-|@vercel\/og(?:\.js)?$)/,
+          id: /(?:next\/|vinext\/(?:shims\/|server\/app-rsc-handler|internal\/server\/(?:app-action-forwarding|app-server-action-execution))|virtual:vinext-|@vercel\/og(?:\.js)?$)/,
         },
         handler(id, importer) {
           // Strip \0 prefix if present — @vitejs/plugin-rsc's generated
@@ -3347,6 +3352,14 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               return { id: _appRscHandlerPath, external: true };
             }
             return _appRscHandlerPath;
+          }
+
+          if (cleanId === "vinext/internal/server/app-action-forwarding") {
+            return _appActionForwardingPath;
+          }
+
+          if (cleanId === "vinext/internal/server/app-server-action-execution") {
+            return _appServerActionExecutionPath;
           }
 
           if (isVercelOgImport(cleanId) && !isVinextOgShimImporter(importer)) {
@@ -3646,12 +3659,11 @@ export const loadServerActionClient = ${
           // pulling ModuleInfo from the wrong graph would give nonsense
           // results.
           if (this.environment?.name !== "rsc") return null;
-          if (!rscClassificationManifest) return null;
-          // Cheap pre-filter: skip chunks that don't mention the stub at all
-          // (e.g. the scan-phase chunk and every non-entry chunk).
-          if (!code.includes("__VINEXT_CLASS")) {
-            return null;
-          }
+          const hasClassificationStub =
+            rscClassificationManifest !== null && code.includes("__VINEXT_CLASS");
+          const hasActionOwnerStub =
+            rscActionOwnerRoutes !== null && code.includes("__VINEXT_ACTION_OWNERS_STUB__");
+          if (!hasClassificationStub && !hasActionOwnerStub) return null;
 
           // Patching per-chunk (rather than scanning the whole bundle in
           // generateBundle) assumes the stub body and its per-route call sites
@@ -3685,19 +3697,20 @@ export const loadServerActionClient = ${
             },
           };
 
-          const patchPlan = rscClassificationManifest
-            ? planRouteClassificationInjection({
-                canonicalizeLayoutPath: canonicalize,
-                chunks: [{ code, fileName: chunk.fileName }],
-                dynamicShimPaths,
-                enableDebugReasons: enableClassificationDebug,
-                manifest: rscClassificationManifest,
-                moduleInfo,
-              })
-            : { kind: "skip" as const };
+          const patchPlan =
+            hasClassificationStub && rscClassificationManifest
+              ? planRouteClassificationInjection({
+                  canonicalizeLayoutPath: canonicalize,
+                  chunks: [{ code, fileName: chunk.fileName }],
+                  dynamicShimPaths,
+                  enableDebugReasons: enableClassificationDebug,
+                  manifest: rscClassificationManifest,
+                  moduleInfo,
+                })
+              : { kind: "skip" as const };
           let nextCode = patchPlan.kind === "skip" ? code : patchPlan.code;
 
-          if (rscActionOwnerRoutes && nextCode.includes("__VINEXT_ACTION_OWNERS_STUB__")) {
+          if (hasActionOwnerStub && rscActionOwnerRoutes) {
             const rscModule = await rscPluginModulePromise;
             const pluginApi = rscModule?.getPluginApi(this.environment.config);
             const serverReferences = Object.values(pluginApi?.manager.serverReferenceMetaMap ?? {});
@@ -3727,6 +3740,14 @@ export const loadServerActionClient = ${
           // confusion in tooling.
           return { code: nextCode, map: null };
         },
+      },
+      generateBundle(_options, bundle) {
+        if (this.environment?.name !== "rsc") return;
+        for (const output of Object.values(bundle)) {
+          if (output.type === "chunk" && output.code.includes("__VINEXT_ACTION_OWNERS_STUB__")) {
+            this.error("vinext: server action owner manifest was not injected into the RSC entry");
+          }
+        }
       },
     },
     {

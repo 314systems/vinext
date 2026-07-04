@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { createFromFetch } from "@vitejs/plugin-rsc/browser";
 import { createClientNavigationRenderSnapshot } from "../packages/vinext/src/shims/navigation.js";
 import { createServerActionInitiationSnapshot } from "../packages/vinext/src/server/app-browser-action-result.js";
 import { invokeClientServerAction } from "../packages/vinext/src/server/app-browser-server-action-client.js";
@@ -21,6 +22,82 @@ afterEach(() => {
 });
 
 describe("app browser server action client", () => {
+  it("renders raw Flight payloads returned for action redirects", async () => {
+    const redirectPayload = AppElementsWire.createMetadataEntries({
+      interception: null,
+      interceptionContext: null,
+      layoutIds: [AppElementsWire.encodeLayoutId("/")],
+      rootLayoutTreePath: "/",
+      routeId: "route:/target",
+      slotBindings: [],
+    });
+    const elements = normalizeAppElements(redirectPayload);
+    const routerState: AppRouterState = {
+      activeOperation: null,
+      bfcacheIds: {},
+      elements,
+      interception: null,
+      interceptionContext: null,
+      layoutFlags: {},
+      layoutIds: [AppElementsWire.encodeLayoutId("/")],
+      navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/source", {}),
+      previousNextUrl: null,
+      renderId: 0,
+      rootLayoutTreePath: "/",
+      routeId: "route:/source",
+      slotBindings: [],
+      visibleCommitVersion: 0,
+    };
+    const actionInitiation = createServerActionInitiationSnapshot({
+      href: "https://example.com/source",
+      navigationId: 1,
+      routerState,
+    });
+    vi.stubGlobal("window", {
+      location: {
+        href: "https://example.com/source",
+        origin: "https://example.com",
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("flight", {
+          status: 303,
+          headers: {
+            [ACTION_REDIRECT_HEADER]: "/target",
+            "content-type": "text/x-component",
+          },
+        }),
+      ),
+    );
+    vi.mocked(createFromFetch).mockResolvedValueOnce(redirectPayload);
+    const performHardNavigation = vi.fn();
+    const renderRedirectPayload = vi.fn();
+
+    await expect(
+      invokeClientServerAction("action-id", [], actionInitiation, {
+        basePath: "",
+        clearClientNavigationCaches: vi.fn(),
+        clientRscCompatibilityId: null,
+        commitSameUrlNavigatePayload: vi.fn(),
+        navigationPlanner,
+        performHardNavigation,
+        renderRedirectPayload,
+        syncCurrentHistoryState: vi.fn(),
+        syncServerActionHttpFallbackHead: vi.fn(),
+      }),
+    ).rejects.toMatchObject({ digest: "NEXT_REDIRECT;push;%2Ftarget;307;", handled: true });
+
+    expect(renderRedirectPayload).toHaveBeenCalledWith(
+      elements,
+      expect.objectContaining({ href: "https://example.com/target" }),
+      actionInitiation,
+      "none",
+    );
+    expect(performHardNavigation).not.toHaveBeenCalled();
+  });
+
   it("uses action state captured before the lazy client loads", async () => {
     const elements = normalizeAppElements(
       AppElementsWire.createMetadataEntries({

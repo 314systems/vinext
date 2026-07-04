@@ -184,6 +184,54 @@ function importedNames(specifiers: readonly AstNode[]): string[] | null {
   return [...names];
 }
 
+function importedNamesForLocalBindings(
+  specifiers: readonly AstNode[],
+  localBindings: ReadonlySet<string>,
+): string[] | null {
+  const names = new Set<string>();
+  for (const specifier of specifiers) {
+    const localName = identifierName(specifier.local);
+    if (!localName || !localBindings.has(localName)) continue;
+    if (specifier.type === "ImportNamespaceSpecifier") return null;
+    if (specifier.type === "ImportDefaultSpecifier") names.add("default");
+    if (specifier.type === "ImportSpecifier") {
+      const name = identifierName(specifier.imported);
+      if (name) names.add(name);
+    }
+  }
+  return [...names];
+}
+
+function requestedLocalExportBindings(program: AstNode, requestedNames: string[]): Set<string> {
+  const requested = new Set(requestedNames);
+  const bindings = new Set<string>();
+  for (const statement of (program.body as AstNode[] | undefined) ?? []) {
+    if (statement.type === "ExportDefaultDeclaration") {
+      const localName = identifierName(statement.declaration);
+      if (requested.has("default") && localName) bindings.add(localName);
+      continue;
+    }
+    if (statement.type !== "ExportNamedDeclaration" || statement.source) continue;
+    const declaration = statement.declaration as AstNode | undefined;
+    if (declaration?.type === "VariableDeclaration") {
+      for (const declarator of (declaration.declarations as AstNode[] | undefined) ?? []) {
+        const exportedName = identifierName(declarator.id);
+        const localName = identifierName(declarator.init);
+        if (exportedName && localName && requested.has(exportedName)) bindings.add(localName);
+      }
+    } else {
+      const exportedName = identifierName(declaration?.id);
+      if (exportedName && requested.has(exportedName)) bindings.add(exportedName);
+    }
+    for (const specifier of (statement.specifiers as AstNode[] | undefined) ?? []) {
+      const exportedName = identifierName(specifier.exported);
+      const localName = identifierName(specifier.local);
+      if (exportedName && localName && requested.has(exportedName)) bindings.add(localName);
+    }
+  }
+  return bindings;
+}
+
 function reexportedNames(
   specifiers: readonly AstNode[],
   requestedNames: string[] | null,
@@ -222,14 +270,25 @@ function sourceDependencies(
   program: AstNode,
   requestedNames: string[] | null,
   includeImports: boolean,
+  narrowImports: boolean,
 ): SourceDependency[] {
   const dependencies: SourceDependency[] = [];
+  const requestedImportBindings =
+    includeImports && narrowImports && requestedNames !== null
+      ? requestedLocalExportBindings(program, requestedNames)
+      : null;
   for (const statement of (program.body as AstNode[] | undefined) ?? []) {
     if (includeImports && statement.type === "ImportDeclaration") {
       const specifier = literalString(statement.source);
       if (specifier) {
+        const names = requestedImportBindings
+          ? importedNamesForLocalBindings(
+              (statement.specifiers as AstNode[] | undefined) ?? [],
+              requestedImportBindings,
+            )
+          : importedNames((statement.specifiers as AstNode[] | undefined) ?? []);
         dependencies.push({
-          names: importedNames((statement.specifiers as AstNode[] | undefined) ?? []),
+          names,
           specifier,
         });
       }
@@ -261,7 +320,9 @@ function sourceDependencies(
       }
       continue;
     }
-    if (includeImports) collectImportExpressions(statement, dependencies);
+    if (includeImports && (!narrowImports || requestedNames === null)) {
+      collectImportExpressions(statement, dependencies);
+    }
   }
   return dependencies;
 }
@@ -284,20 +345,6 @@ export function buildActionOwnerManifest(options: {
   for (const route of options.routes) {
     const entryIds = actionOwnerRouteEntryIds(route);
     const routeComponentIds = new Set(entryIds.map(canonicalizeModuleId));
-    const reachableIds = new Set(routeComponentIds);
-    const queue = [...routeComponentIds];
-    for (let index = 0; index < queue.length; index++) {
-      const moduleInfo = options.moduleInfo.getModuleInfo(queue[index]!);
-      for (const importedId of [
-        ...(moduleInfo?.importedIds ?? []),
-        ...(moduleInfo?.dynamicImportedIds ?? []),
-      ]) {
-        const canonicalImportedId = canonicalizeModuleId(importedId);
-        if (reachableIds.has(canonicalImportedId)) continue;
-        reachableIds.add(canonicalImportedId);
-        queue.push(canonicalImportedId);
-      }
-    }
 
     for (const reference of options.serverReferences) {
       const referenceId = canonicalizeModuleId(reference.importId);
@@ -404,8 +451,14 @@ export async function buildStaticActionOwnerManifest(options: {
         continue;
       }
 
-      const includeImports = !current.id.includes(`${path.sep}node_modules${path.sep}`);
-      for (const dependency of sourceDependencies(program, current.names, includeImports)) {
+      const isPackageModule = current.id.includes(`${path.sep}node_modules${path.sep}`);
+      const includeImports = !isPackageModule || current.names !== null;
+      for (const dependency of sourceDependencies(
+        program,
+        current.names,
+        includeImports,
+        isPackageModule,
+      )) {
         if (dependency.names?.length === 0) continue;
         const resolved = await resolveDependency(dependency.specifier, current.id);
         if (!resolved || resolved.id.includes("?")) continue;

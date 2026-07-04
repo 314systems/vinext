@@ -35,6 +35,7 @@ import {
   VINEXT_RSC_CONTENT_TYPE,
   VINEXT_RSC_VARY_HEADER,
   applyRscCompatibilityIdHeader,
+  createRscRequestUrl,
 } from "./app-rsc-cache-busting.js";
 import { applyEdgeRuntimeHeader } from "./app-page-response.js";
 import { resolveAppPageActionRerenderTarget } from "./app-page-request.js";
@@ -445,11 +446,11 @@ function applySetCookieMutationsToRequestCookieHeader(
     : [...cookies].map(([name, value]) => `${name}=${value}`).join("; ");
 }
 
-function createActionRedirectRenderRequest(options: {
+async function createActionRedirectRenderRequest(options: {
   pendingCookies: readonly string[];
   request: Request;
   url: URL;
-}): Request {
+}): Promise<Request> {
   const headers = cloneActionRedirectHeaders(options.request.headers);
   const cookieHeader = applySetCookieMutationsToRequestCookieHeader(
     headers.get("cookie"),
@@ -461,8 +462,14 @@ function createActionRedirectRenderRequest(options: {
     headers.set("cookie", cookieHeader);
   }
   headers.delete("next-router-state-tree");
+  headers.set("rsc", "1");
 
-  return new Request(options.url, {
+  const requestUrl = new URL(options.url);
+  const rscPath = await createRscRequestUrl(`${requestUrl.pathname}${requestUrl.search}`, headers);
+  requestUrl.pathname = rscPath.split("?", 1)[0]!;
+  requestUrl.search = rscPath.includes("?") ? `?${rscPath.split("?").slice(1).join("?")}` : "";
+
+  return new Request(requestUrl, {
     headers,
     method: "GET",
   });
@@ -1310,7 +1317,7 @@ export async function handleServerActionRscRequest<
       // Hydrate the current route before resolving its runtime below.
       if (currentMatch) await options.ensureRouteLoaded?.(currentMatch.route);
 
-      const redirectRenderRequest = createActionRedirectRenderRequest({
+      const redirectRenderRequest = await createActionRedirectRenderRequest({
         pendingCookies: [
           ...actionPendingCookies,
           ...(actionDraftCookie ? [actionDraftCookie] : []),
@@ -1319,7 +1326,6 @@ export async function handleServerActionRscRequest<
         url: redirectTarget,
       });
       if (options.dispatchRedirectRequest) {
-        redirectRenderRequest.headers.set("rsc", "1");
         let forwardedResponse: Response;
         try {
           forwardedResponse = await options.dispatchRedirectRequest(redirectRenderRequest);
