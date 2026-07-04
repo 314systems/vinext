@@ -156,6 +156,10 @@ export function resolveAppPageRscResponsePolicy(
   }
 
   if (options.revalidateSeconds === null) {
+    if (!options.isProduction && !options.isForceStatic && !options.isDynamicError) {
+      return {};
+    }
+
     return {
       cacheControl: STATIC_CACHE_CONTROL,
       cacheState:
@@ -236,6 +240,10 @@ export function resolveAppPageHtmlResponsePolicy(
   }
 
   if (options.revalidateSeconds === null) {
+    if (!options.isProduction && !options.isForceStatic && !options.isDynamicError) {
+      return { shouldWriteToCache: false };
+    }
+
     return {
       cacheControl: STATIC_CACHE_CONTROL,
       cacheState: options.isProduction ? "MISS" : "STATIC",

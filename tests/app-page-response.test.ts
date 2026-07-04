@@ -315,6 +315,33 @@ describe("app page response helpers", () => {
     });
   });
 
+  it("keeps default-config pages uncached in development", () => {
+    expect(
+      resolveAppPageRscResponsePolicy({
+        dynamicUsedDuringBuild: false,
+        isDraftMode: false,
+        isDynamicError: false,
+        isForceDynamic: false,
+        isForceStatic: false,
+        isProduction: false,
+        revalidateSeconds: null,
+      }),
+    ).toEqual({});
+
+    expect(
+      resolveAppPageHtmlResponsePolicy({
+        dynamicUsedDuringRender: false,
+        hasScriptNonce: false,
+        isDraftMode: false,
+        isDynamicError: false,
+        isForceDynamic: false,
+        isForceStatic: false,
+        isProduction: false,
+        revalidateSeconds: null,
+      }),
+    ).toEqual({ shouldWriteToCache: false });
+  });
+
   it("treats progressive action HTML responses as no-store", () => {
     expect(
       resolveAppPageHtmlResponsePolicy({
