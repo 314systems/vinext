@@ -2,10 +2,12 @@ import { describe, expect, it } from "vite-plus/test";
 
 import type { Commit } from "./create-changeset.mts";
 import {
+  authoredChangesetNotes,
   contributorsForCommits,
   dedupeSortLogins,
   groupedChangelogBody,
   humanizeArea,
+  mergeChangelogBody,
   rewriteReleaseSection,
 } from "./version.mts";
 
@@ -120,6 +122,51 @@ describe("groupedChangelogBody", () => {
     expect(out).toContain("- **Link:** two (#5)");
     expect(out).toContain("- bare fix (#7)");
     expect(out.indexOf("#### App Router")).toBeLessThan(out.indexOf("#### Misc"));
+  });
+});
+
+describe("authoredChangesetNotes", () => {
+  it("keeps normal package notes while ignoring generated changesets and SHA overrides", () => {
+    expect(
+      authoredChangesetNotes([
+        {
+          filename: "enter-v1-beta.md",
+          contents: [
+            "---",
+            '"@vinext/cloudflare": major',
+            '"vinext": major',
+            "---",
+            "",
+            "Release the first vinext 1.0 beta.",
+          ].join("\n"),
+        },
+        {
+          filename: "auto-vinext.md",
+          contents: '---\n"vinext": patch\n---\n\nGenerated commit summary.',
+        },
+        {
+          filename: "9eed252.md",
+          contents: '---\n"vinext": minor\n---\n\nOverride message.',
+        },
+      ]),
+    ).toEqual({
+      "@vinext/cloudflare": ["Release the first vinext 1.0 beta."],
+      vinext: ["Release the first vinext 1.0 beta."],
+    });
+  });
+});
+
+describe("mergeChangelogBody", () => {
+  it("preserves an authored package note when there are no package commits", () => {
+    expect(mergeChangelogBody("", ["Release the first vinext 1.0 beta."])).toBe(
+      "Release the first vinext 1.0 beta.",
+    );
+  });
+
+  it("prepends authored notes to conventional commit groups", () => {
+    expect(mergeChangelogBody("### Features\n\n- add a feature", ["Beta announcement."])).toBe(
+      "Beta announcement.\n\n### Features\n\n- add a feature",
+    );
   });
 });
 

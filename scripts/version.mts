@@ -17,7 +17,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -29,10 +29,12 @@ import {
   discoverPublishablePackages,
   loadOverrides,
   releaseRangeStart,
+  shaFromChangesetFilename,
 } from "./create-changeset.mts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "..");
+const CHANGESET_DIR = join(REPO_ROOT, ".changeset");
 
 /** Conventional-commit type → changelog section heading (### level), in order. */
 const GROUPS: { type: string; heading: string }[] = [
@@ -119,6 +121,43 @@ export function groupedChangelogBody(commits: Commit[]): string {
 }
 
 /**
+ * Authored release notes from normal committed changesets, keyed by package.
+ * Generated `auto-*.md` files duplicate the conventional-commit groups, while
+ * SHA-named changesets are commit overrides handled by collectReleaseCommits.
+ */
+export function authoredChangesetNotes(
+  entries: { filename: string; contents: string }[],
+): Record<string, string[]> {
+  const notes: Record<string, string[]> = {};
+  for (const { filename, contents } of entries) {
+    if (!filename.endsWith(".md") || filename === "README.md" || filename.startsWith("auto-")) {
+      continue;
+    }
+    if (shaFromChangesetFilename(filename)) continue;
+
+    const match = contents.match(/^---\s*\n([\s\S]*?)\n---\s*(?:\n([\s\S]*))?$/);
+    if (!match) continue;
+    const body = (match[2] ?? "").trim();
+    if (!body) continue;
+
+    for (const line of match[1].split("\n")) {
+      const packageMatch = line.match(/^\s*["']?([^"':]+)["']?\s*:\s*(major|minor|patch)\s*$/);
+      const name = packageMatch?.[1]?.trim();
+      if (!name) continue;
+      (notes[name] ??= []).push(body);
+    }
+  }
+  return notes;
+}
+
+/** Merge authored package notes with the generated conventional-commit body. */
+export function mergeChangelogBody(body: string, authoredNotes: string[]): string {
+  return [...authoredNotes.map((note) => note.trim()).filter(Boolean), body.trim()]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/**
  * Replace the body of the newest `## <version>` section with `body`, then append
  * a `### Contributors` list. Older sections are untouched. Only `## <digit>`
  * counts as a section boundary, so re-running is idempotent. Pure.
@@ -185,6 +224,18 @@ function readVersions(packageDirToName: Record<string, string>): Record<string, 
   return out;
 }
 
+function loadAuthoredChangesetNotes(dir: string = CHANGESET_DIR): Record<string, string[]> {
+  if (!existsSync(dir)) return {};
+  return authoredChangesetNotes(
+    readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => ({
+        filename: entry.name,
+        contents: readFileSync(join(dir, entry.name), "utf8"),
+      })),
+  );
+}
+
 /**
  * Pick the deduped, sorted GitHub logins for exactly `commits`, looking each
  * commit's sha up in a `sha → login` map. Commits with no mapped login (or an
@@ -240,6 +291,10 @@ function main(): void {
   // Must happen BEFORE `changeset version` below, which consumes and deletes the
   // `.changeset/<sha>.md` files; the grouping later reads this in-memory copy.
   const overrides = loadOverrides();
+  // Normal committed changesets can carry package-specific prose that has no
+  // corresponding package commit (for example a prerelease announcement). Keep
+  // it before `changeset version` consumes the files, then prepend it below.
+  const authoredNotes = loadAuthoredChangesetNotes();
   const before = readVersions(packages);
 
   console.log("[version] Running `changeset version`...");
@@ -262,7 +317,7 @@ function main(): void {
     // brand-new package that throws and yields an empty changelog (see #1759).
     const from = releaseRangeStart(name);
     const commits = collectReleaseCommits(from, name, packages, overrides);
-    const body = groupedChangelogBody(commits);
+    const body = mergeChangelogBody(groupedChangelogBody(commits), authoredNotes[name] ?? []);
     const contributors = repository ? resolveContributors(from, repository, commits) : [];
 
     const original = readFileSync(changelogPath, "utf8");
