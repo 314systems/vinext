@@ -301,16 +301,13 @@ export function buildActionOwnerManifest(options: {
 
     for (const reference of options.serverReferences) {
       const referenceId = canonicalizeModuleId(reference.importId);
-      if (!reachableIds.has(referenceId)) continue;
-      if (routeComponentIds.has(referenceId)) {
+      const isRouteComponent = routeComponentIds.has(referenceId);
+      if (isRouteComponent) {
         addOwner(manifest, reference.referenceKey, route.pattern);
       }
       for (const exportName of reference.exportNames) {
         const actionId = `${reference.referenceKey}#${exportName}`;
-        if (
-          routeComponentIds.has(referenceId) ||
-          options.staticOwners[actionId]?.includes(route.pattern)
-        ) {
+        if (isRouteComponent || options.staticOwners[actionId]?.includes(route.pattern)) {
           addOwner(manifest, actionId, route.pattern);
         }
       }

@@ -266,7 +266,7 @@ export default function Page() { return example + template; }`,
     });
   });
 
-  it("requires imported actions to exist in the final runtime graph", () => {
+  it("accepts exact plugin references imported through client component boundaries", () => {
     expect(
       buildActionOwnerManifest({
         moduleInfo: {
@@ -284,7 +284,7 @@ export default function Page() { return example + template; }`,
         ],
         staticOwners: { "admin-key#adminOnly": ["/"] },
       }),
-    ).toEqual({});
+    ).toEqual({ "admin-key#adminOnly": ["/"] });
   });
 
   it("accepts actions reachable through the final dynamic import graph", () => {
