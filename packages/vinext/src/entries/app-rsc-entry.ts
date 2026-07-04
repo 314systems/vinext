@@ -21,6 +21,7 @@ import type {
 import type { ImageConfig } from "../server/image-optimization.js";
 import type { AppRoute } from "../routing/app-router.js";
 import { generateDevOriginCheckCode } from "../server/dev-origin-check.js";
+import { safeJsonStringify } from "../server/html.js";
 import type { MetadataFileRoute } from "../server/metadata-routes.js";
 import { isProxyFile } from "../server/middleware.js";
 import { DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "../server/image-optimization.js";
@@ -705,7 +706,7 @@ ${rootParamNameEntries.join("\n")}
 };
 
 __setPagesClientAssets(__pagesClientAssets);
-function __VINEXT_ACTION_OWNERS() { return ${actionOwners ? JSON.stringify(actionOwners) : '"__VINEXT_ACTION_OWNERS_STUB__"'}; }
+function __VINEXT_ACTION_OWNERS() { return ${actionOwners ? safeJsonStringify(actionOwners) : '"__VINEXT_ACTION_OWNERS_STUB__"'}; }
 const __appRscHandler = createAppRscHandler({
   basePath: __basePath,
   buildId: process.env.__VINEXT_BUILD_ID ?? null,

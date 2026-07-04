@@ -9,6 +9,7 @@ import {
   actionOwnerRouteEntryIds,
   buildActionOwnerManifest,
   buildStaticActionOwnerManifest,
+  injectActionOwnerManifest,
 } from "../packages/vinext/src/build/action-owner-manifest.js";
 
 let roots: string[] = [];
@@ -114,6 +115,19 @@ describe("server action owner manifest", () => {
 
     expect(production[`${productionKey("app/actions.ts")}#default`]).toEqual(["/"]);
     expect(development["/app/actions.ts#default"]).toEqual(["/"]);
+  });
+
+  it("escapes action owner manifests embedded in generated JavaScript", () => {
+    const injected = injectActionOwnerManifest(
+      `function __VINEXT_ACTION_OWNERS() { return "__VINEXT_ACTION_OWNERS_STUB__"; }`,
+      { "module#action</script>\u2028": ["/route&segment\u2029"] },
+    );
+
+    expect(injected).toContain("\\u003c/script\\u003e");
+    expect(injected).toContain("\\u0026");
+    expect(injected).toContain("\\u2028");
+    expect(injected).toContain("\\u2029");
+    expect(injected).not.toContain("</script>");
   });
 
   it("traces aliased re-exports to the original server action export", async () => {

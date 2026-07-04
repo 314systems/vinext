@@ -154,6 +154,8 @@ export async function forwardServerActionIfNeeded(
   const forwardUrl = new URL(options.request.url);
   forwardUrl.pathname =
     options.basePath + (ownerPath === "/" ? "" : patternToNextFormat(ownerPath));
+  // Match Next.js createForwardedActionResponse(): forwarding targets only the
+  // owner worker pathname, not the caller's query string.
   forwardUrl.search = "";
   const forwardRequest = new Request(forwardUrl, {
     body: options.request.body,

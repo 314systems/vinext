@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { parseAstAsync, transformWithOxc, type ConfigEnv } from "vite";
 import type { AppRoute } from "../routing/app-route-graph.js";
+import { safeJsonStringify } from "../server/html.js";
 
 type ActionOwnerRoute = Pick<
   AppRoute,
@@ -374,7 +375,7 @@ export function injectActionOwnerManifest(
   if (!match) return null;
   return code.replace(
     marker,
-    () => `function ${match[1]}() { return ${JSON.stringify(manifest)}; }`,
+    () => `function ${match[1]}() { return ${safeJsonStringify(manifest)}; }`,
   );
 }
 
