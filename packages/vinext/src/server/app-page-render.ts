@@ -1094,6 +1094,9 @@ export async function renderAppPageLifecycle(
     shouldCaptureRscForCacheMetadata &&
     (options.isEdgeRuntime || !getCdnCacheAdapter().ownsBackgroundRevalidation)
   ) {
+    // CDN-managed caches need the final cache policy before response headers
+    // leave the origin. Buffer candidate static HTML so late request-API usage
+    // can still demote the response to no-store instead of poisoning the edge.
     const bufferedHtml = await readStreamAsText(safeHtmlStream);
     safeHtmlStream = new Response(bufferedHtml).body!;
     dynamicUsedDuringRender = dynamicUsedBeforeContextCleanup || options.consumeDynamicUsage();
