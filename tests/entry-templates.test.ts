@@ -851,7 +851,8 @@ describe("App Router entry templates", () => {
     const code = generateRscEntry("/tmp/test/app", minimalAppRoutes, null, [], null, "", false);
 
     expect(code).toContain('import { createAppRscHandler } from "vinext/server/app-rsc-handler";');
-    expect(code).toContain("export default createAppRscHandler({");
+    expect(code).toContain("const __appRscHandler = createAppRscHandler({");
+    expect(code).toContain("export default __appRscHandler;");
     expect(code).not.toContain("computeRscCacheBustingSearchParam(");
   });
 
@@ -970,6 +971,16 @@ describe("App Router entry templates", () => {
     expect(code).not.toMatch(
       /import \{\s*handleProgressiveServerActionRequest as __handleProgressiveServerActionRequest,/,
     );
+  });
+
+  it("generateRscEntry delegates action forwarding to the typed runtime", () => {
+    const code = generateRscEntry("/tmp/test/app", minimalAppRoutes, null, [], null, "", false);
+
+    expect(code).toContain("forwardServerActionIfNeeded as __forwardServerActionIfNeeded");
+    expect(code).toContain("await __forwardServerActionIfNeeded({");
+    expect(code).not.toContain("next/dist/server/web/spec-extension/cookies");
+    expect(code).not.toContain("function __mergeActionForwardCookies");
+    expect(code).not.toContain("const __ACTION_FORWARD_FORBIDDEN_HEADERS");
   });
 
   it("generateRscEntry omits server action imports when no server references were found", () => {

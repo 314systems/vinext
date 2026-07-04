@@ -1303,6 +1303,14 @@ export function createAppRscHandler<TRoute extends AppRscHandlerRoute>(
       rawRequest.headers.get(VINEXT_PRERENDER_SECRET_HEADER) !== null &&
       rawRequest.headers.get(VINEXT_PRERENDER_SPECULATIVE_HEADER) === "1";
     const filteredHeaders = filterInternalHeaders(rawRequest.headers);
+    if (
+      ctx !== null &&
+      typeof ctx === "object" &&
+      "actionForwarded" in ctx &&
+      ctx.actionForwarded === true
+    ) {
+      filteredHeaders.set("x-action-forwarded", "1");
+    }
     if (mwCtx !== null) {
       filteredHeaders.set(VINEXT_MW_CTX_HEADER, mwCtx);
     }

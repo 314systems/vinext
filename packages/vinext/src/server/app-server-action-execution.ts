@@ -258,6 +258,7 @@ export type HandleServerActionRscRequestOptions<
     body: string | FormData,
     options: DecodeServerActionReplyOptions<TTemporaryReferences>,
   ) => Promise<unknown[]> | unknown[];
+  dispatchRedirectRequest?: (request: Request) => Promise<Response>;
   draftModeSecret: string;
   /**
    * Hydrate a route's lazy page/route-handler modules before reading
@@ -459,6 +460,7 @@ function createActionRedirectRenderRequest(options: {
   } else {
     headers.set("cookie", cookieHeader);
   }
+  headers.delete("next-router-state-tree");
 
   return new Request(options.url, {
     headers,
@@ -471,6 +473,26 @@ function withoutRscBodyHeaders(headers: Headers): Headers {
   nextHeaders.delete("Content-Type");
   nextHeaders.delete("Vary");
   return nextHeaders;
+}
+
+const ACTIONS_FORBIDDEN_RESPONSE_HEADERS = new Set([
+  "accept-encoding",
+  "keepalive",
+  "keep-alive",
+  "content-encoding",
+  "transfer-encoding",
+  "connection",
+  "expect",
+  "content-length",
+  "set-cookie",
+]);
+
+function mergeForwardedActionResponseHeaders(target: Headers, source: Headers): void {
+  for (const [key, value] of source) {
+    if (!ACTIONS_FORBIDDEN_RESPONSE_HEADERS.has(key.toLowerCase())) {
+      target.set(key, value);
+    }
+  }
 }
 
 function isReadableStreamBody(body: BodyInit | null): body is ReadableStream<Uint8Array> {
@@ -1296,6 +1318,49 @@ export async function handleServerActionRscRequest<
         request: options.request,
         url: redirectTarget,
       });
+      if (options.dispatchRedirectRequest) {
+        redirectRenderRequest.headers.set("rsc", "1");
+        let forwardedResponse: Response;
+        try {
+          forwardedResponse = await options.dispatchRedirectRequest(redirectRenderRequest);
+        } catch (error) {
+          console.error("[vinext] Failed to render action redirect target:", error);
+          options.clearRequestContext();
+          return new Response(null, {
+            status: 303,
+            headers: withoutRscBodyHeaders(redirectHeaders),
+          });
+        }
+
+        if (
+          forwardedResponse.headers.get("content-type")?.startsWith(VINEXT_RSC_CONTENT_TYPE) &&
+          forwardedResponse.body
+        ) {
+          mergeForwardedActionResponseHeaders(redirectHeaders, forwardedResponse.headers);
+          const redirectResponseStatus = shouldUseForwardedActionRedirectStatus({
+            actionWasForwarded,
+            currentPathname: options.cleanPathname,
+            currentRoute: currentMatch?.route ?? null,
+            resolveRouteRuntime: options.resolveRouteRuntime,
+            targetPathname,
+            targetRoute: targetMatch.route,
+          })
+            ? 200
+            : 303;
+          return createServerActionRscResponse(
+            forwardedResponse.body,
+            { status: redirectResponseStatus, headers: redirectHeaders },
+            options.clearRequestContext,
+          );
+        }
+
+        await forwardedResponse.body?.cancel();
+        options.clearRequestContext();
+        return new Response(null, {
+          status: 303,
+          headers: withoutRscBodyHeaders(redirectHeaders),
+        });
+      }
       setHeadersContext(
         headersContextFromRequest(redirectRenderRequest, {
           draftModeSecret: options.draftModeSecret,

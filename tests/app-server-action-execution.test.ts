@@ -1459,8 +1459,20 @@ describe("app server action execution helpers", () => {
   it("renders same-origin action redirects as a single-pass Flight response", async () => {
     // Ported from Next.js: test/e2e/app-dir/actions/app-action.test.ts
     // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/actions/app-action.test.ts
+    const buildPageElement = vi.fn();
+    const dispatchRedirectRequest = vi.fn(async (request: Request) => {
+      expect(request.method).toBe("GET");
+      expect(new URL(request.url).pathname).toBe("/redirect-target");
+      expect(request.headers.get("x-rsc-action")).toBeNull();
+      expect(request.headers.get("rsc")).toBe("1");
+      return new Response(JSON.stringify({ root: "redirect-target:{}:none" }), {
+        headers: { "content-type": "text/x-component" },
+      });
+    });
     const response = await handleServerActionRscRequest(
       createRscOptions({
+        buildPageElement,
+        dispatchRedirectRequest,
         loadServerAction() {
           return Promise.resolve(() => redirect("/redirect-target"));
         },
@@ -1481,10 +1493,35 @@ describe("app server action execution helpers", () => {
 
     expect(response?.status).toBe(303);
     expect(response?.headers.get("x-action-redirect")).toBe("/redirect-target");
-    expect(JSON.parse(await response!.text())).toEqual({
-      root: "redirect-target:{}:none",
-      returnValue: { ok: true },
-    });
+    expect(await response!.text()).toBe(JSON.stringify({ root: "redirect-target:{}:none" }));
+    expect(dispatchRedirectRequest).toHaveBeenCalledOnce();
+    expect(buildPageElement).not.toHaveBeenCalled();
+  });
+
+  it("does not inline middleware-blocked action redirect targets", async () => {
+    // Ported from Next.js: packages/next/src/server/app-render/action-handler.ts
+    // createRedirectRenderResult() re-enters the full request pipeline for the target URL.
+    const buildPageElement = vi.fn();
+    const response = await handleServerActionRscRequest(
+      createRscOptions({
+        buildPageElement,
+        dispatchRedirectRequest: vi.fn(async () => new Response("unauthorized", { status: 401 })),
+        loadServerAction() {
+          return Promise.resolve(() => redirect("/admin/secret"));
+        },
+        matchRoute(pathname) {
+          return {
+            params: {},
+            route: { id: pathname, page: {}, params: [], pattern: pathname },
+          };
+        },
+      }),
+    );
+
+    expect(response?.status).toBe(303);
+    expect(response?.headers.get("x-action-redirect")).toBe("/admin/secret");
+    expect(await response!.text()).toBe("");
+    expect(buildPageElement).not.toHaveBeenCalled();
   });
 
   it.each(["rerender", "redirect"] as const)(

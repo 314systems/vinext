@@ -68,6 +68,12 @@ import {
 } from "./build/route-classification-manifest.js";
 import { extractMiddlewareMatcherConfig, hasExportedName } from "./build/report.js";
 import { planRouteClassificationInjection } from "./build/route-classification-injector.js";
+import {
+  actionOwnerManifestMode,
+  buildActionOwnerManifest,
+  buildStaticActionOwnerManifest,
+  injectActionOwnerManifest,
+} from "./build/action-owner-manifest.js";
 import { normalizePathnameForRouteMatchStrict } from "./routing/utils.js";
 import {
   createRscCompatibilityId,
@@ -1295,6 +1301,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   let warnedInlineNextConfigOverride = false;
   let hasNitroPlugin = false;
   let isServeCommand = false;
+  let isDevelopmentServe = false;
   let pagesOptimizeEntries: string[] = [];
   const pagesClientAssetsOutputDirs = new Set<string>();
   let pagesClientAssetsModule: string | null = null;
@@ -1315,6 +1322,8 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   // module's load hook and consumed in renderChunk to patch the generated
   // `__VINEXT_CLASS` stub with a real dispatch table.
   let rscClassificationManifest: RouteClassificationManifest | null = null;
+  let rscActionOwnerRoutes: Awaited<ReturnType<typeof appRouter>> | null = null;
+  let rscStaticActionOwners: Record<string, string[]> | null = null;
 
   // Resolve shim paths - works both from source (.ts) and built (.js).
   // Normalize to forward slashes so every downstream `path.posix.join` keeps
@@ -1736,6 +1745,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
 
       async config(config, env) {
         isServeCommand = env.command === "serve";
+        isDevelopmentServe = actionOwnerManifestMode(env) === "development";
         root = normalizePathSeparators(config.root ?? process.cwd());
         const userResolve = config.resolve as UserResolveConfigWithTsconfigPaths | undefined;
         const shouldEnableNativeTsconfigPaths = userResolve?.tsconfigPaths === undefined;
@@ -3483,6 +3493,17 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           // indices in the manifest correspond 1:1 to the route.layouts arrays
           // used during codegen. renderChunk clears this after patching.
           rscClassificationManifest = collectRouteClassificationManifest(routes);
+          const actionOwners = await buildStaticActionOwnerManifest({
+            mode: isDevelopmentServe ? "development" : "production",
+            root,
+            routes,
+            resolve: async (source, importer) => {
+              const resolved = await this.resolve(source, importer);
+              return resolved ? { id: resolved.id } : null;
+            },
+          });
+          rscActionOwnerRoutes = isDevelopmentServe ? null : routes;
+          rscStaticActionOwners = isDevelopmentServe ? null : actionOwners;
           return generateRscEntry(
             appDir,
             routes,
@@ -3510,6 +3531,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               cacheComponents: nextConfig?.cacheComponents,
               prefetchInlining: nextConfig?.prefetchInlining,
               hasServerActions,
+              actionOwners: isDevelopmentServe ? actionOwners : undefined,
               i18n: nextConfig?.i18n,
               imageConfig: {
                 deviceSizes: nextConfig?.images?.deviceSizes,
@@ -3616,7 +3638,7 @@ export const loadServerActionClient = ${
       // by reference rather than by name.
       renderChunk: {
         order: "pre",
-        handler(code, chunk) {
+        async handler(code, chunk) {
           // Only run in the RSC environment. SSR/client builds never contain
           // the __VINEXT_CLASS stub so there is nothing to patch there, and
           // pulling ModuleInfo from the wrong graph would give nonsense
@@ -3625,7 +3647,9 @@ export const loadServerActionClient = ${
           if (!rscClassificationManifest) return null;
           // Cheap pre-filter: skip chunks that don't mention the stub at all
           // (e.g. the scan-phase chunk and every non-entry chunk).
-          if (!code.includes("__VINEXT_CLASS")) return null;
+          if (!code.includes("__VINEXT_CLASS")) {
+            return null;
+          }
 
           // Patching per-chunk (rather than scanning the whole bundle in
           // generateBundle) assumes the stub body and its per-route call sites
@@ -3659,15 +3683,35 @@ export const loadServerActionClient = ${
             },
           };
 
-          const patchPlan = planRouteClassificationInjection({
-            canonicalizeLayoutPath: canonicalize,
-            chunks: [{ code, fileName: chunk.fileName }],
-            dynamicShimPaths,
-            enableDebugReasons: enableClassificationDebug,
-            manifest: rscClassificationManifest,
-            moduleInfo,
-          });
-          if (patchPlan.kind === "skip") return null;
+          const patchPlan = rscClassificationManifest
+            ? planRouteClassificationInjection({
+                canonicalizeLayoutPath: canonicalize,
+                chunks: [{ code, fileName: chunk.fileName }],
+                dynamicShimPaths,
+                enableDebugReasons: enableClassificationDebug,
+                manifest: rscClassificationManifest,
+                moduleInfo,
+              })
+            : { kind: "skip" as const };
+          let nextCode = patchPlan.kind === "skip" ? code : patchPlan.code;
+
+          if (rscActionOwnerRoutes && nextCode.includes("__VINEXT_ACTION_OWNERS_STUB__")) {
+            const rscModule = await rscPluginModulePromise;
+            const pluginApi = rscModule?.getPluginApi(this.environment.config);
+            const serverReferences = Object.values(pluginApi?.manager.serverReferenceMetaMap ?? {});
+            const discoveredActionOwners = buildActionOwnerManifest({
+              canonicalizeModuleId: canonicalize,
+              moduleInfo,
+              routes: rscActionOwnerRoutes,
+              serverReferences,
+              staticOwners: rscStaticActionOwners ?? {},
+            });
+            const injected = injectActionOwnerManifest(nextCode, discoveredActionOwners);
+            if (!injected) this.error("vinext: failed to inject the server action owner manifest");
+            nextCode = injected;
+            rscActionOwnerRoutes = null;
+            rscStaticActionOwners = null;
+          }
 
           // Consume the manifest exactly once per RSC entry. Clearing here
           // prevents a stale manifest from leaking into a subsequent build pass
@@ -3679,7 +3723,7 @@ export const loadServerActionClient = ${
           // map would be stale. RSC entry source maps are not served or
           // consumed, so nulling the map is safe and prevents stale-map
           // confusion in tooling.
-          return { code: patchPlan.code, map: patchPlan.map };
+          return { code: nextCode, map: null };
         },
       },
     },
