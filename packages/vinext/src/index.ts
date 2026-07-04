@@ -3493,17 +3493,19 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           // indices in the manifest correspond 1:1 to the route.layouts arrays
           // used during codegen. renderChunk clears this after patching.
           rscClassificationManifest = collectRouteClassificationManifest(routes);
-          const actionOwners = await buildStaticActionOwnerManifest({
-            mode: isDevelopmentServe ? "development" : "production",
-            root,
-            routes,
-            resolve: async (source, importer) => {
-              const resolved = await this.resolve(source, importer);
-              return resolved ? { id: resolved.id } : null;
-            },
-          });
-          rscActionOwnerRoutes = isDevelopmentServe ? null : routes;
-          rscStaticActionOwners = isDevelopmentServe ? null : actionOwners;
+          const actionOwners = hasServerActions
+            ? await buildStaticActionOwnerManifest({
+                mode: isDevelopmentServe ? "development" : "production",
+                root,
+                routes,
+                resolve: async (source, importer) => {
+                  const resolved = await this.resolve(source, importer);
+                  return resolved ? { id: resolved.id } : null;
+                },
+              })
+            : {};
+          rscActionOwnerRoutes = isDevelopmentServe || !hasServerActions ? null : routes;
+          rscStaticActionOwners = isDevelopmentServe || !hasServerActions ? null : actionOwners;
           return generateRscEntry(
             appDir,
             routes,

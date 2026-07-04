@@ -976,7 +976,8 @@ describe("App Router entry templates", () => {
   it("generateRscEntry delegates action forwarding to the typed runtime", () => {
     const code = generateRscEntry("/tmp/test/app", minimalAppRoutes, null, [], null, "", false);
 
-    expect(code).toContain("forwardServerActionIfNeeded as __forwardServerActionIfNeeded");
+    expect(code).toContain("const __loadAppActionForwarding = () => import(");
+    expect(code).toContain("forwardServerActionIfNeeded: __forwardServerActionIfNeeded");
     expect(code).toContain("await __forwardServerActionIfNeeded({");
     expect(code).not.toContain("next/dist/server/web/spec-extension/cookies");
     expect(code).not.toContain("function __mergeActionForwardCookies");
@@ -997,6 +998,7 @@ describe("App Router entry templates", () => {
     expect(code).not.toContain("createTemporaryReferenceSet,");
     expect(code).not.toContain("handleProgressiveActionRequest({");
     expect(code).not.toContain("handleServerActionRequest({");
+    expect(code).not.toContain("app-action-forwarding.js");
   });
 
   it("generateRscEntry passes parallel route segment config into App page dispatch", () => {

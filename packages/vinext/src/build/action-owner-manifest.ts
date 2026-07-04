@@ -341,6 +341,46 @@ export async function buildStaticActionOwnerManifest(options: {
   resolve: (source: string, importer?: string) => Promise<{ id: string } | null>;
 }): Promise<Record<string, string[]>> {
   const manifest: Record<string, string[]> = {};
+  const modulePrograms = new Map<string, Promise<AstNode | null>>();
+  const resolvedDependencies = new Map<string, Promise<{ id: string } | null>>();
+
+  function loadProgram(id: string): Promise<AstNode | null> {
+    let pending = modulePrograms.get(id);
+    if (pending) return pending;
+    pending = (async () => {
+      let source: string;
+      try {
+        source = await fs.readFile(id, "utf8");
+      } catch {
+        return null;
+      }
+
+      const extension = path.extname(id).toLowerCase();
+      try {
+        source = (
+          await transformWithOxc(source, id, {
+            lang: extension === ".ts" ? "ts" : extension === ".tsx" ? "tsx" : "jsx",
+            jsx: { runtime: "automatic" },
+            sourcemap: false,
+          })
+        ).code;
+        return (await parseAstAsync(source)) as unknown as AstNode;
+      } catch {
+        return null;
+      }
+    })();
+    modulePrograms.set(id, pending);
+    return pending;
+  }
+
+  function resolveDependency(specifier: string, importer: string): Promise<{ id: string } | null> {
+    const key = `${importer}\0${specifier}`;
+    let pending = resolvedDependencies.get(key);
+    if (pending) return pending;
+    pending = options.resolve(specifier, importer).catch(() => null);
+    resolvedDependencies.set(key, pending);
+    return pending;
+  }
 
   for (const route of options.routes) {
     const entryIds = actionOwnerRouteEntryIds(route);
@@ -354,32 +394,8 @@ export async function buildStaticActionOwnerManifest(options: {
       if (visited.has(visitKey)) continue;
       visited.add(visitKey);
 
-      let source: string;
-      try {
-        source = await fs.readFile(current.id, "utf8");
-      } catch {
-        continue;
-      }
-
-      const extension = path.extname(current.id).toLowerCase();
-      try {
-        source = (
-          await transformWithOxc(source, current.id, {
-            lang: extension === ".ts" ? "ts" : extension === ".tsx" ? "tsx" : "jsx",
-            jsx: { runtime: "automatic" },
-            sourcemap: false,
-          })
-        ).code;
-      } catch {
-        continue;
-      }
-
-      let program: AstNode;
-      try {
-        program = (await parseAstAsync(source)) as unknown as AstNode;
-      } catch {
-        continue;
-      }
+      const program = await loadProgram(current.id);
+      if (!program) continue;
 
       const moduleReferenceKey = referenceKey(options.root, current.id, options.mode);
       if (entrySet.has(current.id)) addOwner(manifest, moduleReferenceKey, route.pattern);
@@ -394,12 +410,7 @@ export async function buildStaticActionOwnerManifest(options: {
       const includeImports = !current.id.includes(`${path.sep}node_modules${path.sep}`);
       for (const dependency of sourceDependencies(program, current.names, includeImports)) {
         if (dependency.names?.length === 0) continue;
-        let resolved: { id: string } | null;
-        try {
-          resolved = await options.resolve(dependency.specifier, current.id);
-        } catch {
-          continue;
-        }
+        const resolved = await resolveDependency(dependency.specifier, current.id);
         if (!resolved || resolved.id.includes("?")) continue;
         queue.push({ id: resolved.id, names: dependency.names });
       }

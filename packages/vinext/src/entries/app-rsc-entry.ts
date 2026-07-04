@@ -324,7 +324,6 @@ import { ensureInstrumentationRegistered as __ensureInstrumentationRegistered } 
     : ""
 }
 import { createAppRscHandler } from "vinext/server/app-rsc-handler";
-import { forwardServerActionIfNeeded as __forwardServerActionIfNeeded } from ${JSON.stringify(appActionForwardingPath)};
 import { registerConfiguredCacheAdapters as __registerConfiguredCacheAdapters } from "virtual:vinext-cache-adapters";
 import __pagesClientAssets from "virtual:vinext-pages-client-assets";
 import { setPagesClientAssets as __setPagesClientAssets } from "vinext/server/pages-client-assets";
@@ -340,7 +339,8 @@ ${
 const __loadAppRouteHandlerDispatch = () => import(${JSON.stringify(appRouteHandlerDispatchPath)});
 ${
   hasServerActions
-    ? `const __loadAppServerActionExecution = () => import(${JSON.stringify(appServerActionExecutionPath)});`
+    ? `const __loadAppServerActionExecution = () => import(${JSON.stringify(appServerActionExecutionPath)});
+const __loadAppActionForwarding = () => import(${JSON.stringify(appActionForwardingPath)});`
     : ""
 }
 ${
@@ -1057,6 +1057,8 @@ const __appRscHandler = createAppRscHandler({
     request,
     searchParams,
   }) {
+    const { forwardServerActionIfNeeded: __forwardServerActionIfNeeded } =
+      await __loadAppActionForwarding();
     const __currentActionMatch = matchRoute(cleanPathname);
     const __forwardResponse = await __forwardServerActionIfNeeded({
       actionId,
