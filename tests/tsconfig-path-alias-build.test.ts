@@ -266,4 +266,44 @@ export const postCount = Object.keys(posts).length;
     expect(buildOutput).not.toContain('import.meta.glob("@/posts/**/*.mdx"');
     expect(buildOutput).toContain("Nested tsconfig gap sentinel");
   }, 60_000);
+
+  it("compiles globbed MDX files containing frontmatter (issue #659)", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-mdx-frontmatter-build-"));
+    tmpDirs.push(root);
+    writeCloudflareAppFixture(root, "vinext-mdx-frontmatter-test");
+    writeFixtureFile(
+      root,
+      "app/page.tsx",
+      `import { postCount } from "../lib/posts";
+
+export default function HomePage() {
+  return <main>posts: {postCount}</main>;
+}
+`,
+    );
+    writeFixtureFile(
+      root,
+      "lib/posts.ts",
+      `export const posts = import.meta.glob("../content/posts/**/*.mdx", { eager: true });
+export const postCount = Object.keys(posts).length;
+`,
+    );
+    writeFixtureFile(
+      root,
+      "content/posts/second.mdx",
+      `---
+title: "Second Post"
+date: "2025-08-20"
+---
+
+<span className="text-red-500">This is a post with frontmatter and JSX.</span>
+`,
+    );
+
+    await buildCloudflareAppFixture(root);
+
+    const buildOutput = readTextFilesRecursive(path.join(root, "dist"));
+    expect(buildOutput).toContain("text-red-500");
+    expect(buildOutput).not.toMatch(/^---\s*$[\s\S]*?title:/m);
+  }, 60_000);
 });
