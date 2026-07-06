@@ -200,6 +200,7 @@ test.describe("production server action ownership", () => {
       ["default", "default", "DEFAULT_OK"],
       ["cycle", "cycle", "CYCLE_OK"],
       ["client", "client", "CLIENT_OK"],
+      ["client-form", "client-form", "CLIENT_FORM_OK:nested"],
       ["imported-inline", "imported-inline", "IMPORTED_INLINE_OK"],
       ["route-inline", "route-inline", "ROUTE_INLINE_OK"],
       ["layout-owner", "layout-owner", "LAYOUT_OK"],
@@ -212,7 +213,7 @@ test.describe("production server action ownership", () => {
       ["report/shared", "public-shared", "PUBLIC_SHARED_ACTION_EXECUTED"],
     ] as const;
 
-    const expectedAssertions = 20;
+    const expectedAssertions = 21;
     let completedAssertions = 0;
     for (const [route, id, expected] of cases) {
       await expect(await executeAction(page, route, id)).toHaveText(expected);
