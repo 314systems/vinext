@@ -24,6 +24,7 @@ type ActionOwnerRoute = Pick<
 type ServerReferenceMeta = {
   exportNames: readonly string[];
   importId: string;
+  inlineExportNames?: readonly string[];
   referenceKey: string;
 };
 
@@ -437,10 +438,16 @@ export function buildActionOwnerManifest(options: {
     for (const reference of options.serverReferences) {
       const referenceId = canonicalizeModuleId(reference.importId);
       const isRouteComponent = routeComponentIds.has(referenceId);
+      const isReachableModule = reachableIds.has(referenceId);
+      const inlineExportNames = new Set(reference.inlineExportNames ?? []);
       if (isRouteComponent) addOwner(manifest, reference.referenceKey, route.pattern);
       for (const exportName of reference.exportNames) {
         const actionId = `${reference.referenceKey}#${exportName}`;
-        if (isRouteComponent || consumedActions.has(actionId)) {
+        if (
+          isRouteComponent ||
+          consumedActions.has(actionId) ||
+          (isReachableModule && inlineExportNames.has(exportName))
+        ) {
           addOwner(manifest, actionId, route.pattern);
         }
       }

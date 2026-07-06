@@ -29,6 +29,59 @@ function route(pattern: string, pagePath: string) {
 }
 
 describe("server action owner manifest", () => {
+  it("owns inline actions declared by reachable imported Server Components", () => {
+    expect(
+      buildActionOwnerManifest({
+        moduleInfo: {
+          getModuleInfo(id) {
+            return id === "/app/page.tsx"
+              ? { importedIds: ["/app/imported-form.tsx"] }
+              : { importedIds: [] };
+          },
+        },
+        routes: [route("/", "/app/page.tsx")],
+        serverReferenceModuleEdges: {},
+        serverReferences: [
+          {
+            exportNames: ["$$hoist_0_submit"],
+            importId: "/app/imported-form.tsx",
+            inlineExportNames: ["$$hoist_0_submit"],
+            referenceKey: "imported-form",
+          },
+        ],
+      }),
+    ).toEqual({ "imported-form#$$hoist_0_submit": ["/"] });
+  });
+
+  it("does not infer inline action provenance from user-defined export names", () => {
+    expect(
+      buildActionOwnerManifest({
+        moduleInfo: {
+          getModuleInfo(id) {
+            return id === "/app/page.tsx"
+              ? { importedIds: ["/app/actions.ts"] }
+              : { importedIds: [] };
+          },
+        },
+        routes: [route("/", "/app/page.tsx")],
+        serverReferenceModuleEdges: {
+          "/app/page.tsx": {
+            imports: [{ exportNames: ["publicAction"], sourceId: "/app/actions.ts" }],
+            reexports: [],
+          },
+        },
+        serverReferences: [
+          {
+            exportNames: ["publicAction", "$$hoist_0_adminOnly"],
+            importId: "/app/actions.ts",
+            inlineExportNames: [],
+            referenceKey: "actions",
+          },
+        ],
+      }),
+    ).toEqual({ "actions#publicAction": ["/"] });
+  });
+
   it("collects resolved edges across scan environments and resets at the RSC boundary", () => {
     const scan = createActionOwnerScanObserver();
     const moduleEvent = {

@@ -122,8 +122,17 @@ export async function goTo(target) { redirect(target); }
     await write(
       "app/page.tsx",
       `import { goTo } from "./actions";
+import { ImportedActionForm } from "./imported-action-form";
 export default function Page() {
-  return <form action={goTo.bind(null, "/")}><button>home</button></form>;
+  return <><form action={goTo.bind(null, "/")}><button>home</button></form><ImportedActionForm /></>;
+}
+`,
+    );
+    await write(
+      "app/imported-action-form.tsx",
+      `export function ImportedActionForm() {
+  const importedInlineAction = async () => { "use server"; return "IMPORTED_INLINE_ACTION_EXECUTED"; };
+  return <form action={importedInlineAction}><button>imported</button></form>;
 }
 `,
     );
@@ -308,6 +317,13 @@ export default function Page() {
     const response = await handler(actionRequest("/", actionIds.clientOwnedAction, []));
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("{}");
+  });
+
+  it("retains inline action ownership in imported Server Components", async () => {
+    const importedActionId = findActionId(builtSource, "$$hoist_0_importedInlineAction");
+    const response = await handler(actionRequest("/", importedActionId, []));
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("IMPORTED_INLINE_ACTION_EXECUTED");
   });
 
   it("blocks cross-action closure replay and the composed redirect chain before action decode", async () => {

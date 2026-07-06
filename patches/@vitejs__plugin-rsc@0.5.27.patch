@@ -1,5 +1,5 @@
 diff --git a/dist/plugin-BK29Va7z.js b/dist/plugin-BK29Va7z.js
-index 548c63135..4a1c68bb6 100644
+index 548c63135..3257d79d7 100644
 --- a/dist/plugin-BK29Va7z.js
 +++ b/dist/plugin-BK29Va7z.js
 @@ -411,21 +411,37 @@ function scanBuildStripPlugin({ manager }) {
@@ -53,8 +53,18 @@ index 548c63135..4a1c68bb6 100644
  	serverResourcesMetaMap = {};
  	environmentImportMetaMap = {};
  	stabilize() {
+@@ -1606,7 +1624,8 @@ function vitePluginUseServer(useServerPluginOptions, manager) {
+ 				manager.serverReferenceMetaMap[id] = {
+ 					importId: id,
+ 					referenceKey: getNormalizedId(),
+-					exportNames: "names" in result ? result.names : result.exportNames
++					exportNames: "names" in result ? result.names : result.exportNames,
++					inlineExportNames: "names" in result ? result.names : []
+ 				};
+ 				const importSource = resolvePackage(`${PKG_NAME}/react/rsc`);
+ 				output.prepend(`import * as $$ReactServer from "${importSource}";\n`);
 diff --git a/dist/plugin-Bm-Fb4g7.d.ts b/dist/plugin-Bm-Fb4g7.d.ts
-index b0fdd9374..3ddad9eed 100644
+index b0fdd9374..498a7509c 100644
 --- a/dist/plugin-Bm-Fb4g7.d.ts
 +++ b/dist/plugin-Bm-Fb4g7.d.ts
 @@ -1,6 +1,7 @@
@@ -66,9 +76,11 @@ index b0fdd9374..3ddad9eed 100644
  
  //#region src/plugins/import-environment.d.ts
  type EnvironmentImportMeta = {
-@@ -25,6 +26,17 @@ type ServerRerferenceMeta = {
+@@ -24,7 +25,19 @@ type ServerRerferenceMeta = {
+   importId: string;
    referenceKey: string;
    exportNames: string[];
++  inlineExportNames?: string[];
  };
 +type ScanBuildObserver = (event: {
 +  type: "reset";
@@ -84,7 +96,7 @@ index b0fdd9374..3ddad9eed 100644
  /**
  * @experimental
  */
-@@ -37,6 +49,7 @@ declare class RscPluginManager {
+@@ -37,6 +50,7 @@ declare class RscPluginManager {
    clientReferenceMetaMap: Record<string, ClientReferenceMeta>;
    clientReferenceGroups: Record<string, ClientReferenceMeta[]>;
    serverReferenceMetaMap: Record<string, ServerRerferenceMeta>;
@@ -92,7 +104,7 @@ index b0fdd9374..3ddad9eed 100644
    serverResourcesMetaMap: Record<string, {
      key: string;
    }>;
-@@ -182,4 +195,4 @@ declare function transformRscCssExport(options: {
+@@ -182,4 +196,4 @@ declare function transformRscCssExport(options: {
    output: MagicString;
  } | undefined>;
  //#endregion
