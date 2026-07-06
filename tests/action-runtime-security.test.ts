@@ -75,7 +75,10 @@ async function encryptBoundArgsFixture(serializedFlightValue: string): Promise<s
 describe("production server action runtime security", () => {
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-action-runtime-security-"));
-    await fs.symlink(path.resolve("node_modules"), path.join(fixtureRoot, "node_modules"));
+    await fs.symlink(
+      path.resolve("tests/fixtures/app-basic/node_modules"),
+      path.join(fixtureRoot, "node_modules"),
+    );
     await write("package.json", '{"type":"module"}\n');
     await write(
       "middleware.ts",
