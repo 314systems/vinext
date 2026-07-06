@@ -965,6 +965,9 @@ describe("App Router entry templates", () => {
 
     expect(code).toContain('const __loadAppRouteHandlerDispatch = () => import("');
     expect(code).toContain('const __loadAppServerActionExecution = () => import("');
+    expect(code).toContain("/server/app-server-action-execution.js");
+    expect(code).toContain("/server/app-action-forwarding.js");
+    expect(code).not.toContain('import("vinext/internal/server/');
     expect(code).toContain("await __loadAppRouteHandlerDispatch()");
     expect(code).toContain("await __loadAppServerActionExecution()");
     expect(code).not.toMatch(/import \{\s*dispatchAppRouteHandler as __dispatchAppRouteHandler,/);

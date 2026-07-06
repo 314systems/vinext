@@ -45,6 +45,14 @@ const appRouteHandlerResponsePath = resolveEntryPath(
   "../server/app-route-handler-response.js",
   import.meta.url,
 );
+const appServerActionExecutionPath = resolveEntryPath(
+  "../server/app-server-action-execution.js",
+  import.meta.url,
+);
+const appActionForwardingPath = resolveEntryPath(
+  "../server/app-action-forwarding.js",
+  import.meta.url,
+);
 const appMiddlewarePath = resolveEntryPath("../server/app-middleware.js", import.meta.url);
 const metadataRouteResponsePath = resolveEntryPath(
   "../server/metadata-route-response.js",
@@ -333,8 +341,8 @@ ${
 const __loadAppRouteHandlerDispatch = () => import(${JSON.stringify(appRouteHandlerDispatchPath)});
 ${
   hasServerActions
-    ? `const __loadAppServerActionExecution = () => import("vinext/internal/server/app-server-action-execution");
-const __loadAppActionForwarding = () => import("vinext/internal/server/app-action-forwarding");`
+    ? `const __loadAppServerActionExecution = () => import(${JSON.stringify(appServerActionExecutionPath)});
+const __loadAppActionForwarding = () => import(${JSON.stringify(appActionForwardingPath)});`
     : ""
 }
 ${

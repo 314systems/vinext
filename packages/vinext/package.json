@@ -121,14 +121,6 @@
       "types": "./dist/server/app-rsc-handler.d.ts",
       "import": "./dist/server/app-rsc-handler.js"
     },
-    "./internal/server/app-action-forwarding": {
-      "types": "./dist/server/app-action-forwarding.d.ts",
-      "import": "./dist/server/app-action-forwarding.js"
-    },
-    "./internal/server/app-server-action-execution": {
-      "types": "./dist/server/app-server-action-execution.d.ts",
-      "import": "./dist/server/app-server-action-execution.js"
-    },
     "./config/config-matchers": {
       "types": "./dist/config/config-matchers.d.ts",
       "import": "./dist/config/config-matchers.js"
