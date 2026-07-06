@@ -71,6 +71,7 @@ import { extractMiddlewareMatcherConfig, hasExportedName } from "./build/report.
 import { planRouteClassificationInjection } from "./build/route-classification-injector.js";
 import {
   buildActionOwnerManifest,
+  createActionOwnerScanObserver,
   injectActionOwnerManifest,
 } from "./build/action-owner-manifest.js";
 import { normalizePathnameForRouteMatchStrict } from "./routing/utils.js";
@@ -1321,6 +1322,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   // `__VINEXT_CLASS` stub with a real dispatch table.
   let rscClassificationManifest: RouteClassificationManifest | null = null;
   let rscActionOwnerRoutes: Awaited<ReturnType<typeof appRouter>> | null = null;
+  const actionOwnerScan = createActionOwnerScanObserver();
 
   // Resolve shim paths - works both from source (.ts) and built (.js).
   // Normalize to forward slashes so every downstream `path.posix.join` keeps
@@ -1456,6 +1458,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   // resolves to the configured RSC plugin array. Vite's asyncFlatten
   // will resolve this before processing the plugin list.
   let rscPluginPromise: Promise<Plugin[]> | null = null;
+  if (earlyAppDirExists && resolvedRscPath) {
+    rscPluginModulePromise = import(pathToFileURL(resolvedRscPath).href);
+  }
   if (earlyAppDirExists && autoRsc) {
     if (!resolvedRscPath) {
       throw new Error(
@@ -1465,9 +1470,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           " @vitejs/plugin-rsc",
       );
     }
-    const rscImport = import(pathToFileURL(resolvedRscPath).href);
-    rscPluginModulePromise = rscImport;
-    rscPluginPromise = rscImport
+    rscPluginPromise = rscPluginModulePromise!
       .then((mod) => {
         const rsc = mod.default;
         return rsc({
@@ -3188,6 +3191,21 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
       },
 
       async configResolved(config) {
+        if (config.command === "build" && hasAppDir && rscPluginModulePromise) {
+          const { getPluginApi } = await rscPluginModulePromise;
+          const pluginApi = getPluginApi(config);
+          if (pluginApi) {
+            const manager = pluginApi.manager as typeof pluginApi.manager & {
+              scanBuildObservers?: Set<typeof actionOwnerScan.observe>;
+            };
+            if (!(manager.scanBuildObservers instanceof Set)) {
+              throw new Error(
+                "[vinext] The installed @vitejs/plugin-rsc does not expose scan-build observers required for production server action ownership. Install a compatible release before building.",
+              );
+            }
+            manager.scanBuildObservers.add(actionOwnerScan.observe);
+          }
+        }
         const cacheDirPrefix = getCacheDirPrefix(config.cacheDir);
         typeofWindowIdFilter.exclude = new RegExp(`^${escapeRegExp(cacheDirPrefix)}`);
         if (isServeCommand && hasCloudflarePlugin && hasPagesDir && !hasAppDir) {
@@ -3713,7 +3731,7 @@ export const loadServerActionClient = ${
                 canonicalizeModuleId: canonicalize,
                 moduleInfo,
                 routes: rscActionOwnerRoutes,
-                serverReferenceModuleEdges: pluginApi?.manager.serverReferenceModuleEdgeMap ?? {},
+                serverReferenceModuleEdges: actionOwnerScan.moduleEdges,
                 serverReferences,
               });
               const injected = injectActionOwnerManifest(nextCode, discoveredActionOwners);

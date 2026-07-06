@@ -3,6 +3,7 @@ import type { AppRoute } from "../packages/vinext/src/routing/app-route-graph.js
 import {
   actionOwnerRouteEntryIds,
   buildActionOwnerManifest,
+  createActionOwnerScanObserver,
   injectActionOwnerManifest,
 } from "../packages/vinext/src/build/action-owner-manifest.js";
 
@@ -28,6 +29,88 @@ function route(pattern: string, pagePath: string) {
 }
 
 describe("server action owner manifest", () => {
+  it("collects resolved edges across scan environments and resets at the RSC boundary", () => {
+    const scan = createActionOwnerScanObserver();
+    const moduleEvent = {
+      code: `import { submit as run } from "./actions"; export { run as submit };`,
+      environmentName: "ssr",
+      exports: [{ ln: "run", n: "submit" }],
+      imports: [{ d: -1, n: "./actions", s: 31, se: 41, ss: 0 }],
+      info: {
+        dynamicallyImportedIds: [],
+        id: "/app/button.tsx",
+        importedIds: ["/app/actions.ts"],
+      },
+      type: "module" as const,
+    };
+
+    scan.observe(moduleEvent);
+    expect(scan.moduleEdges).toEqual({
+      "/app/button.tsx": {
+        imports: [{ exportNames: ["submit"], sourceId: "/app/actions.ts" }],
+        reexports: [
+          {
+            exportedName: "submit",
+            exportNames: ["submit"],
+            sourceId: "/app/actions.ts",
+          },
+        ],
+      },
+    });
+
+    scan.observe({ environmentName: "ssr", type: "reset" });
+    expect(scan.moduleEdges).not.toEqual({});
+    scan.observe({ environmentName: "rsc", type: "reset" });
+    expect(scan.moduleEdges).toEqual({});
+  });
+
+  it("merges repeated named imports from the same action module", () => {
+    const scan = createActionOwnerScanObserver();
+    scan.observe({
+      code: `import { first } from "./actions"; import { second } from "./actions";`,
+      environmentName: "rsc",
+      exports: [],
+      imports: [
+        { d: -1, n: "./actions", s: 23, se: 33, ss: 0 },
+        { d: -1, n: "./actions", s: 59, se: 69, ss: 35 },
+      ],
+      info: {
+        dynamicallyImportedIds: [],
+        id: "/app/page.tsx",
+        importedIds: ["/app/actions.ts"],
+      },
+      type: "module",
+    });
+
+    expect(scan.moduleEdges["/app/page.tsx"]?.imports).toEqual([
+      { exportNames: ["first", "second"], sourceId: "/app/actions.ts" },
+    ]);
+  });
+
+  it("pairs mixed static and dynamic imports with scan-strip module ids", () => {
+    const scan = createActionOwnerScanObserver();
+    scan.observe({
+      code: `import { first } from "./actions"; import("./lazy-actions");`,
+      environmentName: "rsc",
+      exports: [],
+      imports: [
+        { d: -1, n: "./actions", s: 23, se: 33, ss: 0 },
+        { d: 42, n: "./lazy-actions", s: 43, se: 59, ss: 36 },
+      ],
+      info: {
+        dynamicallyImportedIds: [],
+        id: "/app/page.tsx",
+        importedIds: ["/app/actions.ts", "/app/lazy-actions.ts"],
+      },
+      type: "module",
+    });
+
+    expect(scan.moduleEdges["/app/page.tsx"]?.imports).toEqual([
+      { exportNames: ["first"], sourceId: "/app/actions.ts" },
+      { exportNames: "*", sourceId: "/app/lazy-actions.ts" },
+    ]);
+  });
+
   it("escapes action owner manifests embedded in generated JavaScript", () => {
     const injected = injectActionOwnerManifest(
       `function __VINEXT_ACTION_OWNERS() { return "__VINEXT_ACTION_OWNERS_STUB__"; }`,

@@ -1,241 +1,63 @@
 diff --git a/dist/plugin-BK29Va7z.js b/dist/plugin-BK29Va7z.js
+index 548c631..b34b86e 100644
 --- a/dist/plugin-BK29Va7z.js
 +++ b/dist/plugin-BK29Va7z.js
-@@ -406,26 +406,53 @@
- }
- //#endregion
- //#region src/plugins/scan.ts
--function scanBuildStripPlugin({ manager }) {
-+function scanBuildStripPlugin({ manager, resetEnvironmentName }) {
-+	const unresolvedEdgeMap = /* @__PURE__ */ new Map();
- 	return {
- 		name: "rsc:scan-strip",
- 		apply: "build",
- 		enforce: "post",
+@@ -408,0 +409 @@ function vitePluginResolvedIdProxy() {
++
+@@ -409,0 +411 @@ function scanBuildStripPlugin({ manager }) {
++	const lexedModules = /* @__PURE__ */ new Map();
+@@ -413,0 +416,6 @@ function scanBuildStripPlugin({ manager }) {
 +		buildStart() {
-+			if (manager.isScanBuild && this.environment.name === resetEnvironmentName) {
-+				unresolvedEdgeMap.clear();
-+				manager.serverReferenceModuleEdgeMap = {};
++			if (manager.isScanBuild && manager.scanBuildObservers.size > 0) {
++				lexedModules.clear();
++				for (const observer of manager.scanBuildObservers) observer({ type: "reset", environmentName: this.environment.name });
 +			}
 +		},
- 		transform: {
- 			filter: { id: { exclude: exactRegex("\0rolldown/runtime.js") } },
+@@ -416 +424 @@ function scanBuildStripPlugin({ manager }) {
 -			async handler(code, _id, _options) {
 +			async handler(code, id, _options) {
- 				if (!manager.isScanBuild) return;
- 				return {
+@@ -419 +427 @@ function scanBuildStripPlugin({ manager }) {
 -					code: await transformScanBuildStrip(code),
-+					code: await transformScanBuildStrip(code, (imports, exports) => {
-+						unresolvedEdgeMap.set(id, collectServerReferenceModuleEdges(code, imports, exports));
-+					}),
- 					map: { mappings: "" }
- 				};
-+			}
++					code: await transformScanBuildStrip(code, manager.scanBuildObservers.size > 0 ? (imports, exports) => lexedModules.set(id, { code, imports, exports }) : void 0),
+@@ -422,0 +431,7 @@ function scanBuildStripPlugin({ manager }) {
 +		},
 +		moduleParsed(info) {
-+			if (!manager.isScanBuild) return;
-+			const unresolved = unresolvedEdgeMap.get(info.id);
-+			if (!unresolved) return;
-+			unresolvedEdgeMap.delete(info.id);
-+			if (info.importedIds.length !== unresolved.staticSourceOrder.length || info.dynamicallyImportedIds.length !== unresolved.dynamicSourceOrder.length) {
-+				delete manager.serverReferenceModuleEdgeMap[info.id];
-+				return;
- 			}
-+			const resolvedIds = /* @__PURE__ */ new Map([
-+				...unresolved.staticSourceOrder.map((source, index) => [source, info.importedIds[index]]),
-+				...unresolved.dynamicSourceOrder.map((source, index) => [source, info.dynamicallyImportedIds[index]])
-+			]);
-+			const imports = resolveServerReferenceEdges(unresolved.imports, resolvedIds);
-+			const reexports = resolveServerReferenceEdges(unresolved.reexports, resolvedIds);
-+			if (imports.length > 0 || reexports.length > 0) manager.serverReferenceModuleEdgeMap[info.id] = { imports, reexports };
- 		}
- 	};
- }
- const importGlobRE = /\bimport\.meta\.glob(?:<\w+>)?\s*\(/g;
++			if (!manager.isScanBuild || manager.scanBuildObservers.size === 0) return;
++			const lexed = lexedModules.get(info.id);
++			if (!lexed) return;
++			lexedModules.delete(info.id);
++			for (const observer of manager.scanBuildObservers) observer({ type: "module", environmentName: this.environment.name, info, ...lexed });
+@@ -427,2 +442,3 @@ const importGlobRE = /\bimport\.meta\.glob(?:<\w+>)?\s*\(/g;
 -async function transformScanBuildStrip(code) {
 -	const [imports] = esModuleLexer.parse(code);
-+async function transformScanBuildStrip(code, onImports) {
++async function transformScanBuildStrip(code, onLexed) {
 +	const [imports, exports] = esModuleLexer.parse(code);
-+	onImports?.(imports, exports);
- 	let output = imports.map((e) => e.n && `import ${JSON.stringify(e.n)};\n`).filter(Boolean).join("");
- 	if (importGlobRE.test(code)) {
- 		walk(await parseAstAsync(code), { enter(node) {
-@@ -437,7 +464,118 @@
- 		output += "";
- 	}
- 	return output;
-+}
-+function splitCommaSeparated(value) {
-+	const parts = [];
-+	let start = 0;
-+	let quote = "";
-+	let escaped = false;
-+	for (let index = 0; index < value.length; index++) {
-+		const character = value[index];
-+		if (quote) {
-+			if (escaped) escaped = false;
-+			else if (character === "\\") escaped = true;
-+			else if (character === quote) quote = "";
-+			continue;
-+		}
-+		if (character === '"' || character === "'") quote = character;
-+		else if (character === ",") {
-+			parts.push(value.slice(start, index).trim());
-+			start = index + 1;
-+		}
-+	}
-+	parts.push(value.slice(start).trim());
-+	return parts.filter(Boolean);
- }
-+function unquoteExportName(value) {
-+	const trimmed = value.trim();
-+	if (trimmed[0] === '"' || trimmed[0] === "'") {
-+		try {
-+			return JSON.parse(trimmed[0] === "'" ? `"${trimmed.slice(1, -1).replaceAll('"', '\\"')}"` : trimmed);
-+		} catch {}
-+	}
-+	return trimmed;
-+}
-+function parseNamedSpecifiers(value) {
-+	return splitCommaSeparated(value).flatMap((part) => {
-+		const match = part.match(/^(.+?)(?:\s+as\s+(.+))?$/);
-+		if (!match) return [];
-+		const sourceName = unquoteExportName(match[1]);
-+		const exportedName = unquoteExportName(match[2] ?? match[1]);
-+		return sourceName && exportedName ? [{ sourceName, exportedName }] : [];
-+	});
-+}
-+function collectServerReferenceModuleEdges(code, imports, exports) {
-+	const staticSourceOrder = [];
-+	const dynamicSourceOrder = [];
-+	const staticSources = /* @__PURE__ */ new Set();
-+	const dynamicSources = /* @__PURE__ */ new Set();
-+	const importsBySource = /* @__PURE__ */ new Map();
-+	const reexports = [];
-+	const importedLocals = /* @__PURE__ */ new Map();
-+	for (const item of imports) {
-+		if (!item.n || item.d === -2) continue;
-+		if (item.d >= 0) {
-+			if (!dynamicSources.has(item.n)) {
-+				dynamicSources.add(item.n);
-+				dynamicSourceOrder.push(item.n);
-+			}
-+			importsBySource.set(item.n, { sourceId: item.n, exportNames: "*" });
-+			continue;
-+		}
-+		if (!staticSources.has(item.n)) {
-+			staticSources.add(item.n);
-+			staticSourceOrder.push(item.n);
-+		}
-+		const declaration = code.slice(item.ss, item.se).trim();
-+		if (declaration.startsWith("export")) {
-+			const namespace = declaration.match(/^export\s*\*\s+as\s+([^\s]+)\s+from\b/);
-+			if (namespace) reexports.push({ sourceId: item.n, exportNames: "*", exportedName: unquoteExportName(namespace[1]) });
-+			else if (/^export\s*\*/.test(declaration)) reexports.push({ sourceId: item.n, exportNames: "*" });
-+			else {
-+				const named = declaration.match(/^export\s*\{([\s\S]*?)\}\s*from\b/);
-+				if (named) for (const specifier of parseNamedSpecifiers(named[1])) reexports.push({ sourceId: item.n, exportNames: [specifier.sourceName], exportedName: specifier.exportedName });
-+			}
-+			continue;
-+		}
-+		if (!declaration.startsWith("import")) continue;
-+		const beforeSource = code.slice(item.ss, item.s);
-+		const clauseMatch = beforeSource.match(/^\s*import\s+([\s\S]*?)\s+from\s*["']?$/);
-+		if (!clauseMatch) continue;
-+		const clause = clauseMatch[1].trim();
-+		const exportNames = [];
-+		let consumesNamespace = false;
-+		const named = clause.match(/\{([\s\S]*?)\}/);
-+		if (named) for (const specifier of parseNamedSpecifiers(named[1])) {
-+			exportNames.push(specifier.sourceName);
-+			importedLocals.set(specifier.exportedName, { sourceId: item.n, exportNames: [specifier.sourceName] });
-+		}
-+		const namespace = clause.match(/\*\s+as\s+([\w$]+)/);
-+		if (namespace) {
-+			consumesNamespace = true;
-+			importedLocals.set(namespace[1], { sourceId: item.n, exportNames: "*" });
-+		}
-+		const defaultName = clause.match(/^([\w$]+)(?:\s*,|$)/)?.[1];
-+		if (defaultName) {
-+			exportNames.push("default");
-+			importedLocals.set(defaultName, { sourceId: item.n, exportNames: ["default"] });
-+		}
-+		if (exportNames.length > 0 || consumesNamespace) importsBySource.set(item.n, { sourceId: item.n, exportNames: consumesNamespace ? "*" : [...new Set(exportNames)] });
-+	}
-+	for (const item of exports) {
-+		if (!item.ln) continue;
-+		const imported = importedLocals.get(item.ln);
-+		if (imported) reexports.push({ ...imported, exportedName: item.n });
-+	}
-+	const sourceOrder = [...staticSourceOrder, ...dynamicSourceOrder];
-+	return { staticSourceOrder, dynamicSourceOrder, imports: sourceOrder.flatMap((source) => importsBySource.get(source) ? [importsBySource.get(source)] : []), reexports };
-+}
-+function resolveServerReferenceEdges(edges, resolvedIds) {
-+	return edges.flatMap((edge) => {
-+		const sourceId = resolvedIds.get(edge.sourceId);
-+		return sourceId ? [{ ...edge, sourceId }] : [];
-+	});
-+}
- //#endregion
- //#region src/plugins/validate-import.ts
- function validateImportPlugin() {
-@@ -544,6 +682,7 @@
- 	clientReferenceMetaMap = {};
- 	clientReferenceGroups = {};
- 	serverReferenceMetaMap = {};
-+	serverReferenceModuleEdgeMap = {};
- 	serverResourcesMetaMap = {};
- 	environmentImportMetaMap = {};
- 	stabilize() {
-@@ -620,7 +759,7 @@
- 				}
- 			}
- 		},
--		scanBuildStripPlugin({ manager }),
-+		scanBuildStripPlugin({ manager, resetEnvironmentName: rscPluginOptions.environment?.rsc ?? "rsc" }),
- 		vitePluginResolvedIdProxy()
- 	];
- }
-@@ -1208,7 +1347,7 @@
- 			...validateImportPlugin(),
- 			apply: () => rscPluginOptions.validateImports !== false
- 		},
--		scanBuildStripPlugin({ manager }),
-+		scanBuildStripPlugin({ manager, resetEnvironmentName: rscPluginOptions.environment?.rsc ?? "rsc" }),
- 		...cjsModuleRunnerPlugin(),
- 		...globalAsyncLocalStoragePlugin()
- 	];
++	onLexed?.(imports, exports);
+@@ -546,0 +563 @@ var RscPluginManager = class {
++	scanBuildObservers = /* @__PURE__ */ new Set();
 diff --git a/dist/plugin-Bm-Fb4g7.d.ts b/dist/plugin-Bm-Fb4g7.d.ts
+index b0fdd93..3ddad9e 100644
 --- a/dist/plugin-Bm-Fb4g7.d.ts
 +++ b/dist/plugin-Bm-Fb4g7.d.ts
-@@ -25,6 +25,15 @@
-   referenceKey: string;
-   exportNames: string[];
- };
-+type ServerReferenceModuleEdge = {
-+  sourceId: string;
-+  exportNames: readonly string[] | "*";
-+  exportedName?: string;
-+};
-+type ServerReferenceModuleEdges = {
-+  imports: readonly ServerReferenceModuleEdge[];
-+  reexports: readonly ServerReferenceModuleEdge[];
-+};
- /**
- * @experimental
- */
-@@ -37,6 +46,7 @@
-   clientReferenceMetaMap: Record<string, ClientReferenceMeta>;
-   clientReferenceGroups: Record<string, ClientReferenceMeta[]>;
-   serverReferenceMetaMap: Record<string, ServerRerferenceMeta>;
-+  serverReferenceModuleEdgeMap: Record<string, ServerReferenceModuleEdges>;
-   serverResourcesMetaMap: Record<string, {
-     key: string;
-   }>;
-@@ -182,4 +192,4 @@
-   output: MagicString;
- } | undefined>;
- //#endregion
+@@ -3 +3,2 @@ import MagicString from "magic-string";
+-import { Plugin, ResolvedConfig, Rollup, ViteDevServer, parseAstAsync } from "vite";
++import { ImportSpecifier, ExportSpecifier } from "es-module-lexer";
++import { ModuleInfo, Plugin, ResolvedConfig, Rollup, ViteDevServer, parseAstAsync } from "vite";
+@@ -27,0 +29,11 @@ type ServerRerferenceMeta = {
++type ScanBuildObserver = (event: {
++  type: "reset";
++  environmentName: string;
++} | {
++  type: "module";
++  environmentName: string;
++  code: string;
++  imports: readonly ImportSpecifier[];
++  exports: readonly ExportSpecifier[];
++  info: ModuleInfo;
++}) => void;
+@@ -39,0 +52 @@ declare class RscPluginManager {
++  scanBuildObservers: Set<ScanBuildObserver>;
+@@ -185 +198 @@ declare function transformRscCssExport(options: {
 -export { ResolvedAssetsManifest as a, getPluginApi as c, vitePluginRscMinimal as d, ResolvedAssetDeps as i, transformRscCssExport as l, AssetsManifest as n, RscPluginManager as o, PluginApi as r, RscPluginOptions as s, AssetDeps as t, vitePluginRsc as u };
 \ No newline at end of file
 +export { ResolvedAssetsManifest as a, getPluginApi as c, vitePluginRscMinimal as d, ResolvedAssetDeps as i, transformRscCssExport as l, AssetsManifest as n, RscPluginManager as o, PluginApi as r, RscPluginOptions as s, AssetDeps as t, vitePluginRsc as u };

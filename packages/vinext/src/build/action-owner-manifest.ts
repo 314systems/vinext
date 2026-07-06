@@ -38,6 +38,36 @@ type ServerReferenceModuleEdges = {
   reexports: readonly ServerReferenceModuleEdge[];
 };
 
+type ScanImport = {
+  d: number;
+  n?: string;
+  s: number;
+  se: number;
+  ss: number;
+};
+
+type ScanExport = {
+  ln?: string;
+  n: string;
+};
+
+type ScanModuleInfo = {
+  dynamicallyImportedIds: readonly string[];
+  id: string;
+  importedIds: readonly string[];
+};
+
+export type ActionOwnerScanEvent =
+  | { environmentName: string; type: "reset" }
+  | {
+      code: string;
+      environmentName: string;
+      exports: readonly ScanExport[];
+      info: ScanModuleInfo;
+      imports: readonly ScanImport[];
+      type: "module";
+    };
+
 type ModuleInfoProvider = {
   getModuleInfo(id: string): {
     dynamicImportedIds?: readonly string[];
@@ -82,6 +112,195 @@ export function actionOwnerRouteEntryIds(route: ActionOwnerRoute): string[] {
 function addOwner(manifest: Record<string, string[]>, key: string, pattern: string): void {
   const owners = (manifest[key] ??= []);
   if (!owners.includes(pattern)) owners.push(pattern);
+}
+
+function splitCommaSeparated(value: string): string[] {
+  const parts: string[] = [];
+  let start = 0;
+  let quote = "";
+  let escaped = false;
+  for (let index = 0; index < value.length; index++) {
+    const character = value[index]!;
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === quote) quote = "";
+      continue;
+    }
+    if (character === '"' || character === "'") quote = character;
+    else if (character === ",") {
+      parts.push(value.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+  parts.push(value.slice(start).trim());
+  return parts.filter(Boolean);
+}
+
+function unquoteExportName(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed[0] === '"' || trimmed[0] === "'") {
+    try {
+      return JSON.parse(
+        trimmed[0] === "'" ? `"${trimmed.slice(1, -1).replaceAll('"', '\\"')}"` : trimmed,
+      );
+    } catch {}
+  }
+  return trimmed;
+}
+
+function parseNamedSpecifiers(value: string): { exportedName: string; sourceName: string }[] {
+  return splitCommaSeparated(value).flatMap((part) => {
+    const match = part.match(/^(.+?)(?:\s+as\s+(.+))?$/);
+    if (!match) return [];
+    const sourceName = unquoteExportName(match[1]!);
+    const exportedName = unquoteExportName(match[2] ?? match[1]!);
+    return sourceName && exportedName ? [{ exportedName, sourceName }] : [];
+  });
+}
+
+type UnresolvedServerReferenceModuleEdges = ServerReferenceModuleEdges & {
+  sourceOrder: readonly string[];
+};
+
+function collectServerReferenceModuleEdges(
+  code: string,
+  imports: readonly ScanImport[],
+  exports: readonly ScanExport[],
+): UnresolvedServerReferenceModuleEdges {
+  const sourceOrder: string[] = [];
+  const sources = new Set<string>();
+  const importsBySource = new Map<string, ServerReferenceModuleEdge>();
+  const reexports: ServerReferenceModuleEdge[] = [];
+  const importedLocals = new Map<string, ServerReferenceModuleEdge>();
+
+  for (const item of imports) {
+    if (!item.n || item.d === -2) continue;
+    if (!sources.has(item.n)) {
+      sources.add(item.n);
+      sourceOrder.push(item.n);
+    }
+    if (item.d >= 0) {
+      importsBySource.set(item.n, { exportNames: "*", sourceId: item.n });
+      continue;
+    }
+    const declaration = code.slice(item.ss, item.se).trim();
+    if (declaration.startsWith("export")) {
+      const namespace = declaration.match(/^export\s*\*\s+as\s+([^\s]+)\s+from\b/);
+      if (namespace) {
+        reexports.push({
+          exportedName: unquoteExportName(namespace[1]!),
+          exportNames: "*",
+          sourceId: item.n,
+        });
+      } else if (/^export\s*\*/.test(declaration)) {
+        reexports.push({ exportNames: "*", sourceId: item.n });
+      } else {
+        const named = declaration.match(/^export\s*\{([\s\S]*?)\}\s*from\b/);
+        if (named) {
+          for (const specifier of parseNamedSpecifiers(named[1]!)) {
+            reexports.push({
+              exportedName: specifier.exportedName,
+              exportNames: [specifier.sourceName],
+              sourceId: item.n,
+            });
+          }
+        }
+      }
+      continue;
+    }
+    if (!declaration.startsWith("import")) continue;
+    const beforeSource = code.slice(item.ss, item.s);
+    const clauseMatch = beforeSource.match(/^\s*import\s+([\s\S]*?)\s+from\s*["']?$/);
+    if (!clauseMatch) continue;
+    const clause = clauseMatch[1]!.trim();
+    const exportNames: string[] = [];
+    let consumesNamespace = false;
+    const named = clause.match(/\{([\s\S]*?)\}/);
+    if (named) {
+      for (const specifier of parseNamedSpecifiers(named[1]!)) {
+        exportNames.push(specifier.sourceName);
+        importedLocals.set(specifier.exportedName, {
+          exportNames: [specifier.sourceName],
+          sourceId: item.n,
+        });
+      }
+    }
+    const namespace = clause.match(/\*\s+as\s+([\w$]+)/);
+    if (namespace) {
+      consumesNamespace = true;
+      importedLocals.set(namespace[1]!, { exportNames: "*", sourceId: item.n });
+    }
+    const defaultName = clause.match(/^([\w$]+)(?:\s*,|$)/)?.[1];
+    if (defaultName) {
+      exportNames.push("default");
+      importedLocals.set(defaultName, { exportNames: ["default"], sourceId: item.n });
+    }
+    if (exportNames.length > 0 || consumesNamespace) {
+      const existing = importsBySource.get(item.n);
+      importsBySource.set(item.n, {
+        exportNames:
+          consumesNamespace || existing?.exportNames === "*"
+            ? "*"
+            : [...new Set([...(existing?.exportNames ?? []), ...exportNames])],
+        sourceId: item.n,
+      });
+    }
+  }
+
+  for (const item of exports) {
+    if (!item.ln) continue;
+    const imported = importedLocals.get(item.ln);
+    if (imported) reexports.push({ ...imported, exportedName: item.n });
+  }
+
+  return {
+    imports: sourceOrder.flatMap((source) => {
+      const edge = importsBySource.get(source);
+      return edge ? [edge] : [];
+    }),
+    reexports,
+    sourceOrder,
+  };
+}
+
+export function createActionOwnerScanObserver(options?: { environmentName?: string }): {
+  moduleEdges: Record<string, ServerReferenceModuleEdges>;
+  observe: (event: ActionOwnerScanEvent) => void;
+} {
+  const environmentName = options?.environmentName ?? "rsc";
+  const moduleEdges: Record<string, ServerReferenceModuleEdges> = {};
+
+  return {
+    moduleEdges,
+    observe(event) {
+      if (event.type === "reset") {
+        if (event.environmentName !== environmentName) return;
+        for (const id of Object.keys(moduleEdges)) delete moduleEdges[id];
+        return;
+      }
+      const pending = collectServerReferenceModuleEdges(event.code, event.imports, event.exports);
+      if (pending.imports.length === 0 && pending.reexports.length === 0) return;
+      if (event.info.importedIds.length !== pending.sourceOrder.length) {
+        return;
+      }
+      const resolvedIds = new Map(
+        pending.sourceOrder.map(
+          (source, index) => [source, event.info.importedIds[index]!] as const,
+        ),
+      );
+      const resolveEdges = (edges: readonly ServerReferenceModuleEdge[]) =>
+        edges.flatMap((edge) => {
+          const sourceId = resolvedIds.get(edge.sourceId);
+          return sourceId ? [{ ...edge, sourceId }] : [];
+        });
+      const imports = resolveEdges(pending.imports);
+      const reexports = resolveEdges(pending.reexports);
+      if (imports.length > 0 || reexports.length > 0) {
+        moduleEdges[event.info.id] = { imports, reexports };
+      }
+    },
+  };
 }
 
 function deriveServerReferenceConsumerMap(options: {
