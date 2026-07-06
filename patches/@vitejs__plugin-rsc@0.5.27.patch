@@ -1,49 +1,75 @@
 diff --git a/dist/plugin-BK29Va7z.js b/dist/plugin-BK29Va7z.js
-index 548c631..b34b86e 100644
+index 548c63135..4a1c68bb6 100644
 --- a/dist/plugin-BK29Va7z.js
 +++ b/dist/plugin-BK29Va7z.js
-@@ -408,0 +409 @@ function vitePluginResolvedIdProxy() {
-+
-@@ -409,0 +411 @@ function scanBuildStripPlugin({ manager }) {
-+	const lexedModules = /* @__PURE__ */ new Map();
-@@ -413,0 +416,6 @@ function scanBuildStripPlugin({ manager }) {
+@@ -411,21 +411,37 @@ function scanBuildStripPlugin({ manager }) {
+ 		name: "rsc:scan-strip",
+ 		apply: "build",
+ 		enforce: "post",
 +		buildStart() {
 +			if (manager.isScanBuild && manager.scanBuildObservers.size > 0) {
-+				lexedModules.clear();
++				manager.scanBuildModules.clear();
 +				for (const observer of manager.scanBuildObservers) observer({ type: "reset", environmentName: this.environment.name });
 +			}
 +		},
-@@ -416 +424 @@ function scanBuildStripPlugin({ manager }) {
+ 		transform: {
+ 			filter: { id: { exclude: exactRegex("\0rolldown/runtime.js") } },
 -			async handler(code, _id, _options) {
 +			async handler(code, id, _options) {
-@@ -419 +427 @@ function scanBuildStripPlugin({ manager }) {
+ 				if (!manager.isScanBuild) return;
+ 				return {
 -					code: await transformScanBuildStrip(code),
-+					code: await transformScanBuildStrip(code, manager.scanBuildObservers.size > 0 ? (imports, exports) => lexedModules.set(id, { code, imports, exports }) : void 0),
-@@ -422,0 +431,7 @@ function scanBuildStripPlugin({ manager }) {
++					code: await transformScanBuildStrip(code, manager.scanBuildObservers.size > 0 ? (imports, exports) => {
++						if (!manager.scanBuildModules.has(id)) manager.scanBuildModules.set(id, { code, imports, exports });
++					} : void 0),
+ 					map: { mappings: "" }
+ 				};
+ 			}
 +		},
 +		moduleParsed(info) {
 +			if (!manager.isScanBuild || manager.scanBuildObservers.size === 0) return;
-+			const lexed = lexedModules.get(info.id);
++			const lexed = manager.scanBuildModules.get(info.id);
 +			if (!lexed) return;
-+			lexedModules.delete(info.id);
++			manager.scanBuildModules.delete(info.id);
 +			for (const observer of manager.scanBuildObservers) observer({ type: "module", environmentName: this.environment.name, info, ...lexed });
-@@ -427,2 +442,3 @@ const importGlobRE = /\bimport\.meta\.glob(?:<\w+>)?\s*\(/g;
+ 		}
+ 	};
+ }
+ const importGlobRE = /\bimport\.meta\.glob(?:<\w+>)?\s*\(/g;
 -async function transformScanBuildStrip(code) {
 -	const [imports] = esModuleLexer.parse(code);
 +async function transformScanBuildStrip(code, onLexed) {
 +	const [imports, exports] = esModuleLexer.parse(code);
 +	onLexed?.(imports, exports);
-@@ -546,0 +563 @@ var RscPluginManager = class {
+ 	let output = imports.map((e) => e.n && `import ${JSON.stringify(e.n)};\n`).filter(Boolean).join("");
+ 	if (importGlobRE.test(code)) {
+ 		walk(await parseAstAsync(code), { enter(node) {
+@@ -544,6 +560,8 @@ var RscPluginManager = class {
+ 	clientReferenceMetaMap = {};
+ 	clientReferenceGroups = {};
+ 	serverReferenceMetaMap = {};
 +	scanBuildObservers = /* @__PURE__ */ new Set();
++	scanBuildModules = /* @__PURE__ */ new Map();
+ 	serverResourcesMetaMap = {};
+ 	environmentImportMetaMap = {};
+ 	stabilize() {
 diff --git a/dist/plugin-Bm-Fb4g7.d.ts b/dist/plugin-Bm-Fb4g7.d.ts
-index b0fdd93..3ddad9e 100644
+index b0fdd9374..3ddad9eed 100644
 --- a/dist/plugin-Bm-Fb4g7.d.ts
 +++ b/dist/plugin-Bm-Fb4g7.d.ts
-@@ -3 +3,2 @@ import MagicString from "magic-string";
+@@ -1,6 +1,7 @@
+ import { f as TransformWrapExportFilter } from "./index-DViteJjw.js";
+ import MagicString from "magic-string";
 -import { Plugin, ResolvedConfig, Rollup, ViteDevServer, parseAstAsync } from "vite";
 +import { ImportSpecifier, ExportSpecifier } from "es-module-lexer";
 +import { ModuleInfo, Plugin, ResolvedConfig, Rollup, ViteDevServer, parseAstAsync } from "vite";
-@@ -27,0 +29,11 @@ type ServerRerferenceMeta = {
+ 
+ //#region src/plugins/import-environment.d.ts
+ type EnvironmentImportMeta = {
+@@ -25,6 +26,17 @@ type ServerRerferenceMeta = {
+   referenceKey: string;
+   exportNames: string[];
+ };
 +type ScanBuildObserver = (event: {
 +  type: "reset";
 +  environmentName: string;
@@ -55,9 +81,21 @@ index b0fdd93..3ddad9e 100644
 +  exports: readonly ExportSpecifier[];
 +  info: ModuleInfo;
 +}) => void;
-@@ -39,0 +52 @@ declare class RscPluginManager {
+ /**
+ * @experimental
+ */
+@@ -37,6 +49,7 @@ declare class RscPluginManager {
+   clientReferenceMetaMap: Record<string, ClientReferenceMeta>;
+   clientReferenceGroups: Record<string, ClientReferenceMeta[]>;
+   serverReferenceMetaMap: Record<string, ServerRerferenceMeta>;
 +  scanBuildObservers: Set<ScanBuildObserver>;
-@@ -185 +198 @@ declare function transformRscCssExport(options: {
+   serverResourcesMetaMap: Record<string, {
+     key: string;
+   }>;
+@@ -182,4 +195,4 @@ declare function transformRscCssExport(options: {
+   output: MagicString;
+ } | undefined>;
+ //#endregion
 -export { ResolvedAssetsManifest as a, getPluginApi as c, vitePluginRscMinimal as d, ResolvedAssetDeps as i, transformRscCssExport as l, AssetsManifest as n, RscPluginManager as o, PluginApi as r, RscPluginOptions as s, AssetDeps as t, vitePluginRsc as u };
 \ No newline at end of file
 +export { ResolvedAssetsManifest as a, getPluginApi as c, vitePluginRscMinimal as d, ResolvedAssetDeps as i, transformRscCssExport as l, AssetsManifest as n, RscPluginManager as o, PluginApi as r, RscPluginOptions as s, AssetDeps as t, vitePluginRsc as u };
