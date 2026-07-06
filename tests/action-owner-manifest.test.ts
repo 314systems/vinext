@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { parseAst } from "vite";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import type { AppRoute } from "../packages/vinext/src/routing/app-route-graph.js";
 import {
@@ -9,6 +10,7 @@ import {
   actionOwnerRouteEntryIds,
   buildActionOwnerManifest,
   buildStaticActionOwnerManifest,
+  createActionOwnerModuleCollector,
   injectActionOwnerManifest,
 } from "../packages/vinext/src/build/action-owner-manifest.js";
 
@@ -115,6 +117,130 @@ describe("server action owner manifest", () => {
 
     expect(production[`${productionKey("app/actions.ts")}#default`]).toEqual(["/"]);
     expect(development["/app/actions.ts#default"]).toEqual(["/"]);
+  });
+
+  it("builds production ownership from already-transformed scan modules", async () => {
+    const root = "/project";
+    const sources = new Map([
+      [
+        "/project/app/page.js",
+        `import { publicOnly } from "./actions.js"; export default function Page() { return publicOnly; }`,
+      ],
+      [
+        "/project/app/admin/page.js",
+        `import { adminOnly } from "../actions.js"; export default function Page() { return adminOnly; }`,
+      ],
+      [
+        "/project/app/actions.js",
+        `'use server'; export async function publicOnly() {} export async function adminOnly() {}`,
+      ],
+    ]);
+    const collector = createActionOwnerModuleCollector();
+    const resolve = async (specifier: string, importer: string) => ({
+      id: path.posix.resolve(path.posix.dirname(importer), specifier),
+    });
+
+    await Promise.all(
+      [...sources].map(([id, code]) =>
+        collector.collect({ code, environment: "ssr", id, resolve }),
+      ),
+    );
+
+    const manifest = collector.buildManifest({
+      mode: "production",
+      root,
+      routes: [route("/", "/project/app/page.js"), route("/admin", "/project/app/admin/page.js")],
+    });
+
+    const actionKey = productionKey("app/actions.js");
+    expect(manifest[`${actionKey}#publicOnly`]).toEqual(["/"]);
+    expect(manifest[`${actionKey}#adminOnly`]).toEqual(["/admin"]);
+  });
+
+  it("parses each scan module once and resets between builds", async () => {
+    let parseCount = 0;
+    const collector = createActionOwnerModuleCollector({
+      parse(code) {
+        parseCount++;
+        return parseAst(code) as never;
+      },
+    });
+    const options = {
+      code: `export default function Page() {}`,
+      environment: "ssr" as const,
+      id: "/project/app/page.js",
+      resolve: async () => null,
+    };
+
+    await Promise.all([collector.collect(options), collector.collect(options)]);
+    expect(parseCount).toBe(1);
+    expect(collector.size()).toBe(1);
+
+    collector.clear();
+    expect(collector.size()).toBe(0);
+    await collector.collect(options);
+    expect(parseCount).toBe(2);
+  });
+
+  it("prefers SSR dependency resolution while retaining RSC-only modules", async () => {
+    const collector = createActionOwnerModuleCollector();
+    const pageCode = `import { action } from "conditional-actions"; export default function Page() { return action; }`;
+    await collector.collect({
+      code: pageCode,
+      environment: "rsc",
+      id: "/project/app/page.js",
+      resolve: async () => ({ id: "/project/rsc-actions.js" }),
+    });
+    await collector.collect({
+      code: pageCode,
+      environment: "ssr",
+      id: "/project/app/page.js",
+      resolve: async () => ({ id: "/project/ssr-actions.js" }),
+    });
+    await collector.collect({
+      code: `'use server'; export async function action() {}`,
+      environment: "ssr",
+      id: "/project/ssr-actions.js",
+      resolve: async () => null,
+    });
+
+    const manifest = collector.buildManifest({
+      mode: "production",
+      root: "/project",
+      routes: [route("/", "/project/app/page.js")],
+    });
+    expect(manifest[`${productionKey("ssr-actions.js")}#action`]).toEqual(["/"]);
+    expect(manifest[`${productionKey("rsc-actions.js")}#action`]).toBeUndefined();
+  });
+
+  it("narrows package imports with normalized Windows module ids", async () => {
+    const collector = createActionOwnerModuleCollector();
+    await collector.collect({
+      code: `import { publicOnly } from "pkg"; export default publicOnly;`,
+      environment: "ssr",
+      id: "C:/project/app/page.js",
+      resolve: async () => ({ id: "C:/project/node_modules/pkg/index.js" }),
+    });
+    await collector.collect({
+      code: `import { publicOnly, adminOnly } from "./actions.js"; export { publicOnly, adminOnly };`,
+      environment: "ssr",
+      id: "C:/project/node_modules/pkg/index.js",
+      resolve: async () => ({ id: "C:/project/node_modules/pkg/actions.js" }),
+    });
+    await collector.collect({
+      code: `'use server'; export async function publicOnly() {} export async function adminOnly() {}`,
+      environment: "ssr",
+      id: "C:/project/node_modules/pkg/actions.js",
+      resolve: async () => null,
+    });
+
+    const manifest = collector.buildManifest({
+      mode: "production",
+      root: "C:/project",
+      routes: [route("/", "C:/project/app/page.js")],
+    });
+    expect(Object.keys(manifest).some((key) => key.endsWith("#publicOnly"))).toBe(true);
+    expect(Object.keys(manifest).some((key) => key.endsWith("#adminOnly"))).toBe(false);
   });
 
   it("escapes action owner manifests embedded in generated JavaScript", () => {

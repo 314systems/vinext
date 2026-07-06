@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { parseAstAsync, transformWithOxc, type ConfigEnv } from "vite";
+import { parseAst, parseAstAsync, transformWithOxc, type ConfigEnv } from "vite";
 import type { AppRoute } from "../routing/app-route-graph.js";
 import { safeJsonStringify } from "../server/html.js";
 
@@ -46,6 +46,59 @@ type AstNode = {
 type SourceDependency = {
   names: string[] | null;
   specifier: string;
+};
+
+type SourceImport = {
+  bindings: readonly {
+    importedName: string | null;
+    localName: string;
+  }[];
+  specifier: string;
+};
+
+type SourceReexport = {
+  namespaceName: string | null;
+  specifier: string;
+  specifiers: readonly {
+    exportedName: string;
+    sourceName: string;
+  }[];
+};
+
+type ActionOwnerModuleAnalysis = {
+  dynamicImports: readonly string[];
+  exportedNames: readonly string[];
+  exportLocalBindings: ReadonlyMap<string, ReadonlySet<string>>;
+  hasModuleUseServerDirective: boolean;
+  imports: readonly SourceImport[];
+  reexports: readonly SourceReexport[];
+};
+
+type CollectedActionOwnerModuleEnvironment = {
+  analysis: ActionOwnerModuleAnalysis;
+  resolvedDependencies: ReadonlyMap<string, string>;
+};
+
+type CollectedActionOwnerModule = {
+  id: string;
+  environments: Partial<Record<"rsc" | "ssr", CollectedActionOwnerModuleEnvironment>>;
+};
+
+export type ActionOwnerModuleCollector = {
+  buildManifest(options: {
+    canonicalizeModuleId?: (id: string) => string;
+    mode: "development" | "production";
+    root: string;
+    routes: readonly ActionOwnerRoute[];
+  }): Record<string, string[]>;
+  clear(): void;
+  collect(options: {
+    code: string;
+    environment: "rsc" | "ssr";
+    id: string;
+    resolve: (source: string, importer: string) => Promise<{ id: string } | null>;
+  }): Promise<void>;
+  size(): number;
 };
 
 export function actionOwnerManifestMode(
@@ -267,6 +320,12 @@ function collectImportExpressions(node: unknown, dependencies: SourceDependency[
   }
 }
 
+function collectDynamicImportSpecifiers(node: unknown, specifiers: string[]): void {
+  const dependencies: SourceDependency[] = [];
+  collectImportExpressions(node, dependencies);
+  specifiers.push(...dependencies.map((dependency) => dependency.specifier));
+}
+
 function sourceDependencies(
   program: AstNode,
   requestedNames: string[] | null,
@@ -328,9 +387,285 @@ function sourceDependencies(
   return dependencies;
 }
 
+function analyzeActionOwnerModule(program: AstNode): ActionOwnerModuleAnalysis {
+  const imports: SourceImport[] = [];
+  const reexports: SourceReexport[] = [];
+  const dynamicImports: string[] = [];
+  const exportLocalBindings = new Map<string, Set<string>>();
+
+  for (const statement of (program.body as AstNode[] | undefined) ?? []) {
+    if (statement.type === "ImportDeclaration") {
+      const specifier = literalString(statement.source);
+      if (!specifier) continue;
+      imports.push({
+        bindings: ((statement.specifiers as AstNode[] | undefined) ?? []).flatMap<
+          SourceImport["bindings"][number]
+        >((item) => {
+          const localName = identifierName(item.local);
+          if (!localName) return [];
+          if (item.type === "ImportNamespaceSpecifier") {
+            return [{ importedName: null, localName }];
+          }
+          if (item.type === "ImportDefaultSpecifier") {
+            return [{ importedName: "default", localName }];
+          }
+          const importedName = identifierName(item.imported);
+          return importedName ? [{ importedName, localName }] : [];
+        }),
+        specifier,
+      });
+      continue;
+    }
+    if (statement.type === "ExportNamedDeclaration" && statement.source) {
+      const specifier = literalString(statement.source);
+      if (!specifier) continue;
+      reexports.push({
+        namespaceName: null,
+        specifier,
+        specifiers: ((statement.specifiers as AstNode[] | undefined) ?? []).flatMap((item) => {
+          const exportedName = identifierName(item.exported);
+          const sourceName = identifierName(item.local);
+          return exportedName && sourceName ? [{ exportedName, sourceName }] : [];
+        }),
+      });
+      continue;
+    }
+    if (statement.type === "ExportAllDeclaration") {
+      const specifier = literalString(statement.source);
+      if (!specifier) continue;
+      reexports.push({
+        namespaceName: identifierName(statement.exported),
+        specifier,
+        specifiers: [],
+      });
+      continue;
+    }
+    collectDynamicImportSpecifiers(statement, dynamicImports);
+
+    if (statement.type === "ExportDefaultDeclaration") {
+      const localName = identifierName(statement.declaration);
+      if (localName) exportLocalBindings.set("default", new Set([localName]));
+      continue;
+    }
+    if (statement.type !== "ExportNamedDeclaration" || statement.source) continue;
+    const declaration = statement.declaration as AstNode | undefined;
+    if (declaration?.type === "VariableDeclaration") {
+      for (const declarator of (declaration.declarations as AstNode[] | undefined) ?? []) {
+        const exportedName = identifierName(declarator.id);
+        const localName = identifierName(declarator.init);
+        if (exportedName && localName) exportLocalBindings.set(exportedName, new Set([localName]));
+      }
+    } else {
+      const exportedName = identifierName(declaration?.id);
+      if (exportedName) exportLocalBindings.set(exportedName, new Set([exportedName]));
+    }
+    for (const item of (statement.specifiers as AstNode[] | undefined) ?? []) {
+      const exportedName = identifierName(item.exported);
+      const localName = identifierName(item.local);
+      if (exportedName && localName) exportLocalBindings.set(exportedName, new Set([localName]));
+    }
+  }
+
+  return {
+    dynamicImports,
+    exportedNames: exportedNames(program),
+    exportLocalBindings,
+    hasModuleUseServerDirective: hasModuleUseServerDirective(program),
+    imports,
+    reexports,
+  };
+}
+
+function collectedSourceDependencies(
+  analysis: ActionOwnerModuleAnalysis,
+  requestedNames: string[] | null,
+  includeImports: boolean,
+  narrowImports: boolean,
+): SourceDependency[] {
+  const dependencies: SourceDependency[] = [];
+  const requestedLocalBindings = new Set<string>();
+  if (narrowImports && requestedNames) {
+    for (const name of requestedNames) {
+      for (const localName of analysis.exportLocalBindings.get(name) ?? []) {
+        requestedLocalBindings.add(localName);
+      }
+    }
+  }
+
+  if (includeImports) {
+    for (const sourceImport of analysis.imports) {
+      const bindings =
+        narrowImports && requestedNames
+          ? sourceImport.bindings.filter((binding) => requestedLocalBindings.has(binding.localName))
+          : sourceImport.bindings;
+      dependencies.push({
+        names: bindings.some((binding) => binding.importedName === null)
+          ? null
+          : [...new Set(bindings.flatMap((binding) => binding.importedName ?? []))],
+        specifier: sourceImport.specifier,
+      });
+    }
+  }
+
+  for (const reexport of analysis.reexports) {
+    if (reexport.specifiers.length > 0) {
+      const requested = requestedNames ? new Set(requestedNames) : null;
+      dependencies.push({
+        names: reexport.specifiers.flatMap(({ exportedName, sourceName }) =>
+          !requested || requested.has(exportedName) ? [sourceName] : [],
+        ),
+        specifier: reexport.specifier,
+      });
+    } else {
+      dependencies.push({
+        names: reexport.namespaceName
+          ? requestedNames === null || requestedNames.includes(reexport.namespaceName)
+            ? null
+            : []
+          : requestedNames,
+        specifier: reexport.specifier,
+      });
+    }
+  }
+
+  if (includeImports && (!narrowImports || requestedNames === null)) {
+    for (const specifier of analysis.dynamicImports) {
+      dependencies.push({ names: null, specifier });
+    }
+  }
+  return dependencies;
+}
+
 function addOwner(manifest: Record<string, string[]>, key: string, pattern: string): void {
   const owners = (manifest[key] ??= []);
   if (!owners.includes(pattern)) owners.push(pattern);
+}
+
+function buildManifestFromModules(options: {
+  canonicalizeModuleId?: (id: string) => string;
+  mode: "development" | "production";
+  modules: ReadonlyMap<string, CollectedActionOwnerModule>;
+  root: string;
+  routes: readonly ActionOwnerRoute[];
+}): Record<string, string[]> {
+  const manifest: Record<string, string[]> = {};
+  const canonicalizeModuleId = options.canonicalizeModuleId ?? ((id: string) => id);
+
+  for (const route of options.routes) {
+    const entryIds = actionOwnerRouteEntryIds(route).map(canonicalizeModuleId);
+    const entrySet = new Set(entryIds);
+    const queue = entryIds.map((id) => ({ id, names: null as string[] | null }));
+    const visited = new Set<string>();
+
+    for (let index = 0; index < queue.length; index++) {
+      const current = queue[index]!;
+      const visitKey = `${current.id}\0${current.names?.join(",") ?? "*"}`;
+      if (visited.has(visitKey)) continue;
+      visited.add(visitKey);
+
+      const module = options.modules.get(current.id);
+      const moduleEnvironment = module?.environments.ssr ?? module?.environments.rsc;
+      if (!module || !moduleEnvironment) continue;
+
+      const moduleReferenceKey = referenceKey(options.root, module.id, options.mode);
+      if (entrySet.has(current.id)) addOwner(manifest, moduleReferenceKey, route.pattern);
+
+      if (moduleEnvironment.analysis.hasModuleUseServerDirective) {
+        for (const name of current.names ?? moduleEnvironment.analysis.exportedNames) {
+          addOwner(manifest, `${moduleReferenceKey}#${name}`, route.pattern);
+        }
+        continue;
+      }
+
+      const isPackageModule = module.id.includes("/node_modules/");
+      const includeImports = !isPackageModule || current.names !== null;
+      for (const dependency of collectedSourceDependencies(
+        moduleEnvironment.analysis,
+        current.names,
+        includeImports,
+        isPackageModule,
+      )) {
+        if (dependency.names?.length === 0) continue;
+        const resolvedId =
+          module.environments.ssr?.resolvedDependencies.get(dependency.specifier) ??
+          module.environments.rsc?.resolvedDependencies.get(dependency.specifier);
+        if (!resolvedId) continue;
+        queue.push({ id: canonicalizeModuleId(resolvedId), names: dependency.names });
+      }
+    }
+  }
+
+  return manifest;
+}
+
+export function createActionOwnerModuleCollector(
+  options: {
+    parse?: (code: string) => AstNode;
+  } = {},
+): ActionOwnerModuleCollector {
+  const modules = new Map<string, CollectedActionOwnerModule>();
+  const pendingModules = new Map<string, Promise<void>>();
+  const analyses = new Map<string, ActionOwnerModuleAnalysis>();
+  const parse = options.parse ?? ((code: string) => parseAst(code) as unknown as AstNode);
+
+  return {
+    buildManifest(buildOptions) {
+      return buildManifestFromModules({ ...buildOptions, modules });
+    },
+    clear() {
+      modules.clear();
+      pendingModules.clear();
+      analyses.clear();
+    },
+    async collect({ code, environment, id, resolve }) {
+      const module = modules.get(id);
+      if (module?.environments[environment]) return;
+      const pendingKey = `${environment}\0${id}`;
+      const existing = pendingModules.get(pendingKey);
+      if (existing) return existing;
+
+      const pending = (async () => {
+        const analysisKey = createHash("sha256").update(code).digest("base64url");
+        let analysis = analyses.get(analysisKey);
+        if (!analysis) {
+          let program: AstNode;
+          try {
+            program = parse(code);
+          } catch {
+            return;
+          }
+          analysis = analyzeActionOwnerModule(program);
+          analyses.set(analysisKey, analysis);
+        }
+
+        const dependencies = collectedSourceDependencies(analysis, null, true, false);
+        const resolvedDependencies = new Map<string, string>();
+        await Promise.all(
+          [...new Set(dependencies.map((dependency) => dependency.specifier))].map(
+            async (specifier) => {
+              let resolved: { id: string } | null;
+              try {
+                resolved = await resolve(specifier, id);
+              } catch {
+                return;
+              }
+              if (!resolved || resolved.id.includes("?")) return;
+              resolvedDependencies.set(specifier, resolved.id);
+            },
+          ),
+        );
+        const collected = modules.get(id) ?? { environments: {}, id };
+        collected.environments[environment] = { analysis, resolvedDependencies };
+        modules.set(id, collected);
+      })();
+      pendingModules.set(pendingKey, pending);
+      await pending;
+      pendingModules.delete(pendingKey);
+    },
+    size() {
+      return modules.size;
+    },
+  };
 }
 
 export function buildActionOwnerManifest(options: {

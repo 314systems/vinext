@@ -94,12 +94,15 @@ export function middleware(request) {
   if (request.nextUrl.pathname.startsWith("/admin")) {
     return new NextResponse("unauthorized", { status: 401 });
   }
+  if (request.nextUrl.pathname === "/client-owner") {
+    return new NextResponse("client owner denied", { status: 401 });
+  }
   if (request.nextUrl.pathname === "/loop") {
     return NextResponse.rewrite(new URL("/", request.url));
   }
   return NextResponse.next();
 }
-export const config = { matcher: ["/admin/:path*", "/cookie-source", "/loop"] };
+export const config = { matcher: ["/admin/:path*", "/client-owner", "/cookie-source", "/loop"] };
 `,
     );
     await write(
@@ -128,6 +131,27 @@ export default function Page() {
       "app/admin/actions.ts",
       `'use server';
 export async function deleteEverything() { return "ADMIN_ACTION_EXECUTED"; }
+`,
+    );
+    await write(
+      "app/client-owner/actions.ts",
+      `'use server';
+export async function clientOwnedAction() { return "CLIENT_OWNED_ACTION_EXECUTED"; }
+`,
+    );
+    await write(
+      "app/client-owner/button.tsx",
+      `'use client';
+import { clientOwnedAction } from "./actions";
+export function ClientButton() {
+  return <form action={clientOwnedAction}><button>client owner</button></form>;
+}
+`,
+    );
+    await write(
+      "app/client-owner/page.tsx",
+      `import { ClientButton } from "./button";
+export default function Page() { return <ClientButton />; }
 `,
     );
     await write(
@@ -226,6 +250,7 @@ export default function Page() {
 
     builtSource = await readBuiltJavaScript(path.join(fixtureRoot, "dist", "server"));
     actionIds = {
+      clientOwnedAction: findActionId(builtSource, "clientOwnedAction"),
       deleteEverything: findActionId(builtSource, "deleteEverything"),
       goTo: findActionId(builtSource, "goTo"),
     };
@@ -272,6 +297,15 @@ export default function Page() {
 
     expect(actionIds.deleteEverything).toBe(offlineActionId);
     const response = await handler(actionRequest("/", offlineActionId, []));
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("{}");
+  });
+
+  it("retains action ownership through client component boundaries", async () => {
+    const direct = await handler(new Request("http://example.com/client-owner"));
+    expect(direct.status).toBe(401);
+
+    const response = await handler(actionRequest("/", actionIds.clientOwnedAction, []));
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("{}");
   });

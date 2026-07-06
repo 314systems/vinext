@@ -72,6 +72,7 @@ import {
   actionOwnerManifestMode,
   buildActionOwnerManifest,
   buildStaticActionOwnerManifest,
+  createActionOwnerModuleCollector,
   injectActionOwnerManifest,
 } from "./build/action-owner-manifest.js";
 import { normalizePathnameForRouteMatchStrict } from "./routing/utils.js";
@@ -1328,7 +1329,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   // `__VINEXT_CLASS` stub with a real dispatch table.
   let rscClassificationManifest: RouteClassificationManifest | null = null;
   let rscActionOwnerRoutes: Awaited<ReturnType<typeof appRouter>> | null = null;
-  let rscStaticActionOwners: Record<string, string[]> | null = null;
+  const rscActionOwnerModuleCollector = createActionOwnerModuleCollector();
 
   // Resolve shim paths - works both from source (.ts) and built (.js).
   // Normalize to forward slashes so every downstream `path.posix.join` keeps
@@ -3506,19 +3507,19 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           // indices in the manifest correspond 1:1 to the route.layouts arrays
           // used during codegen. renderChunk clears this after patching.
           rscClassificationManifest = collectRouteClassificationManifest(routes);
-          const actionOwners = hasServerActions
-            ? await buildStaticActionOwnerManifest({
-                mode: isDevelopmentServe ? "development" : "production",
-                root,
-                routes,
-                resolve: async (source, importer) => {
-                  const resolved = await this.resolve(source, importer);
-                  return resolved ? { id: resolved.id } : null;
-                },
-              })
-            : {};
+          const actionOwners =
+            hasServerActions && isDevelopmentServe
+              ? await buildStaticActionOwnerManifest({
+                  mode: "development",
+                  root,
+                  routes,
+                  resolve: async (source, importer) => {
+                    const resolved = await this.resolve(source, importer);
+                    return resolved ? { id: resolved.id } : null;
+                  },
+                })
+              : {};
           rscActionOwnerRoutes = isDevelopmentServe || !hasServerActions ? null : routes;
-          rscStaticActionOwners = isDevelopmentServe || !hasServerActions ? null : actionOwners;
           return generateRscEntry(
             appDir,
             routes,
@@ -3713,19 +3714,31 @@ export const loadServerActionClient = ${
           if (hasActionOwnerStub && rscActionOwnerRoutes) {
             const rscModule = await rscPluginModulePromise;
             const pluginApi = rscModule?.getPluginApi(this.environment.config);
-            const serverReferences = Object.values(pluginApi?.manager.serverReferenceMetaMap ?? {});
-            const discoveredActionOwners = buildActionOwnerManifest({
-              canonicalizeModuleId: canonicalize,
-              moduleInfo,
-              routes: rscActionOwnerRoutes,
-              serverReferences,
-              staticOwners: rscStaticActionOwners ?? {},
-            });
-            const injected = injectActionOwnerManifest(nextCode, discoveredActionOwners);
-            if (!injected) this.error("vinext: failed to inject the server action owner manifest");
-            nextCode = injected;
-            rscActionOwnerRoutes = null;
-            rscStaticActionOwners = null;
+            if (!pluginApi?.manager.isScanBuild) {
+              const serverReferences = Object.values(
+                pluginApi?.manager.serverReferenceMetaMap ?? {},
+              );
+              const staticOwners = rscActionOwnerModuleCollector.buildManifest({
+                canonicalizeModuleId: canonicalize,
+                mode: "production",
+                root,
+                routes: rscActionOwnerRoutes,
+              });
+              const discoveredActionOwners = buildActionOwnerManifest({
+                canonicalizeModuleId: canonicalize,
+                moduleInfo,
+                routes: rscActionOwnerRoutes,
+                serverReferences,
+                staticOwners,
+              });
+              const injected = injectActionOwnerManifest(nextCode, discoveredActionOwners);
+              if (!injected) {
+                this.error("vinext: failed to inject the server action owner manifest");
+              }
+              nextCode = injected;
+              rscActionOwnerRoutes = null;
+              rscActionOwnerModuleCollector.clear();
+            }
           }
 
           // Consume the manifest exactly once per RSC entry. Clearing here
@@ -6545,6 +6558,44 @@ export const loadServerActionClient = ${
       },
     },
   ];
+
+  plugins.push({
+    name: "vinext:action-owner-scan",
+    apply: "build",
+    async buildStart() {
+      if (this.environment.name !== "rsc" || !rscPluginModulePromise) return;
+      const { getPluginApi } = await rscPluginModulePromise;
+      if (getPluginApi(this.environment.config)?.manager.isScanBuild) {
+        rscActionOwnerModuleCollector.clear();
+      }
+    },
+    transform: {
+      filter: {
+        id: /(?:\.[cm]?[jt]sx?|\.mdx)$/i,
+        code: /\b(?:import|export)\b|["']use server["']/,
+      },
+      async handler(code, id) {
+        if (
+          (this.environment.name !== "rsc" && this.environment.name !== "ssr") ||
+          id.includes("?") ||
+          !rscPluginModulePromise
+        ) {
+          return;
+        }
+        const { getPluginApi } = await rscPluginModulePromise;
+        if (!getPluginApi(this.environment.config)?.manager.isScanBuild) return;
+        await rscActionOwnerModuleCollector.collect({
+          code,
+          environment: this.environment.name,
+          id: canonicalize(id),
+          resolve: async (source, importer) => {
+            const resolved = await this.resolve(source, importer);
+            return resolved ? { id: canonicalize(resolved.id) } : null;
+          },
+        });
+      },
+    },
+  });
 
   // Append auto-injected RSC plugins if applicable
   if (rscPluginPromise) {
