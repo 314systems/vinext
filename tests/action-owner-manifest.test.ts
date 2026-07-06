@@ -56,9 +56,15 @@ describe("server action owner manifest", () => {
           },
         },
         routes: [route("/", "/app/page.tsx"), route("/admin", "/app/admin/page.tsx")],
-        serverReferenceConsumers: {
-          "/app/page.tsx": ["action-key#publicOnly"],
-          "/app/admin-consumer.ts": ["action-key#adminOnly"],
+        serverReferenceModuleEdges: {
+          "/app/page.tsx": {
+            imports: [{ exportNames: ["publicOnly"], sourceId: "/app/actions.ts" }],
+            reexports: [],
+          },
+          "/app/admin-consumer.ts": {
+            imports: [{ exportNames: ["adminOnly"], sourceId: "/app/actions.ts" }],
+            reexports: [],
+          },
         },
         serverReferences: [
           {
@@ -83,7 +89,7 @@ describe("server action owner manifest", () => {
           },
         },
         routes: [route("/", "/app/page.tsx")],
-        serverReferenceConsumers: {},
+        serverReferenceModuleEdges: {},
         serverReferences: [
           {
             exportNames: ["$$hoist_0_inline"],
@@ -112,8 +118,11 @@ describe("server action owner manifest", () => {
           },
         },
         routes: [route("/", "/app/page.tsx")],
-        serverReferenceConsumers: {
-          "/app/page.tsx": ["admin-key#adminOnly"],
+        serverReferenceModuleEdges: {
+          "/app/page.tsx": {
+            imports: [{ exportNames: ["adminOnly"], sourceId: "/app/admin-actions.ts" }],
+            reexports: [],
+          },
         },
         serverReferences: [
           {
@@ -124,6 +133,44 @@ describe("server action owner manifest", () => {
         ],
       }),
     ).toEqual({ "admin-key#adminOnly": ["/"] });
+  });
+
+  it("resolves aliased server actions through re-export barrels", () => {
+    expect(
+      buildActionOwnerManifest({
+        moduleInfo: {
+          getModuleInfo(id) {
+            return id === "/app/page.tsx"
+              ? { importedIds: ["/app/barrel.ts"] }
+              : { importedIds: [] };
+          },
+        },
+        routes: [route("/", "/app/page.tsx")],
+        serverReferenceModuleEdges: {
+          "/app/page.tsx": {
+            imports: [{ exportNames: ["submit"], sourceId: "/app/barrel.ts" }],
+            reexports: [],
+          },
+          "/app/barrel.ts": {
+            imports: [],
+            reexports: [
+              {
+                exportedName: "submit",
+                exportNames: ["internalSubmit"],
+                sourceId: "/app/actions.ts",
+              },
+            ],
+          },
+        },
+        serverReferences: [
+          {
+            exportNames: ["internalSubmit", "unrelated"],
+            importId: "/app/actions.ts",
+            referenceKey: "action-key",
+          },
+        ],
+      }),
+    ).toEqual({ "action-key#internalSubmit": ["/"] });
   });
 
   it("accepts actions reachable through the final dynamic import graph", () => {
@@ -137,8 +184,11 @@ describe("server action owner manifest", () => {
           },
         },
         routes: [route("/", "/app/page.tsx")],
-        serverReferenceConsumers: {
-          "/app/actions.ts": ["action-key#submit"],
+        serverReferenceModuleEdges: {
+          "/app/page.tsx": {
+            imports: [{ exportNames: "*", sourceId: "/app/actions.ts" }],
+            reexports: [],
+          },
         },
         serverReferences: [
           {

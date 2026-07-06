@@ -27,6 +27,17 @@ type ServerReferenceMeta = {
   referenceKey: string;
 };
 
+type ServerReferenceModuleEdge = {
+  exportNames: readonly string[] | "*";
+  exportedName?: string;
+  sourceId: string;
+};
+
+type ServerReferenceModuleEdges = {
+  imports: readonly ServerReferenceModuleEdge[];
+  reexports: readonly ServerReferenceModuleEdge[];
+};
+
 type ModuleInfoProvider = {
   getModuleInfo(id: string): {
     dynamicImportedIds?: readonly string[];
@@ -73,15 +84,111 @@ function addOwner(manifest: Record<string, string[]>, key: string, pattern: stri
   if (!owners.includes(pattern)) owners.push(pattern);
 }
 
+function deriveServerReferenceConsumerMap(options: {
+  canonicalizeModuleId: (id: string) => string;
+  moduleEdges: Readonly<Record<string, ServerReferenceModuleEdges>>;
+  serverReferences: readonly ServerReferenceMeta[];
+}): Record<string, readonly string[]> {
+  const serverReferences = new Map(
+    options.serverReferences.map((reference) => [
+      options.canonicalizeModuleId(reference.importId),
+      reference,
+    ]),
+  );
+  const moduleEdges = new Map(
+    Object.entries(options.moduleEdges).map(([id, edges]) => [
+      options.canonicalizeModuleId(id),
+      {
+        imports: edges.imports.map((edge) => ({
+          ...edge,
+          sourceId: options.canonicalizeModuleId(edge.sourceId),
+        })),
+        reexports: edges.reexports.map((edge) => ({
+          ...edge,
+          sourceId: options.canonicalizeModuleId(edge.sourceId),
+        })),
+      },
+    ]),
+  );
+  const exportedActions = new Map<string, Map<string, readonly string[]>>();
+  const resolving = new Set<string>();
+
+  const resolveModuleExports = (id: string): Map<string, readonly string[]> => {
+    const cached = exportedActions.get(id);
+    if (cached) return cached;
+    if (resolving.has(id)) return new Map();
+    resolving.add(id);
+
+    const resolved = new Map<string, string[]>();
+    const reference = serverReferences.get(id);
+    if (reference) {
+      for (const exportName of reference.exportNames) {
+        resolved.set(exportName, [`${reference.referenceKey}#${exportName}`]);
+      }
+    }
+
+    for (const edge of moduleEdges.get(id)?.reexports ?? []) {
+      const sourceExports = resolveModuleExports(edge.sourceId);
+      if (edge.exportNames === "*") {
+        if (edge.exportedName) {
+          addResolvedActions(resolved, edge.exportedName, [...sourceExports.values()].flat());
+        } else {
+          for (const [name, actionIds] of sourceExports) {
+            if (name !== "default") addResolvedActions(resolved, name, actionIds);
+          }
+        }
+      } else if (edge.exportedName) {
+        addResolvedActions(
+          resolved,
+          edge.exportedName,
+          edge.exportNames.flatMap((name) => sourceExports.get(name) ?? []),
+        );
+      }
+    }
+
+    resolving.delete(id);
+    exportedActions.set(id, resolved);
+    return resolved;
+  };
+
+  const consumers: Record<string, readonly string[]> = {};
+  for (const [consumerId, edges] of moduleEdges) {
+    const actionIds = new Set<string>();
+    for (const edge of [...edges.imports, ...edges.reexports]) {
+      const sourceExports = resolveModuleExports(edge.sourceId);
+      const consumed =
+        edge.exportNames === "*"
+          ? [...sourceExports.values()].flat()
+          : edge.exportNames.flatMap((name) => sourceExports.get(name) ?? []);
+      for (const actionId of consumed) actionIds.add(actionId);
+    }
+    if (actionIds.size > 0) consumers[consumerId] = [...actionIds].sort();
+  }
+  return consumers;
+}
+
+function addResolvedActions(
+  target: Map<string, string[]>,
+  name: string,
+  actionIds: readonly string[],
+): void {
+  if (actionIds.length > 0) target.set(name, [...(target.get(name) ?? []), ...actionIds]);
+}
+
 export function buildActionOwnerManifest(options: {
   canonicalizeModuleId?: (id: string) => string;
   moduleInfo: ModuleInfoProvider;
   routes: readonly ActionOwnerRoute[];
-  serverReferenceConsumers: Readonly<Record<string, readonly string[]>>;
+  serverReferenceModuleEdges: Readonly<Record<string, ServerReferenceModuleEdges>>;
   serverReferences: readonly ServerReferenceMeta[];
 }): Record<string, string[]> {
   const manifest: Record<string, string[]> = {};
   const canonicalizeModuleId = options.canonicalizeModuleId ?? ((id: string) => id);
+  const serverReferenceConsumers = deriveServerReferenceConsumerMap({
+    canonicalizeModuleId,
+    moduleEdges: options.serverReferenceModuleEdges,
+    serverReferences: options.serverReferences,
+  });
 
   for (const route of options.routes) {
     const entryIds = actionOwnerRouteEntryIds(route);
@@ -103,7 +210,7 @@ export function buildActionOwnerManifest(options: {
 
     const consumedActions = new Set<string>();
     for (const reachableId of reachableIds) {
-      for (const actionId of options.serverReferenceConsumers[reachableId] ?? []) {
+      for (const actionId of serverReferenceConsumers[reachableId] ?? []) {
         consumedActions.add(actionId);
       }
     }

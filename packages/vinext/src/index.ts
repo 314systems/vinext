@@ -3713,7 +3713,7 @@ export const loadServerActionClient = ${
                 canonicalizeModuleId: canonicalize,
                 moduleInfo,
                 routes: rscActionOwnerRoutes,
-                serverReferenceConsumers: pluginApi?.manager.serverReferenceConsumerMap ?? {},
+                serverReferenceModuleEdges: pluginApi?.manager.serverReferenceModuleEdgeMap ?? {},
                 serverReferences,
               });
               const injected = injectActionOwnerManifest(nextCode, discoveredActionOwners);
