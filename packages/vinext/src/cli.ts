@@ -6,7 +6,6 @@
  *   vinext dev     Start development server (Vite)
  *   vinext build   Build for production
  *   vinext start   Start production server
- *   vinext deploy  Deprecated Cloudflare deploy shim
  *   vinext typegen Generate App Router route helper types
  *   vinext lint    Run linter (delegates to eslint/oxlint)
  *
@@ -16,6 +15,7 @@
 
 import vinext from "./index.js";
 import { runPrerender } from "./build/run-prerender.js";
+import { emitPrerenderPathManifest } from "./build/prerender-paths.js";
 import path from "node:path";
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -28,8 +28,6 @@ import {
   hasAppDir,
   hasViteConfig,
 } from "./utils/project.js";
-import { deploy as runDeploy, parseDeployArgs } from "@vinext/cloudflare/internal/deploy";
-import { printDeployHelp } from "@vinext/cloudflare/internal/deploy-help";
 import { runCheck, formatReport } from "./check.js";
 import { init as runInit, getReactUpgradeDeps } from "./init.js";
 import { resolveInitOptions } from "./init-platform.js";
@@ -54,10 +52,12 @@ import { generateRouteTypes } from "./typegen.js";
 import { normalizePathSeparators } from "./utils/path.js";
 import { createDevServerConfigPlugin, normalizeDevServerHostname } from "./cli-dev-config.js";
 import {
+  findVinextRouteRootConfigInPlugins,
   findVinextPrerenderConfigInPlugins,
   formatVinextPrerenderLabel,
   resolveVinextPrerenderDecision,
   type ResolvedVinextPrerenderConfig,
+  type VinextRouteRootConfig,
 } from "./config/prerender.js";
 
 // ─── Resolve Vite from the project root ────────────────────────────────────────
@@ -229,13 +229,14 @@ function hasPagesDir(): boolean {
 type BuildViteConfigMetadata = {
   emptyOutDir?: boolean;
   prerenderConfig: ResolvedVinextPrerenderConfig | null;
+  routeRootConfig: VinextRouteRootConfig | null;
 };
 
 async function loadBuildViteConfigMetadata(
   vite: ViteModule,
   root: string,
 ): Promise<BuildViteConfigMetadata> {
-  if (!hasViteConfig(root)) return { prerenderConfig: null };
+  if (!hasViteConfig(root)) return { prerenderConfig: null, routeRootConfig: null };
 
   // Read the raw user config before the multi-environment build so
   // `build.emptyOutDir: false` remains an escape hatch for vinext's upfront clean.
@@ -248,6 +249,7 @@ async function loadBuildViteConfigMetadata(
   return {
     emptyOutDir: typeof emptyOutDir === "boolean" ? emptyOutDir : undefined,
     prerenderConfig: findVinextPrerenderConfigInPlugins(loaded?.config.plugins),
+    routeRootConfig: findVinextRouteRootConfigInPlugins(loaded?.config.plugins),
   };
 }
 
@@ -692,6 +694,11 @@ async function buildApp() {
       root: normalizePathSeparators(process.cwd()),
       concurrency: parsed.prerenderConcurrency,
     });
+    await emitPrerenderPathManifest({
+      root: normalizePathSeparators(process.cwd()),
+      nextConfigOverride: resolvedNextConfig,
+      routeRootConfig: buildConfigMetadata.routeRootConfig,
+    });
   }
 
   // Precompression runs as a Vite plugin writeBundle hook (vinext:precompress).
@@ -794,39 +801,12 @@ async function lint() {
   }
 }
 
-async function deployCommand() {
-  const parsed = parseDeployArgs(rawArgs);
-  if (parsed.help) {
-    printDeployDeprecationWarning();
-    printDeployHelp();
-    return;
-  }
-
-  printDeployDeprecationWarning();
-  await loadVite();
-  console.log(`\n  vinext deploy  (Vite ${getViteVersion()})\n`);
-
-  await runDeploy({
-    root: process.cwd(),
-    preview: parsed.preview,
-    env: parsed.env,
-    skipBuild: parsed.skipBuild,
-    dryRun: parsed.dryRun,
-    name: parsed.name,
-    prerenderAll: parsed.prerenderAll,
-    prerenderConcurrency: parsed.prerenderConcurrency,
-    experimentalTPR: parsed.experimentalTPR,
-    tprCoverage: parsed.tprCoverage,
-    tprLimit: parsed.tprLimit,
-    tprWindow: parsed.tprWindow,
-  });
-}
-
-function printDeployDeprecationWarning(): void {
-  console.log(
-    "  ⚠️  Warning: `vinext deploy` has moved to the `@vinext/cloudflare` package.\n" +
-      "  Please switch to `npx @vinext/cloudflare deploy` or `vp exec vinext-cloudflare deploy`; this compatibility command will be removed in a future release.\n",
+function failRemovedDeployCommand(): never {
+  console.error(
+    "\n  Error: `vinext deploy` has moved to the `@vinext/cloudflare` package.\n\n" +
+      "  Run `npx @vinext/cloudflare deploy` or `vp exec vinext-cloudflare deploy` instead.\n",
   );
+  process.exit(1);
 }
 
 async function check() {
@@ -940,9 +920,7 @@ function printHelp(cmd?: string) {
   }
 
   if (cmd === "deploy") {
-    printDeployDeprecationWarning();
-    printDeployHelp();
-    return;
+    failRemovedDeployCommand();
   }
 
   if (cmd === "check") {
@@ -978,6 +956,9 @@ function printHelp(cmd?: string) {
     --platform <target>  Deployment target: cloudflare or node
     --prerender          Configure vinext build to pre-render all static routes
                          (default: prompt, with No selected by default)
+    --experimental-warm-cdn-cache
+                         Add experimental CDN pre-warming to the Cloudflare deploy script
+                         (Workers Cache CDN only, default: prompt with No)
     --cdn-cache <type>   Cloudflare CDN cache: workers-cache or data-cache
                          (default: workers-cache)
     --data-cache <type>  Cloudflare data cache: kv or none (default: kv)
@@ -995,6 +976,8 @@ function printHelp(cmd?: string) {
     vinext init --platform=cloudflare --image-optimization=none
                                 Do not configure Cloudflare Images
     vinext init --prerender     Add prerender: { routes: "*" } to vite.config.ts
+    vinext init --experimental-warm-cdn-cache
+                                Add experimental CDN pre-warming to deploy:vinext
     vinext init --platform=node   Configure a Node deployment
     vinext init -p 4000           Use port 4000 for dev:vinext
     vinext init --force           Overwrite existing vite.config.ts
@@ -1104,10 +1087,7 @@ switch (command) {
     break;
 
   case "deploy":
-    deployCommand().catch((e) => {
-      console.error(e);
-      process.exit(1);
-    });
+    failRemovedDeployCommand();
     break;
 
   case "init":

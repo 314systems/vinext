@@ -1,6 +1,6 @@
 {
   "name": "@vinext/cloudflare",
-  "version": "0.2.1",
+  "version": "1.0.0-beta.0",
   "description": "Cloudflare adapters for vinext (KV data cache and Images-backed image optimization).",
   "license": "MIT",
   "repository": {
@@ -32,6 +32,14 @@
     "./internal/tpr": {
       "types": "./dist/tpr.d.ts",
       "import": "./dist/tpr.js"
+    },
+    "./internal/cdn-warm": {
+      "types": "./dist/cdn-warm.d.ts",
+      "import": "./dist/cdn-warm.js"
+    },
+    "./internal/version-deploy": {
+      "types": "./dist/version-deploy.d.ts",
+      "import": "./dist/version-deploy.js"
     },
     "./cache/*": {
       "types": "./dist/cache/*.d.ts",

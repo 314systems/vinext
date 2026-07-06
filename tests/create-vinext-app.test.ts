@@ -34,6 +34,16 @@ const cloudflareInitOptions: ResolvedInitOptions = {
   },
 };
 
+const warmCloudflareInitOptions: ResolvedInitOptions = {
+  platform: "cloudflare",
+  prerender: false,
+  cloudflare: {
+    dataCache: "kv",
+    cdnCache: "workers-cache",
+    imageOptimization: "cloudflare-images",
+  },
+};
+
 const nodeInitOptions: ResolvedInitOptions = {
   platform: "node",
   prerender: false,
@@ -74,7 +84,9 @@ describe("createVinextApp", () => {
     expect(fs.existsSync(path.join(appPath, "src"))).toBe(false);
     expect(readFile(appPath, "app/page.tsx")).toContain("vinext + Cloudflare Workers");
     expect(readFile(appPath, "app/page.tsx")).toContain("pnpm run dev:vinext");
-    expect(readFile(appPath, "app/page.tsx")).toContain("pnpm exec vinext-cloudflare deploy");
+    expect(readFile(appPath, "app/page.tsx")).toContain(
+      "pnpm exec vinext-cloudflare deploy --config dist/server/wrangler.json",
+    );
     expect(readFile(appPath, "app/page.tsx")).not.toMatch(/\bnpm\b|\bnpx\b/);
     expect(readFile(appPath, "README.md")).toContain("pnpm run build:vinext");
     expect(readFile(appPath, "README.md")).not.toMatch(/\bnpm\b|\bnpx\b/);
@@ -109,6 +121,29 @@ describe("createVinextApp", () => {
       "@cloudflare/vite-plugin": "latest",
       wrangler: "latest",
     });
+  });
+
+  it("does not show the warm CDN cache deploy command by default for Workers Cache init", async () => {
+    const appPath = path.join(tmpDir, "warm-app");
+
+    await withQuietConsole(() =>
+      createVinextApp({
+        appPath,
+        packageManager: "npm",
+        install: false,
+        git: false,
+        initOptions: warmCloudflareInitOptions,
+      }),
+    );
+
+    expect(readFile(appPath, "app/page.tsx")).toContain(
+      "pnpm exec vinext-cloudflare deploy --config dist/server/wrangler.json",
+    );
+    expect(readFile(appPath, "app/page.tsx")).not.toContain("--experimental-warm-cdn-cache");
+    const pkg = readPkg(appPath);
+    expect(pkg.scripts?.["deploy:vinext"]).toBe(
+      "vinext-cloudflare deploy --config dist/server/wrangler.json",
+    );
   });
 
   it("uses the selected package manager through the shared init install path", async () => {
