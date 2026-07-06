@@ -23,6 +23,7 @@ type ProductionApp = {
     protected: string;
     protectedClient: string;
     redirectTo: string;
+    sameNameSubmit: string;
     sideEffectSecret: string;
   };
   deleteAccountIds: string[];
@@ -105,6 +106,7 @@ async function buildAndServeFixture(): Promise<ProductionApp> {
       protected: findActionId(builtSource, "protectedAction"),
       protectedClient: findActionId(builtSource, "protectedClientAction"),
       redirectTo: findActionId(builtSource, "redirectTo"),
+      sameNameSubmit: findActionId(builtSource, "submit"),
       sideEffectSecret: findActionId(builtSource, "sideEffectSecretAction"),
     },
     baseUrl: `http://127.0.0.1:${server.port}`,
@@ -211,9 +213,10 @@ test.describe("production server action ownership", () => {
       ["mixed", "mixed-dynamic", "MIXED_DYNAMIC_OK"],
       ["report/dynamic/example", "dynamic-protected", "DYNAMIC_PROTECTED_ACTION_EXECUTED"],
       ["report/shared", "public-shared", "PUBLIC_SHARED_ACTION_EXECUTED"],
+      ["same-name/action-owner", "same-name-action", "SAME_NAME_ACTION_OK:distinct"],
     ] as const;
 
-    const expectedAssertions = 21;
+    const expectedAssertions = 22;
     let completedAssertions = 0;
     for (const [route, id, expected] of cases) {
       await expect(await executeAction(page, route, id)).toHaveText(expected);
@@ -339,6 +342,22 @@ test.describe("production server action ownership", () => {
     expect(response.status).toBe(200);
     expect(response.body).toBe("{}");
     expect(response.body).not.toContain("ADMIN_SHARED_ACTION_EXECUTED");
+  });
+
+  test("keeps same-named non-action exports isolated from action ownership", async ({ page }) => {
+    await page.goto(`${app.baseUrl}/ownership/same-name/action-owner`);
+    await expect(page.getByTestId("same-name-helper-result")).toHaveText("SAME_NAME_HELPER_OK");
+
+    await page.goto(`${app.baseUrl}/ownership/same-name/helper-only`);
+    await expect(page.getByTestId("same-name-helper-result")).toHaveText("SAME_NAME_HELPER_OK");
+    const response = await postAction(
+      page,
+      "/ownership/same-name/helper-only",
+      app.actionIds.sameNameSubmit,
+    );
+    expect(response.status).toBe(200);
+    expect(response.body).toBe("{}");
+    expect(response.body).not.toContain("SAME_NAME_ACTION_OK");
   });
 
   test("forwards dynamic owners using their route pattern", async ({ page }) => {

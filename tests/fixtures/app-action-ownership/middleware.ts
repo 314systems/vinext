@@ -18,6 +18,12 @@ export function middleware(request: NextRequest) {
   if (request.nextUrl.pathname === "/ownership/report/loop") {
     return NextResponse.rewrite(new URL("/ownership/report/public", request.url));
   }
+  if (
+    request.nextUrl.pathname === "/ownership/same-name/action-owner" &&
+    request.headers.get("x-action-forwarded")
+  ) {
+    return new NextResponse("FORWARDED_SAME_NAME_ACTION_BLOCKED", { status: 401 });
+  }
   return NextResponse.next();
 }
 export const config = {
@@ -28,5 +34,6 @@ export const config = {
     "/ownership/report/dynamic/:path*",
     "/ownership/report/cookie-source",
     "/ownership/report/loop",
+    "/ownership/same-name/action-owner",
   ],
 };
