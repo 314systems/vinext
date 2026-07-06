@@ -1323,6 +1323,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   let rscClassificationManifest: RouteClassificationManifest | null = null;
   let rscActionOwnerRoutes: Awaited<ReturnType<typeof appRouter>> | null = null;
   const actionOwnerScan = createActionOwnerScanObserver();
+  let hasActionOwnerScanObserver = false;
 
   // Resolve shim paths - works both from source (.ts) and built (.js).
   // Normalize to forward slashes so every downstream `path.posix.join` keeps
@@ -3198,12 +3199,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             const manager = pluginApi.manager as typeof pluginApi.manager & {
               scanBuildObservers?: Set<typeof actionOwnerScan.observe>;
             };
-            if (!(manager.scanBuildObservers instanceof Set)) {
-              throw new Error(
-                "[vinext] The installed @vitejs/plugin-rsc does not expose scan-build observers required for production server action ownership. Install a compatible release before building.",
-              );
+            if (manager.scanBuildObservers instanceof Set) {
+              manager.scanBuildObservers.add(actionOwnerScan.observe);
+              hasActionOwnerScanObserver = true;
             }
-            manager.scanBuildObservers.add(actionOwnerScan.observe);
           }
         }
         const cacheDirPrefix = getCacheDirPrefix(config.cacheDir);
@@ -3727,6 +3726,11 @@ export const loadServerActionClient = ${
               const serverReferences = Object.values(
                 pluginApi?.manager.serverReferenceMetaMap ?? {},
               );
+              if (!hasActionOwnerScanObserver && serverReferences.length > 0) {
+                this.error(
+                  "[vinext] The installed @vitejs/plugin-rsc does not expose scan-build observers required to build an app with server actions. Install a compatible release before building.",
+                );
+              }
               const discoveredActionOwners = buildActionOwnerManifest({
                 canonicalizeModuleId: canonicalize,
                 moduleInfo,
