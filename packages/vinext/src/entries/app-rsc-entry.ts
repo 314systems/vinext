@@ -115,7 +115,7 @@ const appPagesBridgePath = resolveEntryPath("../server/app-pages-bridge.js", imp
  * Passed from the Vite plugin where the full next.config.js is loaded.
  */
 type AppRouterConfig = {
-  actionOwners?: Record<string, string[]>;
+  actionOwners?: Record<string, string[]> | null;
   redirects?: NextRedirect[];
   rewrites?: {
     beforeFiles: NextRewrite[];
@@ -706,7 +706,7 @@ ${rootParamNameEntries.join("\n")}
 };
 
 __setPagesClientAssets(__pagesClientAssets);
-function __VINEXT_ACTION_OWNERS() { return ${actionOwners ? safeJsonStringify(actionOwners) : '"__VINEXT_ACTION_OWNERS_STUB__"'}; }
+function __VINEXT_ACTION_OWNERS() { return ${actionOwners === undefined ? '"__VINEXT_ACTION_OWNERS_STUB__"' : safeJsonStringify(actionOwners)}; }
 const __appRscHandler = createAppRscHandler({
   basePath: __basePath,
   buildId: process.env.__VINEXT_BUILD_ID ?? null,

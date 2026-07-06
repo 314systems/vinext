@@ -1,24 +1,10 @@
-import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { parseAst } from "vite";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 import type { AppRoute } from "../packages/vinext/src/routing/app-route-graph.js";
 import {
-  actionOwnerManifestMode,
   actionOwnerRouteEntryIds,
   buildActionOwnerManifest,
-  buildStaticActionOwnerManifest,
-  createActionOwnerModuleCollector,
   injectActionOwnerManifest,
 } from "../packages/vinext/src/build/action-owner-manifest.js";
-
-let roots: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => fs.rm(root, { force: true, recursive: true })));
-});
 
 function route(pattern: string, pagePath: string) {
   return {
@@ -34,215 +20,14 @@ function route(pattern: string, pagePath: string) {
     pagePath,
     parallelSlots: [],
     pattern,
+    siblingIntercepts: [],
     templates: [],
     unauthorizedPath: null,
     unauthorizedPaths: [],
-    siblingIntercepts: [],
   };
-}
-
-async function fixture(files: Record<string, string>) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-action-owner-"));
-  roots.push(root);
-  for (const [relativePath, source] of Object.entries(files)) {
-    const filePath = path.join(root, relativePath);
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, source);
-  }
-  return {
-    root,
-    resolve: async (specifier: string, importer?: string) => {
-      const candidate = path.resolve(importer ? path.dirname(importer) : root, specifier);
-      for (const filePath of [candidate, `${candidate}.ts`, `${candidate}.tsx`]) {
-        try {
-          if ((await fs.stat(filePath)).isFile()) return { id: filePath };
-        } catch {}
-      }
-      return null;
-    },
-  };
-}
-
-function productionKey(relativePath: string): string {
-  return createHash("sha256").update(relativePath).digest("hex").slice(0, 12);
 }
 
 describe("server action owner manifest", () => {
-  it("treats Vite preview as production despite command serve", () => {
-    expect(actionOwnerManifestMode({ command: "serve", isPreview: false })).toBe("development");
-    expect(actionOwnerManifestMode({ command: "serve", isPreview: true })).toBe("production");
-    expect(actionOwnerManifestMode({ command: "build" })).toBe("production");
-  });
-  it("maps only imported action exports to each owning route", async () => {
-    const app = await fixture({
-      "app/actions.ts": `'use server';\nexport async function publicOnly() {}\nexport async function adminOnly() {}\n`,
-      "app/admin/page.tsx": `import { adminOnly } from "../actions"; export default function Page() { return adminOnly; }`,
-      "app/page.tsx": `import { publicOnly } from "./actions"; export default function Page() { return publicOnly; }`,
-    });
-
-    const manifest = await buildStaticActionOwnerManifest({
-      mode: "production",
-      root: app.root,
-      routes: [
-        route("/", path.join(app.root, "app/page.tsx")),
-        route("/admin", path.join(app.root, "app/admin/page.tsx")),
-      ],
-      resolve: app.resolve,
-    });
-
-    const actionKey = productionKey("app/actions.ts");
-    expect(manifest[`${actionKey}#publicOnly`]).toEqual(["/"]);
-    expect(manifest[`${actionKey}#adminOnly`]).toEqual(["/admin"]);
-  });
-
-  it("uses the unchanged plugin-rsc production and development reference keys", async () => {
-    const app = await fixture({
-      "app/actions.ts": `'use server'; export default async function action() {}`,
-      "app/page.tsx": `import action from "./actions"; export default function Page() { return action; }`,
-    });
-    const pagePath = path.join(app.root, "app/page.tsx");
-
-    const production = await buildStaticActionOwnerManifest({
-      mode: "production",
-      root: app.root,
-      routes: [route("/", pagePath)],
-      resolve: app.resolve,
-    });
-    const development = await buildStaticActionOwnerManifest({
-      mode: "development",
-      root: app.root,
-      routes: [route("/", pagePath)],
-      resolve: app.resolve,
-    });
-
-    expect(production[`${productionKey("app/actions.ts")}#default`]).toEqual(["/"]);
-    expect(development["/app/actions.ts#default"]).toEqual(["/"]);
-  });
-
-  it("builds production ownership from already-transformed scan modules", async () => {
-    const root = "/project";
-    const sources = new Map([
-      [
-        "/project/app/page.js",
-        `import { publicOnly } from "./actions.js"; export default function Page() { return publicOnly; }`,
-      ],
-      [
-        "/project/app/admin/page.js",
-        `import { adminOnly } from "../actions.js"; export default function Page() { return adminOnly; }`,
-      ],
-      [
-        "/project/app/actions.js",
-        `'use server'; export async function publicOnly() {} export async function adminOnly() {}`,
-      ],
-    ]);
-    const collector = createActionOwnerModuleCollector();
-    const resolve = async (specifier: string, importer: string) => ({
-      id: path.posix.resolve(path.posix.dirname(importer), specifier),
-    });
-
-    await Promise.all(
-      [...sources].map(([id, code]) =>
-        collector.collect({ code, environment: "ssr", id, resolve }),
-      ),
-    );
-
-    const manifest = collector.buildManifest({
-      mode: "production",
-      root,
-      routes: [route("/", "/project/app/page.js"), route("/admin", "/project/app/admin/page.js")],
-    });
-
-    const actionKey = productionKey("app/actions.js");
-    expect(manifest[`${actionKey}#publicOnly`]).toEqual(["/"]);
-    expect(manifest[`${actionKey}#adminOnly`]).toEqual(["/admin"]);
-  });
-
-  it("parses each scan module once and resets between builds", async () => {
-    let parseCount = 0;
-    const collector = createActionOwnerModuleCollector({
-      parse(code) {
-        parseCount++;
-        return parseAst(code) as never;
-      },
-    });
-    const options = {
-      code: `export default function Page() {}`,
-      environment: "ssr" as const,
-      id: "/project/app/page.js",
-      resolve: async () => null,
-    };
-
-    await Promise.all([collector.collect(options), collector.collect(options)]);
-    expect(parseCount).toBe(1);
-    expect(collector.size()).toBe(1);
-
-    collector.clear();
-    expect(collector.size()).toBe(0);
-    await collector.collect(options);
-    expect(parseCount).toBe(2);
-  });
-
-  it("prefers SSR dependency resolution while retaining RSC-only modules", async () => {
-    const collector = createActionOwnerModuleCollector();
-    const pageCode = `import { action } from "conditional-actions"; export default function Page() { return action; }`;
-    await collector.collect({
-      code: pageCode,
-      environment: "rsc",
-      id: "/project/app/page.js",
-      resolve: async () => ({ id: "/project/rsc-actions.js" }),
-    });
-    await collector.collect({
-      code: pageCode,
-      environment: "ssr",
-      id: "/project/app/page.js",
-      resolve: async () => ({ id: "/project/ssr-actions.js" }),
-    });
-    await collector.collect({
-      code: `'use server'; export async function action() {}`,
-      environment: "ssr",
-      id: "/project/ssr-actions.js",
-      resolve: async () => null,
-    });
-
-    const manifest = collector.buildManifest({
-      mode: "production",
-      root: "/project",
-      routes: [route("/", "/project/app/page.js")],
-    });
-    expect(manifest[`${productionKey("ssr-actions.js")}#action`]).toEqual(["/"]);
-    expect(manifest[`${productionKey("rsc-actions.js")}#action`]).toBeUndefined();
-  });
-
-  it("narrows package imports with normalized Windows module ids", async () => {
-    const collector = createActionOwnerModuleCollector();
-    await collector.collect({
-      code: `import { publicOnly } from "pkg"; export default publicOnly;`,
-      environment: "ssr",
-      id: "C:/project/app/page.js",
-      resolve: async () => ({ id: "C:/project/node_modules/pkg/index.js" }),
-    });
-    await collector.collect({
-      code: `import { publicOnly, adminOnly } from "./actions.js"; export { publicOnly, adminOnly };`,
-      environment: "ssr",
-      id: "C:/project/node_modules/pkg/index.js",
-      resolve: async () => ({ id: "C:/project/node_modules/pkg/actions.js" }),
-    });
-    await collector.collect({
-      code: `'use server'; export async function publicOnly() {} export async function adminOnly() {}`,
-      environment: "ssr",
-      id: "C:/project/node_modules/pkg/actions.js",
-      resolve: async () => null,
-    });
-
-    const manifest = collector.buildManifest({
-      mode: "production",
-      root: "C:/project",
-      routes: [route("/", "C:/project/app/page.js")],
-    });
-    expect(Object.keys(manifest).some((key) => key.endsWith("#publicOnly"))).toBe(true);
-    expect(Object.keys(manifest).some((key) => key.endsWith("#adminOnly"))).toBe(false);
-  });
-
   it("escapes action owner manifests embedded in generated JavaScript", () => {
     const injected = injectActionOwnerManifest(
       `function __VINEXT_ACTION_OWNERS() { return "__VINEXT_ACTION_OWNERS_STUB__"; }`,
@@ -256,225 +41,37 @@ describe("server action owner manifest", () => {
     expect(injected).not.toContain("</script>");
   });
 
-  it("traces aliased re-exports to the original server action export", async () => {
-    const app = await fixture({
-      "app/actions.ts": `'use server'; export async function original() {}`,
-      "app/barrel.ts": `export { original as exposed } from "./actions";`,
-      "app/page.tsx": `import { exposed } from "./barrel"; export default function Page() { return exposed; }`,
-    });
-
-    const manifest = await buildStaticActionOwnerManifest({
-      mode: "production",
-      root: app.root,
-      routes: [route("/", path.join(app.root, "app/page.tsx"))],
-      resolve: app.resolve,
-    });
-
-    expect(manifest[`${productionKey("app/actions.ts")}#original`]).toEqual(["/"]);
-  });
-
-  it("does not authorize sibling exports from a shared barrel", async () => {
-    const app = await fixture({
-      "app/actions.ts": `'use server'; export async function publicOnly() {} export async function adminOnly() {}`,
-      "app/barrel.ts": `export { publicOnly, adminOnly } from "./actions";`,
-      "app/page.tsx": `import { publicOnly } from "./barrel"; export default function Page() { return publicOnly; }`,
-    });
-
-    const manifest = await buildStaticActionOwnerManifest({
-      mode: "production",
-      root: app.root,
-      routes: [route("/", path.join(app.root, "app/page.tsx"))],
-      resolve: app.resolve,
-    });
-
-    const actionKey = productionKey("app/actions.ts");
-    expect(manifest[`${actionKey}#publicOnly`]).toEqual(["/"]);
-    expect(manifest[`${actionKey}#adminOnly`]).toBeUndefined();
-  });
-
-  it("follows namespace re-exports only when the namespace is consumed", async () => {
-    const app = await fixture({
-      "app/actions.ts": `'use server'; export async function first() {} export async function second() {}`,
-      "app/barrel.ts": `export * as actions from "./actions";`,
-      "app/page.tsx": `import { actions } from "./barrel"; export default function Page() { return actions.first; }`,
-    });
-
-    const manifest = await buildStaticActionOwnerManifest({
-      mode: "production",
-      root: app.root,
-      routes: [route("/", path.join(app.root, "app/page.tsx"))],
-      resolve: app.resolve,
-    });
-
-    const actionKey = productionKey("app/actions.ts");
-    expect(manifest[`${actionKey}#first`]).toEqual(["/"]);
-    expect(manifest[`${actionKey}#second`]).toEqual(["/"]);
-  });
-
-  // Ported from Next.js: test/e2e/app-dir/app-external/app/action/client/page.js
-  // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/app-external/app/action/client/page.js
-  it("maps server actions imported from packages", async () => {
-    const app = await fixture({
-      "app/page.tsx": `import { action1 } from "server-action-mod"; export default function Page() { return action1; }`,
-      "node_modules/server-action-mod/index.js": `'use server'; export async function action1() {}`,
-      "node_modules/server-action-mod/package.json": `{"name":"server-action-mod","type":"module"}`,
-    });
-    const packageEntry = path.join(app.root, "node_modules/server-action-mod/index.js");
-    const resolve = async (specifier: string, importer?: string) => {
-      if (specifier === "server-action-mod") return { id: packageEntry };
-      return app.resolve(specifier, importer);
+  it("maps exact consumed action exports to each owning route", () => {
+    const moduleGraph: Record<string, readonly string[]> = {
+      "/app/page.tsx": ["/app/actions.ts"],
+      "/app/admin/page.tsx": ["/app/admin-consumer.ts"],
+      "/app/admin-consumer.ts": ["/app/actions.ts"],
     };
-
-    const manifest = await buildStaticActionOwnerManifest({
-      mode: "production",
-      root: app.root,
-      routes: [route("/", path.join(app.root, "app/page.tsx"))],
-      resolve,
-    });
-
-    expect(manifest[`${productionKey("node_modules/server-action-mod/index.js")}#action1`]).toEqual(
-      ["/"],
-    );
-  });
-
-  it("follows narrowed imports through package intermediaries in development", async () => {
-    const app = await fixture({
-      "app/page.tsx": `import { action1 } from "server-action-wrapper"; export default function Page() { return action1; }`,
-      "node_modules/server-action-wrapper/index.js": `import { action1 } from "server-action-mod"; export { action1 };`,
-      "node_modules/server-action-wrapper/package.json": `{"name":"server-action-wrapper","type":"module"}`,
-      "node_modules/server-action-mod/index.js": `'use server'; export async function action1() {}`,
-      "node_modules/server-action-mod/package.json": `{"name":"server-action-mod","type":"module"}`,
-    });
-    const wrapperEntry = path.join(app.root, "node_modules/server-action-wrapper/index.js");
-    const actionEntry = path.join(app.root, "node_modules/server-action-mod/index.js");
-    const resolve = async (specifier: string, importer?: string) => {
-      if (specifier === "server-action-wrapper") return { id: wrapperEntry };
-      if (specifier === "server-action-mod") return { id: actionEntry };
-      return app.resolve(specifier, importer);
-    };
-
-    const manifest = await buildStaticActionOwnerManifest({
-      mode: "development",
-      root: app.root,
-      routes: [route("/", path.join(app.root, "app/page.tsx"))],
-      resolve,
-    });
 
     expect(
-      manifest[`/${path.relative(app.root, actionEntry).replaceAll(path.sep, "/")}#action1`],
-    ).toEqual(["/"]);
-  });
-
-  it.each([
-    [
-      "default export",
-      `import action from "server-action-mod"; export default action;`,
-      `import action from "server-action-wrapper"; export default function Page() { return action; }`,
-      "default",
-    ],
-    [
-      "exported declaration",
-      `import { action1 } from "server-action-mod"; export const wrapped = action1;`,
-      `import { wrapped } from "server-action-wrapper"; export default function Page() { return wrapped; }`,
-      "action1",
-    ],
-  ])(
-    "follows %s package intermediaries in development",
-    async (_name, wrapperSource, pageSource, exportName) => {
-      const app = await fixture({
-        "app/page.tsx": pageSource,
-        "node_modules/server-action-wrapper/index.js": wrapperSource,
-        "node_modules/server-action-wrapper/package.json": `{"name":"server-action-wrapper","type":"module"}`,
-        "node_modules/server-action-mod/index.js": `'use server'; export default async function action() {} export async function action1() {}`,
-        "node_modules/server-action-mod/package.json": `{"name":"server-action-mod","type":"module"}`,
-      });
-      const wrapperEntry = path.join(app.root, "node_modules/server-action-wrapper/index.js");
-      const actionEntry = path.join(app.root, "node_modules/server-action-mod/index.js");
-      const resolve = async (specifier: string, importer?: string) => {
-        if (specifier === "server-action-wrapper") return { id: wrapperEntry };
-        if (specifier === "server-action-mod") return { id: actionEntry };
-        return app.resolve(specifier, importer);
-      };
-
-      const manifest = await buildStaticActionOwnerManifest({
-        mode: "development",
-        root: app.root,
-        routes: [route("/", path.join(app.root, "app/page.tsx"))],
-        resolve,
-      });
-
-      expect(
-        manifest[
-          `/${path.relative(app.root, actionEntry).replaceAll(path.sep, "/")}#${exportName}`
+      buildActionOwnerManifest({
+        moduleInfo: {
+          getModuleInfo(id) {
+            return { importedIds: moduleGraph[id] ?? [] };
+          },
+        },
+        routes: [route("/", "/app/page.tsx"), route("/admin", "/app/admin/page.tsx")],
+        serverReferenceConsumers: {
+          "/app/page.tsx": ["action-key#publicOnly"],
+          "/app/admin-consumer.ts": ["action-key#adminOnly"],
+        },
+        serverReferences: [
+          {
+            exportNames: ["publicOnly", "adminOnly", "unrelated"],
+            importId: "/app/actions.ts",
+            referenceKey: "action-key",
+          },
         ],
-      ).toEqual(["/"]);
-    },
-  );
-
-  it("does not assign unrelated package actions through a narrowed intermediary", async () => {
-    const app = await fixture({
-      "app/page.tsx": `import { action1 } from "server-action-wrapper"; export default function Page() { return action1; }`,
-      "node_modules/server-action-wrapper/index.js": `import { action1, action2 } from "server-action-mod"; export { action1, action2 };`,
-      "node_modules/server-action-wrapper/package.json": `{"name":"server-action-wrapper","type":"module"}`,
-      "node_modules/server-action-mod/index.js": `'use server'; export async function action1() {} export async function action2() {}`,
-      "node_modules/server-action-mod/package.json": `{"name":"server-action-mod","type":"module"}`,
+      }),
+    ).toEqual({
+      "action-key#adminOnly": ["/admin"],
+      "action-key#publicOnly": ["/"],
     });
-    const wrapperEntry = path.join(app.root, "node_modules/server-action-wrapper/index.js");
-    const actionEntry = path.join(app.root, "node_modules/server-action-mod/index.js");
-    const resolve = async (specifier: string, importer?: string) => {
-      if (specifier === "server-action-wrapper") return { id: wrapperEntry };
-      if (specifier === "server-action-mod") return { id: actionEntry };
-      return app.resolve(specifier, importer);
-    };
-    const manifest = await buildStaticActionOwnerManifest({
-      mode: "development",
-      root: app.root,
-      routes: [route("/", path.join(app.root, "app/page.tsx"))],
-      resolve,
-    });
-    const actionKey = `/${path.relative(app.root, actionEntry).replaceAll(path.sep, "/")}`;
-    expect(manifest[`${actionKey}#action1`]).toEqual(["/"]);
-    expect(manifest[`${actionKey}#action2`]).toBeUndefined();
-  });
-
-  it("does not mistake inline action directives for module-level directives", async () => {
-    const app = await fixture({
-      "app/page.tsx": `export default function Page() {\n  async function action() {\n    "use server";\n  }\n  return action;\n}`,
-    });
-    const pagePath = path.join(app.root, "app/page.tsx");
-
-    const manifest = await buildStaticActionOwnerManifest({
-      mode: "production",
-      root: app.root,
-      routes: [route("/", pagePath)],
-      resolve: app.resolve,
-    });
-    const pageKey = productionKey("app/page.tsx");
-
-    expect(manifest[pageKey]).toEqual(["/"]);
-    expect(manifest[`${pageKey}#default`]).toBeUndefined();
-  });
-
-  it("ignores type-only and commented imports when assigning action ownership", async () => {
-    const app = await fixture({
-      "app/admin-actions.ts": `'use server'; export async function adminOnly() {}`,
-      "app/page.tsx": `import type { adminOnly } from "./admin-actions";
-// import { adminOnly } from "./admin-actions";
-const example = 'import { adminOnly } from "./admin-actions"';
-const template = \`
-import { adminOnly } from "./admin-actions";
-\`;
-export default function Page() { return example + template; }`,
-    });
-
-    const manifest = await buildStaticActionOwnerManifest({
-      mode: "production",
-      root: app.root,
-      routes: [route("/", path.join(app.root, "app/page.tsx"))],
-      resolve: app.resolve,
-    });
-
-    expect(manifest[`${productionKey("app/admin-actions.ts")}#adminOnly`]).toBeUndefined();
   });
 
   it("uses final plugin metadata only for actions defined in route components", () => {
@@ -486,6 +83,7 @@ export default function Page() { return example + template; }`,
           },
         },
         routes: [route("/", "/app/page.tsx")],
+        serverReferenceConsumers: {},
         serverReferences: [
           {
             exportNames: ["$$hoist_0_inline"],
@@ -498,7 +96,6 @@ export default function Page() { return example + template; }`,
             referenceKey: "imported-key",
           },
         ],
-        staticOwners: {},
       }),
     ).toEqual({
       "inline-key": ["/"],
@@ -515,6 +112,9 @@ export default function Page() { return example + template; }`,
           },
         },
         routes: [route("/", "/app/page.tsx")],
+        serverReferenceConsumers: {
+          "/app/page.tsx": ["admin-key#adminOnly"],
+        },
         serverReferences: [
           {
             exportNames: ["adminOnly"],
@@ -522,7 +122,6 @@ export default function Page() { return example + template; }`,
             referenceKey: "admin-key",
           },
         ],
-        staticOwners: { "admin-key#adminOnly": ["/"] },
       }),
     ).toEqual({ "admin-key#adminOnly": ["/"] });
   });
@@ -538,6 +137,9 @@ export default function Page() { return example + template; }`,
           },
         },
         routes: [route("/", "/app/page.tsx")],
+        serverReferenceConsumers: {
+          "/app/actions.ts": ["action-key#submit"],
+        },
         serverReferences: [
           {
             exportNames: ["submit"],
@@ -545,7 +147,6 @@ export default function Page() { return example + template; }`,
             referenceKey: "action-key",
           },
         ],
-        staticOwners: { "action-key#submit": ["/"] },
       }),
     ).toEqual({ "action-key#submit": ["/"] });
   });
@@ -583,9 +184,6 @@ export default function Page() { return example + template; }`,
           pagePath: "/app/@slot/page.tsx",
         } as unknown as AppRoute["parallelSlots"][number],
       ],
-      templates: ["/app/template.tsx"],
-      unauthorizedPath: "/app/unauthorized.tsx",
-      unauthorizedPaths: ["/app/nested-unauthorized.tsx"],
       siblingIntercepts: [
         {
           convention: "(.)",
@@ -596,6 +194,9 @@ export default function Page() { return example + template; }`,
           targetPattern: "/modal",
         },
       ],
+      templates: ["/app/template.tsx"],
+      unauthorizedPath: "/app/unauthorized.tsx",
+      unauthorizedPaths: ["/app/nested-unauthorized.tsx"],
     });
 
     expect(entryIds).toEqual([

@@ -979,9 +979,21 @@ describe("App Router entry templates", () => {
     expect(code).toContain("const __loadAppActionForwarding = () => import(");
     expect(code).toContain("forwardServerActionIfNeeded: __forwardServerActionIfNeeded");
     expect(code).toContain("await __forwardServerActionIfNeeded({");
+    expect(code).toContain(
+      'function __VINEXT_ACTION_OWNERS() { return "__VINEXT_ACTION_OWNERS_STUB__"; }',
+    );
     expect(code).not.toContain("next/dist/server/web/spec-extension/cookies");
     expect(code).not.toContain("function __mergeActionForwardCookies");
     expect(code).not.toContain("const __ACTION_FORWARD_FORBIDDEN_HEADERS");
+  });
+
+  it("generateRscEntry disables action forwarding when ownership is unavailable", () => {
+    const code = generateRscEntry("/tmp/test/app", minimalAppRoutes, null, [], null, "", false, {
+      actionOwners: null,
+    });
+
+    expect(code).toContain("function __VINEXT_ACTION_OWNERS() { return null; }");
+    expect(code).not.toContain("__VINEXT_ACTION_OWNERS_STUB__");
   });
 
   it("generateRscEntry omits server action imports when no server references were found", () => {

@@ -101,6 +101,9 @@ overrides:
   picomatch: ">=2.3.2"
   srvx: ">=0.11.13"
 
+patchedDependencies:
+  "@vitejs/plugin-rsc@0.5.27": patches/@vitejs__plugin-rsc@0.5.27.patch
+
 peerDependencyRules:
   allowAny:
     - vite
