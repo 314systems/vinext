@@ -14,7 +14,7 @@ import Script, {
   initScriptLoader,
   type ScriptProps,
 } from "../packages/vinext/src/shims/script.js";
-import { loadedScripts } from "../packages/vinext/src/shims/script-loader.js";
+import { loadedScripts, scriptCache } from "../packages/vinext/src/shims/script-loader.js";
 import { ScriptNonceProvider } from "../packages/vinext/src/shims/script-nonce-context.js";
 import {
   BeforeInteractiveContext,
@@ -46,6 +46,7 @@ function setGlobalValue(
 
 afterEach(() => {
   loadedScripts.clear();
+  scriptCache.clear();
   setGlobalValue("document", originalDocument);
   setGlobalValue("window", originalWindow);
   setGlobalValue("HTMLElement", originalHTMLElement);
@@ -778,6 +779,44 @@ describe("Script stylesheets prop", () => {
 });
 
 describe("Script loader bootstrap cache", () => {
+  it("retains loaded sources across scripts with different ids", async () => {
+    const appendedScripts: Array<{
+      listeners: Record<string, (event: Event) => void>;
+      src: string;
+    }> = [];
+    setGlobalValue("window", {});
+    setGlobalValue("document", {
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      createElement() {
+        const script = {
+          listeners: {} as Record<string, (event: Event) => void>,
+          src: "",
+          setAttribute() {},
+          getAttribute: () => null,
+          addEventListener(name: string, listener: (event: Event) => void) {
+            script.listeners[name] = listener;
+          },
+        };
+        return script;
+      },
+      body: {
+        appendChild(script: (typeof appendedScripts)[number]) {
+          appendedScripts.push(script);
+        },
+      },
+    });
+
+    handleClientScriptLoad({ id: "document-after", src: "/shared.js" });
+    appendedScripts[0]!.listeners.load!(new Event("load"));
+    await scriptCache.get("/shared.js");
+
+    handleClientScriptLoad({ id: "page-after-one", src: "/shared.js" });
+    handleClientScriptLoad({ id: "page-after-two", src: "/shared.js" });
+
+    expect(appendedScripts).toHaveLength(1);
+  });
+
   for (const strategy of ["beforeInteractive", "beforePageRender"] as const) {
     it(`seeds ${strategy} scripts by id or src`, () => {
       const appendedScripts: unknown[] = [];

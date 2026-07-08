@@ -25,7 +25,7 @@ export type ScriptProps = {
 };
 
 export const loadedScripts = new Set<string>();
-const loadingScripts = new Map<string, Promise<Event>>();
+export const scriptCache = new Map<string, Promise<Event>>();
 const loadedStylesheets = new WeakMap<object, Set<string>>();
 
 function getClientAutoNonce(): string | undefined {
@@ -163,7 +163,7 @@ export function loadClientScript(
   }
 
   if (src) {
-    const existingLoad = loadingScripts.get(src);
+    const existingLoad = scriptCache.get(src);
     if (existingLoad) {
       void existingLoad.then(
         (event) => {
@@ -215,8 +215,8 @@ export function loadClientScript(
         onError?.(event);
       });
     });
-    loadPromise.catch(() => undefined).finally(() => loadingScripts.delete(src));
-    loadingScripts.set(src, loadPromise);
+    loadPromise.catch(() => undefined);
+    scriptCache.set(src, loadPromise);
   }
 
   document.body.appendChild(element);
