@@ -851,7 +851,8 @@ describe("App Router entry templates", () => {
     const code = generateRscEntry("/tmp/test/app", minimalAppRoutes, null, [], null, "", false);
 
     expect(code).toContain('import { createAppRscHandler } from "vinext/server/app-rsc-handler";');
-    expect(code).toContain("export default createAppRscHandler({");
+    expect(code).toContain("const __appRscHandler = createAppRscHandler({");
+    expect(code).toContain("export default __appRscHandler;");
     expect(code).not.toContain("computeRscCacheBustingSearchParam(");
   });
 
@@ -964,12 +965,38 @@ describe("App Router entry templates", () => {
 
     expect(code).toContain('const __loadAppRouteHandlerDispatch = () => import("');
     expect(code).toContain('const __loadAppServerActionExecution = () => import("');
+    expect(code).toContain("/server/app-server-action-execution.js");
+    expect(code).toContain("/server/app-action-forwarding.js");
+    expect(code).not.toContain('import("vinext/internal/server/');
     expect(code).toContain("await __loadAppRouteHandlerDispatch()");
     expect(code).toContain("await __loadAppServerActionExecution()");
     expect(code).not.toMatch(/import \{\s*dispatchAppRouteHandler as __dispatchAppRouteHandler,/);
     expect(code).not.toMatch(
       /import \{\s*handleProgressiveServerActionRequest as __handleProgressiveServerActionRequest,/,
     );
+  });
+
+  it("generateRscEntry delegates action forwarding to the typed runtime", () => {
+    const code = generateRscEntry("/tmp/test/app", minimalAppRoutes, null, [], null, "", false);
+
+    expect(code).toContain("const __loadAppActionForwarding = () => import(");
+    expect(code).toContain("forwardServerActionIfNeeded: __forwardServerActionIfNeeded");
+    expect(code).toContain("await __forwardServerActionIfNeeded({");
+    expect(code).toContain(
+      'function __VINEXT_ACTION_OWNERS() { return "__VINEXT_ACTION_OWNERS_STUB__"; }',
+    );
+    expect(code).not.toContain("next/dist/server/web/spec-extension/cookies");
+    expect(code).not.toContain("function __mergeActionForwardCookies");
+    expect(code).not.toContain("const __ACTION_FORWARD_FORBIDDEN_HEADERS");
+  });
+
+  it("generateRscEntry disables action forwarding when ownership is unavailable", () => {
+    const code = generateRscEntry("/tmp/test/app", minimalAppRoutes, null, [], null, "", false, {
+      actionOwners: null,
+    });
+
+    expect(code).toContain("function __VINEXT_ACTION_OWNERS() { return null; }");
+    expect(code).not.toContain("__VINEXT_ACTION_OWNERS_STUB__");
   });
 
   it("generateRscEntry omits server action imports when no server references were found", () => {
@@ -986,6 +1013,7 @@ describe("App Router entry templates", () => {
     expect(code).not.toContain("createTemporaryReferenceSet,");
     expect(code).not.toContain("handleProgressiveActionRequest({");
     expect(code).not.toContain("handleServerActionRequest({");
+    expect(code).not.toContain("app-action-forwarding.js");
   });
 
   it("generateRscEntry passes parallel route segment config into App page dispatch", () => {

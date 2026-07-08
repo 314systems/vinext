@@ -351,6 +351,17 @@ function isExecutionContextLike(value: unknown): value is ExecutionContextLike {
   return hasProperty(value, "waitUntil") && typeof value.waitUntil === "function";
 }
 
+function isForwardedActionContext(
+  value: unknown,
+): value is { actionForwarded: true } & Partial<ExecutionContextLike> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    hasProperty(value, "actionForwarded") &&
+    value.actionForwarded === true
+  );
+}
+
 function createMissingServerActionResponse(
   options: Pick<CreateAppRscHandlerOptions<AppRscHandlerRoute>, "clearRequestContext">,
   actionId: string | null,
@@ -1303,6 +1314,9 @@ export function createAppRscHandler<TRoute extends AppRscHandlerRoute>(
       rawRequest.headers.get(VINEXT_PRERENDER_SECRET_HEADER) !== null &&
       rawRequest.headers.get(VINEXT_PRERENDER_SPECULATIVE_HEADER) === "1";
     const filteredHeaders = filterInternalHeaders(rawRequest.headers);
+    if (isForwardedActionContext(ctx)) {
+      filteredHeaders.set("x-action-forwarded", "1");
+    }
     if (mwCtx !== null) {
       filteredHeaders.set(VINEXT_MW_CTX_HEADER, mwCtx);
     }

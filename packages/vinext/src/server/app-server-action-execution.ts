@@ -35,6 +35,7 @@ import {
   VINEXT_RSC_CONTENT_TYPE,
   VINEXT_RSC_VARY_HEADER,
   applyRscCompatibilityIdHeader,
+  createRscRequestUrl,
 } from "./app-rsc-cache-busting.js";
 import { applyEdgeRuntimeHeader } from "./app-page-response.js";
 import { resolveAppPageActionRerenderTarget } from "./app-page-request.js";
@@ -255,6 +256,7 @@ export type HandleServerActionRscRequestOptions<
     body: string | FormData,
     options: DecodeServerActionReplyOptions<TTemporaryReferences>,
   ) => Promise<unknown[]> | unknown[];
+  dispatchRedirectRequest?: (request: Request) => Promise<Response>;
   draftModeSecret: string;
   /**
    * Hydrate a route's lazy page/route-handler modules before reading
@@ -441,11 +443,11 @@ function applySetCookieMutationsToRequestCookieHeader(
     : [...cookies].map(([name, value]) => `${name}=${value}`).join("; ");
 }
 
-function createActionRedirectRenderRequest(options: {
+async function createActionRedirectRenderRequest(options: {
   pendingCookies: readonly string[];
   request: Request;
   url: URL;
-}): Request {
+}): Promise<Request> {
   const headers = cloneActionRedirectHeaders(options.request.headers);
   const cookieHeader = applySetCookieMutationsToRequestCookieHeader(
     headers.get("cookie"),
@@ -456,8 +458,15 @@ function createActionRedirectRenderRequest(options: {
   } else {
     headers.set("cookie", cookieHeader);
   }
+  headers.delete("next-router-state-tree");
+  headers.set("rsc", "1");
 
-  return new Request(options.url, {
+  const requestUrl = new URL(options.url);
+  const rscPath = await createRscRequestUrl(`${requestUrl.pathname}${requestUrl.search}`, headers);
+  requestUrl.pathname = rscPath.split("?", 1)[0]!;
+  requestUrl.search = rscPath.includes("?") ? `?${rscPath.split("?").slice(1).join("?")}` : "";
+
+  return new Request(requestUrl, {
     headers,
     method: "GET",
   });
@@ -468,6 +477,26 @@ function withoutRscBodyHeaders(headers: Headers): Headers {
   nextHeaders.delete("Content-Type");
   nextHeaders.delete("Vary");
   return nextHeaders;
+}
+
+const ACTIONS_FORBIDDEN_RESPONSE_HEADERS = new Set([
+  "accept-encoding",
+  "keepalive",
+  "keep-alive",
+  "content-encoding",
+  "transfer-encoding",
+  "connection",
+  "expect",
+  "content-length",
+  "set-cookie",
+]);
+
+function mergeForwardedActionResponseHeaders(target: Headers, source: Headers): void {
+  for (const [key, value] of source) {
+    if (!ACTIONS_FORBIDDEN_RESPONSE_HEADERS.has(key.toLowerCase())) {
+      target.set(key, value);
+    }
+  }
 }
 
 function isReadableStreamBody(body: BodyInit | null): body is ReadableStream<Uint8Array> {
@@ -1285,7 +1314,7 @@ export async function handleServerActionRscRequest<
       // Hydrate the current route before resolving its runtime below.
       if (currentMatch) await options.ensureRouteLoaded?.(currentMatch.route);
 
-      const redirectRenderRequest = createActionRedirectRenderRequest({
+      const redirectRenderRequest = await createActionRedirectRenderRequest({
         pendingCookies: [
           ...actionPendingCookies,
           ...(actionDraftCookie ? [actionDraftCookie] : []),
@@ -1293,6 +1322,48 @@ export async function handleServerActionRscRequest<
         request: options.request,
         url: redirectTarget,
       });
+      if (options.dispatchRedirectRequest) {
+        let forwardedResponse: Response;
+        try {
+          forwardedResponse = await options.dispatchRedirectRequest(redirectRenderRequest);
+        } catch (error) {
+          console.error("[vinext] Failed to render action redirect target:", error);
+          options.clearRequestContext();
+          return new Response(null, {
+            status: 303,
+            headers: withoutRscBodyHeaders(redirectHeaders),
+          });
+        }
+
+        if (
+          forwardedResponse.headers.get("content-type")?.startsWith(VINEXT_RSC_CONTENT_TYPE) &&
+          forwardedResponse.body
+        ) {
+          mergeForwardedActionResponseHeaders(redirectHeaders, forwardedResponse.headers);
+          const redirectResponseStatus = shouldUseForwardedActionRedirectStatus({
+            actionWasForwarded,
+            currentPathname: options.cleanPathname,
+            currentRoute: currentMatch?.route ?? null,
+            resolveRouteRuntime: options.resolveRouteRuntime,
+            targetPathname,
+            targetRoute: targetMatch.route,
+          })
+            ? 200
+            : 303;
+          return createServerActionRscResponse(
+            forwardedResponse.body,
+            { status: redirectResponseStatus, headers: redirectHeaders },
+            options.clearRequestContext,
+          );
+        }
+
+        await forwardedResponse.body?.cancel();
+        options.clearRequestContext();
+        return new Response(null, {
+          status: 303,
+          headers: withoutRscBodyHeaders(redirectHeaders),
+        });
+      }
       setHeadersContext(
         headersContextFromRequest(redirectRenderRequest, {
           draftModeSecret: options.draftModeSecret,

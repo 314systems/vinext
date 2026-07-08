@@ -70,6 +70,11 @@ import {
 } from "./build/route-classification-manifest.js";
 import { extractMiddlewareMatcherConfig, hasExportedName } from "./build/report.js";
 import { planRouteClassificationInjection } from "./build/route-classification-injector.js";
+import {
+  buildActionOwnerManifest,
+  createActionOwnerScanObserver,
+  injectActionOwnerManifest,
+} from "./build/action-owner-manifest.js";
 import { normalizePathnameForRouteMatchStrict } from "./routing/utils.js";
 import {
   createRscCompatibilityId,
@@ -235,7 +240,6 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import commonjs from "vite-plugin-commonjs";
 import { createIgnoreDynamicRequestsPlugin } from "./plugins/ignore-dynamic-requests.js";
 import { stripJsExtension, stripViteModuleQuery } from "./utils/path.js";
-import { escapeRegExp } from "./utils/regex.js";
 import {
   assertSupportedViteVersion,
   getDepOptimizeNodeEnvOptions,
@@ -276,11 +280,6 @@ const ANSI_ESCAPE_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
 installSocketErrorBackstop();
 
 type ASTNode = ReturnType<typeof parseAst>["body"][number]["parent"];
-
-function getCacheDirPrefix(cacheDir: string): string {
-  const normalizedCacheDir = toSlash(cacheDir);
-  return normalizedCacheDir.endsWith("/") ? normalizedCacheDir : `${normalizedCacheDir}/`;
-}
 
 function isInsideDirectory(dir: string, filePath: string): boolean {
   const relativePath = path.relative(dir, filePath);
@@ -1315,14 +1314,13 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   // one process never preprocess `composes` deps with another build's config.
   const sassComposesLoader = createSassAwareFileSystemLoader();
 
-  // Populated from the resolved Vite config before transform filters are
-  // compiled, while keeping the filter object referenced by the plugin stable.
-  const typeofWindowIdFilter = { exclude: /(?!)/ };
-
   // Build-time layout classification manifest, captured in the RSC virtual
   // module's load hook and consumed in renderChunk to patch the generated
   // `__VINEXT_CLASS` stub with a real dispatch table.
   let rscClassificationManifest: RouteClassificationManifest | null = null;
+  let rscActionOwnerRoutes: Awaited<ReturnType<typeof appRouter>> | null = null;
+  const actionOwnerScan = createActionOwnerScanObserver();
+  let hasActionOwnerScanObserver = false;
 
   // Resolve shim paths - works both from source (.ts) and built (.js).
   const shimsDir = path.resolve(__dirname, "shims");
@@ -1455,6 +1453,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   // resolves to the configured RSC plugin array. Vite's asyncFlatten
   // will resolve this before processing the plugin list.
   let rscPluginPromise: Promise<Plugin[]> | null = null;
+  if (earlyAppDirExists && resolvedRscPath) {
+    rscPluginModulePromise = import(pathToFileURL(resolvedRscPath).href);
+  }
   if (earlyAppDirExists && autoRsc) {
     if (!resolvedRscPath) {
       throw new Error(
@@ -1464,9 +1465,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           " @vitejs/plugin-rsc",
       );
     }
-    const rscImport = import(pathToFileURL(resolvedRscPath).href);
-    rscPluginModulePromise = rscImport;
-    rscPluginPromise = rscImport
+    rscPluginPromise = rscPluginModulePromise!
       .then((mod) => {
         const rsc = mod.default;
         return rsc({
@@ -3256,8 +3255,19 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
       },
 
       async configResolved(config) {
-        const cacheDirPrefix = getCacheDirPrefix(config.cacheDir);
-        typeofWindowIdFilter.exclude = new RegExp(`^${escapeRegExp(cacheDirPrefix)}`);
+        if (config.command === "build" && hasAppDir && rscPluginModulePromise) {
+          const { getPluginApi } = await rscPluginModulePromise;
+          const pluginApi = getPluginApi(config);
+          if (pluginApi) {
+            const manager = pluginApi.manager as typeof pluginApi.manager & {
+              scanBuildObservers?: Set<typeof actionOwnerScan.observe>;
+            };
+            if (manager.scanBuildObservers instanceof Set) {
+              manager.scanBuildObservers.add(actionOwnerScan.observe);
+              hasActionOwnerScanObserver = true;
+            }
+          }
+        }
         if (isServeCommand && hasCloudflarePlugin && hasPagesDir && !hasAppDir) {
           suppressOptionalOptimizeDepsWarnings(config.logger);
         }
@@ -3574,6 +3584,8 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             // indices in the manifest correspond 1:1 to the route.layouts arrays
             // used during codegen. renderChunk clears this after patching.
             rscClassificationManifest = collectRouteClassificationManifest(routes);
+            rscActionOwnerRoutes =
+              this.environment.config.command === "build" && hasServerActions ? routes : null;
             return generateRscEntry(
               appDir,
               routes,
@@ -3601,6 +3613,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 cacheComponents: nextConfig?.cacheComponents,
                 prefetchInlining: nextConfig?.prefetchInlining,
                 hasServerActions,
+                actionOwners: this.environment.config.command === "build" ? undefined : null,
                 i18n: nextConfig?.i18n,
                 imageConfig: {
                   deviceSizes: nextConfig?.images?.deviceSizes,
@@ -3708,16 +3721,18 @@ export const loadServerActionClient = ${
       // by reference rather than by name.
       renderChunk: {
         order: "pre",
-        handler(code, chunk) {
+        async handler(code, chunk) {
           // Only run in the RSC environment. SSR/client builds never contain
           // the __VINEXT_CLASS stub so there is nothing to patch there, and
           // pulling ModuleInfo from the wrong graph would give nonsense
           // results.
           if (this.environment?.name !== "rsc") return null;
-          if (!rscClassificationManifest) return null;
+          if (!rscClassificationManifest && !rscActionOwnerRoutes) return null;
           // Cheap pre-filter: skip chunks that don't mention the stub at all
           // (e.g. the scan-phase chunk and every non-entry chunk).
-          if (!code.includes("__VINEXT_CLASS")) return null;
+          const hasClassificationStub = code.includes("__VINEXT_CLASS");
+          const hasActionOwnerStub = code.includes("__VINEXT_ACTION_OWNERS_STUB__");
+          if (!hasClassificationStub && !hasActionOwnerStub) return null;
 
           // Patching per-chunk (rather than scanning the whole bundle in
           // generateBundle) assumes the stub body and its per-route call sites
@@ -3751,27 +3766,60 @@ export const loadServerActionClient = ${
             },
           };
 
-          const patchPlan = planRouteClassificationInjection({
-            canonicalizeLayoutPath: canonicalize,
-            chunks: [{ code, fileName: chunk.fileName }],
-            dynamicShimPaths,
-            enableDebugReasons: enableClassificationDebug,
-            manifest: rscClassificationManifest,
-            moduleInfo,
-          });
-          if (patchPlan.kind === "skip") return null;
+          const patchPlan =
+            hasClassificationStub && rscClassificationManifest
+              ? planRouteClassificationInjection({
+                  canonicalizeLayoutPath: canonicalize,
+                  chunks: [{ code, fileName: chunk.fileName }],
+                  dynamicShimPaths,
+                  enableDebugReasons: enableClassificationDebug,
+                  manifest: rscClassificationManifest,
+                  moduleInfo,
+                })
+              : { kind: "skip" as const };
+          let nextCode = patchPlan.kind === "skip" ? code : patchPlan.code;
+
+          if (hasActionOwnerStub && rscActionOwnerRoutes) {
+            const rscModule = await rscPluginModulePromise;
+            const pluginApi = rscModule?.getPluginApi(this.environment.config);
+            if (!pluginApi?.manager.isScanBuild) {
+              const serverReferences = Object.values(
+                pluginApi?.manager.serverReferenceMetaMap ?? {},
+              );
+              if (!hasActionOwnerScanObserver && serverReferences.length > 0) {
+                this.error(
+                  "[vinext] The installed @vitejs/plugin-rsc does not expose scan-build observers required to build an app with server actions. Install a compatible release before building.",
+                );
+              }
+              const discoveredActionOwners = buildActionOwnerManifest({
+                canonicalizeModuleId: canonicalize,
+                moduleInfo,
+                routes: rscActionOwnerRoutes,
+                serverReferenceModuleEdges: actionOwnerScan.moduleEdges,
+                serverReferences,
+              });
+              const injected = injectActionOwnerManifest(nextCode, discoveredActionOwners);
+              if (!injected) {
+                this.error("vinext: failed to inject the server action owner manifest");
+              }
+              nextCode = injected;
+              rscActionOwnerRoutes = null;
+            }
+          }
+
+          if (patchPlan.kind === "skip" && nextCode === code) return null;
 
           // Consume the manifest exactly once per RSC entry. Clearing here
           // prevents a stale manifest from leaking into a subsequent build pass
           // if the load hook is not re-triggered (e.g., in non-standard rebuild
           // paths).
-          rscClassificationManifest = null;
+          if (patchPlan.kind !== "skip") rscClassificationManifest = null;
 
           // The patched body is longer than the stub, so any existing source
           // map would be stale. RSC entry source maps are not served or
           // consumed, so nulling the map is safe and prevents stale-map
           // confusion in tooling.
-          return { code: patchPlan.code, map: patchPlan.map };
+          return { code: nextCode, map: null };
         },
       },
     },
@@ -5403,23 +5451,34 @@ export const loadServerActionClient = ${
         },
       },
     },
-    // Fold `typeof window` like Next.js before Rolldown resolves imports. This
-    // removes browser-only dynamic imports from server bundles before package
-    // conditional exports are evaluated.
     {
       name: "vinext:typeof-window",
+      configEnvironment(_name, environment) {
+        return {
+          define: {
+            "typeof window": environment.consumer === "client" ? '"object"' : '"undefined"',
+          },
+        };
+      },
+    },
+    // plugin-RSC's analysis builds replace each module with lexer-discovered
+    // imports before Rolldown's native define folding runs. Fold only in those
+    // write-less analysis builds so dead browser/server imports are absent from
+    // the synthetic graph; real builds continue to use native Oxc folding.
+    {
+      name: "vinext:typeof-window-scan",
       enforce: "post",
       transform: {
-        filter: {
-          id: typeofWindowIdFilter,
-          code: /typeof\s+window/,
-        },
+        filter: { code: /\btypeof\s+window\b/ },
         handler(code, id) {
-          const cacheDirPrefix = getCacheDirPrefix(this.environment.config.cacheDir);
-          if (toSlash(id).startsWith(cacheDirPrefix)) {
-            return null;
-          }
-          return replaceTypeofWindow(code, getTypeofWindowReplacement(this.environment), id);
+          if (this.environment.config.build.write !== false) return null;
+          const cacheDir = `${toSlash(this.environment.config.cacheDir).replace(/\/$/, "")}/`;
+          if (toSlash(id).startsWith(cacheDir)) return null;
+          return replaceTypeofWindow(
+            code,
+            getTypeofWindowReplacement(this.environment),
+            id,
+          );
         },
       },
     },
