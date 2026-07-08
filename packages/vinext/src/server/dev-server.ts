@@ -244,6 +244,44 @@ async function collectDevInitialStylesheetHeadHTML(
   return html;
 }
 
+async function loadPagesRootComponents(
+  runner: ModuleImporter,
+  pagesDir: string,
+  matcher: ValidFileMatcher,
+): Promise<{
+  // oxlint-disable-next-line typescript/no-explicit-any
+  DocumentComponent: any;
+  // oxlint-disable-next-line typescript/no-explicit-any
+  AppComponent: any;
+  appAssetPath: string | null;
+}> {
+  // oxlint-disable-next-line typescript/no-explicit-any
+  let DocumentComponent: any = null;
+  const documentAssetPath = findFileWithExts(pagesDir, "_document", matcher);
+  if (documentAssetPath) {
+    try {
+      const documentModule = await importModule(runner, documentAssetPath);
+      DocumentComponent = documentModule.default ?? null;
+    } catch {
+      // _document exists but failed to load
+    }
+  }
+
+  // oxlint-disable-next-line typescript/no-explicit-any
+  let AppComponent: any = null;
+  const appAssetPath = findFileWithExts(pagesDir, "_app", matcher);
+  if (appAssetPath) {
+    try {
+      const appModule = await importModule(runner, appAssetPath);
+      AppComponent = appModule.default ?? null;
+    } catch {
+      // _app exists but failed to load
+    }
+  }
+
+  return { DocumentComponent, AppComponent, appAssetPath };
+}
+
 /**
  * Emit a `getServerSideProps` / `getStaticProps` `{ redirect }` result.
  *
@@ -778,35 +816,13 @@ export function createSSRHandler(
           }
         }
 
-        // Next.js evaluates the root modules in _document > _app > page order
-        // so their top-level side effects observe the same sequence in dev and
-        // production.
-        // oxlint-disable-next-line typescript/no-explicit-any
-        let DocumentComponent: any = null;
-        const docPath = path.join(pagesDir, "_document");
-        if (findFileWithExtensions(docPath, matcher)) {
-          try {
-            const docModule = await importModule(runner, docPath);
-            DocumentComponent = docModule.default ?? null;
-          } catch {
-            // _document exists but failed to load
-          }
-        }
-
-        // Try to load _app.tsx if it exists. This happens before the readiness
-        // predicate so app-level getInitialProps participates in the same
-        // initial Pages Router state as the client __NEXT_DATA__ payload.
-        // oxlint-disable-next-line typescript/no-explicit-any
-        let AppComponent: any = null;
-        const appPath = path.join(pagesDir, "_app");
-        if (findFileWithExtensions(appPath, matcher)) {
-          try {
-            const appModule = await importModule(runner, appPath);
-            AppComponent = appModule.default ?? null;
-          } catch {
-            // _app exists but failed to load
-          }
-        }
+        // Next.js evaluates root modules before the matched page so top-level
+        // side effects observe _document > _app > page on every dev path.
+        const { DocumentComponent, AppComponent } = await loadPagesRootComponents(
+          runner,
+          pagesDir,
+          matcher,
+        );
         // Load the page module through Vite's SSR pipeline after the root
         // components. This gives us HMR and transform support for free while
         // preserving Next.js module evaluation order.
@@ -2093,6 +2109,11 @@ async function renderErrorPage(
   // Try specific status page first, then _error, then fallback
   const candidates =
     statusCode === 404 ? ["404", "_error"] : statusCode === 500 ? ["500", "_error"] : ["_error"];
+  const { DocumentComponent, AppComponent, appAssetPath } = await loadPagesRootComponents(
+    runner,
+    pagesDir,
+    matcher,
+  );
 
   for (const candidate of candidates) {
     try {
@@ -2102,20 +2123,6 @@ async function renderErrorPage(
       const errorModule = await importModule(runner, errorAssetPath);
       const ErrorComponent = errorModule.default;
       if (!ErrorComponent) continue;
-
-      // Try to load _app.tsx to wrap the error page
-      // oxlint-disable-next-line typescript/no-explicit-any
-      let AppComponent: any = null;
-      const appPathErr = path.join(pagesDir, "_app");
-      const appAssetPath = findFileWithExts(pagesDir, "_app", matcher);
-      if (findFileWithExtensions(appPathErr, matcher)) {
-        try {
-          const appModule = await importModule(runner, appAssetPath ?? appPathErr);
-          AppComponent = appModule.default ?? null;
-        } catch {
-          // _app exists but failed to load
-        }
-      }
 
       const createElement = React.createElement;
       const initialErrorProps = await loadPagesGetInitialProps(ErrorComponent, {
@@ -2138,19 +2145,6 @@ async function renderErrorPage(
           wrapFn = errRouterShim.wrapWithRouterContext;
         } catch {
           // router shim not available — continue without it
-        }
-      }
-
-      // Try custom _document
-      // oxlint-disable-next-line typescript/no-explicit-any
-      let DocumentComponent: any = null;
-      const docPathErr = path.join(pagesDir, "_document");
-      if (findFileWithExtensions(docPathErr, matcher)) {
-        try {
-          const docModule = await importModule(runner, docPathErr);
-          DocumentComponent = docModule.default ?? null;
-        } catch {
-          // _document exists but failed to load
         }
       }
 
