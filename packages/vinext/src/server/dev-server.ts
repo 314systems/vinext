@@ -83,7 +83,11 @@ import {
 } from "./pages-document-initial-props.js";
 import { callDocumentGetInitialProps } from "./document-initial-head.js";
 import { renderBeforeInteractiveInlineScripts } from "./before-interactive-head.js";
-import type { BeforeInteractiveInlineScript } from "vinext/shims/before-interactive-context";
+import { createBeforeInteractiveCollector } from "./before-interactive-collector.js";
+import {
+  BeforeInteractiveContext,
+  type BeforeInteractiveInlineScript,
+} from "vinext/shims/before-interactive-context";
 import {
   hasPagesGetInitialProps,
   loadDevAppInitialProps,
@@ -329,6 +333,7 @@ async function streamPageToResponse(
     assetHeadHTML?: string;
     buildScripts: (scriptLoader: ScriptProps[]) => string;
     documentScriptContext?: typeof DocumentScriptContext;
+    beforeInteractiveContext?: typeof BeforeInteractiveContext;
     DocumentComponent: React.ComponentType | null;
     statusCode?: number;
     extraHeaders?: Record<string, string | string[]>;
@@ -370,6 +375,7 @@ async function streamPageToResponse(
     assetHeadHTML = "",
     buildScripts,
     documentScriptContext = DocumentScriptContext,
+    beforeInteractiveContext = BeforeInteractiveContext,
     DocumentComponent,
     statusCode,
     extraHeaders,
@@ -388,11 +394,13 @@ async function streamPageToResponse(
   // streaming path stays as the default for the common case. The contract
   // (including `withScriptNonce` and `styles` rendering) lives in the shared
   // helper so dev and prod stay in lockstep.
+  const beforeInteractiveCollector = createBeforeInteractiveCollector(beforeInteractiveContext);
   const documentRenderPage = await runDocumentRenderPage({
     DocumentComponent,
     enhancePageElement,
     renderToReadableStream,
     renderStylesToString: renderToStringAsync,
+    wrapPageElement: beforeInteractiveCollector.wrapPageElement,
     scriptNonce,
     context: documentContext,
   });
@@ -411,7 +419,7 @@ async function streamPageToResponse(
     // Start the React body stream FIRST — the promise resolves when the
     // shell is ready (synchronous content outside Suspense boundaries).
     // This triggers the render which populates <Head> tags.
-    bodyStream = await renderToReadableStream(element);
+    bodyStream = await renderToReadableStream(beforeInteractiveCollector.wrapPageElement(element));
   }
 
   // Fold any head tags returned by `_document.getInitialProps()` into the same
@@ -439,7 +447,7 @@ async function streamPageToResponse(
 
   // Build the document shell with a placeholder for the body
   let shellTemplate: string;
-  let documentBeforeInteractiveHTML = "";
+  let beforeInteractiveHTML = "";
 
   if (DocumentComponent) {
     const documentClientScripts: ScriptProps[] = [];
@@ -469,9 +477,10 @@ async function streamPageToResponse(
     );
     let docHtml = await renderToStringAsync(docElement);
     const scripts = buildScripts(documentClientScripts);
-    documentBeforeInteractiveHTML = renderBeforeInteractiveInlineScripts(
-      documentBeforeInteractiveScripts,
-    );
+    beforeInteractiveHTML = renderBeforeInteractiveInlineScripts([
+      ...beforeInteractiveCollector.scripts,
+      ...documentBeforeInteractiveScripts,
+    ]);
     // Replace __NEXT_MAIN__ with our stream marker
     docHtml = docHtml.replace("__NEXT_MAIN__", STREAM_BODY_MARKER);
     // Inject head tags
@@ -503,6 +512,9 @@ async function streamPageToResponse(
     }
     shellTemplate = docHtml;
   } else {
+    beforeInteractiveHTML = renderBeforeInteractiveInlineScripts(
+      beforeInteractiveCollector.scripts,
+    );
     const scripts = buildScripts([]);
     // charset + viewport are emitted via getSSRHeadHTML() (next/head's
     // defaultHead seeds them with data-next-head=""), matching Next.js's
@@ -523,14 +535,14 @@ async function streamPageToResponse(
   // Apply Vite's HTML transforms (injects HMR client, etc.) on the full
   // shell template, then split at the body marker.
   let transformedShell = await server.transformIndexHtml(url, shellTemplate);
-  if (documentBeforeInteractiveHTML) {
+  if (beforeInteractiveHTML) {
     const headOpenIndex = transformedShell.indexOf("<head");
     const headOpenEnd =
       headOpenIndex === -1 ? -1 : transformedShell.indexOf(">", headOpenIndex + 5);
     if (headOpenEnd !== -1) {
       transformedShell =
         transformedShell.slice(0, headOpenEnd + 1) +
-        documentBeforeInteractiveHTML +
+        beforeInteractiveHTML +
         transformedShell.slice(headOpenEnd + 1);
     }
   }
@@ -1919,6 +1931,10 @@ hydrate();
           runner,
           "vinext/shims/document-script-context",
         )) as { DocumentScriptContext: typeof DocumentScriptContext };
+        const beforeInteractiveShim = (await importModule(
+          runner,
+          "vinext/shims/before-interactive-context",
+        )) as { BeforeInteractiveContext: typeof BeforeInteractiveContext };
 
         // Expose page route patterns on window before hydration so the
         // next/navigation compat hooks can resolve a dynamic pattern from a
@@ -1981,6 +1997,7 @@ hydrate();
           assetHeadHTML,
           buildScripts,
           documentScriptContext: documentScriptShim.DocumentScriptContext,
+          beforeInteractiveContext: beforeInteractiveShim.BeforeInteractiveContext,
           DocumentComponent,
           statusCode,
           extraHeaders,
@@ -2244,6 +2261,10 @@ async function renderErrorPage(
         [appAssetPath, errorAssetPath],
         nonceAttr,
       );
+      const beforeInteractiveShim = (await importModule(
+        runner,
+        "vinext/shims/before-interactive-context",
+      )) as { BeforeInteractiveContext: typeof BeforeInteractiveContext };
 
       if (DocumentComponent) {
         const errorPathname = candidate === "_error" ? "/_error" : `/${candidate}`;
@@ -2258,6 +2279,7 @@ async function renderErrorPage(
           assetHeadHTML,
           buildScripts: () => "",
           documentScriptContext: documentScriptShim.DocumentScriptContext,
+          beforeInteractiveContext: beforeInteractiveShim.BeforeInteractiveContext,
           DocumentComponent,
           statusCode,
           documentContext: {

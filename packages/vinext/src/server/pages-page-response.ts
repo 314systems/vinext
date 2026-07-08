@@ -7,10 +7,7 @@ import {
   type DocumentScriptRegistration,
 } from "vinext/shims/document-script-context";
 import type { ScriptProps } from "vinext/shims/script";
-import {
-  BeforeInteractiveContext,
-  type BeforeInteractiveInlineScript,
-} from "vinext/shims/before-interactive-context";
+import type { BeforeInteractiveInlineScript } from "vinext/shims/before-interactive-context";
 import { getRequestExecutionContext } from "vinext/shims/request-context";
 import {
   applyCdnResponseHeaders,
@@ -36,6 +33,7 @@ import { fnv1a52 } from "../utils/hash.js";
 import { readStreamAsText } from "../utils/text-stream.js";
 import { callDocumentGetInitialProps } from "./document-initial-head.js";
 import { renderBeforeInteractiveInlineScripts } from "./before-interactive-head.js";
+import { createBeforeInteractiveCollector } from "./before-interactive-collector.js";
 import { appendAssetDeploymentIdQuery } from "../utils/deployment-id.js";
 
 // ---------------------------------------------------------------------------
@@ -575,17 +573,7 @@ export async function renderPagesPageResponse(
   // user does not define `getInitialProps`. The contract (including
   // `withScriptNonce` and `styles` rendering) lives in the shared helper so
   // prod and dev stay in lockstep.
-  const beforeInteractiveScripts: BeforeInteractiveInlineScript[] = [];
-  const wrapWithBeforeInteractiveCollector = (element: React.ReactElement): React.ReactElement =>
-    React.createElement(
-      BeforeInteractiveContext.Provider,
-      {
-        value(script: BeforeInteractiveInlineScript) {
-          beforeInteractiveScripts.push(script);
-        },
-      },
-      element,
-    );
+  const beforeInteractiveCollector = createBeforeInteractiveCollector();
   const documentRenderPage = await runDocumentRenderPage({
     DocumentComponent: options.DocumentComponent,
     enhancePageElement: options.enhancePageElement,
@@ -596,7 +584,7 @@ export async function renderPagesPageResponse(
     // Mirrors the dev path, which passes its `renderToStringAsync` wrapper.
     renderStylesToString: async (element) =>
       readStreamAsText(await options.renderToReadableStream(element)),
-    wrapPageElement: wrapWithBeforeInteractiveCollector,
+    wrapPageElement: beforeInteractiveCollector.wrapPageElement,
     scriptNonce: options.scriptNonce,
     context: {
       err: options.err,
@@ -630,7 +618,7 @@ export async function renderPagesPageResponse(
     // (`rendered`), this element is never used, so there's no point
     // constructing the tree on that path.
     const pageElement = withScriptNonce(
-      wrapWithBeforeInteractiveCollector(
+      beforeInteractiveCollector.wrapPageElement(
         React.createElement(React.Fragment, null, options.createPageElement(renderProps)),
       ),
       options.scriptNonce,
@@ -667,7 +655,7 @@ export async function renderPagesPageResponse(
   }
   const shellHtml = await buildPagesShellHtml(bodyMarker, fontHeadHTML, {
     assetTags: options.assetTags,
-    beforeInteractiveScripts,
+    beforeInteractiveScripts: beforeInteractiveCollector.scripts,
     buildNextDataScript,
     DocumentComponent: options.DocumentComponent,
     renderDocumentToString: options.renderDocumentToString,
