@@ -11,8 +11,10 @@ import React from "react";
 import ReactDOMServer from "react-dom/server";
 import Script, {
   handleClientScriptLoad,
+  initScriptLoader,
   type ScriptProps,
 } from "../packages/vinext/src/shims/script.js";
+import { loadedScripts } from "../packages/vinext/src/shims/script-loader.js";
 import { ScriptNonceProvider } from "../packages/vinext/src/shims/script-nonce-context.js";
 import {
   BeforeInteractiveContext,
@@ -43,6 +45,7 @@ function setGlobalValue(
 }
 
 afterEach(() => {
+  loadedScripts.clear();
   setGlobalValue("document", originalDocument);
   setGlobalValue("window", originalWindow);
   setGlobalValue("HTMLElement", originalHTMLElement);
@@ -744,6 +747,77 @@ describe("Script stylesheets prop", () => {
     // The stylesheets prop must never leak onto the <script> attribute list.
     expect(appendedScripts[0]!.attrs).not.toHaveProperty("stylesheets");
   });
+
+  it("deduplicates a shared stylesheet across imperative scripts", () => {
+    const appendedLinks: Array<{ href: string }> = [];
+    setGlobalValue("window", {});
+    setGlobalValue("document", {
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      createElement(tagName: string) {
+        if (tagName === "link") return { rel: "", type: "", href: "" };
+        return {
+          setAttribute() {},
+          getAttribute: () => null,
+          addEventListener() {},
+        };
+      },
+      head: {
+        appendChild(element: { href: string }) {
+          appendedLinks.push(element);
+        },
+      },
+      body: { appendChild() {} },
+    });
+
+    handleClientScriptLoad({ id: "first", stylesheets: ["/shared.css"] });
+    handleClientScriptLoad({ id: "second", stylesheets: ["/shared.css"] });
+
+    expect(appendedLinks.map((link) => link.href)).toEqual(["/shared.css"]);
+  });
+});
+
+describe("Script loader bootstrap cache", () => {
+  for (const strategy of ["beforeInteractive", "beforePageRender"] as const) {
+    it(`seeds ${strategy} scripts by id or src`, () => {
+      const appendedScripts: unknown[] = [];
+      const emittedScript = {
+        id: strategy === "beforeInteractive" ? `${strategy}-id` : "",
+        getAttribute(name: string) {
+          return name === "src" ? `/${strategy}.js` : null;
+        },
+      };
+
+      setGlobalValue("window", {});
+      setGlobalValue("document", {
+        querySelector: () => null,
+        querySelectorAll(selector: string) {
+          return selector === `[data-nscript="${strategy}"]` ? [emittedScript] : [];
+        },
+        createElement() {
+          return {
+            setAttribute() {},
+            getAttribute: () => null,
+            addEventListener() {},
+          };
+        },
+        body: {
+          appendChild(element: unknown) {
+            appendedScripts.push(element);
+          },
+        },
+      });
+
+      initScriptLoader([]);
+      handleClientScriptLoad(
+        strategy === "beforeInteractive"
+          ? { id: `${strategy}-id`, src: "/different.js" }
+          : { src: `/${strategy}.js` },
+      );
+
+      expect(appendedScripts).toHaveLength(0);
+    });
+  }
 });
 
 // ─── #2016: src beforeInteractive registration, marker, attr mapping ──────

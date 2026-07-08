@@ -26,6 +26,7 @@ export type ScriptProps = {
 
 export const loadedScripts = new Set<string>();
 const loadingScripts = new Map<string, Promise<Event>>();
+const loadedStylesheets = new WeakMap<object, Set<string>>();
 
 function getClientAutoNonce(): string | undefined {
   if (typeof document === "undefined") return undefined;
@@ -64,7 +65,19 @@ function insertClientStylesheets(stylesheets: string[] | undefined): void {
 
   const head = document.head;
   if (!head) return;
+  let documentStylesheets = loadedStylesheets.get(document);
+  if (!documentStylesheets) {
+    documentStylesheets = new Set<string>();
+    for (const link of document.querySelectorAll?.('link[rel="stylesheet"][href]') ?? []) {
+      const href = link.getAttribute("href");
+      if (href) documentStylesheets.add(href);
+    }
+    loadedStylesheets.set(document, documentStylesheets);
+  }
+
   for (const href of stylesheets) {
+    if (documentStylesheets.has(href)) continue;
+    documentStylesheets.add(href);
     const link = document.createElement("link");
     link.rel = "stylesheet";
     link.type = "text/css";
@@ -240,5 +253,15 @@ export function handleClientScriptLoad(props: ScriptProps): void {
 export function initScriptLoader(scripts: ScriptProps[]): void {
   for (const script of scripts) {
     handleClientScriptLoad(script);
+  }
+
+  for (const selector of [
+    '[data-nscript="beforeInteractive"]',
+    '[data-nscript="beforePageRender"]',
+  ]) {
+    for (const script of document.querySelectorAll(selector)) {
+      const key = script.id || script.getAttribute("src");
+      if (key) loadedScripts.add(key);
+    }
   }
 }
