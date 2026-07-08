@@ -737,6 +737,31 @@ export async function resolvePagesPageData(
 
   let renderProps: PagesRenderProps = { pageProps };
 
+  const isAutoExport =
+    typeof options.pageModule.getServerSideProps !== "function" &&
+    typeof options.pageModule.getStaticProps !== "function" &&
+    !hasPagesGetInitialProps(options.AppComponent) &&
+    !hasPagesGetInitialProps(options.pageModule.default);
+  if (isAutoExport && !options.isDataReq && !options.scriptNonce && previewData === false) {
+    const pathname = options.routeUrl.split("?")[0];
+    const cached = await options.isrGet(options.isrCacheKey("pages", pathname));
+    const cachedValue = cached?.value.value;
+    if (cached?.isStale === false && cachedValue?.kind === "PAGES") {
+      return {
+        kind: "response",
+        response: buildPagesCacheResponse(
+          cachedValue.html,
+          "HIT",
+          options.fontLinkHeader,
+          undefined,
+          options.expireSeconds,
+          cached.value.cacheControl,
+          cachedValue.status,
+        ),
+      };
+    }
+  }
+
   async function loadForegroundAppInitialRenderProps(): Promise<ResolvePagesPageDataResult | null> {
     const result = await loadPagesAppInitialRenderProps(options, getSharedReqRes);
     if (result.kind === "response") {

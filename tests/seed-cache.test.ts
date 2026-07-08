@@ -74,6 +74,28 @@ describe("seedMemoryCacheFromPrerender", () => {
 
   // ── App Router ISR routes ─────────────────────────────────────────────────
 
+  it("seeds Pages Router prerendered HTML for the first production request", async () => {
+    const buildId = "pages-build-001";
+    setupPrerenderFixture(
+      serverDir,
+      {
+        buildId,
+        routes: [{ route: "/", status: "rendered", revalidate: false, router: "pages" }],
+      },
+      { "index.html": "<html><body>Pages home</body></html>" },
+    );
+
+    const count = await seedMemoryCacheFromPrerender(serverDir);
+    const entry = await getCacheHandler().get(isrCacheKey("pages", "/", buildId));
+
+    expect(count).toBe(1);
+    expect(entry?.value).toMatchObject({
+      kind: "PAGES",
+      html: "<html><body>Pages home</body></html>",
+      pageData: {},
+    });
+  });
+
   it("seeds App Router ISR routes with HTML and RSC entries", async () => {
     const buildId = "test-build-001";
     setupPrerenderFixture(

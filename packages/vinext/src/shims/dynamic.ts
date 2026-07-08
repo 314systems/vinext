@@ -21,6 +21,7 @@
  */
 import React, { type ComponentType } from "react";
 import { DynamicPreloadChunks } from "./dynamic-preload-chunks.js";
+import { recordPagesDynamicModuleIds } from "./pages-dynamic.js";
 
 type DynamicLoadingProps = {
   error?: Error | null;
@@ -293,6 +294,7 @@ function dynamic<P extends object = object>(
     const LazyServer = createLazyComponent(loader);
 
     const ServerDynamic = (props: P) => {
+      recordPagesDynamicModuleIds(preloadModuleIds);
       const fallback = LoadingComponent
         ? React.createElement(LoadingComponent, createDynamicLoadingProps())
         : null;
