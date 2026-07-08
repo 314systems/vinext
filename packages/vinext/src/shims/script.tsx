@@ -15,7 +15,9 @@
 import React, { useEffect, useRef } from "react";
 import * as ReactDOM from "react-dom";
 import { hasAppNavigationRuntimeBootstrap } from "../client/navigation-runtime.js";
+import { fnv1a64 } from "../utils/hash.js";
 import { escapeInlineContent } from "./head.js";
+import { useDocumentScriptRegister } from "./document-script-context.js";
 import { useScriptNonce } from "./script-nonce-context.js";
 import {
   useBeforeInteractiveRegister,
@@ -26,7 +28,12 @@ export type ScriptProps = {
   /** Script source URL */
   src?: string;
   /** Loading strategy. Default: "afterInteractive" */
-  strategy?: "beforeInteractive" | "afterInteractive" | "lazyOnload" | "worker";
+  strategy?:
+    | "beforeInteractive"
+    | "beforePageRender"
+    | "afterInteractive"
+    | "lazyOnload"
+    | "worker";
   /** Unique identifier for the script */
   id?: string;
   /** Called when the script has loaded */
@@ -162,10 +169,12 @@ function buildBeforeInteractiveScriptProps(options: {
   rest: Record<string, unknown>;
   resolvedNonce?: string;
   dangerouslySetInnerHTML?: { __html: string };
+  scriptKey: string;
 }): Record<string, unknown> {
   const scriptProps: Record<string, unknown> = {
     ...options.rest,
     "data-nscript": "beforeInteractive",
+    "data-vinext-script-key": options.scriptKey,
   };
   if (options.src) scriptProps.src = options.src;
   if (options.id) scriptProps.id = options.id;
@@ -212,27 +221,24 @@ function extractBeforeInteractiveInlineContent(
   return null;
 }
 
-function hasHoistedBeforeInteractiveScript(options: {
+function createScriptKey(options: {
   id?: string;
   src?: string;
   inlineContent: string | null;
-}): boolean {
+}): string {
+  if (options.id) return `id:${options.id}`;
+  if (options.src) return `src:${options.src}`;
+  return `inline:${fnv1a64(options.inlineContent ?? "")}`;
+}
+
+function hasHoistedBeforeInteractiveScript(options: { scriptKey: string }): boolean {
   if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") {
     return false;
   }
 
   const scripts = document.querySelectorAll('script[data-nscript="beforeInteractive"]');
   for (const script of scripts) {
-    if (options.id && script.getAttribute("id") === options.id) return true;
-    if (options.src && script.getAttribute("src") === options.src) return true;
-    if (
-      !options.id &&
-      !options.src &&
-      options.inlineContent !== null &&
-      script.textContent === options.inlineContent
-    ) {
-      return true;
-    }
+    if (script.getAttribute("data-vinext-script-key") === options.scriptKey) return true;
   }
   return false;
 }
@@ -399,6 +405,7 @@ function loadClientScript(
   if (id) el.id = id;
 
   setScriptAttributes(el, rest);
+  el.setAttribute("data-nscript", strategy);
   if (options.resolvedNonce && !el.getAttribute("nonce")) {
     el.setAttribute("nonce", options.resolvedNonce);
   }
@@ -446,6 +453,27 @@ function loadClientScript(
  * Load a script imperatively (outside of React).
  */
 export function handleClientScriptLoad(props: ScriptProps): void {
+  if (props.strategy === "lazyOnload") {
+    const load = () =>
+      loadClientScript(props, {
+        resolvedNonce: resolveScriptNonce(props.nonce),
+        fireReadyWhenAlreadyLoaded: false,
+      });
+    const schedule = () => {
+      if (typeof requestIdleCallback === "function") {
+        requestIdleCallback(load);
+      } else {
+        setTimeout(load, 1);
+      }
+    };
+    if (document.readyState === "complete") {
+      schedule();
+    } else {
+      window.addEventListener("load", schedule);
+    }
+    return;
+  }
+
   loadClientScript(props, {
     resolvedNonce: resolveScriptNonce(props.nonce),
     fireReadyWhenAlreadyLoaded: false,
@@ -460,6 +488,8 @@ export function initScriptLoader(scripts: ScriptProps[]): void {
     handleClientScriptLoad(script);
   }
 }
+
+Object.defineProperty(Script, "__nextScript", { value: true });
 
 function Script(props: ScriptProps): React.ReactElement | null {
   const {
@@ -483,6 +513,11 @@ function Script(props: ScriptProps): React.ReactElement | null {
   // missing (Pages Router SSR, raw renderToString, client render) we keep the
   // inline `<script>` element in source order.
   const registerBeforeInteractive = useBeforeInteractiveRegister();
+  const registerDocumentScript = useDocumentScriptRegister();
+  const inlineContent = src
+    ? null
+    : extractBeforeInteractiveInlineContent(children, dangerouslySetInnerHTML);
+  const scriptKey = createScriptKey({ id, src, inlineContent });
 
   // Client path: load scripts via useEffect based on strategy.
   // useEffect never runs during SSR, so it's safe to call unconditionally.
@@ -608,7 +643,30 @@ function Script(props: ScriptProps): React.ReactElement | null {
       ReactDOM.preload(src, preloadOptions);
     }
 
-    if (strategy === "beforeInteractive") {
+    if (registerDocumentScript) {
+      if (strategy === "beforeInteractive" || strategy === "beforePageRender") {
+        registerDocumentScript({
+          kind: "beforeInteractive",
+          script: {
+            key: scriptKey,
+            id,
+            src: src ?? undefined,
+            innerHTML:
+              inlineContent !== null ? escapeInlineContent(inlineContent, "script") : undefined,
+            nonce: resolvedNonce,
+            attributes: collectBeforeInteractiveAttributes(rest),
+          },
+        });
+      } else {
+        registerDocumentScript({
+          kind: "client",
+          script: { ...props, strategy, nonce: resolvedNonce },
+        });
+      }
+      return null;
+    }
+
+    if (strategy === "beforeInteractive" || strategy === "beforePageRender") {
       // beforeInteractive scripts need to run BEFORE any stylesheets,
       // modulepreload links, or other resource hints React Float hoists into
       // <head>. React Fizz emits user-rendered head children AFTER the hoisted
@@ -623,11 +681,9 @@ function Script(props: ScriptProps): React.ReactElement | null {
       // beforeInteractive scripts equally through the App Router runtime
       // (.nextjs-ref/packages/next/src/client/script.tsx — the `(self.__next_s=
       // ...).push([0|src, …])` branch).
-      const inlineContent = src
-        ? null
-        : extractBeforeInteractiveInlineContent(children, dangerouslySetInnerHTML);
       if ((src || inlineContent !== null) && registerBeforeInteractive) {
         const registered: BeforeInteractiveInlineScript = {
+          key: scriptKey,
           id,
           src: src ?? undefined,
           // Escape `</script>` sequences exactly as the inline render path does
@@ -651,6 +707,7 @@ function Script(props: ScriptProps): React.ReactElement | null {
           rest,
           resolvedNonce,
           dangerouslySetInnerHTML,
+          scriptKey,
         }),
         children,
       );
@@ -659,7 +716,7 @@ function Script(props: ScriptProps): React.ReactElement | null {
     return null;
   }
 
-  if (strategy === "beforeInteractive") {
+  if (strategy === "beforeInteractive" || strategy === "beforePageRender") {
     // On the client, suppress the `<script>` render for any beforeInteractive
     // Script in App Router pages — inline AND external `src`. The pre-head
     // splice in app-ssr-entry/app-ssr-stream already put the tag in the DOM
@@ -673,13 +730,9 @@ function Script(props: ScriptProps): React.ReactElement | null {
     // navigation runtime that the App Router bootstrap installs before
     // calling hydrateRoot — it is the most reliable runtime signal we
     // can read from inside a `"use client"` shim.
-    const inlineContent = src
-      ? null
-      : extractBeforeInteractiveInlineContent(children, dangerouslySetInnerHTML);
     if (
       (src || inlineContent !== null) &&
-      (hasHoistedBeforeInteractiveScript({ id, src, inlineContent }) ||
-        hasAppNavigationRuntimeBootstrap())
+      (hasHoistedBeforeInteractiveScript({ scriptKey }) || hasAppNavigationRuntimeBootstrap())
     ) {
       return null;
     }
@@ -692,6 +745,7 @@ function Script(props: ScriptProps): React.ReactElement | null {
         rest,
         resolvedNonce,
         dangerouslySetInnerHTML,
+        scriptKey,
       }),
       children,
     );

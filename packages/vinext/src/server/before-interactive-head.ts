@@ -26,6 +26,7 @@ export function renderBeforeInteractiveInlineScripts(
   let html = "";
   for (const script of scripts) {
     let attrs = "";
+    attrs += ` data-vinext-script-key="${escapeHtmlAttr(script.key)}"`;
     if (script.id) {
       attrs += ` id="${escapeHtmlAttr(script.id)}"`;
     }

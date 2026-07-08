@@ -8,6 +8,7 @@ import {
 } from "../packages/vinext/src/server/pages-page-response.js";
 import { resolvePagesPageData } from "../packages/vinext/src/server/pages-page-data.js";
 import Script from "../packages/vinext/src/shims/script.js";
+import { Html, Head, Main, NextScript } from "../packages/vinext/src/shims/document.js";
 
 function createStream(chunks: string[]): ReadableStream<Uint8Array> {
   return new ReadableStream({
@@ -239,6 +240,106 @@ describe("pages page response", () => {
     expect(html).toContain('data-nscript="beforeInteractive"');
     expect(assetIndex).toBeGreaterThan(scriptIndex);
     expect(html).not.toMatch(/<div id="__next">[\s\S]*legacy-before-interactive/);
+  });
+
+  it("serializes client scripts declared only in _document into __NEXT_DATA__", async () => {
+    const common = createCommonOptions();
+    const reactDomServer = await import("react-dom/server.edge");
+
+    function ScriptDocument() {
+      return React.createElement(
+        Html,
+        null,
+        React.createElement(Head),
+        React.createElement(
+          "body",
+          null,
+          React.createElement(Main),
+          React.createElement(NextScript),
+          React.createElement(Script, {
+            id: "document-after",
+            src: "/document-after.js",
+            strategy: "afterInteractive",
+          }),
+          React.createElement(Script, {
+            id: "document-lazy",
+            src: "/document-lazy.js",
+            strategy: "lazyOnload",
+          }),
+        ),
+      );
+    }
+
+    const response = await renderPagesPageResponse({
+      ...common.options,
+      DocumentComponent: ScriptDocument,
+      renderDocumentToString: async (element) =>
+        new Response(
+          await reactDomServer.renderToReadableStream(element as React.ReactElement),
+        ).text(),
+    });
+    const html = await response.text();
+    const nextDataJson = html.match(
+      /<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/,
+    )?.[1];
+
+    expect(nextDataJson).toBeDefined();
+    expect(JSON.parse(nextDataJson!).scriptLoader).toEqual([
+      expect.objectContaining({
+        id: "document-after",
+        src: "/document-after.js",
+        strategy: "afterInteractive",
+      }),
+      expect.objectContaining({
+        id: "document-lazy",
+        src: "/document-lazy.js",
+        strategy: "lazyOnload",
+      }),
+    ]);
+  });
+
+  it("hoists modern and legacy beforeInteractive scripts from the _document body", async () => {
+    const common = createCommonOptions();
+    const reactDomServer = await import("react-dom/server.edge");
+
+    function ScriptDocument() {
+      return React.createElement(
+        Html,
+        null,
+        React.createElement(Head),
+        React.createElement(
+          "body",
+          null,
+          React.createElement(Main),
+          React.createElement(NextScript),
+          React.createElement(Script, {
+            id: "document-modern-before",
+            src: "/document-modern.js",
+            strategy: "beforeInteractive",
+          }),
+          React.createElement(Script, {
+            id: "document-legacy-before",
+            src: "/document-legacy.js",
+            strategy: "beforePageRender" as "beforeInteractive",
+          }),
+        ),
+      );
+    }
+
+    const response = await renderPagesPageResponse({
+      ...common.options,
+      DocumentComponent: ScriptDocument,
+      renderDocumentToString: async (element) =>
+        new Response(
+          await reactDomServer.renderToReadableStream(element as React.ReactElement),
+        ).text(),
+    });
+    const html = await response.text();
+    const assetIndex = html.indexOf('src="/entry.js"');
+
+    expect(html.indexOf('id="document-modern-before"')).toBeLessThan(assetIndex);
+    expect(html.indexOf('id="document-legacy-before"')).toBeLessThan(assetIndex);
+    expect(html).not.toMatch(/<body>[\s\S]*id="document-(modern|legacy)-before"/);
   });
 
   it("preserves array-valued non-set-cookie headers from gSSP responses", async () => {

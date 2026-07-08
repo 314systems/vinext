@@ -1,4 +1,5 @@
 import { Html, Head, Main, NextScript } from "next/document";
+import Script from "next/script";
 
 export default function Document() {
   return (
@@ -9,6 +10,12 @@ export default function Document() {
       <body className="custom-body">
         <Main />
         <NextScript />
+        <Script id="document-after" src="/dedupe-script.js" strategy="afterInteractive" />
+        <Script
+          id="document-before"
+          src="/dedupe-script.js?before=1"
+          strategy="beforeInteractive"
+        />
       </body>
     </Html>
   );

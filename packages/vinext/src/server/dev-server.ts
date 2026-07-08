@@ -36,6 +36,11 @@ import { runWithHeadState } from "vinext/shims/head-state";
 import { runWithServerInsertedHTMLState } from "vinext/shims/navigation-state";
 import { withScriptNonce } from "vinext/shims/script-nonce-context";
 import {
+  DocumentScriptContext,
+  type DocumentScriptRegistration,
+} from "vinext/shims/document-script-context";
+import type { ScriptProps } from "vinext/shims/script";
+import {
   createInlineScriptTag,
   createNonceAttribute,
   escapeHtmlAttr,
@@ -77,6 +82,8 @@ import {
   runDocumentRenderPage,
 } from "./pages-document-initial-props.js";
 import { callDocumentGetInitialProps } from "./document-initial-head.js";
+import { renderBeforeInteractiveInlineScripts } from "./before-interactive-head.js";
+import type { BeforeInteractiveInlineScript } from "vinext/shims/before-interactive-context";
 import {
   hasPagesGetInitialProps,
   loadDevAppInitialProps,
@@ -320,7 +327,8 @@ async function streamPageToResponse(
     server: ViteDevServer;
     fontHeadHTML: string;
     assetHeadHTML?: string;
-    scripts: string;
+    buildScripts: (scriptLoader: ScriptProps[]) => string;
+    documentScriptContext?: typeof DocumentScriptContext;
     DocumentComponent: React.ComponentType | null;
     statusCode?: number;
     extraHeaders?: Record<string, string | string[]>;
@@ -360,7 +368,8 @@ async function streamPageToResponse(
     server,
     fontHeadHTML,
     assetHeadHTML = "",
-    scripts,
+    buildScripts,
+    documentScriptContext = DocumentScriptContext,
     DocumentComponent,
     statusCode,
     extraHeaders,
@@ -430,8 +439,11 @@ async function streamPageToResponse(
 
   // Build the document shell with a placeholder for the body
   let shellTemplate: string;
+  let documentBeforeInteractiveHTML = "";
 
   if (DocumentComponent) {
+    const documentClientScripts: ScriptProps[] = [];
+    const documentBeforeInteractiveScripts: BeforeInteractiveInlineScript[] = [];
     // When the renderPage path already invoked getInitialProps, reuse its
     // resolved props instead of calling it a second time.
     // `skipped` means it was never invoked → fall through to the fast path.
@@ -439,10 +451,27 @@ async function streamPageToResponse(
       documentRenderPage.status === "skipped"
         ? await loadUserDocumentInitialProps(DocumentComponent)
         : documentRenderPage.docProps;
-    const docElement = docProps
+    const rawDocElement = docProps
       ? React.createElement(DocumentComponent, docProps)
       : React.createElement(DocumentComponent);
+    const docElement = React.createElement(
+      documentScriptContext.Provider,
+      {
+        value(registration: DocumentScriptRegistration) {
+          if (registration.kind === "beforeInteractive") {
+            documentBeforeInteractiveScripts.push(registration.script);
+          } else {
+            documentClientScripts.push(registration.script);
+          }
+        },
+      },
+      rawDocElement,
+    );
     let docHtml = await renderToStringAsync(docElement);
+    const scripts = buildScripts(documentClientScripts);
+    documentBeforeInteractiveHTML = renderBeforeInteractiveInlineScripts(
+      documentBeforeInteractiveScripts,
+    );
     // Replace __NEXT_MAIN__ with our stream marker
     docHtml = docHtml.replace("__NEXT_MAIN__", STREAM_BODY_MARKER);
     // Inject head tags
@@ -453,12 +482,28 @@ async function streamPageToResponse(
       );
     }
     // Inject scripts: replace placeholder or append before </body>
-    docHtml = docHtml.replace("<!-- __NEXT_SCRIPTS__ -->", scripts);
+    const placeholder = "<!-- __NEXT_SCRIPTS__ -->";
+    const placeholderIndex = docHtml.indexOf(placeholder);
+    if (placeholderIndex !== -1) {
+      const spanOpen = docHtml.lastIndexOf("<span", placeholderIndex);
+      const spanClose = docHtml.indexOf("</span>", placeholderIndex + placeholder.length);
+      const openEnd = spanOpen === -1 ? -1 : docHtml.indexOf(">", spanOpen);
+      const onlyWhitespaceBefore =
+        openEnd !== -1 && docHtml.slice(openEnd + 1, placeholderIndex).trim().length === 0;
+      const onlyWhitespaceAfter =
+        spanClose !== -1 &&
+        docHtml.slice(placeholderIndex + placeholder.length, spanClose).trim().length === 0;
+      if (spanOpen !== -1 && onlyWhitespaceBefore && onlyWhitespaceAfter) {
+        docHtml = docHtml.slice(0, spanOpen) + scripts + docHtml.slice(spanClose + 7);
+      }
+    }
+    docHtml = docHtml.replace(placeholder, scripts);
     if (!docHtml.includes("__NEXT_DATA__")) {
       docHtml = docHtml.replace("</body>", `  ${scripts}\n</body>`);
     }
     shellTemplate = docHtml;
   } else {
+    const scripts = buildScripts([]);
     // charset + viewport are emitted via getSSRHeadHTML() (next/head's
     // defaultHead seeds them with data-next-head=""), matching Next.js's
     // canonical ordering. Don't duplicate them here.
@@ -477,7 +522,18 @@ async function streamPageToResponse(
 
   // Apply Vite's HTML transforms (injects HMR client, etc.) on the full
   // shell template, then split at the body marker.
-  const transformedShell = await server.transformIndexHtml(url, shellTemplate);
+  let transformedShell = await server.transformIndexHtml(url, shellTemplate);
+  if (documentBeforeInteractiveHTML) {
+    const headOpenIndex = transformedShell.indexOf("<head");
+    const headOpenEnd =
+      headOpenIndex === -1 ? -1 : transformedShell.indexOf(">", headOpenIndex + 5);
+    if (headOpenEnd !== -1) {
+      transformedShell =
+        transformedShell.slice(0, headOpenEnd + 1) +
+        documentBeforeInteractiveHTML +
+        transformedShell.slice(headOpenEnd + 1);
+    }
+  }
   const markerIdx = transformedShell.indexOf(STREAM_BODY_MARKER);
   const prefix = transformedShell.slice(0, markerIdx);
   const suffix = transformedShell.slice(markerIdx + STREAM_BODY_MARKER.length);
@@ -1775,6 +1831,7 @@ import "vinext/instrumentation-client";
 import React from "react";
 import { hydrateRoot } from "react-dom/client";
 import Router, { wrapWithRouterContext, _initializePagesRouterReadyFromNextData } from "next/router";
+import { initScriptLoader } from "next/script";
 
 const nextDataElement = document.getElementById("__NEXT_DATA__");
 if (nextDataElement?.textContent) {
@@ -1785,6 +1842,7 @@ if (nextDataElement?.textContent) {
 }
 const nextData = window.__NEXT_DATA__;
 _initializePagesRouterReadyFromNextData(nextData);
+initScriptLoader(Array.isArray(nextData.scriptLoader) ? nextData.scriptLoader : []);
 const props = nextData.props && typeof nextData.props === "object" ? nextData.props : {};
 const rawPageProps = props.pageProps;
 const pageProps = rawPageProps && typeof rawPageProps === "object" ? rawPageProps : {};
@@ -1845,21 +1903,6 @@ async function hydrate() {
 hydrate();
 </script>`;
 
-        const nextDataScript = `<script id="__NEXT_DATA__" type="application/json"${nonceAttr}>${safeJsonStringify(
-          {
-            props: renderProps,
-            page: patternToNextFormat(route.pattern),
-            query: params,
-            buildId: process.env.__VINEXT_BUILD_ID,
-            isFallback: isFallbackRender,
-            locale: locale ?? currentDefaultLocale,
-            locales: i18nConfig?.locales,
-            defaultLocale: currentDefaultLocale,
-            domainLocales,
-            ...serializedPagesNextData,
-          },
-        )}</script>`;
-
         // Try to load custom _document.tsx
         const docPath = path.join(pagesDir, "_document");
         // oxlint-disable-next-line typescript/no-explicit-any
@@ -1872,6 +1915,10 @@ hydrate();
             // _document exists but failed to load
           }
         }
+        const documentScriptShim = (await importModule(
+          runner,
+          "vinext/shims/document-script-context",
+        )) as { DocumentScriptContext: typeof DocumentScriptContext };
 
         // Expose page route patterns on window before hydration so the
         // next/navigation compat hooks can resolve a dynamic pattern from a
@@ -1883,7 +1930,24 @@ hydrate();
           scriptNonce,
         );
 
-        const allScripts = `${nextDataScript}\n  ${pagePatternsScript}\n  ${hydrationScript}`;
+        const buildScripts = (scriptLoader: ScriptProps[]) => {
+          const nextDataScript = `<script id="__NEXT_DATA__" type="application/json"${nonceAttr}>${safeJsonStringify(
+            {
+              props: renderProps,
+              page: patternToNextFormat(route.pattern),
+              query: params,
+              buildId: process.env.__VINEXT_BUILD_ID,
+              isFallback: isFallbackRender,
+              locale: locale ?? currentDefaultLocale,
+              locales: i18nConfig?.locales,
+              defaultLocale: currentDefaultLocale,
+              domainLocales,
+              ...serializedPagesNextData,
+              ...(scriptLoader.length > 0 ? { scriptLoader } : {}),
+            },
+          )}</script>`;
+          return `${nextDataScript}\n  ${pagePatternsScript}\n  ${hydrationScript}`;
+        };
 
         // Build response headers: start with gSSP headers, then layer on
         // ISR and font preload headers (which take precedence).
@@ -1915,7 +1979,8 @@ hydrate();
           server,
           fontHeadHTML,
           assetHeadHTML,
-          scripts: allScripts,
+          buildScripts,
+          documentScriptContext: documentScriptShim.DocumentScriptContext,
           DocumentComponent,
           statusCode,
           extraHeaders,
@@ -2006,7 +2071,7 @@ hydrate();
           const isrBodyHtml = await renderIsrPassToStringAsync(
             withScriptNonce(isrElement, scriptNonce),
           );
-          const isrHtml = `<!DOCTYPE html><html><head>${assetHeadHTML}</head><body><div id="__next">${isrBodyHtml}</div>${allScripts}</body></html>`;
+          const isrHtml = `<!DOCTYPE html><html><head>${assetHeadHTML}</head><body><div id="__next">${isrBodyHtml}</div>${buildScripts([])}</body></html>`;
           const cacheKey = pagesIsrCacheKey(url.split("?")[0]);
           await isrSet(cacheKey, buildPagesCacheValue(isrHtml, pageProps), isrRevalidateSeconds);
           setRevalidateDuration(cacheKey, isrRevalidateSeconds);
@@ -2182,12 +2247,17 @@ async function renderErrorPage(
 
       if (DocumentComponent) {
         const errorPathname = candidate === "_error" ? "/_error" : `/${candidate}`;
+        const documentScriptShim = (await importModule(
+          runner,
+          "vinext/shims/document-script-context",
+        )) as { DocumentScriptContext: typeof DocumentScriptContext };
         await streamPageToResponse(res, element, {
           url,
           server,
           fontHeadHTML: "",
           assetHeadHTML,
-          scripts: "",
+          buildScripts: () => "",
+          documentScriptContext: documentScriptShim.DocumentScriptContext,
           DocumentComponent,
           statusCode,
           documentContext: {

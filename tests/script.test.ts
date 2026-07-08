@@ -24,8 +24,12 @@ import { NAVIGATION_RUNTIME_KEY } from "../packages/vinext/src/client/navigation
 const originalDocument = globalThis.document;
 const originalWindow = globalThis.window;
 const originalHTMLElement = globalThis.HTMLElement;
+const originalRequestIdleCallback = globalThis.requestIdleCallback;
 
-function setGlobalValue(key: "document" | "window" | "HTMLElement", value: unknown): void {
+function setGlobalValue(
+  key: "document" | "window" | "HTMLElement" | "requestIdleCallback",
+  value: unknown,
+): void {
   if (value === undefined) {
     Reflect.deleteProperty(globalThis, key);
     return;
@@ -42,6 +46,7 @@ afterEach(() => {
   setGlobalValue("document", originalDocument);
   setGlobalValue("window", originalWindow);
   setGlobalValue("HTMLElement", originalHTMLElement);
+  setGlobalValue("requestIdleCallback", originalRequestIdleCallback);
 });
 
 // ─── SSR rendering ──────────────────────────────────────────────────────
@@ -180,8 +185,7 @@ describe("Script SSR rendering", () => {
         return [
           {
             getAttribute(name: string) {
-              if (name === "id") return "legacy-before-interactive";
-              if (name === "src") return "/legacy-before.js";
+              if (name === "data-vinext-script-key") return "id:legacy-before-interactive";
               return null;
             },
             textContent: "",
@@ -415,6 +419,42 @@ describe("Script SSR rendering", () => {
     expect(appendedScripts[0]!.async).toBe(false);
     expect(appendedScripts[0]!.attrs).not.toHaveProperty("async");
   });
+
+  it.each(["afterInteractive", "lazyOnload", "worker"] as const)(
+    "marks client-injected %s scripts with data-nscript",
+    (strategy) => {
+      const createdScript = {
+        attrs: {} as Record<string, string>,
+        src: "",
+        setAttribute(name: string, value: string) {
+          this.attrs[name] = value;
+        },
+        getAttribute(name: string): string | null {
+          return this.attrs[name] ?? null;
+        },
+        addEventListener() {},
+      };
+      setGlobalValue("window", {
+        addEventListener(_event: string, callback: () => void) {
+          callback();
+        },
+      });
+      setGlobalValue("requestIdleCallback", (callback: IdleRequestCallback) => {
+        callback({ didTimeout: false, timeRemaining: () => 50 });
+        return 1;
+      });
+      setGlobalValue("document", {
+        querySelector: () => null,
+        readyState: "complete",
+        createElement: () => createdScript,
+        body: { appendChild() {} },
+      });
+
+      handleClientScriptLoad({ src: `/${strategy}.js`, strategy });
+
+      expect(createdScript.attrs["data-nscript"]).toBe(strategy);
+    },
+  );
 });
 
 // ─── nonce resolution ───────────────────────────────────────────────────
@@ -782,11 +822,53 @@ describe("Script beforeInteractive registry (#2016)", () => {
 
     expect(html).toBe("");
   });
+
+  it("dedupes escaped inline beforeInteractive scripts by stable emitted identity", () => {
+    const source = 'window.value = "</script><script>bad()</script>";';
+    const captured: BeforeInteractiveInlineScript[] = [];
+    ReactDOMServer.renderToString(
+      React.createElement(
+        BeforeInteractiveContext.Provider,
+        { value: (script: BeforeInteractiveInlineScript) => captured.push(script) },
+        React.createElement(Script, {
+          strategy: "beforeInteractive",
+          children: source,
+        } as ScriptProps),
+      ),
+    );
+    const emitted = renderBeforeInteractiveInlineScripts(captured);
+    const key = captured[0]!.key;
+    expect(emitted).toContain(`data-vinext-script-key="${key}"`);
+
+    setGlobalValue("window", {});
+    setGlobalValue("document", {
+      querySelector: () => null,
+      querySelectorAll: () => [
+        {
+          getAttribute(name: string) {
+            return name === "data-vinext-script-key" ? key : null;
+          },
+          textContent: 'window.value = "\\u003c/script>";',
+        },
+      ],
+    });
+
+    expect(
+      ReactDOMServer.renderToString(
+        React.createElement(Script, {
+          strategy: "beforeInteractive",
+          children: source,
+        } as ScriptProps),
+      ),
+    ).toBe("");
+  });
 });
 
 describe("renderBeforeInteractiveInlineScripts (#2016)", () => {
   it('marks every hoisted script with data-nscript="beforeInteractive"', () => {
-    const html = renderBeforeInteractiveInlineScripts([{ id: "x", innerHTML: "console.log(1)" }]);
+    const html = renderBeforeInteractiveInlineScripts([
+      { key: "id:x", id: "x", innerHTML: "console.log(1)" },
+    ]);
     expect(html).toContain('data-nscript="beforeInteractive"');
     expect(html).toContain('id="x"');
     expect(html).toContain("console.log(1)");
@@ -795,6 +877,7 @@ describe("renderBeforeInteractiveInlineScripts (#2016)", () => {
   it("emits a <script src> tag (with no body) for registered src scripts", () => {
     const html = renderBeforeInteractiveInlineScripts([
       {
+        key: "id:a",
         id: "a",
         src: "/a.js",
         attributes: { crossorigin: "anonymous", defer: true },
@@ -814,8 +897,13 @@ describe("renderBeforeInteractiveInlineScripts (#2016)", () => {
   // render with the correct `class` attribute, never `classname`).
   it("renders multiple hoisted beforeInteractive scripts with correct class attributes", () => {
     const html = renderBeforeInteractiveInlineScripts([
-      { id: "first", innerHTML: "1", attributes: { class: "first-script" } },
-      { id: "second", src: "/second.js", attributes: { class: "second-script" } },
+      { key: "id:first", id: "first", innerHTML: "1", attributes: { class: "first-script" } },
+      {
+        key: "id:second",
+        id: "second",
+        src: "/second.js",
+        attributes: { class: "second-script" },
+      },
     ]);
     expect(html).toContain('class="first-script"');
     expect(html).toContain('class="second-script"');

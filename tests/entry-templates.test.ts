@@ -1383,6 +1383,11 @@ describe("Pages Router entry template", () => {
       expect(code).toContain("_initializePagesRouterReadyFromNextData,");
       expect(code).toContain('} from "next/router";');
       expect(code).toContain("_initializePagesRouterReadyFromNextData(nextData);");
+      expect(code).toContain('import { initScriptLoader } from "next/script";');
+      expect(code).toContain(
+        "initScriptLoader(Array.isArray(nextData.scriptLoader) ? nextData.scriptLoader : []);",
+      );
+      expect(code.indexOf("initScriptLoader(")).toBeLessThan(code.indexOf("hydrateRoot(container"));
       expect(code).toContain("router: Router,");
       expect(code).toContain("pageProps: rawPageProps,");
       expect(code).toContain("element = wrapWithRouterContext(element, resolveHydrationCommit);");
