@@ -1105,8 +1105,15 @@ export function matchRewrite(
         ...params,
         ...conditionParams,
       };
+      const pathParamKeys = new Set(
+        Object.keys(params).filter((key) => !Object.hasOwn(conditionParams, key)),
+      );
       // Collapse protocol-relative URLs (e.g. //evil.com from decoded %2F in catch-all params).
-      return substituteAndSanitizeRewriteDestination(rewrite.destination, rewriteParams);
+      return substituteAndSanitizeRewriteDestination(
+        rewrite.destination,
+        rewriteParams,
+        pathParamKeys,
+      );
     }
   }
   return null;
@@ -1141,7 +1148,7 @@ export function matchesRewriteSource(
 function substituteDestinationParams(
   destination: string,
   params: Record<string, string>,
-  encodePathParams = false,
+  encodedPathParamKeys?: ReadonlySet<string>,
 ): string {
   const keys = Object.keys(params);
   if (keys.length === 0) return destination;
@@ -1164,24 +1171,29 @@ function substituteDestinationParams(
 
   const replaceParams = (
     value: string,
-    encodeParam: (value: string, modifier: string | undefined) => string,
+    encodeParam: (value: string, key: string, modifier: string | undefined) => string,
   ): string =>
     value.replace(paramRe, (_token, key: string, modifier: string | undefined) =>
-      encodeParam(params[key], modifier),
+      encodeParam(params[key], key, modifier),
     );
 
   const replacePathParams = (value: string): string => {
-    if (!encodePathParams) return replaceParams(value, (param) => param);
+    if (!encodedPathParamKeys) return replaceParams(value, (param) => param);
 
     const replaceAndEncodePathname = (pathname: string): string =>
       pathname
         .split("/")
         .flatMap((segment) => {
-          paramRe.lastIndex = 0;
-          const hasSubstitution = paramRe.test(segment);
-          paramRe.lastIndex = 0;
-          const substituted = replaceParams(segment, (param) => param);
-          return hasSubstitution ? substituted.split("/").map(encodeUrlDotSegment) : [substituted];
+          let allParamsArePathDerived = true;
+          let hasSubstitution = false;
+          const substituted = replaceParams(segment, (param, key) => {
+            hasSubstitution = true;
+            if (!encodedPathParamKeys.has(key)) allParamsArePathDerived = false;
+            return param;
+          });
+          return hasSubstitution && allParamsArePathDerived
+            ? substituted.split("/").map(encodeUrlDotSegment)
+            : [substituted];
         })
         .join("/");
 
@@ -1245,9 +1257,14 @@ function substituteAndSanitizeDestination(
 function substituteAndSanitizeRewriteDestination(
   destination: string,
   params: Record<string, string>,
+  pathParamKeys: ReadonlySet<string>,
 ): string {
   const rewritten = sanitizeDestination(
-    substituteDestinationParams(destination, params, isExternalUrl(destination)),
+    substituteDestinationParams(
+      destination,
+      params,
+      isExternalUrl(destination) ? pathParamKeys : undefined,
+    ),
   );
   if (!shouldAppendRewriteParamsToQuery(destination, params)) return rewritten;
 

@@ -12033,6 +12033,26 @@ describe("matchRewrite with external URLs", () => {
         emptyCtx,
       ),
     ).toBe("https://api.example.com/v1/../api/value");
+
+    expect(
+      matchRewrite(
+        "/proxy/value",
+        [
+          {
+            source: "/proxy/:id",
+            destination: "https://api.example.com/v1/:captured/outside",
+            has: [
+              {
+                type: "query",
+                key: "value",
+                value: "(?<captured>.*)",
+              },
+            ],
+          },
+        ],
+        { ...emptyCtx, query: new URLSearchParams({ value: ".." }) },
+      ),
+    ).toBe("https://api.example.com/v1/../outside");
   });
 
   it("returns internal path for non-external rewrites", async () => {
