@@ -14346,7 +14346,7 @@ describe("next/compat/router shim", () => {
     (globalThis as any).window = {
       location: {
         pathname: "/second",
-        search: "",
+        search: "?foo=bar",
         hash: "",
       },
       history: { state: null },
@@ -14371,12 +14371,12 @@ describe("next/compat/router shim", () => {
 
       (globalThis as any).window.__NEXT_DATA__ = {
         page: "/[slug]",
-        query: { slug: "second" },
+        query: { slug: "second", foo: "bar" },
         isFallback: false,
       };
 
       expect(renderToStaticMarkup(wrapWithRouterContext(React.createElement(Probe)))).toBe(
-        "<span>{&quot;slug&quot;:&quot;second&quot;}</span>",
+        "<span>{&quot;foo&quot;:&quot;bar&quot;,&quot;slug&quot;:&quot;second&quot;}</span>",
       );
     } finally {
       if (previousWindow === undefined) {

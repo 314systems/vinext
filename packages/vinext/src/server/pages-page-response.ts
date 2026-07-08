@@ -279,7 +279,7 @@ export function buildPagesNextDataScript(
   const nextDataPayload: Record<string, unknown> = {
     props: options.props ?? { pageProps: options.pageProps },
     page: options.routePattern,
-    query: options.query ?? options.params,
+    query: options.isFallback ? (options.query ?? {}) : options.params,
     buildId: options.buildId,
     isFallback: options.isFallback === true,
   };

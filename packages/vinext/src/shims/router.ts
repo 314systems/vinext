@@ -1277,16 +1277,14 @@ function getPathnameAndQuery(): {
   // pattern and is updated by navigateClient() on every client-side navigation.
   const pathname = window.__NEXT_DATA__?.page ?? resolvedPath;
   const nextData = window.__NEXT_DATA__;
-  const routeQuery = nextData?.isFallback
-    ? copySerializedRouteQuery(nextData.query)
-    : getRouteQueryFromNextData(nextData, resolvedPath);
+  const routeQuery = getRouteQueryFromNextData(nextData, resolvedPath);
   // URL search params always reflect the current URL
   const searchQuery: Record<string, string | string[]> = {};
   const params = new URLSearchParams(window.location.search);
   for (const [key, value] of params) {
     addQueryParam(searchQuery, key, value);
   }
-  const query = { ...searchQuery, ...routeQuery };
+  const query = nextData?.isFallback ? {} : { ...searchQuery, ...routeQuery };
   // asPath uses the resolved browser path, not the route pattern
   const asPath =
     getCurrentHistoryAsPath() ?? resolvedPath + window.location.search + window.location.hash;

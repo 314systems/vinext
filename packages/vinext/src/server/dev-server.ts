@@ -1851,7 +1851,7 @@ hydrate();
           {
             props: renderProps,
             page: patternToNextFormat(route.pattern),
-            query: renderQuery,
+            query: isFallbackRender ? renderQuery : params,
             buildId: process.env.__VINEXT_BUILD_ID,
             isFallback: isFallbackRender,
             locale: locale ?? currentDefaultLocale,
