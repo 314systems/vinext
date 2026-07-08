@@ -18163,33 +18163,46 @@ describe("Pages Router _next/data client navigation", () => {
     const originalFetch = globalThis.fetch;
     let receivedPageContext: Record<string, unknown> | undefined;
 
-    const Page = Object.assign(() => "page", {
-      getInitialProps(context: Record<string, unknown>) {
-        receivedPageContext = context;
-        const AppTree = context.AppTree as (props: Record<string, unknown>) => unknown;
-        return { rendered: AppTree({ pageProps: {} }) };
-      },
-    });
-    const App = Object.assign(({ Component, pageProps }: any) => Component(pageProps), {
-      async getInitialProps(context: { Component: typeof Page; ctx: Record<string, unknown> }) {
-        return { pageProps: context.Component.getInitialProps(context.ctx) };
-      },
-    });
-    const { win } = createDataNavWindow({
-      loaders: {
-        "/": vi.fn(async () => makePageModule("home")),
-        "/about": vi.fn(async () => ({ default: Page })),
-      },
-      appLoader: vi.fn(async () => ({ default: App })),
-      ssgPatterns: [],
-      sspPatterns: [],
-    });
-    (globalThis as any).window = win;
-    globalThis.fetch = vi.fn() as any;
-    vi.resetModules();
-
     try {
-      const Router = (await import("../packages/vinext/src/shims/router.js")).default;
+      const React = await import("react");
+      const { renderToStaticMarkup } = await import("react-dom/server");
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      const Router = routerModule.default;
+      const Page = Object.assign(
+        function Page() {
+          const router = routerModule.useRouter();
+          return React.createElement("p", { id: "route" }, router.pathname);
+        },
+        {
+          getInitialProps(context: Record<string, unknown>) {
+            receivedPageContext = context;
+            const AppTree = context.AppTree as (props: Record<string, unknown>) => unknown;
+            return {
+              rendered: renderToStaticMarkup(AppTree({ pageProps: {} }) as React.ReactElement),
+            };
+          },
+        },
+      );
+      const App = Object.assign(
+        ({ Component, pageProps }: any) => React.createElement(Component, pageProps),
+        {
+          async getInitialProps(context: { Component: typeof Page; ctx: Record<string, unknown> }) {
+            return { pageProps: context.Component.getInitialProps(context.ctx) };
+          },
+        },
+      );
+      const { win } = createDataNavWindow({
+        loaders: {
+          "/": vi.fn(async () => makePageModule("home")),
+          "/about": vi.fn(async () => ({ default: Page })),
+        },
+        appLoader: vi.fn(async () => ({ default: App })),
+        ssgPatterns: [],
+        sspPatterns: [],
+      });
+      (globalThis as any).window = win;
+      globalThis.fetch = vi.fn() as any;
+
       await Router.push("/about");
 
       expect(receivedPageContext).toMatchObject({
@@ -18197,6 +18210,7 @@ describe("Pages Router _next/data client navigation", () => {
         pathname: "/about",
         asPath: "/about",
       });
+      expect(win.__NEXT_DATA__.props.pageProps.rendered).toContain('<p id="route">/about</p>');
       expect(globalThis.fetch).not.toHaveBeenCalled();
     } finally {
       if (previousWindow === undefined) delete (globalThis as any).window;

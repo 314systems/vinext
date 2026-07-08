@@ -439,8 +439,10 @@ type PagesRouterRuntimeComponents = {
     onCommit: () => void;
     onError: (error: Error) => void;
   }>;
-  Provider: ComponentType<{ children: ReactNode }>;
+  Provider: ComponentType<{ children?: ReactNode; initialSnapshot?: RouterSnapshot }>;
 };
+
+type RouterSnapshot = ReturnType<typeof getPathnameAndQuery> & { isReady: boolean };
 
 const PAGES_ROUTER_RUNTIME_STATE_KEY = Symbol.for("vinext.pagesRouter.runtimeState");
 
@@ -1393,7 +1395,7 @@ function PagesRouterHydrationMarker(): null {
   return null;
 }
 
-function getRouterSnapshot(): ReturnType<typeof getPathnameAndQuery> & { isReady: boolean } {
+function getRouterSnapshot(): RouterSnapshot {
   // On the server, derive `router.isReady` from the SSR navigation-readiness
   // context (auto-export dynamic / query-string / rewrite-capable routes are
   // not ready until the client router publishes the live URL). Mirrors Next.js
@@ -1976,11 +1978,16 @@ async function loadComponentOnlyProps(
 
   if (typeof AppComponent?.getInitialProps === "function") {
     const AppTree = (appProps: Record<string, unknown>) =>
-      createElement(AppComponent as ComponentType<Record<string, unknown>>, {
-        ...appProps,
-        Component: PageComponent,
-        router: Router,
-      });
+      wrapWithRouterContext(
+        createElement(AppComponent as ComponentType<Record<string, unknown>>, {
+          ...appProps,
+          Component: PageComponent,
+          router: Router,
+        }),
+        noopCommit,
+        noopCommit,
+        { pathname: target.pattern, query, asPath, isReady: true },
+      );
     return propsObject(
       await AppComponent.getInitialProps({
         Component: PageComponent,
@@ -3269,8 +3276,16 @@ export function useRouter(): NextRouter {
   );
 }
 
-function PagesRouterProvider({ children }: { children: ReactNode }): ReactElement {
-  const [{ pathname, query, asPath, isReady }, setState] = useState(getRouterSnapshot);
+function PagesRouterProvider({
+  children,
+  initialSnapshot,
+}: {
+  children?: ReactNode;
+  initialSnapshot?: RouterSnapshot;
+}): ReactElement {
+  const [{ pathname, query, asPath, isReady }, setState] = useState(
+    initialSnapshot ?? getRouterSnapshot,
+  );
 
   // Popstate is handled by the Pages Router client entry via
   // installPagesRouterRuntime() so beforePopState() is consistently enforced
@@ -3615,6 +3630,7 @@ export function wrapWithRouterContext(
   element: ReactElement,
   onCommit: () => void = noopCommit,
   onError: (error: Error) => void = noopCommit,
+  initialSnapshot?: RouterSnapshot,
 ): ReactElement {
   const { CommitBoundary, Provider } = getPagesRouterRuntimeComponents();
   // React Strict Mode (Pages Router). When `reactStrictMode: true`, wrap the
@@ -3627,7 +3643,7 @@ export function wrapWithRouterContext(
   // navigations, mirroring Next.js's `doRender` closure used for both. The
   // CommitBoundary stays outside StrictMode so its commit `useLayoutEffect`
   // is not double-invoked (Next.js keeps `<Root>` outside <StrictMode> too).
-  let inner: ReactElement = createElement(Provider, null, element);
+  let inner: ReactElement = createElement(Provider, { initialSnapshot }, element);
   // Re-read the static page-load flag on each render so hydration and
   // navigation share this single wrapping path.
   if (typeof window !== "undefined" && window.__VINEXT_REACT_STRICT_MODE__ === true) {
