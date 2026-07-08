@@ -3033,6 +3033,67 @@ describe("Virtual server entry generation", () => {
     }
   });
 
+  it("evaluates Pages root components in _document > _app > page order in dev", async () => {
+    // Ported from Next.js: test/e2e/app-document-import-order/app-document-import-order.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-document-import-order/app-document-import-order.test.ts
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-pages-import-order-dev-"));
+    const pagesDir = path.join(tmpDir, "pages");
+    fs.mkdirSync(pagesDir, { recursive: true });
+    fs.symlinkSync(path.join(process.cwd(), "node_modules"), path.join(tmpDir, "node_modules"));
+    fs.writeFileSync(
+      path.join(tmpDir, "side-effect.ts"),
+      `const calls = ((globalThis as any).__VINEXT_IMPORT_ORDER__ ??= []);
+export function record(name: string) { calls.push(name); }
+export function read() { return calls; }
+`,
+    );
+    fs.writeFileSync(
+      path.join(pagesDir, "_document.tsx"),
+      `import Document, { Html, Head, Main, NextScript } from "next/document";
+import { record } from "../side-effect";
+record("_document");
+export default class CustomDocument extends Document {
+  render() { return <Html><Head /><body><Main /><NextScript /></body></Html>; }
+}
+`,
+    );
+    fs.writeFileSync(
+      path.join(pagesDir, "_app.tsx"),
+      `import { record } from "../side-effect";
+record("_app");
+export default function App({ Component, pageProps }) { return <Component {...pageProps} />; }
+`,
+    );
+    fs.writeFileSync(
+      path.join(pagesDir, "index.tsx"),
+      `import { read, record } from "../side-effect";
+record("page");
+export default function Page() { return <p id="import-order">{read().join(",")}</p>; }
+`,
+    );
+
+    const testServer = await createServer({
+      root: tmpDir,
+      configFile: false,
+      plugins: [vinext({ appDir: tmpDir })],
+      server: { port: 0, cors: false },
+      logLevel: "silent",
+    });
+
+    try {
+      await testServer.listen();
+      const addr = testServer.httpServer?.address();
+      if (!addr || typeof addr !== "object") throw new Error("Expected dev server address");
+
+      const res = await fetch(`http://localhost:${addr.port}/`);
+      expect(res.status).toBe(200);
+      expect(await res.text()).toContain('<p id="import-order">_document,_app,page</p>');
+    } finally {
+      await testServer.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("dev Pages client assets expose virtual CSS added by client transforms", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-pages-virtual-css-"));
     fs.mkdirSync(path.join(tmpDir, "pages"), { recursive: true });

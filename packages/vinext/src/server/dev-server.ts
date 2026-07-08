@@ -778,9 +778,21 @@ export function createSSRHandler(
           }
         }
 
-        // Load the page module through Vite's SSR pipeline
-        // This gives us HMR and transform support for free
-        const pageModule = await importModule(runner, route.filePath);
+        // Next.js evaluates the root modules in _document > _app > page order
+        // so their top-level side effects observe the same sequence in dev and
+        // production.
+        // oxlint-disable-next-line typescript/no-explicit-any
+        let DocumentComponent: any = null;
+        const docPath = path.join(pagesDir, "_document");
+        if (findFileWithExtensions(docPath, matcher)) {
+          try {
+            const docModule = await importModule(runner, docPath);
+            DocumentComponent = docModule.default ?? null;
+          } catch {
+            // _document exists but failed to load
+          }
+        }
+
         // Try to load _app.tsx if it exists. This happens before the readiness
         // predicate so app-level getInitialProps participates in the same
         // initial Pages Router state as the client __NEXT_DATA__ payload.
@@ -795,6 +807,10 @@ export function createSSRHandler(
             // _app exists but failed to load
           }
         }
+        // Load the page module through Vite's SSR pipeline after the root
+        // components. This gives us HMR and transform support for free while
+        // preserving Next.js module evaluation order.
+        const pageModule = await importModule(runner, route.filePath);
         const pagesNextData = buildPagesReadinessNextData({
           pageModule,
           appComponent: AppComponent,
@@ -1859,19 +1875,6 @@ hydrate();
             ...serializedPagesNextData,
           },
         )}</script>`;
-
-        // Try to load custom _document.tsx
-        const docPath = path.join(pagesDir, "_document");
-        // oxlint-disable-next-line typescript/no-explicit-any
-        let DocumentComponent: any = null;
-        if (findFileWithExtensions(docPath, matcher)) {
-          try {
-            const docModule = (await runner.import(docPath)) as Record<string, unknown>;
-            DocumentComponent = docModule.default ?? null;
-          } catch {
-            // _document exists but failed to load
-          }
-        }
 
         // Expose page route patterns on window before hydration so the
         // next/navigation compat hooks can resolve a dynamic pattern from a
