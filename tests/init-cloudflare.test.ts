@@ -482,6 +482,12 @@ export default { plugins: [vinext({ imageOptimization: true })] };
     const output = updateWranglerConfigForCloudflare(input, options);
     expect(output).toContain("// keep this comment");
     expect(JSON.parse(output.replace("  // keep this comment\n", ""))).toEqual({
+      assets: {
+        binding: "ASSETS",
+        directory: "dist/client",
+        not_found_handling: "none",
+        run_worker_first: ["//*", "/*//*"],
+      },
       images: { binding: "IMAGES" },
     });
     expect(updateWranglerConfigForCloudflare(output, options)).toBe(output);
@@ -493,7 +499,15 @@ export default { plugins: [vinext({ imageOptimization: true })] };
       cdnCache: "workers-cache",
       imageOptimization: "none",
     });
-    expect(JSON.parse(output)).toEqual({ cache: { enabled: true } });
+    expect(JSON.parse(output)).toEqual({
+      assets: {
+        binding: "ASSETS",
+        directory: "dist/client",
+        not_found_handling: "none",
+        run_worker_first: ["//*", "/*//*"],
+      },
+      cache: { enabled: true },
+    });
   });
 
   it("preserves a custom Wrangler Images binding for the Vite adapter", () => {
