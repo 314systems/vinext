@@ -14,7 +14,11 @@ import Script, {
   initScriptLoader,
   type ScriptProps,
 } from "../packages/vinext/src/shims/script.js";
-import { loadedScripts, scriptCache } from "../packages/vinext/src/shims/script-loader.js";
+import {
+  loadClientScript,
+  loadedScripts,
+  scriptCache,
+} from "../packages/vinext/src/shims/script-loader.js";
 import { ScriptNonceProvider } from "../packages/vinext/src/shims/script-nonce-context.js";
 import {
   BeforeInteractiveContext,
@@ -779,7 +783,7 @@ describe("Script stylesheets prop", () => {
 });
 
 describe("Script loader bootstrap cache", () => {
-  it("retains loaded sources across scripts with different ids", async () => {
+  function installScriptDocument() {
     const appendedScripts: Array<{
       listeners: Record<string, (event: Event) => void>;
       src: string;
@@ -806,6 +810,11 @@ describe("Script loader bootstrap cache", () => {
         },
       },
     });
+    return appendedScripts;
+  }
+
+  it("retains loaded sources across scripts with different ids", async () => {
+    const appendedScripts = installScriptDocument();
 
     handleClientScriptLoad({ id: "document-after", src: "/shared.js" });
     appendedScripts[0]!.listeners.load!(new Event("load"));
@@ -815,6 +824,70 @@ describe("Script loader bootstrap cache", () => {
     handleClientScriptLoad({ id: "page-after-two", src: "/shared.js" });
 
     expect(appendedScripts).toHaveLength(1);
+  });
+
+  it("marks a shared-source cache key while the first script is pending", () => {
+    const appendedScripts = installScriptDocument();
+    const calls: string[] = [];
+
+    handleClientScriptLoad({ id: "first", src: "/shared.js" });
+    handleClientScriptLoad({
+      id: "second",
+      src: "/shared.js",
+      onLoad: () => calls.push("load"),
+      onReady: () => calls.push("ready"),
+      onError: () => calls.push("error"),
+    });
+
+    expect(appendedScripts).toHaveLength(1);
+    expect(loadedScripts.has("second")).toBe(true);
+    expect(calls).toEqual([]);
+  });
+
+  it("fires only onLoad for a fulfilled shared-source attachment", async () => {
+    const appendedScripts = installScriptDocument();
+    const calls: string[] = [];
+
+    handleClientScriptLoad({ id: "first", src: "/shared.js" });
+    handleClientScriptLoad({
+      id: "second",
+      src: "/shared.js",
+      onLoad: () => calls.push("load"),
+      onReady: () => calls.push("ready"),
+    });
+    appendedScripts[0]!.listeners.load!(new Event("load"));
+    await scriptCache.get("/shared.js");
+
+    expect(calls).toEqual(["load"]);
+
+    loadClientScript(
+      {
+        id: "second",
+        src: "/shared.js",
+        onReady: () => calls.push("remount-ready"),
+      },
+      { fireReadyWhenAlreadyLoaded: true },
+    );
+    expect(calls).toEqual(["load", "remount-ready"]);
+  });
+
+  it("fires only onError for a rejected shared-source attachment", async () => {
+    const appendedScripts = installScriptDocument();
+    const calls: string[] = [];
+
+    handleClientScriptLoad({ id: "first", src: "/shared.js" });
+    handleClientScriptLoad({
+      id: "second",
+      src: "/shared.js",
+      onLoad: () => calls.push("load"),
+      onReady: () => calls.push("ready"),
+      onError: () => calls.push("error"),
+    });
+    appendedScripts[0]!.listeners.error!(new Event("error"));
+    await scriptCache.get("/shared.js")?.catch(() => undefined);
+
+    expect(loadedScripts.has("second")).toBe(true);
+    expect(calls).toEqual(["error"]);
   });
 
   for (const strategy of ["beforeInteractive", "beforePageRender"] as const) {

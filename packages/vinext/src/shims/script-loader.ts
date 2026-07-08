@@ -165,14 +165,8 @@ export function loadClientScript(
   if (src) {
     const existingLoad = scriptCache.get(src);
     if (existingLoad) {
-      void existingLoad.then(
-        (event) => {
-          if (key) loadedScripts.add(key);
-          onLoad?.(event);
-          onReady?.();
-        },
-        (event) => onError?.(event),
-      );
+      if (key) loadedScripts.add(key);
+      void existingLoad.then(onLoad, onError);
       return;
     }
   }
