@@ -3155,6 +3155,88 @@ export default function NotFound() { return <p id="import-order">{read().join(",
     }
   });
 
+  it("propagates a throwing _document import on a normal dev route", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-pages-document-import-error-"));
+    const pagesDir = path.join(tmpDir, "pages");
+    fs.mkdirSync(pagesDir, { recursive: true });
+    fs.symlinkSync(path.join(process.cwd(), "node_modules"), path.join(tmpDir, "node_modules"));
+    fs.writeFileSync(
+      path.join(pagesDir, "_document.tsx"),
+      `throw new Error("document import failed");
+export default function Document() { return null; }
+`,
+    );
+    fs.writeFileSync(
+      path.join(pagesDir, "index.tsx"),
+      `export default function Page() { return <p>page rendered</p>; }
+`,
+    );
+
+    const testServer = await createServer({
+      root: tmpDir,
+      configFile: false,
+      plugins: [vinext({ appDir: tmpDir })],
+      server: { port: 0, cors: false },
+      logLevel: "silent",
+    });
+
+    try {
+      await testServer.listen();
+      const addr = testServer.httpServer?.address();
+      if (!addr || typeof addr !== "object") throw new Error("Expected dev server address");
+
+      const res = await fetch(`http://localhost:${addr.port}/`);
+      expect(res.status).toBe(500);
+      const html = await res.text();
+      expect(html).toContain("document import failed");
+      expect(html).not.toContain("page rendered");
+    } finally {
+      await testServer.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("propagates a throwing _app import on a cold-start missing dev route", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-pages-app-import-error-"));
+    const pagesDir = path.join(tmpDir, "pages");
+    fs.mkdirSync(pagesDir, { recursive: true });
+    fs.symlinkSync(path.join(process.cwd(), "node_modules"), path.join(tmpDir, "node_modules"));
+    fs.writeFileSync(
+      path.join(pagesDir, "_app.tsx"),
+      `throw new Error("app import failed");
+export default function App({ Component, pageProps }) { return <Component {...pageProps} />; }
+`,
+    );
+    fs.writeFileSync(
+      path.join(pagesDir, "404.tsx"),
+      `export default function NotFound() { return <p>404 rendered</p>; }
+`,
+    );
+
+    const testServer = await createServer({
+      root: tmpDir,
+      configFile: false,
+      plugins: [vinext({ appDir: tmpDir })],
+      server: { port: 0, cors: false },
+      logLevel: "silent",
+    });
+
+    try {
+      await testServer.listen();
+      const addr = testServer.httpServer?.address();
+      if (!addr || typeof addr !== "object") throw new Error("Expected dev server address");
+
+      const res = await fetch(`http://localhost:${addr.port}/missing`);
+      expect(res.status).toBe(500);
+      const html = await res.text();
+      expect(html).toContain("app import failed");
+      expect(html).not.toContain("404 rendered");
+    } finally {
+      await testServer.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("dev Pages client assets expose virtual CSS added by client transforms", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-pages-virtual-css-"));
     fs.mkdirSync(path.join(tmpDir, "pages"), { recursive: true });
@@ -8556,7 +8638,11 @@ describe("Pages Router dev ISR regeneration", () => {
           };
         }
 
-        if (id === path.join(FIXTURE_DIR, "pages", "_app")) {
+        if (/[/\\]_document(?:\.[^/\\]+)?$/.test(id)) {
+          return { default: null };
+        }
+
+        if (/[/\\]_app(?:\.[^/\\]+)?$/.test(id)) {
           return { default: App };
         }
 

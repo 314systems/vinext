@@ -259,24 +259,16 @@ async function loadPagesRootComponents(
   let DocumentComponent: any = null;
   const documentAssetPath = findFileWithExts(pagesDir, "_document", matcher);
   if (documentAssetPath) {
-    try {
-      const documentModule = await importModule(runner, documentAssetPath);
-      DocumentComponent = documentModule.default ?? null;
-    } catch {
-      // _document exists but failed to load
-    }
+    const documentModule = await importModule(runner, documentAssetPath);
+    DocumentComponent = documentModule.default ?? null;
   }
 
   // oxlint-disable-next-line typescript/no-explicit-any
   let AppComponent: any = null;
   const appAssetPath = findFileWithExts(pagesDir, "_app", matcher);
   if (appAssetPath) {
-    try {
-      const appModule = await importModule(runner, appAssetPath);
-      AppComponent = appModule.default ?? null;
-    } catch {
-      // _app exists but failed to load
-    }
+    const appModule = await importModule(runner, appAssetPath);
+    AppComponent = appModule.default ?? null;
   }
 
   return { DocumentComponent, AppComponent, appAssetPath };
