@@ -147,6 +147,25 @@ describe("isPagesStreamingBot", () => {
 });
 
 describe("pages page response", () => {
+  it("serializes the fallback shell render query instead of matched params", async () => {
+    const common = createCommonOptions();
+    const response = await renderPagesPageResponse({
+      ...common.options,
+      isFallback: true,
+      params: { slug: "first" },
+      query: {},
+      routePattern: "/[slug]",
+      routeUrl: "/first",
+    });
+
+    const html = await response.text();
+    const nextDataMatch = html.match(
+      /<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/,
+    );
+    expect(nextDataMatch).not.toBeNull();
+    expect(JSON.parse(nextDataMatch![1]!).query).toEqual({});
+  });
+
   it("renders the document shell, merges gSSP headers, and marks streamed HTML responses", async () => {
     const common = createCommonOptions();
 
