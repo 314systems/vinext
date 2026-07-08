@@ -1092,7 +1092,9 @@ export async function resolvePagesPageData(
     hasPagesGetInitialProps(options.pageModule.default)
   ) {
     const { req, res, responsePromise } = getSharedReqRes();
+    const AppTree = options.createAppTree ?? options.createPageElement;
     const initialProps = await loadPagesGetInitialProps(options.pageModule.default, {
+      AppTree,
       req,
       res,
       err: options.err,

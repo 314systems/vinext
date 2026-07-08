@@ -1975,19 +1975,26 @@ async function loadComponentOnlyProps(
     locales: window.__VINEXT_LOCALES__,
     defaultLocale: window.__VINEXT_DEFAULT_LOCALE__,
   };
-
-  if (typeof AppComponent?.getInitialProps === "function") {
-    const AppTree = (appProps: Record<string, unknown>) =>
-      wrapWithRouterContext(
-        createElement(AppComponent as ComponentType<Record<string, unknown>>, {
+  const AppTree = (appProps: Record<string, unknown>) => {
+    const element = AppComponent
+      ? createElement(AppComponent as ComponentType<Record<string, unknown>>, {
           ...appProps,
           Component: PageComponent,
           router: Router,
-        }),
-        noopCommit,
-        noopCommit,
-        { pathname: target.pattern, query, asPath, isReady: true },
-      );
+        })
+      : createElement(
+          PageComponent as ComponentType<Record<string, unknown>>,
+          propsObject(appProps.pageProps),
+        );
+    return wrapWithRouterContext(element, noopCommit, noopCommit, {
+      pathname: target.pattern,
+      query,
+      asPath,
+      isReady: true,
+    });
+  };
+
+  if (typeof AppComponent?.getInitialProps === "function") {
     return propsObject(
       await AppComponent.getInitialProps({
         Component: PageComponent,
@@ -1999,7 +2006,7 @@ async function loadComponentOnlyProps(
   }
 
   if (typeof PageComponent.getInitialProps === "function") {
-    return { pageProps: propsObject(await PageComponent.getInitialProps(ctx)) };
+    return { pageProps: propsObject(await PageComponent.getInitialProps({ ...ctx, AppTree })) };
   }
 
   return { pageProps: {} };

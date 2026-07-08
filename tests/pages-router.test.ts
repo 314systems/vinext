@@ -2903,6 +2903,49 @@ describe("Pages Router allowedDevOrigins config", () => {
 });
 
 describe("Virtual server entry generation", () => {
+  it("passes a route-aware AppTree to page getInitialProps without a custom app", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-pages-dev-default-app-tree-"));
+    const pagesDir = path.join(tmpDir, "pages");
+    fs.mkdirSync(pagesDir, { recursive: true });
+    fs.symlinkSync(path.join(process.cwd(), "node_modules"), path.join(tmpDir, "node_modules"));
+    fs.writeFileSync(
+      path.join(pagesDir, "about.tsx"),
+      `import { renderToStaticMarkup } from "react-dom/server";
+import { useRouter } from "next/router";
+export default function Page({ saved }) {
+  const router = useRouter();
+  return <><p id="route">{router.pathname}</p><div id="saved">{saved}</div></>;
+}
+Page.getInitialProps = ({ AppTree }) => ({
+  saved: renderToStaticMarkup(<AppTree pageProps={{}} />),
+});
+`,
+    );
+
+    const testServer = await createServer({
+      root: tmpDir,
+      configFile: false,
+      plugins: [vinext({ appDir: tmpDir })],
+      server: { port: 0, cors: false },
+      logLevel: "silent",
+    });
+
+    try {
+      await testServer.listen();
+      const addr = testServer.httpServer?.address();
+      if (!addr || typeof addr !== "object") throw new Error("Expected dev server address");
+
+      const res = await fetch(`http://localhost:${addr.port}/about`);
+      const html = await res.text();
+      expect(res.status).toBe(200);
+      expect(html).toContain('<p id="route">/about</p>');
+      expect(html).toContain("&lt;p id=&quot;route&quot;&gt;/about&lt;/p&gt;");
+    } finally {
+      await testServer.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("runs custom app getInitialProps for dev error rendering with nested AppTree", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-pages-dev-error-app-tree-"));
     const pagesDir = path.join(tmpDir, "pages");

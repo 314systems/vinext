@@ -956,6 +956,22 @@ export function createSSRHandler(
         const gsspExtraHeaders: Record<string, string | string[]> = {};
 
         const hasAppGetInitialProps = hasPagesGetInitialProps(AppComponent);
+        const createAppTree = (appTreeProps: Record<string, unknown>) => {
+          const appTree = AppComponent
+            ? React.createElement(AppComponent, {
+                ...appTreeProps,
+                Component: PageComponent,
+                pageProps: appTreeProps.pageProps,
+                router: routerShim.default,
+              })
+            : React.createElement(
+                PageComponent,
+                isUnknownRecord(appTreeProps.pageProps) ? appTreeProps.pageProps : {},
+              );
+          return typeof routerShim.wrapWithRouterContext === "function"
+            ? routerShim.wrapWithRouterContext(appTree)
+            : appTree;
+        };
 
         // Thin glue over loadDevAppInitialProps: build the React AppTree closure,
         // delegate the decision to the tested helper, and apply the result.
@@ -966,17 +982,7 @@ export function createSSRHandler(
           }
           const appResult = await loadDevAppInitialProps({
             appComponent: AppComponent,
-            appTree: (appTreeProps: Record<string, unknown>) => {
-              const appTree = React.createElement(AppComponent, {
-                ...appTreeProps,
-                Component: PageComponent,
-                pageProps: appTreeProps.pageProps,
-                router: routerShim.default,
-              });
-              return typeof routerShim.wrapWithRouterContext === "function"
-                ? routerShim.wrapWithRouterContext(appTree)
-                : appTree;
-            },
+            appTree: createAppTree,
             component: PageComponent,
             req,
             res,
@@ -1565,6 +1571,7 @@ export function createSSRHandler(
           !hasAppGetInitialProps
         ) {
           const initialProps = await loadPagesGetInitialProps(PageComponent, {
+            AppTree: createAppTree,
             req,
             res,
             pathname: patternToNextFormat(route.pattern),
