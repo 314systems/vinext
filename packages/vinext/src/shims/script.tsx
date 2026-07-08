@@ -242,7 +242,8 @@ function Script(props: ScriptProps): React.ReactElement | null {
     ...rest
   } = props;
 
-  const hasMounted = useRef(false);
+  const hasOnReadyEffectCalled = useRef(false);
+  const hasLoadScriptEffectCalled = useRef(false);
   const key = id ?? src ?? "";
   const contextualNonce = useScriptNonce();
   const resolvedNonce = resolveScriptNonce(rest.nonce, contextualNonce);
@@ -256,11 +257,18 @@ function Script(props: ScriptProps): React.ReactElement | null {
     : extractBeforeInteractiveInlineContent(children, dangerouslySetInnerHTML);
   const scriptKey = createScriptKey({ id, src, inlineContent });
 
-  // Client path: load scripts via useEffect based on strategy.
-  // useEffect never runs during SSR, so it's safe to call unconditionally.
   useEffect(() => {
-    if (hasMounted.current) return;
-    hasMounted.current = true;
+    if (hasOnReadyEffectCalled.current) return;
+    hasOnReadyEffectCalled.current = true;
+
+    if (onReady && key && loadedScripts.has(key)) {
+      onReady();
+    }
+  }, [onReady, key]);
+
+  useEffect(() => {
+    if (hasLoadScriptEffectCalled.current) return;
+    hasLoadScriptEffectCalled.current = true;
 
     if (strategy === "beforeInteractive") {
       // The script itself is loaded by Next.js's bootstrap before hydration,
@@ -272,19 +280,13 @@ function Script(props: ScriptProps): React.ReactElement | null {
       return;
     }
 
-    // Already loaded — just fire onReady
     if (key && loadedScripts.has(key)) {
-      // Stylesheets must still be inserted on subsequent mounts of the same
-      // script. loadClientScript handles this for the fresh-load path; the
-      // already-loaded shortcut needs it explicitly.
       insertClientStylesheets(stylesheets);
-      onReady?.();
       return;
     }
 
     const load = () => {
       if (key && loadedScripts.has(key)) {
-        onReady?.();
         return;
       }
 

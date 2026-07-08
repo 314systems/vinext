@@ -16,4 +16,21 @@ test.describe("next/script", () => {
       .poll(() => page.evaluate(() => Reflect.get(window, "__vinextScriptDedupeExecutions")))
       .toBe(1);
   });
+
+  test("fires onReady for hydrated and remounted beforeInteractive scripts", async ({ page }) => {
+    await page.goto(`${BASE}/script-before-ready`);
+    await expect(page.getByRole("heading", { name: "Before Interactive Ready" })).toBeVisible();
+
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(window, "__vinextBeforeReadyCalls")))
+      .toBe(1);
+
+    const toggle = page.getByRole("button", { name: "Toggle script" });
+    await toggle.click();
+    await toggle.click();
+
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(window, "__vinextBeforeReadyCalls")))
+      .toBe(2);
+  });
 });

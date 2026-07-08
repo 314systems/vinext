@@ -16,6 +16,11 @@ export default function Document() {
           src="/dedupe-script.js?before=1"
           strategy="beforeInteractive"
         />
+        <Script
+          id="before-ready"
+          src="/dedupe-script.js?before=ready"
+          strategy="beforeInteractive"
+        />
       </body>
     </Html>
   );

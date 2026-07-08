@@ -871,23 +871,33 @@ describe("Script loader bootstrap cache", () => {
     expect(calls).toEqual(["load", "remount-ready"]);
   });
 
-  it("fires only onError for a rejected shared-source attachment", async () => {
+  it("settles a rejected source before later shared-source attachments", async () => {
     const appendedScripts = installScriptDocument();
-    const calls: string[] = [];
+    const calls: Array<[string, Event | undefined]> = [];
 
-    handleClientScriptLoad({ id: "first", src: "/shared.js" });
+    handleClientScriptLoad({
+      id: "first",
+      src: "/shared.js",
+      onError: (event) => calls.push(["first-error", event]),
+    });
+    const error = new Event("error");
+    appendedScripts[0]!.listeners.error!(error);
+    await scriptCache.get("/shared.js");
+
     handleClientScriptLoad({
       id: "second",
       src: "/shared.js",
-      onLoad: () => calls.push("load"),
-      onReady: () => calls.push("ready"),
-      onError: () => calls.push("error"),
+      onLoad: (event) => calls.push(["second-load", event]),
+      onReady: () => calls.push(["second-ready", undefined]),
+      onError: (event) => calls.push(["second-error", event]),
     });
-    appendedScripts[0]!.listeners.error!(new Event("error"));
-    await scriptCache.get("/shared.js")?.catch(() => undefined);
+    await Promise.resolve();
 
     expect(loadedScripts.has("second")).toBe(true);
-    expect(calls).toEqual(["error"]);
+    expect(calls).toEqual([
+      ["first-error", error],
+      ["second-load", undefined],
+    ]);
   });
 
   for (const strategy of ["beforeInteractive", "beforePageRender"] as const) {
