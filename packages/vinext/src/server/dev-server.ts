@@ -248,6 +248,7 @@ async function loadPagesRootComponents(
   runner: ModuleImporter,
   pagesDir: string,
   matcher: ValidFileMatcher,
+  options: { includeDocument?: boolean } = {},
 ): Promise<{
   // oxlint-disable-next-line typescript/no-explicit-any
   DocumentComponent: any;
@@ -255,12 +256,15 @@ async function loadPagesRootComponents(
   AppComponent: any;
   appAssetPath: string | null;
 }> {
+  const { includeDocument = true } = options;
   // oxlint-disable-next-line typescript/no-explicit-any
   let DocumentComponent: any = null;
-  const documentAssetPath = findFileWithExts(pagesDir, "_document", matcher);
-  if (documentAssetPath) {
-    const documentModule = await importModule(runner, documentAssetPath);
-    DocumentComponent = documentModule.default ?? null;
+  if (includeDocument) {
+    const documentAssetPath = findFileWithExts(pagesDir, "_document", matcher);
+    if (documentAssetPath) {
+      const documentModule = await importModule(runner, documentAssetPath);
+      DocumentComponent = documentModule.default ?? null;
+    }
   }
 
   // oxlint-disable-next-line typescript/no-explicit-any
@@ -808,12 +812,13 @@ export function createSSRHandler(
           }
         }
 
-        // Next.js evaluates root modules before the matched page so top-level
-        // side effects observe _document > _app > page on every dev path.
+        // Next.js evaluates _app before the matched page on every dev path,
+        // while _document is only evaluated for HTML rendering.
         const { DocumentComponent, AppComponent } = await loadPagesRootComponents(
           runner,
           pagesDir,
           matcher,
+          { includeDocument: !isDataReq },
         );
         // Load the page module through Vite's SSR pipeline after the root
         // components. This gives us HMR and transform support for free while

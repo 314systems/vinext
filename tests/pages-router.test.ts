@@ -3196,6 +3196,59 @@ export default function Document() { return null; }
     }
   });
 
+  it("does not evaluate _document for a dev data request", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-pages-data-document-dev-"));
+    const pagesDir = path.join(tmpDir, "pages");
+    fs.mkdirSync(pagesDir, { recursive: true });
+    fs.symlinkSync(path.join(process.cwd(), "node_modules"), path.join(tmpDir, "node_modules"));
+    fs.writeFileSync(
+      path.join(tmpDir, "next.config.js"),
+      `module.exports = { generateBuildId: () => "test-build-id" };\n`,
+    );
+    fs.writeFileSync(
+      path.join(pagesDir, "_document.tsx"),
+      `throw new Error("document import failed");
+export default function Document() { return null; }
+`,
+    );
+    fs.writeFileSync(
+      path.join(pagesDir, "_app.tsx"),
+      `export default function App({ Component, pageProps }) { return <Component {...pageProps} />; }
+`,
+    );
+    fs.writeFileSync(
+      path.join(pagesDir, "index.tsx"),
+      `export async function getServerSideProps() { return { props: { value: "data response" } }; }
+export default function Page({ value }) { return <p>{value}</p>; }
+`,
+    );
+
+    const testServer = await createServer({
+      root: tmpDir,
+      configFile: false,
+      plugins: [vinext({ appDir: tmpDir })],
+      server: { port: 0, cors: false },
+      logLevel: "silent",
+    });
+
+    try {
+      await testServer.listen();
+      const addr = testServer.httpServer?.address();
+      if (!addr || typeof addr !== "object") throw new Error("Expected dev server address");
+
+      const res = await fetch(`http://localhost:${addr.port}/_next/data/test-build-id/index.json`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("application/json");
+      expect(await res.json()).toEqual({
+        pageProps: { value: "data response" },
+        __N_SSP: true,
+      });
+    } finally {
+      await testServer.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("propagates a throwing _app import on a cold-start missing dev route", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-pages-app-import-error-"));
     const pagesDir = path.join(tmpDir, "pages");
