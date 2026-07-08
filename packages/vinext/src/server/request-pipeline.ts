@@ -23,9 +23,22 @@ export { isOpenRedirectShaped } from "./open-redirect.js";
  * https://github.com/vercel/next.js/blob/v16.3.0-canary.80/packages/next/src/shared/lib/utils.ts
  */
 export function normalizeRepeatedSlashes(url: string): string {
-  const [pathname, ...queryParts] = url.split("?");
+  const urlParts = url.split("?");
+  const pathname = urlParts[0];
   const normalizedPathname = pathname.replaceAll("\\", "/").replace(/\/\/+/g, "/");
-  return normalizedPathname + (queryParts.length > 0 ? `?${queryParts.join("?")}` : "");
+  return normalizedPathname + (urlParts[1] ? `?${urlParts.slice(1).join("?")}` : "");
+}
+
+export function getRepeatedSlashRedirect(url: string): string | null {
+  const pathname = url.split("?", 1)[0];
+  return /(\\|\/\/)/.test(pathname) ? normalizeRepeatedSlashes(url) : null;
+}
+
+export function redirectRepeatedSlashes(request: Request): Response | null {
+  const url = new URL(request.url);
+  const location = getRepeatedSlashRedirect(url.pathname + url.search);
+  if (location === null) return null;
+  return new Response(location, { status: 308, headers: { Location: location } });
 }
 
 /**

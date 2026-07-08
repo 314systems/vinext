@@ -139,6 +139,8 @@ describe("normalizeRepeatedSlashes", () => {
 
   it("preserves the complete query string", () => {
     expect(normalizeRepeatedSlashes("//details?one=1?two=2")).toBe("/details?one=1?two=2");
+    expect(normalizeRepeatedSlashes("//details?")).toBe("/details");
+    expect(normalizeRepeatedSlashes("//details??x=1")).toBe("/details");
   });
 });
 

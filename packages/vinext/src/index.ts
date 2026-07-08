@@ -102,9 +102,9 @@ import { logRequest, now } from "./server/request-log.js";
 import { normalizePath } from "./server/normalize-path.js";
 import {
   filterInternalHeaders,
+  getRepeatedSlashRedirect,
   INTERNAL_HEADERS,
   isOpenRedirectShaped,
-  normalizeRepeatedSlashes,
   normalizeTrailingSlash,
   VINEXT_INTERNAL_HEADERS,
 } from "./server/request-pipeline.js";
@@ -1666,6 +1666,21 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   };
 
   const plugins: PluginOption[] = [
+    {
+      name: "vinext:canonical-request-url",
+      enforce: "pre",
+      configureServer: {
+        order: "pre",
+        handler(server) {
+          server.middlewares.use((req, res, next) => {
+            const location = getRepeatedSlashRedirect(req.url ?? "/");
+            if (location === null) return next();
+            res.writeHead(308, { Location: location });
+            res.end(location);
+          });
+        },
+      },
+    },
     // Resolve tsconfig paths/baseUrl aliases so real-world Next.js repos
     // that use @/*, #/*, or baseUrl imports work out of the box.
     // Vite 8+ supports this natively via resolve.tsconfigPaths.
@@ -4662,14 +4677,6 @@ export const loadServerActionClient = ${
               // Skip .rsc requests — those are for the App Router RSC handler
               if (url.split("?")[0].endsWith(".rsc")) {
                 return next();
-              }
-
-              const rawRequestPathname = url.split("?")[0];
-              if (/(\\|\/\/)/.test(rawRequestPathname)) {
-                const location = normalizeRepeatedSlashes(url);
-                res.writeHead(308, { Location: location });
-                res.end(location);
-                return;
               }
 
               // ── Cross-origin request protection (defense-in-depth) ──────

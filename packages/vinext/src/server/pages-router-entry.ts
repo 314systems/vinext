@@ -31,7 +31,7 @@ import {
   cloneRequestWithUrl,
   filterInternalHeaders,
   isOpenRedirectShaped,
-  normalizeRepeatedSlashes,
+  redirectRepeatedSlashes,
 } from "./request-pipeline.js";
 import { notFoundStaticAssetResponse } from "./http-error-responses.js";
 import { finalizeMissingStaticAssetResponse } from "./worker-utils.js";
@@ -113,13 +113,8 @@ async function handleRequest(
     const url = new URL(request.url);
     let pathname = url.pathname;
 
-    if (/(\\|\/\/)/.test(pathname)) {
-      const location = normalizeRepeatedSlashes(pathname + url.search);
-      return new Response(location, {
-        status: 308,
-        headers: { Location: location },
-      });
-    }
+    const repeatedSlashRedirect = redirectRepeatedSlashes(request);
+    if (repeatedSlashRedirect) return repeatedSlashRedirect;
 
     // Literal repeated delimiters were canonicalized above. Reject encoded
     // variants before any downstream redirect can echo them.

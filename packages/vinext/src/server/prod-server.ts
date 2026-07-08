@@ -37,8 +37,8 @@ import {
 import { normalizePath } from "./normalize-path.js";
 import {
   filterInternalHeaders,
+  getRepeatedSlashRedirect,
   isOpenRedirectShaped,
-  normalizeRepeatedSlashes,
 } from "./request-pipeline.js";
 import { notFoundResponse } from "./http-error-responses.js";
 import {
@@ -1319,6 +1319,13 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
     const rawUrl = req.url ?? "/";
     const rawPathname = rawUrl.split("?")[0];
 
+    const repeatedSlashLocation = getRepeatedSlashRedirect(rawUrl);
+    if (repeatedSlashLocation !== null) {
+      res.writeHead(308, { Location: repeatedSlashLocation });
+      res.end(repeatedSlashLocation);
+      return;
+    }
+
     // Literal repeated delimiters were canonicalized above. Reject encoded
     // variants before decoding because they would otherwise survive
     // segment-wise normalization and reach a redirect emitter.
@@ -1638,10 +1645,10 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
     const rawUrl = req.url ?? "/";
     const rawPagesPathnameBeforeNormalize = rawUrl.split("?")[0];
 
-    if (/(\\|\/\/)/.test(rawPagesPathnameBeforeNormalize)) {
-      const location = normalizeRepeatedSlashes(rawUrl);
-      res.writeHead(308, { Location: location });
-      res.end(location);
+    const repeatedSlashLocation = getRepeatedSlashRedirect(rawUrl);
+    if (repeatedSlashLocation !== null) {
+      res.writeHead(308, { Location: repeatedSlashLocation });
+      res.end(repeatedSlashLocation);
       return;
     }
 
