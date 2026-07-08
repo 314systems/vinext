@@ -1181,21 +1181,10 @@ function substituteDestinationParams(
     if (!encodedPathParamKeys) return replaceParams(value, (param) => param);
 
     const replaceAndEncodePathname = (pathname: string): string =>
-      pathname
-        .split("/")
-        .flatMap((segment) => {
-          let allParamsArePathDerived = true;
-          let hasSubstitution = false;
-          const substituted = replaceParams(segment, (param, key) => {
-            hasSubstitution = true;
-            if (!encodedPathParamKeys.has(key)) allParamsArePathDerived = false;
-            return param;
-          });
-          return hasSubstitution && allParamsArePathDerived
-            ? substituted.split("/").map(encodeUrlDotSegment)
-            : [substituted];
-        })
-        .join("/");
+      replaceParams(pathname, (param, key) => {
+        if (!encodedPathParamKeys.has(key)) return param;
+        return param.split("/").map(encodeUrlDotSegment).join("/");
+      });
 
     const authorityStart = value.match(/^[A-Za-z][A-Za-z\d+.-]*:\/\//)?.[0].length;
     if (authorityStart === undefined) {

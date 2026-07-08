@@ -12018,7 +12018,14 @@ describe("matchRewrite with external URLs", () => {
         [{ source: "/proxy/:id", destination: "https://api.example.com/v1/prefix-:id" }],
         emptyCtx,
       ),
-    ).toBe("https://api.example.com/v1/prefix-%2e%2e");
+    ).toBe("https://api.example.com/v1/prefix-%252e%252e");
+    expect(
+      matchRewrite(
+        "/proxy/%2e",
+        [{ source: "/proxy/:id", destination: "https://api.example.com/v1/.:id/outside" }],
+        emptyCtx,
+      ),
+    ).toBe("https://api.example.com/v1/.%252e/outside");
     expect(
       matchRewrite(
         "/proxy/%2e%2e",
@@ -12053,6 +12060,26 @@ describe("matchRewrite with external URLs", () => {
         { ...emptyCtx, query: new URLSearchParams({ value: ".." }) },
       ),
     ).toBe("https://api.example.com/v1/../outside");
+
+    expect(
+      matchRewrite(
+        "/proxy/%2e",
+        [
+          {
+            source: "/proxy/:pathValue",
+            destination: "https://api.example.com/v1/:pathValue-:captured/outside",
+            has: [
+              {
+                type: "query",
+                key: "value",
+                value: "(?<captured>.*)",
+              },
+            ],
+          },
+        ],
+        { ...emptyCtx, query: new URLSearchParams({ value: "." }) },
+      ),
+    ).toBe("https://api.example.com/v1/%252e-./outside");
   });
 
   it("returns internal path for non-external rewrites", async () => {
