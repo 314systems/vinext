@@ -11978,6 +11978,63 @@ describe("matchRewrite with external URLs", () => {
     expect(isExternalUrl(result!)).toBe(true);
   });
 
+  it("preserves an external destination prefix when a catch-all contains encoded traversal", async () => {
+    const { matchRewrite } = await import("../packages/vinext/src/config/config-matchers.js");
+    const rewrites = [
+      {
+        source: "/proxy/:path*",
+        destination: "https://api.example.com/v1/:path*",
+      },
+    ];
+
+    // Request normalization decodes the E2E input `%252e%252e` once before matching.
+    expect(matchRewrite("/proxy/%2e%2e/outside", rewrites, emptyCtx)).toBe(
+      "https://api.example.com/v1/%252e%252e/outside",
+    );
+    expect(matchRewrite("/proxy../outside", rewrites, emptyCtx)).toBeNull();
+    expect(matchRewrite("/proxy/a%2Fb", rewrites, emptyCtx)).toBe(
+      "https://api.example.com/v1/a%2Fb",
+    );
+    expect(matchRewrite("/proxy/a%23b", rewrites, emptyCtx)).toBe(
+      "https://api.example.com/v1/a%23b",
+    );
+    expect(matchRewrite("/proxy/a%3Fb", rewrites, emptyCtx)).toBe(
+      "https://api.example.com/v1/a%3Fb",
+    );
+    expect(matchRewrite("/proxy/hello world/café", rewrites, emptyCtx)).toBe(
+      "https://api.example.com/v1/hello world/café",
+    );
+
+    expect(
+      matchRewrite(
+        "/proxy/%2e",
+        [{ source: "/proxy/:sub", destination: "https://:sub.example.com/v1" }],
+        emptyCtx,
+      ),
+    ).toBe("https://%2e.example.com/v1");
+    expect(
+      matchRewrite(
+        "/proxy/%2e%2e",
+        [{ source: "/proxy/:id", destination: "https://api.example.com/v1/prefix-:id" }],
+        emptyCtx,
+      ),
+    ).toBe("https://api.example.com/v1/prefix-%2e%2e");
+    expect(
+      matchRewrite(
+        "/proxy/%2e%2e",
+        [{ source: "/proxy/:id", destination: "https://api.example.com/v1#section-:id" }],
+        emptyCtx,
+      ),
+    ).toBe("https://api.example.com/v1#section-%2e%2e");
+    expect(
+      matchRewrite(
+        "/proxy/value",
+        [{ source: "/proxy/:id", destination: "https://api.example.com/v1/../api/:id" }],
+        emptyCtx,
+      ),
+    ).toBe("https://api.example.com/v1/../api/value");
+  });
+
   it("returns internal path for non-external rewrites", async () => {
     const { matchRewrite, isExternalUrl } =
       await import("../packages/vinext/src/config/config-matchers.js");

@@ -99,7 +99,7 @@ import {
   VINEXT_TIMING_HEADER,
 } from "./server/headers.js";
 import { logRequest, now } from "./server/request-log.js";
-import { normalizePath } from "./server/normalize-path.js";
+import { escapeUrlDotSegments, normalizePath } from "./server/normalize-path.js";
 import {
   filterInternalHeaders,
   INTERNAL_HEADERS,
@@ -4739,7 +4739,7 @@ export const loadServerActionClient = ${
               // receives the decoded path for config rule matching.
               {
                 const qs = url.includes("?") ? url.slice(url.indexOf("?")) : "";
-                url = pathname + qs;
+                url = escapeUrlDotSegments(pathname) + qs;
               }
 
               const capturedMiddlewarePath = middlewarePath;
@@ -4757,7 +4757,7 @@ export const loadServerActionClient = ${
               if (bp && pathname.startsWith(bp)) {
                 const stripped = pathname.slice(bp.length) || "/";
                 const qs = url.includes("?") ? url.slice(url.indexOf("?")) : "";
-                url = stripped + qs;
+                url = escapeUrlDotSegments(stripped) + qs;
                 pathname = stripped;
               }
 
