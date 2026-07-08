@@ -83,10 +83,7 @@ import {
 } from "./pages-document-initial-props.js";
 import { callDocumentGetInitialProps } from "./document-initial-head.js";
 import { renderBeforeInteractiveInlineScripts } from "./before-interactive-head.js";
-import {
-  createBeforeInteractiveCollector,
-  waitForBeforeInteractiveCollection,
-} from "./before-interactive-collector.js";
+import { createBeforeInteractiveCollector } from "./before-interactive-collector.js";
 import {
   BeforeInteractiveContext,
   type BeforeInteractiveInlineScript,
@@ -424,8 +421,6 @@ async function streamPageToResponse(
     // This triggers the render which populates <Head> tags.
     bodyStream = await renderToReadableStream(beforeInteractiveCollector.wrapPageElement(element));
   }
-
-  await waitForBeforeInteractiveCollection(bodyStream);
 
   // Fold any head tags returned by `_document.getInitialProps()` into the same
   // dedupe pipeline as user `next/head` tags. Matches Next.js's `_document`
