@@ -7,6 +7,7 @@ import {
   etagMatches,
 } from "../packages/vinext/src/server/pages-page-response.js";
 import { resolvePagesPageData } from "../packages/vinext/src/server/pages-page-data.js";
+import Script from "../packages/vinext/src/shims/script.js";
 
 function createStream(chunks: string[]): ReadableStream<Uint8Array> {
   return new ReadableStream({
@@ -191,6 +192,53 @@ describe("pages page response", () => {
 
     expect(common.clearSsrContext).toHaveBeenCalledTimes(1);
     expect(common.renderDocumentToString).toHaveBeenCalledTimes(1);
+  });
+
+  // Ported from Next.js: test/e2e/script-loader/script-loader.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/script-loader/script-loader.test.ts
+  it("places client-loaded Pages scripts after __NEXT_DATA__ as body siblings", async () => {
+    const common = createCommonOptions();
+    common.renderDocumentToString.mockResolvedValue(
+      '<!DOCTYPE html><html><head></head><body><div id="__next">__NEXT_MAIN__</div><span><!-- __NEXT_SCRIPTS__ --></span></body></html>',
+    );
+
+    const response = await renderPagesPageResponse(common.options);
+    const html = await response.text();
+
+    expect(html).not.toContain("<span><!-- __NEXT_SCRIPTS__ --></span>");
+    expect(html).toMatch(/<script id="__NEXT_DATA__"[^>]*>[\s\S]*<\/script><\/body>/);
+  });
+
+  // Ported from Next.js: test/e2e/script-loader/script-loader.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/script-loader/script-loader.test.ts
+  it("hoists legacy page beforeInteractive scripts ahead of Pages asset chunks", async () => {
+    const common = createCommonOptions();
+    const reactDomServer = await import("react-dom/server.edge");
+
+    const response = await renderPagesPageResponse({
+      ...common.options,
+      createPageElement: () =>
+        React.createElement(
+          React.Fragment,
+          null,
+          React.createElement(Script, {
+            id: "legacy-before-interactive",
+            src: "/legacy-before.js",
+            strategy: "beforeInteractive",
+          }),
+          React.createElement("main", null, "page"),
+        ),
+      renderToReadableStream: async (element: React.ReactNode) =>
+        reactDomServer.renderToReadableStream(element as React.ReactElement),
+    });
+    const html = await response.text();
+    const scriptIndex = html.indexOf('id="legacy-before-interactive"');
+    const assetIndex = html.indexOf('src="/entry.js"');
+
+    expect(scriptIndex).toBeGreaterThan(-1);
+    expect(html).toContain('data-nscript="beforeInteractive"');
+    expect(assetIndex).toBeGreaterThan(scriptIndex);
+    expect(html).not.toMatch(/<div id="__next">[\s\S]*legacy-before-interactive/);
   });
 
   it("preserves array-valued non-set-cookie headers from gSSP responses", async () => {

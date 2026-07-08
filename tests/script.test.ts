@@ -56,6 +56,7 @@ describe("Script SSR rendering", () => {
     );
     expect(html).toContain("<script");
     expect(html).toContain('src="/analytics.js"');
+    expect(html).toContain('data-nscript="beforeInteractive"');
   });
 
   it("emits a preload link for afterInteractive strategy on SSR (no <script> tag)", () => {
@@ -167,6 +168,37 @@ describe("Script SSR rendering", () => {
     );
     expect(html).toContain('id="google-analytics"');
     expect(html).toContain('src="/gtag.js"');
+    expect(html).toContain('data-nscript="beforeInteractive"');
+  });
+
+  it("suppresses a Pages beforeInteractive script already hoisted into the document", () => {
+    setGlobalValue("window", {});
+    setGlobalValue("document", {
+      querySelector: () => null,
+      querySelectorAll(selector: string) {
+        expect(selector).toBe('script[data-nscript="beforeInteractive"]');
+        return [
+          {
+            getAttribute(name: string) {
+              if (name === "id") return "legacy-before-interactive";
+              if (name === "src") return "/legacy-before.js";
+              return null;
+            },
+            textContent: "",
+          },
+        ];
+      },
+    });
+
+    const html = ReactDOMServer.renderToString(
+      React.createElement(Script, {
+        id: "legacy-before-interactive",
+        src: "/legacy-before.js",
+        strategy: "beforeInteractive",
+      } as ScriptProps),
+    );
+
+    expect(html).toBe("");
   });
 
   it("renders beforeInteractive with inline content", () => {

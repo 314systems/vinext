@@ -2,6 +2,10 @@ import React, { type ComponentType, type ReactNode } from "react";
 import type { VinextNextData } from "../client/vinext-next-data.js";
 import type { CachedPagesValue } from "vinext/shims/cache-handler";
 import { withScriptNonce } from "vinext/shims/script-nonce-context";
+import {
+  BeforeInteractiveContext,
+  type BeforeInteractiveInlineScript,
+} from "vinext/shims/before-interactive-context";
 import { getRequestExecutionContext } from "vinext/shims/request-context";
 import {
   applyCdnResponseHeaders,
@@ -26,6 +30,7 @@ import {
 import { fnv1a52 } from "../utils/hash.js";
 import { readStreamAsText } from "../utils/text-stream.js";
 import { callDocumentGetInitialProps } from "./document-initial-head.js";
+import { renderBeforeInteractiveInlineScripts } from "./before-interactive-head.js";
 import { appendAssetDeploymentIdQuery } from "../utils/deployment-id.js";
 
 // ---------------------------------------------------------------------------
@@ -340,6 +345,10 @@ async function buildPagesShellHtml(
         `  ${fontHeadHTML}${options.ssrHeadHTML}\n  ${options.assetTags}\n</head>`,
       );
     }
+    html = html.replace(
+      /<span(?:\s[^>]*)?>\s*<!-- __NEXT_SCRIPTS__ -->\s*<\/span>/,
+      nextDataScript,
+    );
     html = html.replace("<!-- __NEXT_SCRIPTS__ -->", nextDataScript);
     if (!html.includes("__NEXT_DATA__")) {
       html = html.replace("</body>", `  ${nextDataScript}\n</body>`);
@@ -513,6 +522,17 @@ export async function renderPagesPageResponse(
   // user does not define `getInitialProps`. The contract (including
   // `withScriptNonce` and `styles` rendering) lives in the shared helper so
   // prod and dev stay in lockstep.
+  const beforeInteractiveScripts: BeforeInteractiveInlineScript[] = [];
+  const wrapWithBeforeInteractiveCollector = (element: React.ReactElement): React.ReactElement =>
+    React.createElement(
+      BeforeInteractiveContext.Provider,
+      {
+        value(script: BeforeInteractiveInlineScript) {
+          beforeInteractiveScripts.push(script);
+        },
+      },
+      element,
+    );
   const documentRenderPage = await runDocumentRenderPage({
     DocumentComponent: options.DocumentComponent,
     enhancePageElement: options.enhancePageElement,
@@ -523,6 +543,7 @@ export async function renderPagesPageResponse(
     // Mirrors the dev path, which passes its `renderToStringAsync` wrapper.
     renderStylesToString: async (element) =>
       readStreamAsText(await options.renderToReadableStream(element)),
+    wrapPageElement: wrapWithBeforeInteractiveCollector,
     scriptNonce: options.scriptNonce,
     context: {
       err: options.err,
@@ -556,7 +577,9 @@ export async function renderPagesPageResponse(
     // (`rendered`), this element is never used, so there's no point
     // constructing the tree on that path.
     const pageElement = withScriptNonce(
-      React.createElement(React.Fragment, null, options.createPageElement(renderProps)),
+      wrapWithBeforeInteractiveCollector(
+        React.createElement(React.Fragment, null, options.createPageElement(renderProps)),
+      ),
       options.scriptNonce,
     );
     bodyStream = await options.renderToReadableStream(pageElement);
@@ -590,7 +613,7 @@ export async function renderPagesPageResponse(
     ssrHeadHTML += `\n  ${documentRenderPage.stylesHTML}`;
   }
   const shellHtml = await buildPagesShellHtml(bodyMarker, fontHeadHTML, nextDataScript, {
-    assetTags: options.assetTags,
+    assetTags: renderBeforeInteractiveInlineScripts(beforeInteractiveScripts) + options.assetTags,
     DocumentComponent: options.DocumentComponent,
     renderDocumentToString: options.renderDocumentToString,
     ssrHeadHTML,

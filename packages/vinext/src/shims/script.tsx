@@ -163,7 +163,10 @@ function buildBeforeInteractiveScriptProps(options: {
   resolvedNonce?: string;
   dangerouslySetInnerHTML?: { __html: string };
 }): Record<string, unknown> {
-  const scriptProps: Record<string, unknown> = { ...options.rest };
+  const scriptProps: Record<string, unknown> = {
+    ...options.rest,
+    "data-nscript": "beforeInteractive",
+  };
   if (options.src) scriptProps.src = options.src;
   if (options.id) scriptProps.id = options.id;
   if (options.resolvedNonce) {
@@ -207,6 +210,31 @@ function extractBeforeInteractiveInlineContent(
     return joined.length > 0 ? joined : null;
   }
   return null;
+}
+
+function hasHoistedBeforeInteractiveScript(options: {
+  id?: string;
+  src?: string;
+  inlineContent: string | null;
+}): boolean {
+  if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") {
+    return false;
+  }
+
+  const scripts = document.querySelectorAll('script[data-nscript="beforeInteractive"]');
+  for (const script of scripts) {
+    if (options.id && script.getAttribute("id") === options.id) return true;
+    if (options.src && script.getAttribute("src") === options.src) return true;
+    if (
+      !options.id &&
+      !options.src &&
+      options.inlineContent !== null &&
+      script.textContent === options.inlineContent
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -648,7 +676,11 @@ function Script(props: ScriptProps): React.ReactElement | null {
     const inlineContent = src
       ? null
       : extractBeforeInteractiveInlineContent(children, dangerouslySetInnerHTML);
-    if ((src || inlineContent !== null) && hasAppNavigationRuntimeBootstrap()) {
+    if (
+      (src || inlineContent !== null) &&
+      (hasHoistedBeforeInteractiveScript({ id, src, inlineContent }) ||
+        hasAppNavigationRuntimeBootstrap())
+    ) {
       return null;
     }
 
