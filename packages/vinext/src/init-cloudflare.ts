@@ -23,6 +23,8 @@ const DEFAULT_CLOUDFLARE_INIT_OPTIONS: CloudflareInitOptions = {
   imageOptimization: "cloudflare-images",
 };
 
+const REPEATED_SLASH_WORKER_ROUTES = ["//*", "/*//*"];
+
 export type CloudflarePlatformSetupContext = {
   root: string;
   isAppRouter: boolean;
@@ -186,6 +188,7 @@ export function generateWranglerConfig(
       directory: "dist/client",
       not_found_handling: "none",
       binding: "ASSETS",
+      run_worker_first: REPEATED_SLASH_WORKER_ROUTES,
     },
   };
 
@@ -372,6 +375,37 @@ export function updateWranglerConfigForCloudflare(
     throw new Error("Could not parse the existing Wrangler JSON/JSONC config.", { cause });
   }
   let output = code;
+  const assetsProperty = findTopLevelJsonProperty(output, "assets");
+  if (!assetsProperty) {
+    output = appendTopLevelJsonProperty(
+      output,
+      `  "assets": ${JSON.stringify({
+        directory: "dist/client",
+        not_found_handling: "none",
+        binding: "ASSETS",
+        run_worker_first: REPEATED_SLASH_WORKER_ROUTES,
+      })}`,
+    );
+  } else {
+    const assets = JSON.parse(
+      stripJsonComments(output.slice(assetsProperty.valueStart, assetsProperty.valueEnd)),
+    ) as Record<string, unknown> | null;
+    if (assets && assets.run_worker_first !== true) {
+      const workerFirstRoutes = Array.isArray(assets.run_worker_first)
+        ? assets.run_worker_first.filter((route): route is string => typeof route === "string")
+        : [];
+      const missingRoutes = REPEATED_SLASH_WORKER_ROUTES.filter(
+        (route) => !workerFirstRoutes.includes(route),
+      );
+      if (missingRoutes.length > 0) {
+        const updatedAssets = JSON.stringify({
+          ...assets,
+          run_worker_first: [...workerFirstRoutes, ...missingRoutes],
+        });
+        output = `${output.slice(0, assetsProperty.valueStart)}${updatedAssets}${output.slice(assetsProperty.valueEnd)}`;
+      }
+    }
+  }
   if (options.cdnCache === "workers-cache") {
     const cacheProperty = findTopLevelJsonProperty(output, "cache");
     if (!cacheProperty) {

@@ -35,6 +35,9 @@ export function getRepeatedSlashRedirect(url: string): string | null {
 }
 
 export function redirectRepeatedSlashes(request: Request): Response | null {
+  // Cloudflare normalizes literal backslashes before constructing the Fetch
+  // Request. Wrangler routes repeated forward slashes to the Worker first so
+  // this check can still run before static asset lookup.
   const url = new URL(request.url);
   const location = getRepeatedSlashRedirect(url.pathname + url.search);
   if (location === null) return null;

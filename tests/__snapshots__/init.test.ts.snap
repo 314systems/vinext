@@ -65,7 +65,11 @@ export default defineConfig({
   "assets": {
     "directory": "dist/client",
     "not_found_handling": "none",
-    "binding": "ASSETS"
+    "binding": "ASSETS",
+    "run_worker_first": [
+      "//*",
+      "/*//*"
+    ]
   },
   "cache": {
     "enabled": true
@@ -184,7 +188,11 @@ export default defineConfig({
   "assets": {
     "directory": "dist/client",
     "not_found_handling": "none",
-    "binding": "ASSETS"
+    "binding": "ASSETS",
+    "run_worker_first": [
+      "//*",
+      "/*//*"
+    ]
   },
   "cache": {
     "enabled": true

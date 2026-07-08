@@ -6,7 +6,8 @@
   "main": "./worker/index.ts",
   "preview_urls": true,
   "assets": {
-    "not_found_handling": "none"
+    "not_found_handling": "none",
+    "run_worker_first": ["//*", "/*//*"]
   },
   "d1_databases": [
     {
