@@ -14859,6 +14859,7 @@ describe("Pages Router concurrent navigation", () => {
       },
       __VINEXT_ROOT__: { render },
       __VINEXT_APP__: undefined,
+      __VINEXT_PAGE_COMPONENT__: undefined,
       __VINEXT_LOCALE__: undefined as string | undefined,
       __VINEXT_LOCALES__: undefined as string[] | undefined,
       __VINEXT_DEFAULT_LOCALE__: undefined as string | undefined,
@@ -18062,6 +18063,7 @@ describe("Pages Router _next/data client navigation", () => {
       } as any,
       __VINEXT_ROOT__: { render },
       __VINEXT_APP__: undefined,
+      __VINEXT_PAGE_COMPONENT__: undefined as unknown,
       __VINEXT_LOCALE__: opts.locale,
       __VINEXT_LOCALES__: undefined,
       __VINEXT_DEFAULT_LOCALE__: undefined,
@@ -18215,6 +18217,7 @@ describe("Pages Router _next/data client navigation", () => {
         ssgPatterns: [],
         sspPatterns: [],
       });
+      win.__VINEXT_PAGE_COMPONENT__ = Home;
       (globalThis as any).window = win;
       globalThis.fetch = vi.fn() as any;
 
@@ -18275,6 +18278,7 @@ describe("Pages Router _next/data client navigation", () => {
         ssgPatterns: [],
         sspPatterns: [],
       });
+      win.__VINEXT_PAGE_COMPONENT__ = Home;
       (globalThis as any).window = win;
       globalThis.fetch = vi.fn() as any;
 

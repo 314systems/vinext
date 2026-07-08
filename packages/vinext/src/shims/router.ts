@@ -1977,17 +1977,8 @@ async function loadComponentOnlyProps(
     locales: window.__VINEXT_LOCALES__,
     defaultLocale: window.__VINEXT_DEFAULT_LOCALE__,
   };
-  if (!routerRuntimeState.committedComponent) {
-    const committedPage = window.__NEXT_DATA__?.page;
-    const committedLoader = committedPage ? window.__VINEXT_PAGE_LOADERS__?.[committedPage] : null;
-    if (committedLoader) {
-      const committedModule = await committedLoader();
-      if (isPageComponent(committedModule.default)) {
-        routerRuntimeState.committedComponent = committedModule.default;
-      }
-    }
-  }
-  const committedComponent = routerRuntimeState.committedComponent ?? PageComponent;
+  const committedComponent =
+    routerRuntimeState.committedComponent ?? window.__VINEXT_PAGE_COMPONENT__ ?? PageComponent;
   const committedSnapshot = routerRuntimeState.committedSnapshot ?? getRouterSnapshot();
   const AppTree = (appProps: Record<string, unknown>) => {
     const element = AppComponent
@@ -2071,6 +2062,7 @@ async function renderPagesNavigationTarget(
   await renderPagesRouterElement(element, options.scroll);
   assertStillCurrent();
   routerRuntimeState.committedComponent = PageComponent;
+  window.__VINEXT_PAGE_COMPONENT__ = PageComponent;
   routerRuntimeState.committedSnapshot = {
     pathname: target.pattern,
     query: mergeRouteParamsIntoQuery(parseQueryString(target.search), target.params),
@@ -2450,6 +2442,7 @@ async function navigateClientHtml(
   await renderPagesRouterElement(element, options.scroll);
   assertStillCurrent();
   routerRuntimeState.committedComponent = PageComponent;
+  window.__VINEXT_PAGE_COMPONENT__ = PageComponent;
   routerRuntimeState.committedSnapshot = getRouterSnapshot();
 }
 

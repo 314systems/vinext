@@ -1808,6 +1808,7 @@ async function hydrate() {
 
   const pageModule = await import("${pageModuleSource}");
   const PageComponent = pageModule.default;
+  window.__VINEXT_PAGE_COMPONENT__ = PageComponent;
   let element;
   ${
     appModuleSource
