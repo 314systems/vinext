@@ -33,7 +33,10 @@ import { fnv1a52 } from "../utils/hash.js";
 import { readStreamAsText } from "../utils/text-stream.js";
 import { callDocumentGetInitialProps } from "./document-initial-head.js";
 import { renderBeforeInteractiveInlineScripts } from "./before-interactive-head.js";
-import { createBeforeInteractiveCollector } from "./before-interactive-collector.js";
+import {
+  createBeforeInteractiveCollector,
+  waitForBeforeInteractiveCollection,
+} from "./before-interactive-collector.js";
 import { appendAssetDeploymentIdQuery } from "../utils/deployment-id.js";
 
 // ---------------------------------------------------------------------------
@@ -625,6 +628,8 @@ export async function renderPagesPageResponse(
     );
     bodyStream = await options.renderToReadableStream(pageElement);
   }
+
+  await waitForBeforeInteractiveCollection(bodyStream);
 
   // Fold any head tags returned by `_document.getInitialProps()` into the
   // dedupe pipeline before getSSRHeadHTML serialises the final <head>. Mirrors

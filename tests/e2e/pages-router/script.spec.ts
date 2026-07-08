@@ -3,6 +3,40 @@ import { test, expect } from "@playwright/test";
 const BASE = "http://localhost:4173";
 
 test.describe("next/script", () => {
+  test("hoists suspended page beforeInteractive scripts before document scripts", async ({
+    page,
+  }) => {
+    await page.goto(`${BASE}/script-page-before-suspense`);
+    await expect(
+      page.getByRole("heading", { name: "Suspended Page Before Interactive" }),
+    ).toBeVisible();
+
+    const placement = await page.evaluate(() => {
+      const pageScript = document.querySelector<HTMLScriptElement>("script#page-before-suspense");
+      const documentScript = document.querySelector<HTMLScriptElement>("script#document-before");
+      const headScripts = Array.from(document.head.querySelectorAll("script"));
+
+      return {
+        pageInHead: pageScript?.parentElement === document.head,
+        pageBeforeDocument:
+          pageScript != null &&
+          documentScript != null &&
+          headScripts.indexOf(pageScript) < headScripts.indexOf(documentScript),
+        bodyCopies: document.body.querySelectorAll("script#page-before-suspense").length,
+      };
+    });
+
+    expect(placement).toEqual({
+      pageInHead: true,
+      pageBeforeDocument: true,
+      bodyCopies: 0,
+    });
+    await expect(page.locator("script#page-before-suspense")).toHaveCount(1);
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(window, "__vinextSuspendedPageBeforeExecutions")))
+      .toBe(1);
+  });
+
   test("hoists page beforeInteractive scripts ahead of document and Vite scripts", async ({
     page,
   }) => {
