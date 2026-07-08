@@ -431,6 +431,8 @@ type PagesRouterRuntimeState = {
   deprecatedEventBridgeInstalled: boolean;
   pagesRouterReady: boolean;
   publicRouter?: Record<string, unknown>;
+  committedComponent?: PagesComponent;
+  committedSnapshot?: RouterSnapshot;
 };
 
 type PagesRouterRuntimeComponents = {
@@ -1975,23 +1977,30 @@ async function loadComponentOnlyProps(
     locales: window.__VINEXT_LOCALES__,
     defaultLocale: window.__VINEXT_DEFAULT_LOCALE__,
   };
+  if (!routerRuntimeState.committedComponent) {
+    const committedPage = window.__NEXT_DATA__?.page;
+    const committedLoader = committedPage ? window.__VINEXT_PAGE_LOADERS__?.[committedPage] : null;
+    if (committedLoader) {
+      const committedModule = await committedLoader();
+      if (isPageComponent(committedModule.default)) {
+        routerRuntimeState.committedComponent = committedModule.default;
+      }
+    }
+  }
+  const committedComponent = routerRuntimeState.committedComponent ?? PageComponent;
+  const committedSnapshot = routerRuntimeState.committedSnapshot ?? getRouterSnapshot();
   const AppTree = (appProps: Record<string, unknown>) => {
     const element = AppComponent
       ? createElement(AppComponent as ComponentType<Record<string, unknown>>, {
           ...appProps,
-          Component: PageComponent,
+          Component: committedComponent,
           router: Router,
         })
       : createElement(
-          PageComponent as ComponentType<Record<string, unknown>>,
+          committedComponent as ComponentType<Record<string, unknown>>,
           propsObject(appProps.pageProps),
         );
-    return wrapWithRouterContext(element, noopCommit, noopCommit, {
-      pathname: target.pattern,
-      query,
-      asPath,
-      isReady: true,
-    });
+    return wrapWithRouterContext(element, noopCommit, noopCommit, committedSnapshot);
   };
 
   if (typeof AppComponent?.getInitialProps === "function") {
@@ -2061,6 +2070,13 @@ async function renderPagesNavigationTarget(
   applyVinextLocaleGlobals(window, nextData);
   await renderPagesRouterElement(element, options.scroll);
   assertStillCurrent();
+  routerRuntimeState.committedComponent = PageComponent;
+  routerRuntimeState.committedSnapshot = {
+    pathname: target.pattern,
+    query: mergeRouteParamsIntoQuery(parseQueryString(target.search), target.params),
+    asPath: url,
+    isReady: true,
+  };
 }
 
 async function navigateClientNoData(
@@ -2433,6 +2449,8 @@ async function navigateClientHtml(
   applyVinextLocaleGlobals(window, nextData);
   await renderPagesRouterElement(element, options.scroll);
   assertStillCurrent();
+  routerRuntimeState.committedComponent = PageComponent;
+  routerRuntimeState.committedSnapshot = getRouterSnapshot();
 }
 
 /**
@@ -2884,6 +2902,8 @@ async function performNavigation(
   if (typeof window === "undefined") {
     throwNoRouterInstance();
   }
+
+  routerRuntimeState.committedSnapshot ??= getRouterSnapshot();
 
   // Defence-in-depth dangerous-scheme guard. The synchronous guard inside
   // `Router.push` / `Router.replace` (see RouterMethods below) is the primary
