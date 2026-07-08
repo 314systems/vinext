@@ -104,6 +104,7 @@ import {
   filterInternalHeaders,
   INTERNAL_HEADERS,
   isOpenRedirectShaped,
+  normalizeRepeatedSlashes,
   normalizeTrailingSlash,
   VINEXT_INTERNAL_HEADERS,
 } from "./server/request-pipeline.js";
@@ -4661,6 +4662,14 @@ export const loadServerActionClient = ${
               // Skip .rsc requests — those are for the App Router RSC handler
               if (url.split("?")[0].endsWith(".rsc")) {
                 return next();
+              }
+
+              const rawRequestPathname = url.split("?")[0];
+              if (/(\\|\/\/)/.test(rawRequestPathname)) {
+                const location = normalizeRepeatedSlashes(url);
+                res.writeHead(308, { Location: location });
+                res.end(location);
+                return;
               }
 
               // ── Cross-origin request protection (defense-in-depth) ──────

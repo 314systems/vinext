@@ -11,6 +11,7 @@ import {
   isOpenRedirectShaped,
   hasBasePath,
   stripBasePath,
+  normalizeRepeatedSlashes,
   normalizeTrailingSlash,
   resolvePublicFileRoute,
   validateCsrfOrigin,
@@ -122,6 +123,22 @@ describe("isOpenRedirectShaped", () => {
     expect(isOpenRedirectShaped("/about")).toBe(false);
     expect(isOpenRedirectShaped("/api/users")).toBe(false);
     expect(isOpenRedirectShaped("/%61dmin")).toBe(false);
+  });
+});
+
+// Ported from Next.js: packages/next/src/shared/lib/utils.ts and
+// packages/next/src/server/base-server.ts.
+// https://github.com/vercel/next.js/blob/v16.3.0-canary.80/packages/next/src/shared/lib/utils.ts
+describe("normalizeRepeatedSlashes", () => {
+  it("canonicalizes repeated slashes and backslashes before routing", () => {
+    expect(normalizeRepeatedSlashes("//")).toBe("/");
+    expect(normalizeRepeatedSlashes("//details")).toBe("/details");
+    expect(normalizeRepeatedSlashes("/foo//bar")).toBe("/foo/bar");
+    expect(normalizeRepeatedSlashes("/foo\\bar")).toBe("/foo/bar");
+  });
+
+  it("preserves the complete query string", () => {
+    expect(normalizeRepeatedSlashes("//details?one=1?two=2")).toBe("/details?one=1?two=2");
   });
 });
 

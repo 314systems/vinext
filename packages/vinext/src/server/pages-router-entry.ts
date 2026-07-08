@@ -31,6 +31,7 @@ import {
   cloneRequestWithUrl,
   filterInternalHeaders,
   isOpenRedirectShaped,
+  normalizeRepeatedSlashes,
 } from "./request-pipeline.js";
 import { notFoundStaticAssetResponse } from "./http-error-responses.js";
 import { finalizeMissingStaticAssetResponse } from "./worker-utils.js";
@@ -112,12 +113,16 @@ async function handleRequest(
     const url = new URL(request.url);
     let pathname = url.pathname;
 
-    // Block protocol-relative URL open redirects in all shapes:
-    //   literal  //evil.com, /\\evil.com
-    //   encoded  /%5Cevil.com, /%2F/evil.com
-    // Browsers normalize backslash to forward slash, and percent-decode
-    // Location headers, so encoded variants must be rejected before any
-    // downstream redirect can echo them.
+    if (/(\\|\/\/)/.test(pathname)) {
+      const location = normalizeRepeatedSlashes(pathname + url.search);
+      return new Response(location, {
+        status: 308,
+        headers: { Location: location },
+      });
+    }
+
+    // Literal repeated delimiters were canonicalized above. Reject encoded
+    // variants before any downstream redirect can echo them.
     if (isOpenRedirectShaped(pathname)) {
       return new Response("This page could not be found", { status: 404 });
     }
