@@ -18297,6 +18297,64 @@ describe("Pages Router _next/data client navigation", () => {
     }
   });
 
+  // Ported from Next.js: test/e2e/middleware-rewrites/test/index.test.ts
+  // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/middleware-rewrites/test/index.test.ts
+  it("warms a middleware rewrite destination loader during prefetch", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalDocument = (globalThis as any).document;
+    const originalFetch = globalThis.fetch;
+
+    const sourceLoader = vi.fn(async () => makePageModule("source"));
+    const destinationLoader = vi.fn(async () => makePageModule("about"));
+    const { win, buildId } = createDataNavWindow({
+      loaders: {
+        "/rewrite-me-to-about": sourceLoader,
+        "/about": destinationLoader,
+      },
+      ssgPatterns: [],
+      sspPatterns: [],
+    });
+    (win.__NEXT_DATA__ as any).__vinext = { hasMiddleware: true };
+    (win as any).__VINEXT_MIDDLEWARE_MATCHER__ = ["/:path*"];
+    (globalThis as any).window = win;
+    (globalThis as any).document = {
+      createElement: () => ({ rel: "", as: "", href: "" }),
+      head: { appendChild: vi.fn() },
+    };
+    vi.resetModules();
+
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response("{}", {
+          headers: {
+            "Content-Type": "application/json",
+            "x-nextjs-rewrite": "/about?override=internal",
+          },
+        }),
+    ) as any;
+
+    try {
+      const { default: Router } = await import("../packages/vinext/src/shims/router.js");
+
+      await Router.prefetch("/rewrite-me-to-about?override=internal");
+      await vi.waitFor(() => expect(destinationLoader).toHaveBeenCalledOnce());
+
+      expect(sourceLoader).toHaveBeenCalledOnce();
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        `/_next/data/${buildId}/rewrite-me-to-about.json?override=internal`,
+        expect.objectContaining({
+          headers: expect.objectContaining({ "x-middleware-prefetch": "1" }),
+        }),
+      );
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      (globalThis as any).document = originalDocument;
+      globalThis.fetch = originalFetch;
+      vi.resetModules();
+    }
+  });
+
   it("reuses a default-locale SSG middleware prefetch for the following navigation", async () => {
     const previousWindow = (globalThis as any).window;
     const originalDocument = (globalThis as any).document;
