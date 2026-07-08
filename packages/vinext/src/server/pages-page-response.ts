@@ -32,7 +32,7 @@ import {
 import { fnv1a52 } from "../utils/hash.js";
 import { readStreamAsText } from "../utils/text-stream.js";
 import { callDocumentGetInitialProps } from "./document-initial-head.js";
-import { renderBeforeInteractiveInlineScripts } from "./before-interactive-head.js";
+import { insertBeforeInteractiveScripts } from "./before-interactive-head.js";
 import { createBeforeInteractiveCollector } from "./before-interactive-collector.js";
 import { appendAssetDeploymentIdQuery } from "../utils/deployment-id.js";
 
@@ -365,11 +365,11 @@ async function buildPagesShellHtml(
     );
     let html = await options.renderDocumentToString(docElement);
     const nextDataScript = options.buildNextDataScript(documentClientScripts);
-    const assetTags =
-      renderBeforeInteractiveInlineScripts([
-        ...options.beforeInteractiveScripts,
-        ...documentBeforeInteractiveScripts,
-      ]) + options.assetTags;
+    const beforeInteractiveScripts = [
+      ...options.beforeInteractiveScripts,
+      ...documentBeforeInteractiveScripts,
+    ];
+    const assetTags = options.assetTags;
     html = html.replace("__NEXT_MAIN__", bodyMarker);
     if (options.ssrHeadHTML || assetTags || fontHeadHTML) {
       html = html.replace(
@@ -396,24 +396,24 @@ async function buildPagesShellHtml(
     if (!html.includes("__NEXT_DATA__")) {
       html = html.replace("</body>", `  ${nextDataScript}\n</body>`);
     }
-    return html;
+    return insertBeforeInteractiveScripts(html, beforeInteractiveScripts);
   }
 
   const nextDataScript = options.buildNextDataScript([]);
-  const assetTags =
-    renderBeforeInteractiveInlineScripts(options.beforeInteractiveScripts) + options.assetTags;
+  const assetTags = options.assetTags;
 
   // charset + viewport are emitted via getSSRHeadHTML() (next/head's
   // defaultHead seeds them with data-next-head=""), matching Next.js's
   // canonical ordering. Don't duplicate them here.
-  return (
+  return insertBeforeInteractiveScripts(
     "<!DOCTYPE html>\n<html>\n<head>\n" +
-    `  ${fontHeadHTML}${options.ssrHeadHTML}\n` +
-    `  ${assetTags}\n` +
-    "</head>\n<body>\n" +
-    `  <div id="__next">${bodyMarker}</div>\n` +
-    `  ${nextDataScript}\n` +
-    "</body>\n</html>"
+      `  ${fontHeadHTML}${options.ssrHeadHTML}\n` +
+      `  ${assetTags}\n` +
+      "</head>\n<body>\n" +
+      `  <div id="__next">${bodyMarker}</div>\n` +
+      `  ${nextDataScript}\n` +
+      "</body>\n</html>",
+    options.beforeInteractiveScripts,
   );
 }
 

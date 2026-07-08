@@ -234,10 +234,14 @@ describe("pages page response", () => {
     });
     const html = await response.text();
     const scriptIndex = html.indexOf('id="legacy-before-interactive"');
+    const fontIndex = html.indexOf('href="/font.css"');
+    const headIndex = html.indexOf('name="test-head"');
     const assetIndex = html.indexOf('src="/entry.js"');
 
     expect(scriptIndex).toBeGreaterThan(-1);
     expect(html).toContain('data-nscript="beforeInteractive"');
+    expect(fontIndex).toBeGreaterThan(scriptIndex);
+    expect(headIndex).toBeGreaterThan(scriptIndex);
     expect(assetIndex).toBeGreaterThan(scriptIndex);
     expect(html).not.toMatch(/<div id="__next">[\s\S]*legacy-before-interactive/);
   });

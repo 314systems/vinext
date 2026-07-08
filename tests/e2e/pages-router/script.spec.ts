@@ -5,7 +5,13 @@ const BASE = "http://localhost:4173";
 test.describe("next/script", () => {
   test("hoists page beforeInteractive scripts ahead of document and Vite scripts", async ({
     page,
+    request,
   }) => {
+    const rawHtml = await request
+      .get(`${BASE}/script-page-before`)
+      .then((response) => response.text());
+    expect(rawHtml.indexOf('id="page-before"')).toBeLessThan(rawHtml.indexOf('name="description"'));
+
     await page.goto(`${BASE}/script-page-before`);
     await expect(page.getByRole("heading", { name: "Page Before Interactive" })).toBeVisible();
 

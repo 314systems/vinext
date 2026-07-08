@@ -82,7 +82,10 @@ import {
   runDocumentRenderPage,
 } from "./pages-document-initial-props.js";
 import { callDocumentGetInitialProps } from "./document-initial-head.js";
-import { renderBeforeInteractiveInlineScripts } from "./before-interactive-head.js";
+import {
+  insertAfterHeadOpen,
+  renderBeforeInteractiveInlineScripts,
+} from "./before-interactive-head.js";
 import { createBeforeInteractiveCollector } from "./before-interactive-collector.js";
 import {
   BeforeInteractiveContext,
@@ -536,15 +539,7 @@ async function streamPageToResponse(
   // shell template, then split at the body marker.
   let transformedShell = await server.transformIndexHtml(url, shellTemplate);
   if (beforeInteractiveHTML) {
-    const headOpenIndex = transformedShell.indexOf("<head");
-    const headOpenEnd =
-      headOpenIndex === -1 ? -1 : transformedShell.indexOf(">", headOpenIndex + 5);
-    if (headOpenEnd !== -1) {
-      transformedShell =
-        transformedShell.slice(0, headOpenEnd + 1) +
-        beforeInteractiveHTML +
-        transformedShell.slice(headOpenEnd + 1);
-    }
+    transformedShell = insertAfterHeadOpen(transformedShell, beforeInteractiveHTML);
   }
   const markerIdx = transformedShell.indexOf(STREAM_BODY_MARKER);
   const prefix = transformedShell.slice(0, markerIdx);
