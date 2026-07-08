@@ -153,6 +153,7 @@ export async function loadDevAppInitialProps(
     Component: ctx.component,
     router: { pathname: ctx.pathname, query: ctx.query, asPath: ctx.asPath },
     ctx: {
+      AppTree: ctx.appTree,
       req: ctx.req,
       res: ctx.res,
       pathname: ctx.pathname,

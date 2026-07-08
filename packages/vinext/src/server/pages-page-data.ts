@@ -368,6 +368,7 @@ async function loadPagesAppInitialRenderProps(
       asPath: options.asPath ?? options.routeUrl,
     },
     ctx: {
+      AppTree: options.createAppTree ?? options.createPageElement,
       req,
       res,
       err: options.err,
