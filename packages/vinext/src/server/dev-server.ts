@@ -1831,7 +1831,7 @@ import "vinext/instrumentation-client";
 import React from "react";
 import { hydrateRoot } from "react-dom/client";
 import Router, { wrapWithRouterContext, _initializePagesRouterReadyFromNextData } from "next/router";
-import { initScriptLoader } from "next/script";
+import { initScriptLoader } from "vinext/shims/script-loader";
 
 const nextDataElement = document.getElementById("__NEXT_DATA__");
 if (nextDataElement?.textContent) {

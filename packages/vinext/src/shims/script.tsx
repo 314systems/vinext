@@ -23,95 +23,14 @@ import {
   useBeforeInteractiveRegister,
   type BeforeInteractiveInlineScript,
 } from "./before-interactive-context.js";
+import {
+  loadClientScript,
+  loadedScripts,
+  resolveScriptNonce,
+  type ScriptProps,
+} from "./script-loader.js";
 
-export type ScriptProps = {
-  /** Script source URL */
-  src?: string;
-  /** Loading strategy. Default: "afterInteractive" */
-  strategy?:
-    | "beforeInteractive"
-    | "beforePageRender"
-    | "afterInteractive"
-    | "lazyOnload"
-    | "worker";
-  /** Unique identifier for the script */
-  id?: string;
-  /** Called when the script has loaded */
-  onLoad?: (e: Event) => void;
-  /** Called when the script is ready (after load, and on every re-render if already loaded) */
-  onReady?: () => void;
-  /** Called on script load error */
-  onError?: (e: Event) => void;
-  /** Inline script content */
-  children?: React.ReactNode;
-  /** Dangerous inner HTML */
-  dangerouslySetInnerHTML?: { __html: string };
-  /** Script type attribute */
-  type?: string;
-  /** Async attribute */
-  async?: boolean;
-  /** Defer attribute */
-  defer?: boolean;
-  /** Crossorigin attribute */
-  crossOrigin?: string;
-  /** Nonce for CSP */
-  nonce?: string;
-  /** Integrity hash */
-  integrity?: string;
-  /**
-   * Associated stylesheets to load alongside the script. Emitted as
-   * `<link rel="stylesheet" href="...">` on SSR (via `ReactDOM.preinit`)
-   * and inserted into `<head>` on the client load path.
-   *
-   * Mirrors Next.js App Router behaviour at
-   * `.nextjs-ref/packages/next/src/client/script.tsx` (`insertStylesheets`
-   * and the `appDir` block).
-   */
-  stylesheets?: string[];
-  /** Additional attributes */
-  [key: string]: unknown;
-};
-
-// Track scripts that have already been loaded, plus remote scripts currently
-// loading, to avoid duplicate DOM insertion when same-src components mount
-// before the first load event fires.
-const loadedScripts = new Set<string>();
-const loadingScripts = new Map<string, Promise<Event>>();
-
-function getClientAutoNonce(): string | undefined {
-  if (typeof document === "undefined") return undefined;
-
-  const existingNonceElement = document.querySelector("[nonce]");
-  if (!existingNonceElement) return undefined;
-
-  // `HTMLElement` is not defined in some SSR/edge runtimes that polyfill
-  // `document` but stop short of the full DOM surface. Guarding the
-  // constructor before `instanceof` keeps SSR from crashing in those hosts;
-  // when the constructor *is* present we still prefer the typed `.nonce`
-  // property because browsers strip the `nonce` attribute from serialised
-  // HTML for CSP reasons.
-  if (typeof HTMLElement !== "undefined" && existingNonceElement instanceof HTMLElement) {
-    return existingNonceElement.nonce || existingNonceElement.getAttribute("nonce") || undefined;
-  }
-
-  return existingNonceElement.getAttribute("nonce") || undefined;
-}
-
-function resolveScriptNonce(explicitNonce: unknown, contextualNonce?: string): string | undefined {
-  if (typeof explicitNonce === "string" && explicitNonce.length > 0) {
-    return explicitNonce;
-  }
-
-  if (typeof contextualNonce === "string" && contextualNonce.length > 0) {
-    return contextualNonce;
-  }
-
-  if (typeof window === "undefined") {
-    return undefined;
-  }
-
-  return getClientAutoNonce();
-}
+export { handleClientScriptLoad, initScriptLoader, type ScriptProps } from "./script-loader.js";
 
 /**
  * Insert `<link rel="stylesheet">` tags into `document.head` for each entry
@@ -307,188 +226,6 @@ function collectBeforeInteractiveAttributes(
   return out;
 }
 
-function setBooleanScriptAttribute(el: HTMLScriptElement, attr: string, value: unknown): boolean {
-  const enabled = value !== false && value !== "false" && Boolean(value);
-
-  switch (attr) {
-    case "async":
-      el.async = enabled;
-      break;
-    case "defer":
-      el.defer = enabled;
-      break;
-    case "noModule":
-    case "nomodule":
-      el.noModule = enabled;
-      break;
-    default:
-      return false;
-  }
-
-  if (!enabled) {
-    // Dynamic script elements start in the browser's force-async state.
-    // Setting and removing the attribute mirrors Next.js and clears that state.
-    el.setAttribute(attr, "");
-    el.removeAttribute(attr);
-  }
-
-  return true;
-}
-
-function setScriptAttributes(el: HTMLScriptElement, rest: Record<string, unknown>): void {
-  for (const [attr, value] of Object.entries(rest)) {
-    if (attr === "dangerouslySetInnerHTML") continue;
-    if (value === undefined) continue;
-    if (setBooleanScriptAttribute(el, attr, value)) continue;
-    if (attr === "className" && typeof value === "string") {
-      el.setAttribute("class", value);
-    } else if (typeof value === "string") {
-      el.setAttribute(attr, value);
-    } else if (typeof value === "boolean" && value) {
-      el.setAttribute(attr, "");
-    }
-  }
-}
-
-function loadClientScript(
-  props: ScriptProps,
-  options: {
-    resolvedNonce?: string;
-    fireReadyWhenAlreadyLoaded: boolean;
-  },
-): void {
-  const {
-    src,
-    id,
-    onLoad,
-    onReady,
-    onError,
-    strategy = "afterInteractive",
-    children,
-    dangerouslySetInnerHTML,
-    stylesheets,
-    ...rest
-  } = props;
-  if (typeof window === "undefined") return;
-
-  // Insert associated stylesheets into <head> regardless of whether the
-  // script was already loaded — the script's onReady handlers may already
-  // assume the stylesheet is present. `insertClientStylesheets` dedupes
-  // via ReactDOM.preinit where available.
-  insertClientStylesheets(stylesheets);
-
-  const key = id ?? src ?? "";
-  if (key && loadedScripts.has(key)) {
-    if (options.fireReadyWhenAlreadyLoaded) {
-      onReady?.();
-    }
-    return;
-  }
-
-  if (src) {
-    const existingLoad = loadingScripts.get(src);
-    if (existingLoad) {
-      void existingLoad.then(
-        (event) => {
-          if (key) loadedScripts.add(key);
-          onLoad?.(event);
-          onReady?.();
-        },
-        (event) => onError?.(event),
-      );
-      return;
-    }
-  }
-
-  const el = document.createElement("script");
-  if (src) el.src = src;
-  if (id) el.id = id;
-
-  setScriptAttributes(el, rest);
-  el.setAttribute("data-nscript", strategy);
-  if (options.resolvedNonce && !el.getAttribute("nonce")) {
-    el.setAttribute("nonce", options.resolvedNonce);
-  }
-
-  if (strategy === "worker") {
-    el.setAttribute("type", "text/partytown");
-  }
-
-  const markLoaded = () => {
-    if (key) loadedScripts.add(key);
-    onReady?.();
-  };
-
-  if (dangerouslySetInnerHTML?.__html) {
-    // Intentional: mirrors the Next.js <Script> API where dangerouslySetInnerHTML
-    // is developer-supplied inline script content (not user input). The prop name
-    // itself signals developer awareness of the XSS risk, consistent with React's
-    // design. User-supplied data must never flow into this prop.
-    el.innerHTML = dangerouslySetInnerHTML.__html;
-    markLoaded();
-  } else if (children && typeof children === "string") {
-    el.textContent = children;
-    markLoaded();
-  } else if (src) {
-    const loadPromise = new Promise<Event>((resolve, reject) => {
-      el.addEventListener("load", (event) => {
-        resolve(event);
-        if (key) loadedScripts.add(key);
-        onLoad?.(event);
-        onReady?.();
-      });
-      el.addEventListener("error", (event) => {
-        reject(event);
-        onError?.(event);
-      });
-    });
-    loadPromise.catch(() => undefined).finally(() => loadingScripts.delete(src));
-    loadingScripts.set(src, loadPromise);
-  }
-
-  document.body.appendChild(el);
-}
-
-/**
- * Load a script imperatively (outside of React).
- */
-export function handleClientScriptLoad(props: ScriptProps): void {
-  if (props.strategy === "lazyOnload") {
-    const load = () =>
-      loadClientScript(props, {
-        resolvedNonce: resolveScriptNonce(props.nonce),
-        fireReadyWhenAlreadyLoaded: false,
-      });
-    const schedule = () => {
-      if (typeof requestIdleCallback === "function") {
-        requestIdleCallback(load);
-      } else {
-        setTimeout(load, 1);
-      }
-    };
-    if (document.readyState === "complete") {
-      schedule();
-    } else {
-      window.addEventListener("load", schedule);
-    }
-    return;
-  }
-
-  loadClientScript(props, {
-    resolvedNonce: resolveScriptNonce(props.nonce),
-    fireReadyWhenAlreadyLoaded: false,
-  });
-}
-
-/**
- * Initialize multiple scripts at once (called during app bootstrap).
- */
-export function initScriptLoader(scripts: ScriptProps[]): void {
-  for (const script of scripts) {
-    handleClientScriptLoad(script);
-  }
-}
-
 Object.defineProperty(Script, "__nextScript", { value: true });
 
 function Script(props: ScriptProps): React.ReactElement | null {
@@ -564,7 +301,11 @@ function Script(props: ScriptProps): React.ReactElement | null {
           stylesheets,
           ...rest,
         },
-        { resolvedNonce, fireReadyWhenAlreadyLoaded: true },
+        {
+          resolvedNonce,
+          fireReadyWhenAlreadyLoaded: true,
+          insertStylesheets: insertClientStylesheets,
+        },
       );
     };
 

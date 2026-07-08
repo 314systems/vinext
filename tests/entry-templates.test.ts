@@ -1383,7 +1383,8 @@ describe("Pages Router entry template", () => {
       expect(code).toContain("_initializePagesRouterReadyFromNextData,");
       expect(code).toContain('} from "next/router";');
       expect(code).toContain("_initializePagesRouterReadyFromNextData(nextData);");
-      expect(code).toContain('import { initScriptLoader } from "next/script";');
+      expect(code).toContain('import { initScriptLoader } from "vinext/shims/script-loader";');
+      expect(code).not.toContain('from "next/script"');
       expect(code).toContain(
         "initScriptLoader(Array.isArray(nextData.scriptLoader) ? nextData.scriptLoader : []);",
       );

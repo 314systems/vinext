@@ -688,9 +688,10 @@ describe("Script stylesheets prop", () => {
   });
 
   it("does not throw when handleClientScriptLoad is invoked with a stylesheets prop", () => {
-    // handleClientScriptLoad runs on the client and feeds into ReactDOM.preinit
-    // (when available). The shim must accept the prop without crashing or
-    // setting it as a `stylesheets="..."` attribute on the created <script>.
+    // The imperative loader is intentionally React-free so Pages bootstrap can
+    // import it without pulling the ReactDOM namespace into Vite's dev entry.
+    // It inserts stylesheet links directly and must not leak the prop onto the
+    // created <script> element.
     const createdScript = {
       attrs: {} as Record<string, string>,
       setAttribute(name: string, value: string) {
@@ -701,19 +702,26 @@ describe("Script stylesheets prop", () => {
       },
       addEventListener() {},
     };
+    const createdLink = {
+      rel: "",
+      type: "",
+      href: "",
+    };
 
     const appendedScripts: Array<typeof createdScript> = [];
+    const appendedLinks: Array<typeof createdLink> = [];
     class MockHTMLElement {}
     setGlobalValue("HTMLElement", MockHTMLElement);
     setGlobalValue("window", {});
     setGlobalValue("document", {
       querySelector: () => null,
       createElement(tagName: string) {
-        expect(tagName).toBe("script");
-        return createdScript;
+        return tagName === "link" ? createdLink : createdScript;
       },
       head: {
-        appendChild() {},
+        appendChild(element: unknown) {
+          appendedLinks.push(element as typeof createdLink);
+        },
       },
       body: {
         appendChild(el: unknown) {
@@ -730,6 +738,9 @@ describe("Script stylesheets prop", () => {
     ).not.toThrow();
 
     expect(appendedScripts).toHaveLength(1);
+    expect(appendedLinks).toEqual([
+      { rel: "stylesheet", type: "text/css", href: "/imperative.css" },
+    ]);
     // The stylesheets prop must never leak onto the <script> attribute list.
     expect(appendedScripts[0]!.attrs).not.toHaveProperty("stylesheets");
   });

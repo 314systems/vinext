@@ -142,7 +142,7 @@ import Router, {
   wrapWithRouterContext,
   _initializePagesRouterReadyFromNextData,
 } from "next/router";
-import { initScriptLoader } from "next/script";
+import { initScriptLoader } from "vinext/shims/script-loader";
 
 const pageLoaders = {
 ${loaderEntries.join(",\n")}
