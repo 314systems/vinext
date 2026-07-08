@@ -21015,6 +21015,38 @@ describe("isSafeImageContentType", () => {
 });
 
 describe("handleImageOptimization", () => {
+  it("creates credential-free GET requests for local image sources", async () => {
+    const { createInternalImageRequest } =
+      await import("../packages/vinext/src/server/image-optimization.js");
+    const source = createInternalImageRequest(
+      "/protected/private.png?version=1",
+      new Request("https://example.com/_next/image", {
+        headers: { authorization: "Bearer secret", cookie: "session=secret" },
+      }),
+    );
+
+    expect(source?.method).toBe("GET");
+    expect(source?.url).toBe("https://example.com/protected/private.png?version=1");
+    expect(source?.headers.get("authorization")).toBeNull();
+    expect(source?.headers.get("cookie")).toBeNull();
+
+    const basePathSource = createInternalImageRequest(
+      "/protected/private.png",
+      new Request("https://example.com/docs/_next/image"),
+      "/docs",
+    );
+    expect(basePathSource?.url).toBe("https://example.com/docs/protected/private.png");
+  });
+
+  it("rejects recursive local image optimizer requests", async () => {
+    const { createInternalImageRequest } =
+      await import("../packages/vinext/src/server/image-optimization.js");
+    const request = new Request("https://example.com/docs/_next/image");
+
+    expect(createInternalImageRequest("/docs/_next/image", request, "/docs")).toBeNull();
+    expect(createInternalImageRequest("/docs/%5Fnext/image", request, "/docs")).toBeNull();
+  });
+
   it("returns 400 for invalid params", async () => {
     const { handleImageOptimization } =
       await import("../packages/vinext/src/server/image-optimization.js");
@@ -21035,6 +21067,54 @@ describe("handleImageOptimization", () => {
     };
     const response = await handleImageOptimization(request, handlers);
     expect(response.status).toBe(404);
+  });
+
+  it("cancels rejected image source bodies", async () => {
+    const { handleImageOptimization } =
+      await import("../packages/vinext/src/server/image-optimization.js");
+    let cancelled = false;
+    const response = await handleImageOptimization(
+      new Request("http://localhost/_next/image?url=%2Fimg.jpg&w=640&q=75"),
+      {
+        fetchAsset: async () =>
+          new Response(
+            new ReadableStream({
+              cancel() {
+                cancelled = true;
+              },
+            }),
+            { status: 401 },
+          ),
+      },
+    );
+
+    expect(response.status).toBe(404);
+    expect(cancelled).toBe(true);
+  });
+
+  it("does not expose source response headers on passthrough images", async () => {
+    const { handleImageOptimization } =
+      await import("../packages/vinext/src/server/image-optimization.js");
+    const response = await handleImageOptimization(
+      new Request("http://localhost/_next/image?url=%2Fimg.jpg&w=640&q=75"),
+      {
+        fetchAsset: async () =>
+          new Response("image", {
+            headers: {
+              "Content-Type": "image/jpeg",
+              ETag: '"source"',
+              "Set-Cookie": "private=1",
+              "X-Middleware-Header": "private",
+            },
+          }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("image/jpeg");
+    expect(response.headers.get("ETag")).toBe('"source"');
+    expect(response.headers.get("Set-Cookie")).toBeNull();
+    expect(response.headers.get("X-Middleware-Header")).toBeNull();
   });
 
   it("returns original image when no transformImage handler", async () => {

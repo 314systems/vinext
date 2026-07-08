@@ -26,6 +26,8 @@ import path from "pathslash";
 import zlib from "node:zlib";
 import { StaticFileCache, CONTENT_TYPES, etagFromFilenameHash } from "./static-file-cache.js";
 import {
+  createInternalImageRequest,
+  imageSourceResponseHeaders,
   isImageOptimizationPath,
   IMAGE_CONTENT_SECURITY_POLICY,
   parseImageParams,
@@ -1037,6 +1039,36 @@ type WorkerAppRouterEntry = {
   fetch(request: Request, env?: unknown, ctx?: ExecutionContextLike): Promise<Response> | Response;
 };
 
+function internalImageOrigin(host: string, port: number): string {
+  const loopbackHost = host === "0.0.0.0" ? "127.0.0.1" : host === "::" ? "::1" : host;
+  const internalHost = loopbackHost.includes(":") ? `[${loopbackHost}]` : loopbackHost;
+  return `http://${internalHost}:${port}`;
+}
+
+async function fetchInternalImageSource(
+  sourceRequest: Request,
+  host: string,
+  port: number,
+): Promise<Response> {
+  const publicUrl = new URL(sourceRequest.url);
+  const sourceUrl = new URL(sourceRequest.url);
+  const internalOrigin = new URL(internalImageOrigin(host, port));
+  sourceUrl.protocol = internalOrigin.protocol;
+  sourceUrl.host = internalOrigin.host;
+  try {
+    return await fetch(sourceUrl, {
+      headers: {
+        "accept-encoding": "identity",
+        host: publicUrl.host,
+        "x-forwarded-proto": publicUrl.protocol.slice(0, -1),
+      },
+      redirect: "manual",
+    });
+  } catch {
+    return new Response(null, { status: 502 });
+  }
+}
+
 function createNodeExecutionContext(): ExecutionContextLike {
   return {
     waitUntil(promise: Promise<unknown>) {
@@ -1310,6 +1342,7 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
   // stat() calls — all lookups are pure in-memory Map.get(). Precompressed
   // .br/.gz/.zst variants (generated at build time) are detected automatically.
   const staticCache = await StaticFileCache.create(clientDir);
+  let listeningPort = port;
 
   const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const rawUrl = req.url ?? "/";
@@ -1399,15 +1432,6 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
         res.end("Bad Request");
         return;
       }
-      // Block SVG and other unsafe content types by checking the file extension.
-      // SVG is only allowed when dangerouslyAllowSVG is enabled in next.config.js.
-      const ext = path.extname(params.imageUrl).toLowerCase();
-      const ct = CONTENT_TYPES[ext] ?? "application/octet-stream";
-      if (!isSafeImageContentType(ct, imageConfig?.dangerouslyAllowSVG)) {
-        res.writeHead(400);
-        res.end("The requested resource is not an allowed image type");
-        return;
-      }
       // Serve the original image with CSP and security headers
       const imageSecurityHeaders: Record<string, string> = {
         "Content-Security-Policy":
@@ -1416,19 +1440,36 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
         "Content-Disposition":
           imageConfig?.contentDispositionType === "attachment" ? "attachment" : "inline",
       };
-      if (
-        await tryServeStatic(
-          req,
-          res,
-          clientDir,
-          params.imageUrl,
-          false,
-          staticCache,
-          imageSecurityHeaders,
-        )
-      ) {
+      const optimizerRequest = nodeToWebRequest(req, rawUrl, prerenderSecret);
+      const sourceRequest = createInternalImageRequest(
+        params.imageUrl,
+        optimizerRequest,
+        appRouterBasePath,
+      );
+      if (!sourceRequest) {
+        res.writeHead(400);
+        res.end("Bad Request");
         return;
       }
+      const source = await fetchInternalImageSource(sourceRequest, host, listeningPort);
+      if (source.ok && source.body) {
+        if (
+          !isSafeImageContentType(
+            source.headers.get("Content-Type"),
+            imageConfig?.dangerouslyAllowSVG,
+          )
+        ) {
+          cancelResponseBody(source);
+          res.writeHead(400);
+          res.end("The requested resource is not an allowed image type");
+          return;
+        }
+        const headers = imageSourceResponseHeaders(source);
+        for (const [name, value] of Object.entries(imageSecurityHeaders)) headers.set(name, value);
+        await sendWebResponse(new Response(source.body, { status: 200, headers }), req, res, false);
+        return;
+      }
+      cancelResponseBody(source);
       res.writeHead(404);
       res.end("Image not found");
       return;
@@ -1508,6 +1549,7 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
     server.listen(port, host, () => {
       const addr = server.address();
       const actualPort = typeof addr === "object" && addr ? addr.port : port;
+      listeningPort = actualPort;
       if (!silent) logProdServerStarted(host, actualPort, purpose);
       resolve();
     });
@@ -1630,6 +1672,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
 
   // Build the static file metadata cache at startup (same as App Router).
   const staticCache = await StaticFileCache.create(clientDir);
+  let listeningPort = port;
 
   const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const rawUrl = req.url ?? "/";
@@ -1737,15 +1780,6 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         res.end("Bad Request");
         return;
       }
-      // Block SVG and other unsafe content types.
-      // SVG is only allowed when dangerouslyAllowSVG is enabled.
-      const ext = path.extname(params.imageUrl).toLowerCase();
-      const ct = CONTENT_TYPES[ext] ?? "application/octet-stream";
-      if (!isSafeImageContentType(ct, pagesImageConfig?.dangerouslyAllowSVG)) {
-        res.writeHead(400);
-        res.end("The requested resource is not an allowed image type");
-        return;
-      }
       const imageSecurityHeaders: Record<string, string> = {
         "Content-Security-Policy":
           pagesImageConfig?.contentSecurityPolicy ?? IMAGE_CONTENT_SECURITY_POLICY,
@@ -1753,19 +1787,32 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         "Content-Disposition":
           pagesImageConfig?.contentDispositionType === "attachment" ? "attachment" : "inline",
       };
-      if (
-        await tryServeStatic(
-          req,
-          res,
-          clientDir,
-          params.imageUrl,
-          false,
-          staticCache,
-          imageSecurityHeaders,
-        )
-      ) {
+      const optimizerRequest = nodeToWebRequest(req, rawUrl, prerenderSecret);
+      const sourceRequest = createInternalImageRequest(params.imageUrl, optimizerRequest, basePath);
+      if (!sourceRequest) {
+        res.writeHead(400);
+        res.end("Bad Request");
         return;
       }
+      const source = await fetchInternalImageSource(sourceRequest, host, listeningPort);
+      if (source.ok && source.body) {
+        if (
+          !isSafeImageContentType(
+            source.headers.get("Content-Type"),
+            pagesImageConfig?.dangerouslyAllowSVG,
+          )
+        ) {
+          cancelResponseBody(source);
+          res.writeHead(400);
+          res.end("The requested resource is not an allowed image type");
+          return;
+        }
+        const headers = imageSourceResponseHeaders(source);
+        for (const [name, value] of Object.entries(imageSecurityHeaders)) headers.set(name, value);
+        await sendWebResponse(new Response(source.body, { status: 200, headers }), req, res, false);
+        return;
+      }
+      cancelResponseBody(source);
       res.writeHead(404);
       res.end("Image not found");
       return;
@@ -1977,6 +2024,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
     server.listen(port, host, () => {
       const addr = server.address();
       const actualPort = typeof addr === "object" && addr ? addr.port : port;
+      listeningPort = actualPort;
       if (!silent) logProdServerStarted(host, actualPort, purpose);
       resolve();
     });
@@ -2000,5 +2048,6 @@ export {
   nodeToWebRequest,
   mergeResponseHeaders,
   mergeWebResponse,
+  internalImageOrigin,
   tryServeStatic,
 };

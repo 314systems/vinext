@@ -20,6 +20,7 @@ import {
 } from "./pages-request-pipeline.js";
 import type { PagesPipelineDeps } from "./pages-request-pipeline.js";
 import {
+  createInternalImageRequest,
   DEFAULT_DEVICE_SIZES,
   DEFAULT_IMAGE_SIZES,
   handleConfiguredImageOptimization,
@@ -160,8 +161,12 @@ async function handleRequest(
       ];
       return handleConfiguredImageOptimization(
         request,
-        (assetPath) =>
-          Promise.resolve(env.ASSETS!.fetch(new Request(new URL(assetPath, request.url)))),
+        (assetPath, optimizerRequest) => {
+          const sourceRequest = createInternalImageRequest(assetPath, optimizerRequest, basePath);
+          return sourceRequest
+            ? handleRequest(sourceRequest, env, ctx)
+            : Promise.resolve(new Response("Bad Request", { status: 400 }));
+        },
         allowedWidths,
         imageConfig,
       );

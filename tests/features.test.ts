@@ -4750,6 +4750,14 @@ describe("host header poisoning prevention", () => {
     expect(resolveHost(req as any, "fallback.local")).toBe("fallback.local");
   });
 
+  it("internalImageOrigin brackets IPv6 listener hosts", async () => {
+    const { internalImageOrigin } = await import("../packages/vinext/src/server/prod-server.js");
+
+    expect(internalImageOrigin("::", 3000)).toBe("http://[::1]:3000");
+    expect(internalImageOrigin("::1", 3000)).toBe("http://[::1]:3000");
+    expect(internalImageOrigin("2001:db8::1", 3000)).toBe("http://[2001:db8::1]:3000");
+  });
+
   it("resolveHost trusts X-Forwarded-Host when it is in the trusted hosts set", async () => {
     const { resolveHost, trustedHosts } =
       await import("../packages/vinext/src/server/prod-server.js");

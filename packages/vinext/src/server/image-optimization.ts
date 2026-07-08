@@ -18,6 +18,7 @@
  */
 
 import { badRequestResponse } from "./http-error-responses.js";
+import { addBasePathToPathname, stripBasePath } from "../utils/base-path.js";
 
 /** The pathname that triggers image optimization (matches Next.js). */
 export const IMAGE_OPTIMIZATION_PATH = "/_next/image";
@@ -47,6 +48,23 @@ export function isImageOptimizationPath(pathname: string): boolean {
     pathname = pathname.slice(0, -1);
   }
   return pathname === IMAGE_OPTIMIZATION_PATH || pathname === VINEXT_IMAGE_OPTIMIZATION_PATH;
+}
+
+export function createInternalImageRequest(
+  imagePath: string,
+  request: Request,
+  basePath = "",
+): Request | null {
+  const url = new URL(imagePath, request.url);
+  let pathname: string;
+  try {
+    pathname = decodeURIComponent(url.pathname).replaceAll("\\", "/");
+  } catch {
+    return null;
+  }
+  if (isImageOptimizationPath(stripBasePath(pathname, basePath))) return null;
+  url.pathname = addBasePathToPathname(url.pathname, basePath);
+  return new Request(url, { method: "GET" });
 }
 
 /**
@@ -263,11 +281,24 @@ function setImageSecurityHeaders(headers: Headers, config?: ImageConfig): void {
 }
 
 function createPassthroughImageResponse(source: Response, config?: ImageConfig): Response {
-  const headers = new Headers(source.headers);
+  const headers = new Headers();
+  for (const name of ["Content-Type", "ETag"] as const) {
+    const value = source.headers.get(name);
+    if (value) headers.set(name, value);
+  }
   headers.set("Cache-Control", IMAGE_CACHE_CONTROL);
   headers.set("Vary", "Accept");
   setImageSecurityHeaders(headers, config);
   return new Response(source.body, { status: 200, headers });
+}
+
+export function imageSourceResponseHeaders(source: Response): Headers {
+  const headers = new Headers();
+  for (const name of ["Content-Type", "Cache-Control", "ETag"] as const) {
+    const value = source.headers.get(name);
+    if (value) headers.set(name, value);
+  }
+  return headers;
 }
 
 /**
@@ -283,6 +314,12 @@ export type ImageHandlers = {
     options: { width: number; format: string; quality: number },
   ) => Promise<Response>;
 };
+
+async function cancelResponseBody(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {}
+}
 
 /**
  * Handle image optimization requests.
@@ -309,6 +346,7 @@ export async function handleImageOptimization(
   // Fetch source image
   const source = await handlers.fetchAsset(imageUrl, request);
   if (!source.ok || !source.body) {
+    await cancelResponseBody(source);
     return new Response("Image not found", { status: 404 });
   }
 
@@ -320,6 +358,7 @@ export async function handleImageOptimization(
   // when dangerouslyAllowSVG is explicitly enabled in next.config.js.
   const sourceContentType = source.headers.get("Content-Type");
   if (!isSafeImageContentType(sourceContentType, imageConfig?.dangerouslyAllowSVG)) {
+    await cancelResponseBody(source);
     return new Response("The requested resource is not an allowed image type", { status: 400 });
   }
 
@@ -363,11 +402,13 @@ export async function handleImageOptimization(
     console.error("[vinext] Image fallback error, refetching source image:", e);
     const refetchedSource = await handlers.fetchAsset(imageUrl, request);
     if (!refetchedSource.ok || !refetchedSource.body) {
+      await cancelResponseBody(refetchedSource);
       return new Response("Image not found", { status: 404 });
     }
 
     const refetchedContentType = refetchedSource.headers.get("Content-Type");
     if (!isSafeImageContentType(refetchedContentType, imageConfig?.dangerouslyAllowSVG)) {
+      await cancelResponseBody(refetchedSource);
       return new Response("The requested resource is not an allowed image type", { status: 400 });
     }
 

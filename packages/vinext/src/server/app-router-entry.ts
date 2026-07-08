@@ -35,6 +35,7 @@ import { registerConfiguredCacheAdapters } from "virtual:vinext-cache-adapters";
 // @ts-expect-error -- virtual module resolved by vinext at build time
 import { registerConfiguredImageOptimizer } from "virtual:vinext-image-adapters";
 import {
+  createInternalImageRequest,
   getImageOptimizer,
   handleConfiguredImageOptimization,
   isImageOptimizationPath,
@@ -93,11 +94,18 @@ async function handleRequest(
   const url = new URL(request.url);
 
   if (isImageOptimizationPath(url.pathname) && env?.ASSETS && getImageOptimizer()) {
-    const assetFetcher = env.ASSETS;
     return handleConfiguredImageOptimization(
       request,
-      (assetPath) =>
-        Promise.resolve(assetFetcher.fetch(new Request(new URL(assetPath, request.url)))),
+      (assetPath, optimizerRequest) => {
+        const sourceRequest = createInternalImageRequest(
+          assetPath,
+          optimizerRequest,
+          __workerBasePath,
+        );
+        return sourceRequest
+          ? handleRequest(sourceRequest, env, ctx)
+          : Promise.resolve(new Response("Bad Request", { status: 400 }));
+      },
       __rscImageAllowedWidths,
       __rscImageConfig,
     );
