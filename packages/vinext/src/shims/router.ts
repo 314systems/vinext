@@ -1985,7 +1985,7 @@ async function loadComponentOnlyProps(
       await AppComponent.getInitialProps({
         Component: PageComponent,
         AppTree,
-        ctx,
+        ctx: { ...ctx, AppTree },
         router: Router,
       }),
     );

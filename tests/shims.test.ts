@@ -18158,6 +18158,54 @@ describe("Pages Router _next/data client navigation", () => {
     }
   });
 
+  it("passes AppTree through custom app getInitialProps during no-data navigation", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    let receivedPageContext: Record<string, unknown> | undefined;
+
+    const Page = Object.assign(() => "page", {
+      getInitialProps(context: Record<string, unknown>) {
+        receivedPageContext = context;
+        const AppTree = context.AppTree as (props: Record<string, unknown>) => unknown;
+        return { rendered: AppTree({ pageProps: {} }) };
+      },
+    });
+    const App = Object.assign(({ Component, pageProps }: any) => Component(pageProps), {
+      async getInitialProps(context: { Component: typeof Page; ctx: Record<string, unknown> }) {
+        return { pageProps: context.Component.getInitialProps(context.ctx) };
+      },
+    });
+    const { win } = createDataNavWindow({
+      loaders: {
+        "/": vi.fn(async () => makePageModule("home")),
+        "/about": vi.fn(async () => ({ default: Page })),
+      },
+      appLoader: vi.fn(async () => ({ default: App })),
+      ssgPatterns: [],
+      sspPatterns: [],
+    });
+    (globalThis as any).window = win;
+    globalThis.fetch = vi.fn() as any;
+    vi.resetModules();
+
+    try {
+      const Router = (await import("../packages/vinext/src/shims/router.js")).default;
+      await Router.push("/about");
+
+      expect(receivedPageContext).toMatchObject({
+        AppTree: expect.any(Function),
+        pathname: "/about",
+        asPath: "/about",
+      });
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+      vi.resetModules();
+    }
+  });
+
   it("does not persist middleware-prefetched SSR data between prefetch and navigation", async () => {
     const previousWindow = (globalThis as any).window;
     const originalDocument = (globalThis as any).document;

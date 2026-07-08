@@ -1281,8 +1281,9 @@ export function createSSRHandler(
                         return {};
                       },
                     };
-                    const initialProps = await loadPagesGetInitialProps(RegenApp, {
-                      AppTree: (appTreeProps: Record<string, unknown>) => {
+                    const appResult = await loadDevAppInitialProps({
+                      appComponent: RegenApp,
+                      appTree: (appTreeProps: Record<string, unknown>) => {
                         const appTree = React.createElement(RegenApp, {
                           ...appTreeProps,
                           Component: pageModule.default,
@@ -1293,29 +1294,20 @@ export function createSSRHandler(
                           ? routerShim.wrapWithRouterContext(appTree)
                           : appTree;
                       },
-                      Component: pageModule.default,
-                      router: {
-                        pathname: patternToNextFormat(route.pattern),
-                        query,
-                        asPath: requestAsPath,
-                      },
-                      ctx: {
-                        req: regenReq,
-                        res: regenRes,
-                        pathname: patternToNextFormat(route.pattern),
-                        query,
-                        asPath: requestAsPath,
-                        locale: locale ?? currentDefaultLocale,
-                        locales: i18nConfig?.locales,
-                        defaultLocale: currentDefaultLocale,
-                      },
+                      component: pageModule.default,
+                      req: regenReq,
+                      res: regenRes,
+                      pathname: patternToNextFormat(route.pattern),
+                      query,
+                      asPath: requestAsPath,
+                      locale: locale ?? currentDefaultLocale,
+                      locales: i18nConfig?.locales,
+                      defaultLocale: currentDefaultLocale,
                     });
-                    if (regenRes.headersSent || regenRes.writableEnded) return;
-                    if (initialProps) {
-                      freshRenderProps = initialProps;
-                      freshPageProps = isUnknownRecord(initialProps.pageProps)
-                        ? initialProps.pageProps
-                        : {};
+                    if (appResult.kind === "response-sent") return;
+                    if (appResult.kind === "render") {
+                      freshRenderProps = appResult.renderProps;
+                      freshPageProps = appResult.pageProps;
                     }
                   }
 
@@ -2115,28 +2107,71 @@ async function renderErrorPage(
       }
 
       const createElement = React.createElement;
-      const initialErrorProps = await loadPagesGetInitialProps(ErrorComponent, {
-        req,
-        res,
-        err,
-        pathname: candidate === "_error" ? "/_error" : `/${candidate}`,
-        query: parseQuery(url),
-        asPath: url,
-      });
-      if (res.headersSent || res.writableEnded) return;
-      const errorProps = { ...initialErrorProps, statusCode };
-
       // If the caller didn't supply wrapWithRouterContext, load it now.
       // runner.import() caches internally so the cost is negligible.
       let wrapFn = wrapWithRouterContext;
-      if (!wrapFn) {
-        try {
-          const errRouterShim = await importModule(runner, "next/router");
-          wrapFn = errRouterShim.wrapWithRouterContext;
-        } catch {
-          // router shim not available — continue without it
-        }
+      let errorRouter: Record<string, unknown> = {};
+      try {
+        const errRouterShim = await importModule(runner, "next/router");
+        if (!wrapFn) wrapFn = errRouterShim.wrapWithRouterContext;
+        errorRouter = (errRouterShim.default as Record<string, unknown> | undefined) ?? {};
+      } catch {
+        // router shim not available — continue without it
       }
+
+      const errorPathname = candidate === "_error" ? "/_error" : `/${candidate}`;
+      const errorQuery = parseQuery(url);
+      const createErrorAppTree = (appTreeProps: Record<string, unknown>) => {
+        let appTree: React.ReactElement = AppComponent
+          ? createElement(AppComponent, {
+              ...appTreeProps,
+              Component: ErrorComponent,
+              pageProps: appTreeProps.pageProps,
+              router: errorRouter,
+            })
+          : createElement(
+              ErrorComponent,
+              isUnknownRecord(appTreeProps.pageProps) ? appTreeProps.pageProps : {},
+            );
+        if (wrapFn) appTree = wrapFn(appTree);
+        return appTree;
+      };
+
+      let renderProps: Record<string, unknown> = { pageProps: {} };
+      let errorProps: Record<string, unknown> = {};
+      if (AppComponent && hasPagesGetInitialProps(AppComponent)) {
+        const appResult = await loadDevAppInitialProps({
+          appComponent: AppComponent,
+          appTree: createErrorAppTree,
+          component: ErrorComponent,
+          req,
+          res,
+          err,
+          pathname: errorPathname,
+          query: errorQuery,
+          asPath: url,
+        });
+        if (appResult.kind === "response-sent") return;
+        if (appResult.kind === "render") {
+          errorProps = appResult.pageProps;
+          renderProps = appResult.renderProps;
+        }
+      } else {
+        const initialErrorProps = await loadPagesGetInitialProps(ErrorComponent, {
+          AppTree: createErrorAppTree,
+          req,
+          res,
+          err,
+          pathname: errorPathname,
+          query: errorQuery,
+          asPath: url,
+        });
+        if (res.headersSent || res.writableEnded) return;
+        errorProps = initialErrorProps ?? {};
+        renderProps = { pageProps: errorProps };
+      }
+      errorProps = { ...errorProps, statusCode };
+      renderProps = { ...renderProps, pageProps: errorProps };
 
       // Try custom _document
       // oxlint-disable-next-line typescript/no-explicit-any
@@ -2159,8 +2194,10 @@ async function renderErrorPage(
       ): React.ReactElement => {
         let errorElement: React.ReactElement = FinalApp
           ? createElement(FinalApp, {
+              ...renderProps,
               Component: FinalComponent,
               pageProps: errorProps,
+              router: errorRouter,
             })
           : createElement(FinalComponent, errorProps);
         if (wrapFn) errorElement = wrapFn(errorElement);
@@ -2181,7 +2218,6 @@ async function renderErrorPage(
       );
 
       if (DocumentComponent) {
-        const errorPathname = candidate === "_error" ? "/_error" : `/${candidate}`;
         await streamPageToResponse(res, element, {
           url,
           server,

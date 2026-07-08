@@ -2903,6 +2903,62 @@ describe("Pages Router allowedDevOrigins config", () => {
 });
 
 describe("Virtual server entry generation", () => {
+  it("runs custom app getInitialProps for dev error rendering with nested AppTree", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-pages-dev-error-app-tree-"));
+    const pagesDir = path.join(tmpDir, "pages");
+    fs.mkdirSync(pagesDir, { recursive: true });
+    fs.symlinkSync(path.join(process.cwd(), "node_modules"), path.join(tmpDir, "node_modules"));
+    fs.writeFileSync(
+      path.join(pagesDir, "_app.tsx"),
+      `export default function App({ Component, pageProps, appMarker }) {
+  return <><p id="app-marker">{appMarker}</p><Component {...pageProps} /></>;
+}
+App.getInitialProps = async ({ Component, ctx }) => ({
+  appMarker: "app-ran",
+  pageProps: Component.getInitialProps ? await Component.getInitialProps(ctx) : {},
+});
+`,
+    );
+    fs.writeFileSync(
+      path.join(pagesDir, "_error.tsx"),
+      `import { renderToStaticMarkup } from "react-dom/server";
+export default function ErrorPage({ saved }) {
+  return <p id="saved">{saved}</p>;
+}
+ErrorPage.getInitialProps = ({ AppTree }) => ({
+  saved: renderToStaticMarkup(<AppTree pageProps={{ saved: "nested" }} />),
+});
+`,
+    );
+    fs.writeFileSync(
+      path.join(pagesDir, "index.tsx"),
+      `export default function Page() { return null; }`,
+    );
+
+    const testServer = await createServer({
+      root: tmpDir,
+      configFile: false,
+      plugins: [vinext({ appDir: tmpDir })],
+      server: { port: 0, cors: false },
+      logLevel: "silent",
+    });
+
+    try {
+      await testServer.listen();
+      const addr = testServer.httpServer?.address();
+      if (!addr || typeof addr !== "object") throw new Error("Expected dev server address");
+
+      const res = await fetch(`http://localhost:${addr.port}/missing`);
+      const html = await res.text();
+      expect(res.status).toBe(404);
+      expect(html).toContain('<p id="app-marker">app-ran</p>');
+      expect(html).toContain("nested");
+    } finally {
+      await testServer.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("generates valid JavaScript for the server entry", async () => {
     // Create a minimal server just to access the plugin's virtual module
     const testServer = await createServer({
@@ -8403,11 +8459,14 @@ describe("Pages Router dev ISR regeneration", () => {
       let regenUnifiedExecutionContext: unknown;
       let regenSsrContext: unknown;
       let regenI18nContext: unknown;
+      let regenPageContext: Record<string, unknown> | undefined;
       let appTreeWrapCount = 0;
       const App = Object.assign(({ Component, pageProps }: any) => Component(pageProps), {
-        getInitialProps: vi.fn(async () => ({
+        getInitialProps: vi.fn(async ({ Component, ctx }: any) => ({
           appLevel: "preserved",
-          pageProps: { fromApp: true },
+          pageProps: Component.getInitialProps
+            ? await Component.getInitialProps(ctx)
+            : { fromApp: true },
         })),
       });
       const outerExecutionContext = {
@@ -8440,9 +8499,19 @@ describe("Pages Router dev ISR regeneration", () => {
 
         if (id === routeFile) {
           return {
-            default() {
-              return null;
-            },
+            default: Object.assign(
+              function Page() {
+                return null;
+              },
+              {
+                getInitialProps(context: Record<string, unknown>) {
+                  regenPageContext = context;
+                  const AppTree = context.AppTree as (props: Record<string, unknown>) => unknown;
+                  AppTree({ pageProps: {} });
+                  return { fromApp: true };
+                },
+              },
+            ),
             async getStaticProps() {
               regenSawUnifiedScope = isInsideUnifiedScope();
               regenTags = [...getRequestContext().currentRequestTags];
@@ -8537,7 +8606,8 @@ describe("Pages Router dev ISR regeneration", () => {
         asPath: "/isr-test",
       });
       expect(regenI18nContext).toBeNull();
-      expect(appTreeWrapCount).toBe(1);
+      expect(regenPageContext).toMatchObject({ AppTree: expect.any(Function) });
+      expect(appTreeWrapCount).toBe(2);
       expect(isrSetSpy).toHaveBeenCalledOnce();
       expect(isrSetSpy.mock.calls[0]?.[1]).toMatchObject({
         kind: "PAGES",
