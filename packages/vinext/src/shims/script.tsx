@@ -162,6 +162,15 @@ function hasHoistedBeforeInteractiveScript(options: { scriptKey: string }): bool
   return false;
 }
 
+function seedHoistedBeforeInteractiveScript(options: {
+  scriptKey: string;
+  cacheKey: string;
+}): boolean {
+  const hoisted = hasHoistedBeforeInteractiveScript({ scriptKey: options.scriptKey });
+  if (hoisted && options.cacheKey) loadedScripts.add(options.cacheKey);
+  return hoisted;
+}
+
 /**
  * Map of React DOM prop names to their HTML attribute equivalents. Mirrors
  * Next.js's `set-attributes-from-props.ts`:
@@ -256,6 +265,10 @@ function Script(props: ScriptProps): React.ReactElement | null {
     ? null
     : extractBeforeInteractiveInlineContent(children, dangerouslySetInnerHTML);
   const scriptKey = createScriptKey({ id, src, inlineContent });
+  const hasHoistedScript =
+    typeof window !== "undefined" &&
+    (strategy === "beforeInteractive" || strategy === "beforePageRender") &&
+    seedHoistedBeforeInteractiveScript({ scriptKey, cacheKey: key });
 
   useEffect(() => {
     if (hasOnReadyEffectCalled.current) return;
@@ -475,7 +488,7 @@ function Script(props: ScriptProps): React.ReactElement | null {
     // can read from inside a `"use client"` shim.
     if (
       (src || inlineContent !== null) &&
-      (hasHoistedBeforeInteractiveScript({ scriptKey }) || hasAppNavigationRuntimeBootstrap())
+      (hasHoistedScript || hasAppNavigationRuntimeBootstrap())
     ) {
       return null;
     }

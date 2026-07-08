@@ -1030,6 +1030,31 @@ describe("Script beforeInteractive registry (#2016)", () => {
     expect(html).toBe("");
   });
 
+  it("seeds the load cache from a hoisted App Router beforeInteractive script", () => {
+    setGlobalValue("window", {});
+    setGlobalValue("document", {
+      querySelector: () => null,
+      querySelectorAll: () => [
+        {
+          getAttribute(name: string) {
+            return name === "data-vinext-script-key" ? "id:app-before-ready" : null;
+          },
+        },
+      ],
+    });
+
+    const html = ReactDOMServer.renderToString(
+      React.createElement(Script, {
+        id: "app-before-ready",
+        src: "/beforeinteractive-ready.js",
+        strategy: "beforeInteractive",
+      } as ScriptProps),
+    );
+
+    expect(html).toBe("");
+    expect(loadedScripts.has("app-before-ready")).toBe(true);
+  });
+
   it("dedupes escaped inline beforeInteractive scripts by stable emitted identity", () => {
     const source = 'window.value = "</script><script>bad()</script>";';
     const captured: BeforeInteractiveInlineScript[] = [];

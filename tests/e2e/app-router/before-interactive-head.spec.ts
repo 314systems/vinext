@@ -39,4 +39,34 @@ test.describe("inline beforeInteractive head ordering", () => {
     // hydration warnings.
     void consoleErrors;
   });
+
+  test("fires onReady for hydrated and remounted hoisted scripts without re-executing", async ({
+    page,
+    consoleErrors,
+  }) => {
+    await page.goto(`${BASE}/beforeinteractive-ready`);
+    await expect(page.getByRole("heading", { name: "App Before Interactive Ready" })).toBeVisible();
+
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(window, "__vinextAppBeforeReadyCalls")))
+      .toBe(1);
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(window, "__vinextAppBeforeScriptExecutions")))
+      .toBe(1);
+    await expect(page.locator('script[src="/beforeinteractive-ready.js"]')).toHaveCount(1);
+
+    const toggle = page.getByRole("button", { name: "Toggle script" });
+    await toggle.click();
+    await toggle.click();
+
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(window, "__vinextAppBeforeReadyCalls")))
+      .toBe(2);
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(window, "__vinextAppBeforeScriptExecutions")))
+      .toBe(1);
+    await expect(page.locator('script[src="/beforeinteractive-ready.js"]')).toHaveCount(1);
+
+    void consoleErrors;
+  });
 });
