@@ -1679,12 +1679,14 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               base && (requestUrl === base || requestUrl.startsWith(`${base}/`))
                 ? requestUrl.slice(base.length) || "/"
                 : requestUrl;
+            const pathWithoutBase = urlWithoutBase.split("?", 1)[0];
             if (
-              urlWithoutBase.startsWith("/@fs/") ||
-              urlWithoutBase.startsWith("/@id/") ||
-              urlWithoutBase.startsWith("/@vite/") ||
-              urlWithoutBase.startsWith("/@react-refresh") ||
-              urlWithoutBase.startsWith("/node_modules/.vite/")
+              pathWithoutBase.startsWith("/@fs/") ||
+              pathWithoutBase.startsWith("/@id/") ||
+              pathWithoutBase.startsWith("/@vite/") ||
+              pathWithoutBase === "/@react-refresh" ||
+              pathWithoutBase.startsWith("/@react-refresh/") ||
+              pathWithoutBase.startsWith("/node_modules/.vite/")
             ) {
               return next();
             }

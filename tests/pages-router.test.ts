@@ -1149,6 +1149,12 @@ describe("Pages Router integration", () => {
     const pageRes = await fetch(`${baseUrl}/foo//bar?x=1`, { redirect: "manual" });
     expect(pageRes.status).toBe(308);
     expect(pageRes.headers.get("location")).toBe("/foo/bar?x=1");
+
+    const lookalikeRes = await fetch(`${baseUrl}/@react-refresh-demo//page`, {
+      redirect: "manual",
+    });
+    expect(lookalikeRes.status).toBe(308);
+    expect(lookalikeRes.headers.get("location")).toBe("/@react-refresh-demo/page");
   });
 
   it("does not canonicalize base-prefixed Vite-internal dev URLs", async () => {
@@ -1176,6 +1182,12 @@ describe("Pages Router integration", () => {
       const pageRes = await fetch(`${testBaseUrl}/docs/foo//bar?x=1`, { redirect: "manual" });
       expect(pageRes.status).toBe(308);
       expect(pageRes.headers.get("location")).toBe("/docs/foo/bar?x=1");
+
+      const lookalikeRes = await fetch(`${testBaseUrl}/docs/@react-refresh-demo//page`, {
+        redirect: "manual",
+      });
+      expect(lookalikeRes.status).toBe(308);
+      expect(lookalikeRes.headers.get("location")).toBe("/docs/@react-refresh-demo/page");
     } finally {
       await testServer.close();
     }
