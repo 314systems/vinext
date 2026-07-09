@@ -61,5 +61,10 @@ export async function loadBeforeInteractiveRuntimeRecords(
   scope.__next_s = records;
 
   for (const record of initialRecords) enqueueRecord(record);
-  await pending;
+  let observedPending = pending;
+  while (true) {
+    await observedPending;
+    if (observedPending === pending) break;
+    observedPending = pending;
+  }
 }

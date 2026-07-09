@@ -61,6 +61,31 @@ describe("App beforeInteractive runtime records", () => {
     consoleError.mockRestore();
   });
 
+  it("waits for records pushed while an initial source is loading", async () => {
+    const scope: { __next_s: RuntimeRecord[] } = {
+      __next_s: [["/blocking.js", {}]],
+    };
+    let resolveBlockingScript: (() => void) | undefined;
+    const { document, scripts } = createRuntimeDocument((script) => {
+      if (script.src) resolveBlockingScript = () => script.onload?.();
+    });
+
+    let bootstrapResolved = false;
+    const bootstrap = loadBeforeInteractiveRuntimeRecords(scope, document).then(() => {
+      bootstrapResolved = true;
+    });
+    await vi.waitFor(() => expect(resolveBlockingScript).toBeTypeOf("function"));
+
+    scope.__next_s.push(["/streamed.js", {}]);
+    resolveBlockingScript?.();
+    await vi.waitFor(() => expect(scripts).toHaveLength(2));
+
+    expect(bootstrapResolved).toBe(false);
+    scripts[1]?.onload?.();
+    await bootstrap;
+    expect(scripts[1]?.src).toBe("/streamed.js");
+  });
+
   it("materializes contextual nonces and numeric attributes", async () => {
     const scope: { __next_s: RuntimeRecord[] } = {
       __next_s: [
