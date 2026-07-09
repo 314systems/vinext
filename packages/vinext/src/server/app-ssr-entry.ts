@@ -697,11 +697,11 @@ export async function handleSsr(
         // The transform calls this once when it splices after `<head ...>`.
         // By that point React Fizz has rendered the layout's `<head>` children
         // (which is where the Script shim registers), so the captured array is
-        // populated. We deliberately return a snapshot — `flushBuffered` will
-        // not re-invoke us, and any beforeInteractive Script that renders
-        // later (inside a Suspense boundary further down the tree) falls back
-        // to its inline location, matching the documented guarantee that
-        // ordering applies to scripts rendered in the initial shell.
+        // populated. We deliberately return a shell snapshot: any
+        // beforeInteractive Script that first renders later inside a pending
+        // Suspense boundary is not emitted or added to a client loader. Pages
+        // Router has the same shell-only behavior. beforeInteractive scripts
+        // must therefore be rendered in the initial shell.
         const getBeforeInteractiveHeadHTML = (): string =>
           renderBeforeInteractiveInlineScripts(beforeInteractiveInlineScripts);
 

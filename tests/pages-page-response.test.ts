@@ -246,6 +246,53 @@ describe("pages page response", () => {
     expect(html).not.toMatch(/<div id="__next">[\s\S]*legacy-before-interactive/);
   });
 
+  it("snapshots beforeInteractive scripts at shell-ready and omits scripts revealed later", async () => {
+    const common = createCommonOptions();
+    const reactDomServer = await import("react-dom/server.edge");
+    let revealLateScript!: () => void;
+    const lateScriptReady = new Promise<void>((resolve) => {
+      revealLateScript = resolve;
+    });
+    let revealed = false;
+
+    function LateScript() {
+      if (!revealed) throw lateScriptReady;
+      return React.createElement(
+        Script,
+        {
+          id: "late-before-interactive",
+          strategy: "beforeInteractive",
+        },
+        "window.lateBeforeInteractive = true",
+      );
+    }
+
+    const responsePromise = renderPagesPageResponse({
+      ...common.options,
+      createPageElement: () =>
+        React.createElement(
+          React.Suspense,
+          { fallback: React.createElement("p", { id: "shell-fallback" }, "loading") },
+          React.createElement(LateScript),
+        ),
+      renderToReadableStream: async (element: React.ReactNode) =>
+        reactDomServer.renderToReadableStream(element as React.ReactElement),
+    });
+
+    const response = await responsePromise;
+    revealed = true;
+    revealLateScript();
+    const html = await response.text();
+    const nextDataMatch = html.match(
+      /<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/,
+    );
+
+    expect(html).not.toContain("late-before-interactive");
+    expect(html).not.toContain("window.lateBeforeInteractive");
+    expect(nextDataMatch).not.toBeNull();
+    expect(JSON.parse(nextDataMatch![1]).scriptLoader).toBeUndefined();
+  });
+
   it("serializes client scripts declared only in _document into __NEXT_DATA__", async () => {
     const common = createCommonOptions();
     const reactDomServer = await import("react-dom/server.edge");
