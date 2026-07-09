@@ -1066,6 +1066,11 @@ describe("App Router Production server (startProdServer)", () => {
     expect(encoded.status).toBe(404);
   });
 
+  it("does not redirect absolute-form request targets off origin", async () => {
+    const response = await requestRawPath(baseUrl, "https://evil.example//about");
+    expect(response.headers.location).toBeUndefined();
+  });
+
   it("redirects header-only RSC requests at canonical page URLs to cache-separated Flight URLs", async () => {
     const res = await fetch(`${baseUrl}/about`, {
       headers: { Accept: "text/x-component", RSC: "1" },

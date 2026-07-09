@@ -30,8 +30,12 @@ export function normalizeRepeatedSlashes(url: string): string {
 }
 
 export function getRepeatedSlashRedirect(url: string): string | null {
+  if (!url.startsWith("/")) return null;
   const pathname = url.split("?", 1)[0];
-  return /(\\|\/\/)/.test(pathname) ? normalizeRepeatedSlashes(url) : null;
+  if (!/(\\|\/\/)/.test(pathname)) return null;
+
+  const location = normalizeRepeatedSlashes(url);
+  return location.startsWith("/") && !location.startsWith("//") ? location : null;
 }
 
 export function redirectRepeatedSlashes(request: Request): Response | null {

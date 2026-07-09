@@ -7,6 +7,7 @@ import {
   createStaticFileSignal,
   filterInternalHeaders,
   guardProtocolRelativeUrl,
+  getRepeatedSlashRedirect,
   INTERNAL_HEADERS,
   isOpenRedirectShaped,
   hasBasePath,
@@ -141,6 +142,16 @@ describe("normalizeRepeatedSlashes", () => {
     expect(normalizeRepeatedSlashes("//details?one=1?two=2")).toBe("/details?one=1?two=2");
     expect(normalizeRepeatedSlashes("//details?")).toBe("/details");
     expect(normalizeRepeatedSlashes("//details??x=1")).toBe("/details");
+  });
+
+  it("rejects absolute-form request targets", () => {
+    expect(getRepeatedSlashRedirect("https://evil.example//path")).toBeNull();
+    expect(getRepeatedSlashRedirect("http://evil.example\\path")).toBeNull();
+  });
+
+  it("returns only same-origin path redirects", () => {
+    expect(getRepeatedSlashRedirect("//evil.example/path")).toBe("/evil.example/path");
+    expect(getRepeatedSlashRedirect("/foo//bar?from=test")).toBe("/foo/bar?from=test");
   });
 });
 
