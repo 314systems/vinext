@@ -26,6 +26,7 @@ import {
   loadClientScript,
   loadedScripts,
   resolveScriptNonce,
+  scriptCache,
   type ScriptProps,
 } from "./script-loader.js";
 
@@ -324,6 +325,9 @@ function Script(props: ScriptProps): React.ReactElement | null {
     typeof window !== "undefined" &&
     (strategy === "beforeInteractive" || strategy === "beforePageRender") &&
     hasAppBeforeInteractiveRuntimeRecord(scriptKey);
+  const hasPagesClientRuntime =
+    typeof window !== "undefined" &&
+    typeof (window as typeof window & { next?: { router?: unknown } }).next?.router === "object";
 
   useEffect(() => {
     if (hasOnReadyEffectCalled.current) return;
@@ -331,8 +335,12 @@ function Script(props: ScriptProps): React.ReactElement | null {
 
     if (onReady && key && loadedScripts.has(key)) {
       onReady();
+      return;
     }
-  }, [onReady, key]);
+    if (onReady && src && hasAppRuntimeRecord) {
+      void scriptCache.get(src)?.then(() => onReady());
+    }
+  }, [onReady, key, src, hasAppRuntimeRecord]);
 
   useEffect(() => {
     if (hasLoadScriptEffectCalled.current) return;
@@ -345,6 +353,27 @@ function Script(props: ScriptProps): React.ReactElement | null {
       // dedupes against any SSR-emitted <link rel="stylesheet">, so this is
       // safe even when the server already hoisted them via React Float.
       insertClientStylesheets(stylesheets);
+      if (serverRenderedScriptLocation === "head" || !hasPagesClientRuntime) return;
+
+      loadClientScript(
+        {
+          src,
+          id,
+          strategy,
+          onLoad,
+          onReady,
+          onError,
+          children,
+          dangerouslySetInnerHTML,
+          stylesheets,
+          ...rest,
+        },
+        {
+          resolvedNonce,
+          fireReadyWhenAlreadyLoaded: true,
+          insertStylesheets: insertClientStylesheets,
+        },
+      );
       return;
     }
 
@@ -413,6 +442,8 @@ function Script(props: ScriptProps): React.ReactElement | null {
     key,
     resolvedNonce,
     rest,
+    serverRenderedScriptLocation,
+    hasPagesClientRuntime,
   ]);
 
   // SSR path: only "beforeInteractive" renders a <script> tag server-side
@@ -565,6 +596,7 @@ function Script(props: ScriptProps): React.ReactElement | null {
     ) {
       return null;
     }
+    if (hasPagesClientRuntime) return null;
 
     return React.createElement(
       "script",

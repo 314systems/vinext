@@ -18,21 +18,31 @@ declare global {
   interface Window {
     __vinextLateBeforeReadyCalls?: number;
     __vinextLateBeforeScriptExecutions?: number;
+    __vinextLateBeforeReadyFiredEarly?: boolean;
   }
 }
 
 function LateScript(): React.ReactElement {
   return (
-    <Script
-      id="app-late-before-ready"
-      strategy="beforeInteractive"
-      onReady={() => {
-        window.__vinextLateBeforeReadyCalls = (window.__vinextLateBeforeReadyCalls ?? 0) + 1;
-      }}
-    >
-      {`window.__vinextLateBeforeScriptExecutions =
-        (window.__vinextLateBeforeScriptExecutions || 0) + 1;`}
-    </Script>
+    <>
+      <Script
+        id="app-late-before-blocking"
+        src="/beforeinteractive-late-blocking.js"
+        strategy="beforeInteractive"
+      />
+      <Script
+        id="app-late-before-ready"
+        src="/beforeinteractive-late-ready.js"
+        strategy="beforeInteractive"
+        async={false}
+        onReady={() => {
+          if (window.__vinextLateBeforeScriptExecutions !== 1) {
+            window.__vinextLateBeforeReadyFiredEarly = true;
+          }
+          window.__vinextLateBeforeReadyCalls = (window.__vinextLateBeforeReadyCalls ?? 0) + 1;
+        }}
+      />
+    </>
   );
 }
 

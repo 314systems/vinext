@@ -86,6 +86,9 @@ test.describe("inline beforeInteractive head ordering", () => {
     await expect
       .poll(() => page.evaluate(() => Reflect.get(window, "__vinextLateBeforeReadyCalls")))
       .toBe(1);
+    expect(
+      await page.evaluate(() => Reflect.get(window, "__vinextLateBeforeReadyFiredEarly")),
+    ).not.toBe(true);
     await expect(page.locator('script[id="app-late-before-ready"]')).toHaveCount(1);
 
     const toggle = page.getByRole("button", { name: "Toggle late script" });

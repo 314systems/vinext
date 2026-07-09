@@ -1,3 +1,5 @@
+import { loadedScripts, scriptCache, setScriptAttributes } from "vinext/shims/script-loader";
+
 type BeforeInteractiveRuntimeRecord = [src: string | 0, props: Record<string, unknown>];
 
 type BeforeInteractiveRuntimeScope = {
@@ -6,7 +8,15 @@ type BeforeInteractiveRuntimeScope = {
 
 type RuntimeScript = Pick<
   HTMLScriptElement,
-  "setAttribute" | "src" | "text" | "onload" | "onerror"
+  | "setAttribute"
+  | "removeAttribute"
+  | "src"
+  | "text"
+  | "onload"
+  | "onerror"
+  | "async"
+  | "defer"
+  | "noModule"
 >;
 
 type RuntimeDocument = {
@@ -14,38 +24,64 @@ type RuntimeDocument = {
   head: { appendChild(script: RuntimeScript): unknown };
 };
 
+type DeferredLoad = {
+  promise: Promise<void>;
+  resolve(): void;
+  reject(error: unknown): void;
+};
+
+function createDeferredLoad(): DeferredLoad {
+  let resolve!: () => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  void promise.catch(() => {});
+  return { promise, resolve, reject };
+}
+
 export async function loadBeforeInteractiveRuntimeRecords(
   scope: BeforeInteractiveRuntimeScope = self as BeforeInteractiveRuntimeScope,
   runtimeDocument: RuntimeDocument = document as unknown as RuntimeDocument,
 ): Promise<void> {
   const records = scope.__next_s ?? [];
   let pending = Promise.resolve();
-  const loadRecord = ([src, props]: BeforeInteractiveRuntimeRecord): Promise<void> =>
+  const loadRecord = (
+    [src, props]: BeforeInteractiveRuntimeRecord,
+    deferredLoad?: DeferredLoad,
+  ): Promise<void> =>
     new Promise<void>((resolve, reject) => {
       const script = runtimeDocument.createElement("script");
-      for (const [name, value] of Object.entries(props)) {
-        if (name === "children" || value === undefined) continue;
-        if (name === "className" && typeof value === "string") {
-          script.setAttribute("class", value);
-        } else if (typeof value === "string" || typeof value === "number") {
-          script.setAttribute(name, String(value));
-        } else if (typeof value === "boolean" && value) {
-          script.setAttribute(name, "");
-        }
-      }
+      setScriptAttributes(script as HTMLScriptElement, props);
+      const key =
+        (typeof props.id === "string" && props.id) || (typeof src === "string" && src) || "";
       if (src) {
         script.src = src;
-        script.onload = () => resolve();
-        script.onerror = reject;
+        script.onload = () => {
+          if (key) loadedScripts.add(key);
+          deferredLoad?.resolve();
+          resolve();
+        };
+        script.onerror = (error) => {
+          deferredLoad?.reject(error);
+          reject(error);
+        };
       } else {
         script.text = typeof props.children === "string" ? props.children : "";
       }
       runtimeDocument.head.appendChild(script);
-      if (!src) queueMicrotask(resolve);
+      if (!src) {
+        if (key) loadedScripts.add(key);
+        queueMicrotask(resolve);
+      }
     });
   const enqueueRecord = (record: BeforeInteractiveRuntimeRecord): void => {
+    const [src] = record;
+    const deferredLoad = src ? createDeferredLoad() : undefined;
+    if (src && deferredLoad) scriptCache.set(src, deferredLoad.promise);
     pending = pending
-      .then(() => loadRecord(record))
+      .then(() => loadRecord(record, deferredLoad))
       .catch((error: unknown) => {
         console.error(error);
       });

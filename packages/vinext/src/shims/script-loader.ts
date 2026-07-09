@@ -116,14 +116,18 @@ function setBooleanScriptAttribute(
   return true;
 }
 
-function setScriptAttributes(element: HTMLScriptElement, rest: Record<string, unknown>): void {
+export function setScriptAttributes(
+  element: HTMLScriptElement,
+  rest: Record<string, unknown>,
+): void {
   for (const [attribute, value] of Object.entries(rest)) {
-    if (attribute === "dangerouslySetInnerHTML" || value === undefined) continue;
+    if (attribute === "dangerouslySetInnerHTML" || attribute === "children" || value === undefined)
+      continue;
     if (setBooleanScriptAttribute(element, attribute, value)) continue;
     if (attribute === "className" && typeof value === "string") {
       element.setAttribute("class", value);
-    } else if (typeof value === "string") {
-      element.setAttribute(attribute, value);
+    } else if (typeof value === "string" || typeof value === "number") {
+      element.setAttribute(attribute, String(value));
     } else if (typeof value === "boolean" && value) {
       element.setAttribute(attribute, "");
     }

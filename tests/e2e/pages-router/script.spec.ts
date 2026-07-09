@@ -85,4 +85,17 @@ test.describe("next/script", () => {
       .poll(() => page.evaluate(() => Reflect.get(window, "__vinextBeforeReadyCalls")))
       .toBe(2);
   });
+
+  test("executes a beforeInteractive script introduced by client navigation", async ({ page }) => {
+    await page.goto(`${BASE}/script-navigation-start`);
+    await page.getByRole("link", { name: "Navigate to script target" }).click();
+    await expect(page.getByRole("heading", { name: "Script Navigation Target" })).toBeVisible();
+
+    await expect
+      .poll(() =>
+        page.evaluate(() => Reflect.get(window, "__vinextPagesNavigationBeforeExecutions")),
+      )
+      .toBe(1);
+    await expect(page.locator('script[id="pages-navigation-before"]')).toHaveCount(1);
+  });
 });

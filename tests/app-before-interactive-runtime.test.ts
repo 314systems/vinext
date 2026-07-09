@@ -6,8 +6,12 @@ type RuntimeRecord = [src: string | 0, props: Record<string, unknown>];
 type MockScript = {
   attrs: Record<string, string>;
   setAttribute(name: string, value: string): void;
+  removeAttribute(name: string): void;
   src: string;
   text: string;
+  async: boolean;
+  defer: boolean;
+  noModule: boolean;
   onload: (() => void) | null;
   onerror: ((error: unknown) => void) | null;
 };
@@ -23,8 +27,14 @@ function createRuntimeDocument(onAppend?: (script: MockScript) => void) {
           setAttribute(name, value) {
             this.attrs[name] = value;
           },
+          removeAttribute(name) {
+            delete this.attrs[name];
+          },
           src: "",
           text: "",
+          async: true,
+          defer: false,
+          noModule: false,
           onload: null,
           onerror: null,
         };
@@ -95,7 +105,7 @@ describe("App beforeInteractive runtime records", () => {
             children: "window.attributesLoaded = true",
             nonce: "context-nonce",
             "data-version": 2,
-            async: true,
+            async: false,
           },
         ],
       ],
@@ -107,7 +117,7 @@ describe("App beforeInteractive runtime records", () => {
     expect(scripts[0]?.attrs).toEqual({
       nonce: "context-nonce",
       "data-version": "2",
-      async: "",
     });
+    expect(scripts[0]?.async).toBe(false);
   });
 });
