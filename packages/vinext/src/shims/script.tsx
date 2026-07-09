@@ -14,7 +14,6 @@
  */
 import React, { useEffect, useRef } from "react";
 import * as ReactDOM from "react-dom";
-import { hasAppNavigationRuntimeBootstrap } from "../client/navigation-runtime.js";
 import { fnv1a64 } from "../utils/hash.js";
 import { escapeInlineContent } from "./head.js";
 import { useDocumentScriptRegister } from "./document-script-context.js";
@@ -150,25 +149,28 @@ function createScriptKey(options: {
   return `inline:${fnv1a64(options.inlineContent ?? "")}`;
 }
 
-function hasHoistedBeforeInteractiveScript(options: { scriptKey: string }): boolean {
+function findServerRenderedBeforeInteractiveScript(options: {
+  scriptKey: string;
+}): "head" | "body" | null {
   if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") {
-    return false;
+    return null;
   }
 
   const scripts = document.querySelectorAll('script[data-nscript="beforeInteractive"]');
   for (const script of scripts) {
-    if (script.getAttribute("data-vinext-script-key") === options.scriptKey) return true;
+    if (script.getAttribute("data-vinext-script-key") !== options.scriptKey) continue;
+    return document.head?.contains(script) === false ? "body" : "head";
   }
-  return false;
+  return null;
 }
 
-function seedHoistedBeforeInteractiveScript(options: {
+function seedServerRenderedBeforeInteractiveScript(options: {
   scriptKey: string;
   cacheKey: string;
-}): boolean {
-  const hoisted = hasHoistedBeforeInteractiveScript({ scriptKey: options.scriptKey });
-  if (hoisted && options.cacheKey) loadedScripts.add(options.cacheKey);
-  return hoisted;
+}): "head" | "body" | null {
+  const location = findServerRenderedBeforeInteractiveScript({ scriptKey: options.scriptKey });
+  if (location && options.cacheKey) loadedScripts.add(options.cacheKey);
+  return location;
 }
 
 /**
@@ -265,10 +267,10 @@ function Script(props: ScriptProps): React.ReactElement | null {
     ? null
     : extractBeforeInteractiveInlineContent(children, dangerouslySetInnerHTML);
   const scriptKey = createScriptKey({ id, src, inlineContent });
-  const hasHoistedScript =
+  const serverRenderedScriptLocation =
     typeof window !== "undefined" &&
     (strategy === "beforeInteractive" || strategy === "beforePageRender") &&
-    seedHoistedBeforeInteractiveScript({ scriptKey, cacheKey: key });
+    seedServerRenderedBeforeInteractiveScript({ scriptKey, cacheKey: key });
 
   useEffect(() => {
     if (hasOnReadyEffectCalled.current) return;
@@ -472,22 +474,21 @@ function Script(props: ScriptProps): React.ReactElement | null {
   }
 
   if (strategy === "beforeInteractive" || strategy === "beforePageRender") {
-    // On the client, suppress the `<script>` render for any beforeInteractive
-    // Script in App Router pages — inline AND external `src`. The pre-head
-    // splice in app-ssr-entry/app-ssr-stream already put the tag in the DOM
-    // (the SSR registration condition above mirrors this exactly), so rendering
-    // it again would duplicate the script (double execution) or cause a
-    // hydration mismatch (positions differ).
-    //
-    // For Pages Router and any other SSR path that didn't run through
-    // app-ssr-entry, the server rendered the `<script>` inline in source
-    // order, so the client must match. We detect "App Router" via the
-    // navigation runtime that the App Router bootstrap installs before
-    // calling hydrateRoot — it is the most reliable runtime signal we
-    // can read from inside a `"use client"` shim.
+    // Suppress only when this exact script was hoisted into `<head>`. A script
+    // first revealed after the App Router shell snapshot remains in its
+    // streamed Suspense boundary, so the hydrating client must render the same
+    // element instead of suppressing every script merely because App Router is
+    // active. The marker lookup above still seeds loadedScripts for either
+    // location so onReady/remount behavior matches an already-executed script.
+    if ((src || inlineContent !== null) && serverRenderedScriptLocation === "head") {
+      return null;
+    }
+
     if (
       (src || inlineContent !== null) &&
-      (hasHoistedScript || hasAppNavigationRuntimeBootstrap())
+      serverRenderedScriptLocation === null &&
+      key &&
+      loadedScripts.has(key)
     ) {
       return null;
     }

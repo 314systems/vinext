@@ -69,4 +69,37 @@ test.describe("inline beforeInteractive head ordering", () => {
 
     void consoleErrors;
   });
+
+  test("hydrates a late Suspense script without suppressing or duplicating it", async ({
+    page,
+    consoleErrors,
+  }) => {
+    await page.goto(`${BASE}/beforeinteractive-late-suspense`);
+    await expect(
+      page.getByRole("heading", { name: "Late Before Interactive Suspense" }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Toggle late script" })).toBeVisible();
+
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(window, "__vinextLateBeforeScriptExecutions")))
+      .toBe(1);
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(window, "__vinextLateBeforeReadyCalls")))
+      .toBe(1);
+    await expect(page.locator('script[id="app-late-before-ready"]')).toHaveCount(1);
+
+    const toggle = page.getByRole("button", { name: "Toggle late script" });
+    await toggle.click();
+    await toggle.click();
+
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(window, "__vinextLateBeforeReadyCalls")))
+      .toBe(2);
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(window, "__vinextLateBeforeScriptExecutions")))
+      .toBe(1);
+    await expect(page.locator('script[id="app-late-before-ready"]')).toHaveCount(0);
+
+    void consoleErrors;
+  });
 });

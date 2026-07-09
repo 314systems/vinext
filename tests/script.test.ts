@@ -25,7 +25,6 @@ import {
   type BeforeInteractiveInlineScript,
 } from "../packages/vinext/src/shims/before-interactive-context.js";
 import { renderBeforeInteractiveInlineScripts } from "../packages/vinext/src/server/before-interactive-head.js";
-import { NAVIGATION_RUNTIME_KEY } from "../packages/vinext/src/client/navigation-runtime.js";
 
 const originalDocument = globalThis.document;
 const originalWindow = globalThis.window;
@@ -1044,21 +1043,67 @@ describe("Script beforeInteractive registry (#2016)", () => {
   });
 
   it("does not re-render a hoisted src beforeInteractive script on the client", () => {
-    // With the App Router runtime installed on `window`, the SSR pipeline has
-    // already hoisted the script's tag into <head>. The client component must
-    // return null for both inline AND src beforeInteractive scripts so React
-    // does not duplicate the tag (duplicate execution / hydration mismatch).
-    setGlobalValue("window", {
-      [NAVIGATION_RUNTIME_KEY]: {
-        bootstrap: { routeManifest: null, rsc: undefined },
-        functions: {},
+    const hoistedScript = {
+      getAttribute(name: string) {
+        return name === "data-vinext-script-key" ? "src:/dedupe.js" : null;
       },
+    };
+    setGlobalValue("window", {});
+    setGlobalValue("document", {
+      querySelector: () => null,
+      querySelectorAll: () => [hoistedScript],
+      head: { contains: (node: unknown) => node === hoistedScript },
     });
-    setGlobalValue("document", { querySelector: () => null });
 
     const html = ReactDOMServer.renderToString(
       React.createElement(Script, {
         src: "/dedupe.js",
+        strategy: "beforeInteractive",
+      } as ScriptProps),
+    );
+
+    expect(html).toBe("");
+  });
+
+  it("re-renders a late body script while seeding its onReady cache key", () => {
+    const lateScript = {
+      getAttribute(name: string) {
+        return name === "data-vinext-script-key" ? "id:late-body" : null;
+      },
+    };
+    setGlobalValue("window", {});
+    setGlobalValue("document", {
+      querySelector: () => null,
+      querySelectorAll: () => [lateScript],
+      head: { contains: () => false },
+    });
+
+    const html = ReactDOMServer.renderToString(
+      React.createElement(Script, {
+        id: "late-body",
+        src: "/late-body.js",
+        strategy: "beforeInteractive",
+      } as ScriptProps),
+    );
+
+    expect(html).toContain('id="late-body"');
+    expect(html).toContain('src="/late-body.js"');
+    expect(loadedScripts.has("late-body")).toBe(true);
+  });
+
+  it("does not execute a late body script again when it remounts", () => {
+    loadedScripts.add("late-body");
+    setGlobalValue("window", {});
+    setGlobalValue("document", {
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      head: { contains: () => false },
+    });
+
+    const html = ReactDOMServer.renderToString(
+      React.createElement(Script, {
+        id: "late-body",
+        src: "/late-body.js",
         strategy: "beforeInteractive",
       } as ScriptProps),
     );
