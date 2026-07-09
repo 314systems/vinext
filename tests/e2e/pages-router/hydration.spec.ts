@@ -17,10 +17,10 @@ test.describe("Hydration", () => {
       markDynamicModuleRequested = resolve;
     });
 
-    await page.route(/\/components\/heavy\.tsx(?:\?|$)/, async (route) => {
+    await page.route("**/dynamic-hydration-gate.txt", async (route) => {
       markDynamicModuleRequested();
       await dynamicModuleReleased;
-      await route.continue();
+      await route.fulfill({ status: 200, body: "ready" });
     });
 
     await page.goto(`${BASE}/dynamic-page`, { waitUntil: "domcontentloaded" });
@@ -28,12 +28,12 @@ test.describe("Hydration", () => {
 
     const increment = page.locator('[data-testid="dynamic-increment"]');
     await expect(increment).toHaveText("Count: 0");
-    await increment.click();
+    await increment.dispatchEvent("click");
     await expect(increment).toHaveText("Count: 0");
 
     releaseDynamicModule();
     await waitForHydration(page);
-    await increment.click();
+    await increment.dispatchEvent("click");
     await expect(increment).toHaveText("Count: 1");
   });
 
