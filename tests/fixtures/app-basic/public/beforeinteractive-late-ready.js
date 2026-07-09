@@ -1,2 +1,1 @@
-window.__vinextLateBeforeScriptExecutions =
-  (window.__vinextLateBeforeScriptExecutions || 0) + 1;
+window.__vinextLateBeforeScriptExecutions = (window.__vinextLateBeforeScriptExecutions || 0) + 1;
