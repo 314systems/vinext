@@ -1010,6 +1010,32 @@ describe("Script beforeInteractive registry (#2016)", () => {
     expect(html).not.toContain('data-nscript="beforeInteractive"');
   });
 
+  it("serializes contextual nonces and numeric attributes into late App runtime records", () => {
+    const html = ReactDOMServer.renderToString(
+      React.createElement(
+        ScriptNonceProvider,
+        { nonce: "context-nonce" },
+        React.createElement(
+          BeforeInteractiveContext.Provider,
+          { value: (): BeforeInteractiveRegistration => "app-runtime" },
+          React.createElement(
+            Script,
+            {
+              id: "late-app-script-attributes",
+              strategy: "beforeInteractive",
+              "data-version": 2,
+            } as ScriptProps,
+            "window.lateAppScriptAttributes = true",
+          ),
+        ),
+      ),
+    );
+
+    expect(html).toContain('nonce="context-nonce"');
+    expect(html).toContain('"nonce":"context-nonce"');
+    expect(html).toContain('"data-version":2');
+  });
+
   it("registers src beforeInteractive scripts so they are hoisted into <head>", () => {
     const captured: BeforeInteractiveInlineScript[] = [];
     const html = ReactDOMServer.renderToString(

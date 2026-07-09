@@ -1,0 +1,88 @@
+import { describe, expect, it, vi } from "vite-plus/test";
+import { loadBeforeInteractiveRuntimeRecords } from "../packages/vinext/src/server/app-before-interactive-runtime.js";
+
+type RuntimeRecord = [src: string | 0, props: Record<string, unknown>];
+
+type MockScript = {
+  attrs: Record<string, string>;
+  setAttribute(name: string, value: string): void;
+  src: string;
+  text: string;
+  onload: (() => void) | null;
+  onerror: ((error: unknown) => void) | null;
+};
+
+function createRuntimeDocument(onAppend?: (script: MockScript) => void) {
+  const scripts: MockScript[] = [];
+  return {
+    scripts,
+    document: {
+      createElement(): MockScript {
+        return {
+          attrs: {},
+          setAttribute(name, value) {
+            this.attrs[name] = value;
+          },
+          src: "",
+          text: "",
+          onload: null,
+          onerror: null,
+        };
+      },
+      head: {
+        appendChild(script: MockScript) {
+          scripts.push(script);
+          onAppend?.(script);
+        },
+      },
+    },
+  };
+}
+
+describe("App beforeInteractive runtime records", () => {
+  it("continues after an initial source fails so later records can load", async () => {
+    const scope: { __next_s: RuntimeRecord[] } = {
+      __next_s: [
+        ["/missing.js", {}],
+        [0, { children: "window.afterFailure = true" }],
+      ],
+    };
+    const error = new Error("blocked script");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { document, scripts } = createRuntimeDocument((script) => {
+      if (script.src) queueMicrotask(() => script.onerror?.(error));
+    });
+
+    await loadBeforeInteractiveRuntimeRecords(scope, document);
+
+    expect(scripts).toHaveLength(2);
+    expect(scripts[1]?.text).toBe("window.afterFailure = true");
+    expect(consoleError).toHaveBeenCalledWith(error);
+    consoleError.mockRestore();
+  });
+
+  it("materializes contextual nonces and numeric attributes", async () => {
+    const scope: { __next_s: RuntimeRecord[] } = {
+      __next_s: [
+        [
+          0,
+          {
+            children: "window.attributesLoaded = true",
+            nonce: "context-nonce",
+            "data-version": 2,
+            async: true,
+          },
+        ],
+      ],
+    };
+    const { document, scripts } = createRuntimeDocument();
+
+    await loadBeforeInteractiveRuntimeRecords(scope, document);
+
+    expect(scripts[0]?.attrs).toEqual({
+      nonce: "context-nonce",
+      "data-version": "2",
+      async: "",
+    });
+  });
+});

@@ -130,6 +130,7 @@ function renderAppBeforeInteractiveRecord(options: {
     "data-vinext-script-key": options.scriptKey,
   };
   if (options.id) scriptProps.id = options.id;
+  if (options.resolvedNonce) scriptProps.nonce = options.resolvedNonce;
   if (!options.src) scriptProps.children = options.inlineContent ?? "";
 
   return React.createElement("script", {
