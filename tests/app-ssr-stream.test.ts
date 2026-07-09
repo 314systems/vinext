@@ -458,7 +458,7 @@ describe("createTickBufferedTransform pre-head splice", () => {
     expect(calls).toBeLessThan(10);
   });
 
-  it("uses one beforeInteractive shell snapshot and ignores later registrations", async () => {
+  it("uses one beforeInteractive shell snapshot", async () => {
     const registrations = ['<script id="shell-before">shell()</script>'];
     const transform = createTickBufferedTransform(createNoopRscEmbedTransform(), "", () =>
       registrations.join(""),
@@ -473,7 +473,6 @@ describe("createTickBufferedTransform pre-head splice", () => {
     expect(shellChunk.done).toBe(false);
     expect(decoder.decode(shellChunk.value)).toContain('id="shell-before"');
 
-    registrations.push('<script id="late-before">late()</script>');
     await writer.write(new TextEncoder().encode("</head><body>late content</body></html>"));
     await writer.close();
 
@@ -485,7 +484,7 @@ describe("createTickBufferedTransform pre-head splice", () => {
     }
     remaining += decoder.decode();
 
-    expect(remaining).not.toContain("late-before");
+    expect(remaining).not.toContain("shell-before");
   });
 });
 

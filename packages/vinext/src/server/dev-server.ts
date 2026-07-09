@@ -451,6 +451,7 @@ async function streamPageToResponse(
   // Build the document shell with a placeholder for the body
   let shellTemplate: string;
   let beforeInteractiveHTML = "";
+  beforeInteractiveCollector.seal();
 
   if (DocumentComponent) {
     const documentClientScripts: ScriptProps[] = [];

@@ -451,8 +451,7 @@ function Script(props: ScriptProps): React.ReactElement | null {
           nonce: resolvedNonce,
           attributes: collectBeforeInteractiveAttributes(rest),
         };
-        registerBeforeInteractive(registered);
-        return null;
+        if (registerBeforeInteractive(registered)) return null;
       }
 
       return React.createElement(

@@ -264,7 +264,12 @@ describe("Script SSR rendering", () => {
     ReactDOMServer.renderToString(
       React.createElement(
         BeforeInteractiveContext.Provider,
-        { value: (script: BeforeInteractiveInlineScript) => captured.push(script) },
+        {
+          value: (script: BeforeInteractiveInlineScript) => {
+            captured.push(script);
+            return true;
+          },
+        },
         React.createElement(Script, {
           id: "example-script",
           strategy: "beforeInteractive",
@@ -960,12 +965,38 @@ describe("Script loader bootstrap cache", () => {
 //      lowercases these in set-attributes-from-props.ts.
 
 describe("Script beforeInteractive registry (#2016)", () => {
+  it("renders beforeInteractive inline when the shell collector is sealed", () => {
+    const html = ReactDOMServer.renderToString(
+      React.createElement(
+        BeforeInteractiveContext.Provider,
+        { value: () => false },
+        React.createElement(
+          Script,
+          {
+            id: "late-before-interactive",
+            strategy: "beforeInteractive",
+          } as ScriptProps,
+          "window.lateBeforeInteractive = true",
+        ),
+      ),
+    );
+
+    expect(html).toContain('id="late-before-interactive"');
+    expect(html).toContain('data-nscript="beforeInteractive"');
+    expect(html).toContain("window.lateBeforeInteractive = true");
+  });
+
   it("registers src beforeInteractive scripts so they are hoisted into <head>", () => {
     const captured: BeforeInteractiveInlineScript[] = [];
     const html = ReactDOMServer.renderToString(
       React.createElement(
         BeforeInteractiveContext.Provider,
-        { value: (s: BeforeInteractiveInlineScript) => captured.push(s) },
+        {
+          value: (s: BeforeInteractiveInlineScript) => {
+            captured.push(s);
+            return true;
+          },
+        },
         React.createElement(Script, {
           src: "/analytics.js",
           id: "analytics",
@@ -987,7 +1018,12 @@ describe("Script beforeInteractive registry (#2016)", () => {
     ReactDOMServer.renderToString(
       React.createElement(
         BeforeInteractiveContext.Provider,
-        { value: (s: BeforeInteractiveInlineScript) => captured.push(s) },
+        {
+          value: (s: BeforeInteractiveInlineScript) => {
+            captured.push(s);
+            return true;
+          },
+        },
         React.createElement(Script, {
           src: "/cdn.js",
           strategy: "beforeInteractive",
@@ -1061,7 +1097,12 @@ describe("Script beforeInteractive registry (#2016)", () => {
     ReactDOMServer.renderToString(
       React.createElement(
         BeforeInteractiveContext.Provider,
-        { value: (script: BeforeInteractiveInlineScript) => captured.push(script) },
+        {
+          value: (script: BeforeInteractiveInlineScript) => {
+            captured.push(script);
+            return true;
+          },
+        },
         React.createElement(Script, {
           strategy: "beforeInteractive",
           children: source,

@@ -38,7 +38,9 @@ export type BeforeInteractiveInlineScript = {
   attributes?: Record<string, string | boolean>;
 };
 
-export type RegisterBeforeInteractiveInlineScript = (script: BeforeInteractiveInlineScript) => void;
+export type RegisterBeforeInteractiveInlineScript = (
+  script: BeforeInteractiveInlineScript,
+) => boolean;
 
 export const BeforeInteractiveContext =
   React.createContext<RegisterBeforeInteractiveInlineScript | null>(null);

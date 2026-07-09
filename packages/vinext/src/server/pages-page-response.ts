@@ -653,6 +653,7 @@ export async function renderPagesPageResponse(
   if (documentRenderPage.status === "rendered" && documentRenderPage.stylesHTML) {
     ssrHeadHTML += `\n  ${documentRenderPage.stylesHTML}`;
   }
+  beforeInteractiveCollector.seal();
   const shellHtml = await buildPagesShellHtml(bodyMarker, fontHeadHTML, {
     assetTags: options.assetTags,
     beforeInteractiveScripts: beforeInteractiveCollector.scripts,

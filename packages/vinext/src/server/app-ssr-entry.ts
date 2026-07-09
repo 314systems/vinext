@@ -506,10 +506,13 @@ export async function handleSsr(
         // hoisted stylesheets/modulepreloads). See
         // packages/vinext/src/shims/script.tsx for the capture side.
         const beforeInteractiveInlineScripts: BeforeInteractiveInlineScript[] = [];
+        let beforeInteractiveSnapshotTaken = false;
         const registerBeforeInteractiveInlineScript = (
           script: BeforeInteractiveInlineScript,
-        ): void => {
+        ): boolean => {
+          if (beforeInteractiveSnapshotTaken) return false;
           beforeInteractiveInlineScripts.push(script);
+          return true;
         };
         const treeWithBeforeInteractive = createReactElement(
           BeforeInteractiveContext.Provider,
@@ -697,13 +700,13 @@ export async function handleSsr(
         // The transform calls this once when it splices after `<head ...>`.
         // By that point React Fizz has rendered the layout's `<head>` children
         // (which is where the Script shim registers), so the captured array is
-        // populated. We deliberately return a shell snapshot: any
-        // beforeInteractive Script that first renders later inside a pending
-        // Suspense boundary is not emitted or added to a client loader. Pages
-        // Router has the same shell-only behavior. beforeInteractive scripts
-        // must therefore be rendered in the initial shell.
-        const getBeforeInteractiveHeadHTML = (): string =>
-          renderBeforeInteractiveInlineScripts(beforeInteractiveInlineScripts);
+        // populated. After this shell snapshot, later Suspense registrations
+        // are rejected by the collector so the Script shim renders their
+        // runtime loader inline in the streamed boundary, matching Next.js.
+        const getBeforeInteractiveHeadHTML = (): string => {
+          beforeInteractiveSnapshotTaken = true;
+          return renderBeforeInteractiveInlineScripts(beforeInteractiveInlineScripts);
+        };
 
         const finalStream = deferUntilStreamConsumed(
           htmlStream.pipeThrough(
