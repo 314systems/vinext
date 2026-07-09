@@ -5,6 +5,7 @@ import {
   resolvePagesPageData,
   type ResolvePagesPageDataOptions,
 } from "../packages/vinext/src/server/pages-page-data.js";
+import { generatePagesETag } from "../packages/vinext/src/server/pages-page-response.js";
 
 function createOptions(
   overrides: Partial<ResolvePagesPageDataOptions> = {},
@@ -89,6 +90,37 @@ describe("pages page data", () => {
     if (result.kind === "response") {
       expect(await result.response.text()).toBe("<html>prerendered</html>");
       expect(result.response.headers.get("x-nextjs-cache")).toBe("HIT");
+    }
+  });
+
+  it("returns 304 for a matching bot ETag on an auto-export cache hit", async () => {
+    const html = "<html>prerendered</html>";
+    const result = await resolvePagesPageData(
+      createOptions({
+        ifNoneMatch: generatePagesETag(html),
+        isrGet: vi.fn().mockResolvedValue({
+          isStale: false,
+          value: {
+            value: {
+              kind: "PAGES",
+              html,
+              pageData: {},
+              headers: undefined,
+              status: undefined,
+            },
+            cacheControl: { revalidate: 31_536_000 },
+          },
+        }),
+        pageModule: { default: function Page() {} },
+        userAgent: "Googlebot",
+      }),
+    );
+
+    expect(result.kind).toBe("response");
+    if (result.kind === "response") {
+      expect(result.response.status).toBe(304);
+      expect(await result.response.text()).toBe("");
+      expect(result.response.headers.get("etag")).toBe(generatePagesETag(html));
     }
   });
 

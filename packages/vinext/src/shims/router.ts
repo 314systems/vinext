@@ -1434,8 +1434,9 @@ function PagesRouteAnnouncer(): null {
     if (previousPath.current === asPath) return;
     previousPath.current = asPath;
     const heading = document.querySelector("h1");
+    const headingText = heading?.innerText ?? heading?.textContent;
     if (announcer.current) {
-      announcer.current.textContent = document.title || heading?.textContent || asPath;
+      announcer.current.textContent = document.title || headingText || asPath;
     }
   }, [asPath]);
 

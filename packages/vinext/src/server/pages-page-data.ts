@@ -747,17 +747,20 @@ export async function resolvePagesPageData(
     const cached = await options.isrGet(options.isrCacheKey("pages", pathname));
     const cachedValue = cached?.value.value;
     if (cached?.isStale === false && cachedValue?.kind === "PAGES") {
+      const hitResponse = buildPagesCacheResponse(
+        cachedValue.html,
+        "HIT",
+        options.fontLinkHeader,
+        undefined,
+        options.expireSeconds,
+        cached.value.cacheControl,
+        cachedValue.status,
+      );
+      const hitBotResult = applyBotETagAndCheck(hitResponse, cachedValue.html, options);
+      if (hitBotResult) return hitBotResult;
       return {
         kind: "response",
-        response: buildPagesCacheResponse(
-          cachedValue.html,
-          "HIT",
-          options.fontLinkHeader,
-          undefined,
-          options.expireSeconds,
-          cached.value.cacheControl,
-          cachedValue.status,
-        ),
+        response: hitResponse,
       };
     }
   }

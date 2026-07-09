@@ -17,6 +17,19 @@ test.describe("Client-side navigation", () => {
     await expect(announcer).toHaveText("About - vinext");
   });
 
+  test("route announcer uses visible heading text when the title is empty", async ({ page }) => {
+    await page.goto(`${BASE}/`);
+    await waitForHydration(page);
+    await page.evaluate(() => {
+      document.title = "";
+    });
+
+    await page.click('a[href="/route-announcer-heading"]');
+
+    await expect(page.locator("h1")).toContainText("Visible heading");
+    await expect(page.locator("#__next-route-announcer__")).toHaveText("Visible heading");
+  });
+
   test("Link click navigates without full page reload", async ({ page }) => {
     await page.goto(`${BASE}/`);
     await expect(page.locator("h1")).toHaveText("Hello, vinext!");

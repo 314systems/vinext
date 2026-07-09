@@ -169,7 +169,12 @@ export async function seedMemoryCacheFromPrerender(
         html: fs.readFileSync(fullPath, "utf-8"),
         pageData: {},
         headers: route.headers,
-        status: undefined,
+        status:
+          cachePathname === "/404"
+            ? 404
+            : cachePathname === "/500" || cachePathname === "/_error"
+              ? 500
+              : undefined,
       },
       {
         revalidateSeconds: typeof route.revalidate === "number" ? route.revalidate : undefined,

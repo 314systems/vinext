@@ -96,6 +96,33 @@ describe("seedMemoryCacheFromPrerender", () => {
     });
   });
 
+  it("preserves the status of seeded Pages error documents", async () => {
+    const buildId = "pages-errors";
+    setupPrerenderFixture(
+      serverDir,
+      {
+        buildId,
+        routes: [
+          { route: "/404", status: "rendered", revalidate: false, router: "pages" },
+          { route: "/500", status: "rendered", revalidate: false, router: "pages" },
+        ],
+      },
+      {
+        "404.html": "<html>Not found</html>",
+        "500.html": "<html>Server error</html>",
+      },
+    );
+
+    await seedMemoryCacheFromPrerender(serverDir);
+
+    await expect(
+      getCacheHandler().get(isrCacheKey("pages", "/404", buildId)),
+    ).resolves.toMatchObject({ value: { status: 404 } });
+    await expect(
+      getCacheHandler().get(isrCacheKey("pages", "/500", buildId)),
+    ).resolves.toMatchObject({ value: { status: 500 } });
+  });
+
   it("seeds App Router ISR routes with HTML and RSC entries", async () => {
     const buildId = "test-build-001";
     setupPrerenderFixture(
