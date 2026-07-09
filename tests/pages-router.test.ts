@@ -1129,6 +1129,28 @@ describe("Pages Router integration", () => {
     }
   });
 
+  it("does not canonicalize Vite-internal dev URLs with repeated slashes", async () => {
+    const internalPaths = [
+      "/@fs//tmp/vinext-missing.js",
+      "/@id/foo//bar",
+      "/@vite/foo//bar",
+      "/@react-refresh//runtime",
+      "/node_modules/.vite/deps//react.js",
+    ];
+
+    for (const internalPath of internalPaths) {
+      const res = await fetch(`${baseUrl}${internalPath}`, { redirect: "manual" });
+      expect(res.status).not.toBe(308);
+      expect(res.headers.get("location")).toBeNull();
+    }
+
+    // Ported behavior from Next.js: test/e2e/repeated-slashes/repeated-slashes.test.ts
+    // https://github.com/vercel/next.js/blob/v16.3.0-canary.80/test/e2e/repeated-slashes/repeated-slashes.test.ts
+    const pageRes = await fetch(`${baseUrl}/foo//bar?x=1`, { redirect: "manual" });
+    expect(pageRes.status).toBe(308);
+    expect(pageRes.headers.get("location")).toBe("/foo/bar?x=1");
+  });
+
   it("returns 404 with custom 404 page for non-existent routes", async () => {
     const res = await fetch(`${baseUrl}/nonexistent`);
     expect(res.status).toBe(404);

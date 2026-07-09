@@ -1673,6 +1673,15 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         order: "pre",
         handler(server) {
           server.middlewares.use((req, res, next) => {
+            if (
+              req.url?.startsWith("/@fs/") ||
+              req.url?.startsWith("/@id/") ||
+              req.url?.startsWith("/@vite/") ||
+              req.url?.startsWith("/@react-refresh") ||
+              req.url?.startsWith("/node_modules/.vite/")
+            ) {
+              return next();
+            }
             const location = getRepeatedSlashRedirect(req.url ?? "/");
             if (location === null) return next();
             res.writeHead(308, { Location: location });
