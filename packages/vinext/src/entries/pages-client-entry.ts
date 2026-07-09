@@ -142,6 +142,7 @@ import Router, {
   wrapWithRouterContext,
   _initializePagesRouterReadyFromNextData,
 } from "next/router";
+import { preloadPagesDynamicModules } from "vinext/shims/pages-dynamic";
 
 const pageLoaders = {
 ${loaderEntries.join(",\n")}
@@ -249,8 +250,10 @@ async function hydrate() {
   ${
     hasApp
       ? `
+  let appModule;
   try {
-    const appModule = await appLoader();
+    appModule = await appLoader();
+    await preloadPagesDynamicModules(nextData.dynamicIds);
     const AppComponent = appModule.default;
     window.__VINEXT_APP__ = AppComponent;
     element = React.createElement(AppComponent, {
@@ -264,6 +267,7 @@ async function hydrate() {
   }
   `
       : `
+  await preloadPagesDynamicModules(nextData.dynamicIds);
   element = React.createElement(PageComponent, pageProps);
   `
   }
