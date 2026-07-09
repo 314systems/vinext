@@ -1839,7 +1839,6 @@ import "vinext/instrumentation-client";
 import React from "react";
 import { hydrateRoot } from "react-dom/client";
 import Router, { wrapWithRouterContext, _initializePagesRouterReadyFromNextData } from "next/router";
-import { initScriptLoader } from "vinext/shims/script-loader";
 
 const nextDataElement = document.getElementById("__NEXT_DATA__");
 if (nextDataElement?.textContent) {
@@ -1850,7 +1849,6 @@ if (nextDataElement?.textContent) {
 }
 const nextData = window.__NEXT_DATA__;
 _initializePagesRouterReadyFromNextData(nextData);
-initScriptLoader(Array.isArray(nextData.scriptLoader) ? nextData.scriptLoader : []);
 const props = nextData.props && typeof nextData.props === "object" ? nextData.props : {};
 const rawPageProps = props.pageProps;
 const pageProps = rawPageProps && typeof rawPageProps === "object" ? rawPageProps : {};
