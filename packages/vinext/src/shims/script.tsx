@@ -26,24 +26,10 @@ import {
   loadClientScript,
   loadedScripts,
   resolveScriptNonce,
-  scriptCache,
   type ScriptProps,
 } from "./script-loader.js";
 
 export { handleClientScriptLoad, initScriptLoader, type ScriptProps } from "./script-loader.js";
-
-function reportBeforeInteractiveError(
-  scriptKey: string,
-  onError: ScriptProps["onError"],
-  error: Event,
-): void {
-  const scope = self as typeof self & { __VINEXT_REPORTED_APP_SCRIPT_ERRORS__?: Set<string> };
-  const reportedErrors = scope.__VINEXT_REPORTED_APP_SCRIPT_ERRORS__ ?? new Set();
-  scope.__VINEXT_REPORTED_APP_SCRIPT_ERRORS__ = reportedErrors;
-  if (reportedErrors.has(scriptKey)) return;
-  reportedErrors.add(scriptKey);
-  onError?.(error);
-}
 
 /**
  * Insert `<link rel="stylesheet">` tags into `document.head` for each entry
@@ -203,7 +189,7 @@ function createScriptKey(options: {
 
 function findServerRenderedBeforeInteractiveScript(options: {
   scriptKey: string;
-}): { location: "head" | "body"; loaded: boolean } | null {
+}): "head" | "body" | null {
   if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") {
     return null;
   }
@@ -211,34 +197,19 @@ function findServerRenderedBeforeInteractiveScript(options: {
   const scripts = document.querySelectorAll('script[data-nscript="beforeInteractive"]');
   for (const script of scripts) {
     if (script.getAttribute("data-vinext-script-key") !== options.scriptKey) continue;
-    return {
-      location: document.head?.contains(script) === false ? "body" : "head",
-      loaded:
-        script.getAttribute("data-vinext-script-status") !== "pending" &&
-        script.getAttribute("data-vinext-script-status") !== "error",
-    };
+    return document.head?.contains(script) === false ? "body" : "head";
   }
   return null;
-}
-
-function hasAppBeforeInteractiveRuntimeRecord(scriptKey: string): boolean {
-  if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") {
-    return false;
-  }
-  const scripts = document.querySelectorAll("script[data-vinext-before-interactive-runtime]");
-  for (const script of scripts) {
-    if (script.getAttribute("data-vinext-before-interactive-runtime") === scriptKey) return true;
-  }
-  return false;
 }
 
 function seedServerRenderedBeforeInteractiveScript(options: {
   scriptKey: string;
   cacheKey: string;
+  seedLoaded: boolean;
 }): "head" | "body" | null {
-  const result = findServerRenderedBeforeInteractiveScript({ scriptKey: options.scriptKey });
-  if (result?.loaded && options.cacheKey) loadedScripts.add(options.cacheKey);
-  return result?.location ?? null;
+  const location = findServerRenderedBeforeInteractiveScript({ scriptKey: options.scriptKey });
+  if (location && options.cacheKey && options.seedLoaded) loadedScripts.add(options.cacheKey);
+  return location;
 }
 
 /**
@@ -335,14 +306,32 @@ function Script(props: ScriptProps): React.ReactElement | null {
     ? null
     : extractBeforeInteractiveInlineContent(children, dangerouslySetInnerHTML);
   const scriptKey = createScriptKey({ id, src, inlineContent });
+  const appScript =
+    typeof window === "undefined"
+      ? undefined
+      : (
+          window as typeof window & {
+            __VINEXT_APP_SCRIPT__?: (
+              scriptKey: string,
+              subscription?: {
+                src: string;
+                onReady: ScriptProps["onReady"];
+                onError: ScriptProps["onError"];
+              },
+            ) => boolean;
+          }
+        ).__VINEXT_APP_SCRIPT__;
+  const hasAppRuntimeRecord =
+    (strategy === "beforeInteractive" || strategy === "beforePageRender") &&
+    appScript?.(scriptKey) === true;
   const serverRenderedScriptLocation =
     typeof window !== "undefined" &&
     (strategy === "beforeInteractive" || strategy === "beforePageRender") &&
-    seedServerRenderedBeforeInteractiveScript({ scriptKey, cacheKey: key });
-  const hasAppRuntimeRecord =
-    typeof window !== "undefined" &&
-    (strategy === "beforeInteractive" || strategy === "beforePageRender") &&
-    hasAppBeforeInteractiveRuntimeRecord(scriptKey);
+    seedServerRenderedBeforeInteractiveScript({
+      scriptKey,
+      cacheKey: key,
+      seedLoaded: !hasAppRuntimeRecord,
+    });
   const hasAppRuntimeQueue =
     typeof window !== "undefined" &&
     Array.isArray((window as typeof window & { __next_s?: unknown }).__next_s);
@@ -359,11 +348,9 @@ function Script(props: ScriptProps): React.ReactElement | null {
       return;
     }
     if (src && hasAppRuntimeRecord && (onReady || onError)) {
-      void scriptCache
-        .get(src)
-        ?.then(onReady, (error) => reportBeforeInteractiveError(scriptKey, onError, error));
+      appScript?.(scriptKey, { src, onReady, onError });
     }
-  }, [onReady, onError, key, src, scriptKey, hasAppRuntimeRecord]);
+  }, [onReady, onError, key, src, scriptKey, hasAppRuntimeRecord, appScript]);
 
   useEffect(() => {
     if (hasLoadScriptEffectCalled.current) return;
@@ -392,7 +379,7 @@ function Script(props: ScriptProps): React.ReactElement | null {
           strategy,
           onLoad,
           onReady,
-          onError: (error) => reportBeforeInteractiveError(scriptKey, onError, error),
+          onError,
           children,
           dangerouslySetInnerHTML,
           stylesheets,

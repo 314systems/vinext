@@ -73,7 +73,17 @@ describe("App beforeInteractive runtime records", () => {
   });
 
   it("publishes a rejected source load while continuing later records", async () => {
-    const scope: { __next_s: RuntimeRecord[] } = {
+    const scope: {
+      __next_s: RuntimeRecord[];
+      __VINEXT_APP_SCRIPT__?: (
+        scriptKey: string,
+        subscription?: {
+          src: string;
+          onReady?: () => void;
+          onError?: (error: unknown) => void;
+        },
+      ) => boolean;
+    } = {
       __next_s: [
         ["/failed.js", {}],
         [0, { children: "window.afterFailure = true" }],
@@ -89,7 +99,11 @@ describe("App beforeInteractive runtime records", () => {
 
     const bootstrap = loadBeforeInteractiveRuntimeRecords(scope, document);
     await vi.waitFor(() => expect(scriptCache.get("/failed.js")).toBeInstanceOf(Promise));
-    await scriptCache.get("/failed.js")?.then(onReady, onError);
+    scope.__VINEXT_APP_SCRIPT__?.("src:/failed.js", {
+      src: "/failed.js",
+      onReady,
+      onError,
+    });
     await bootstrap;
 
     expect(onError).toHaveBeenCalledWith(error);

@@ -87,7 +87,7 @@ test.describe("next/script", () => {
   });
 
   test("executes a beforeInteractive script introduced by client navigation", async ({ page }) => {
-    await page.goto(`${BASE}/script-navigation-start`);
+    await page.goto(`${BASE}/script-dedupe`);
     await page.getByRole("link", { name: "Navigate to script target" }).click();
     await expect(page.getByRole("heading", { name: "Script Navigation Target" })).toBeVisible();
 

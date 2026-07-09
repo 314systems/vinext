@@ -142,7 +142,6 @@ import Router, {
   wrapWithRouterContext,
   _initializePagesRouterReadyFromNextData,
 } from "next/router";
-import { initScriptLoader } from "vinext/shims/script-loader";
 
 const pageLoaders = {
 ${loaderEntries.join(",\n")}
@@ -217,7 +216,6 @@ async function hydrate() {
   }
 
   _initializePagesRouterReadyFromNextData(nextData);
-  initScriptLoader(Array.isArray(nextData.scriptLoader) ? nextData.scriptLoader : []);
 
   let hydrateRootOptions;
   if (import.meta.env.DEV) {

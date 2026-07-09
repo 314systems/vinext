@@ -4,6 +4,15 @@ type BeforeInteractiveRuntimeRecord = [src: string | 0, props: Record<string, un
 
 type BeforeInteractiveRuntimeScope = {
   __next_s?: BeforeInteractiveRuntimeRecord[];
+  __VINEXT_APP_SCRIPT__?: (
+    scriptKey: string,
+    subscription?: {
+      src: string;
+      onReady?: () => void;
+      onError?: (error: unknown) => void;
+    },
+  ) => boolean;
+  __VINEXT_REPORTED_APP_SCRIPT_ERRORS__?: Set<string>;
 };
 
 type RuntimeScript = Pick<
@@ -46,6 +55,28 @@ export async function loadBeforeInteractiveRuntimeRecords(
   runtimeDocument: RuntimeDocument = document as unknown as RuntimeDocument,
 ): Promise<void> {
   const records = scope.__next_s ?? [];
+  scope.__VINEXT_APP_SCRIPT__ = (scriptKey, subscription) => {
+    if (subscription) {
+      void scriptCache.get(subscription.src)?.then(subscription.onReady, (error) => {
+        const reportedErrors =
+          scope.__VINEXT_REPORTED_APP_SCRIPT_ERRORS__ ??
+          (scope.__VINEXT_REPORTED_APP_SCRIPT_ERRORS__ = new Set());
+        if (reportedErrors.has(scriptKey)) return;
+        reportedErrors.add(scriptKey);
+        subscription.onError?.(error);
+      });
+      return true;
+    }
+    if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") {
+      return false;
+    }
+    for (const script of document.querySelectorAll(
+      "script[data-vinext-before-interactive-runtime]",
+    )) {
+      if (script.getAttribute("data-vinext-before-interactive-runtime") === scriptKey) return true;
+    }
+    return false;
+  };
   let pending = Promise.resolve();
   const loadRecord = (
     [src, props]: BeforeInteractiveRuntimeRecord,
