@@ -107,6 +107,43 @@ function buildBeforeInteractiveScriptProps(options: {
   return scriptProps;
 }
 
+function stringifyAppBeforeInteractiveRecord(record: unknown): string {
+  return JSON.stringify(record)
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/&/g, "\\u0026")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+}
+
+function renderAppBeforeInteractiveRecord(options: {
+  src?: string;
+  id?: string;
+  rest: Record<string, unknown>;
+  resolvedNonce?: string;
+  inlineContent: string | null;
+  scriptKey: string;
+}): React.ReactElement {
+  const scriptProps: Record<string, unknown> = {
+    ...options.rest,
+    "data-nscript": "beforeInteractive",
+    "data-vinext-script-key": options.scriptKey,
+  };
+  if (options.id) scriptProps.id = options.id;
+  if (!options.src) scriptProps.children = options.inlineContent ?? "";
+
+  return React.createElement("script", {
+    nonce: options.resolvedNonce,
+    "data-vinext-before-interactive-runtime": options.scriptKey,
+    dangerouslySetInnerHTML: {
+      __html: `(self.__next_s=self.__next_s||[]).push(${stringifyAppBeforeInteractiveRecord([
+        options.src ?? 0,
+        scriptProps,
+      ])})`,
+    },
+  });
+}
+
 /**
  * Extract the inline script content for a `beforeInteractive` Script element
  * with no `src`. Returns `null` when the element has neither a string-shaped
@@ -162,6 +199,17 @@ function findServerRenderedBeforeInteractiveScript(options: {
     return document.head?.contains(script) === false ? "body" : "head";
   }
   return null;
+}
+
+function hasAppBeforeInteractiveRuntimeRecord(scriptKey: string): boolean {
+  if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") {
+    return false;
+  }
+  const scripts = document.querySelectorAll("script[data-vinext-before-interactive-runtime]");
+  for (const script of scripts) {
+    if (script.getAttribute("data-vinext-before-interactive-runtime") === scriptKey) return true;
+  }
+  return false;
 }
 
 function seedServerRenderedBeforeInteractiveScript(options: {
@@ -271,6 +319,10 @@ function Script(props: ScriptProps): React.ReactElement | null {
     typeof window !== "undefined" &&
     (strategy === "beforeInteractive" || strategy === "beforePageRender") &&
     seedServerRenderedBeforeInteractiveScript({ scriptKey, cacheKey: key });
+  const hasAppRuntimeRecord =
+    typeof window !== "undefined" &&
+    (strategy === "beforeInteractive" || strategy === "beforePageRender") &&
+    hasAppBeforeInteractiveRuntimeRecord(scriptKey);
 
   useEffect(() => {
     if (hasOnReadyEffectCalled.current) return;
@@ -453,7 +505,18 @@ function Script(props: ScriptProps): React.ReactElement | null {
           nonce: resolvedNonce,
           attributes: collectBeforeInteractiveAttributes(rest),
         };
-        if (registerBeforeInteractive(registered)) return null;
+        const registration = registerBeforeInteractive(registered);
+        if (registration === "hoisted") return null;
+        if (registration === "app-runtime") {
+          return renderAppBeforeInteractiveRecord({
+            src,
+            id,
+            rest,
+            resolvedNonce,
+            inlineContent,
+            scriptKey,
+          });
+        }
       }
 
       return React.createElement(
@@ -474,12 +537,21 @@ function Script(props: ScriptProps): React.ReactElement | null {
   }
 
   if (strategy === "beforeInteractive" || strategy === "beforePageRender") {
+    if ((src || inlineContent !== null) && hasAppRuntimeRecord) {
+      return renderAppBeforeInteractiveRecord({
+        src,
+        id,
+        rest,
+        resolvedNonce,
+        inlineContent,
+        scriptKey,
+      });
+    }
     // Suppress only when this exact script was hoisted into `<head>`. A script
-    // first revealed after the App Router shell snapshot remains in its
-    // streamed Suspense boundary, so the hydrating client must render the same
-    // element instead of suppressing every script merely because App Router is
-    // active. The marker lookup above still seeds loadedScripts for either
-    // location so onReady/remount behavior matches an already-executed script.
+    // first revealed after the App Router shell snapshot renders the same
+    // runtime queue record on the server and hydrating client instead. The
+    // marker lookup above seeds loadedScripts once the queue consumer creates
+    // the real head script, preserving onReady/remount behavior.
     if ((src || inlineContent !== null) && serverRenderedScriptLocation === "head") {
       return null;
     }

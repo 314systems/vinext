@@ -239,6 +239,57 @@ function markInitialAppRouterBootstrapHydrated(): void {
   window.__VINEXT_RSC_BOOTSTRAP_STATE__ = "hydrated";
 }
 
+type BeforeInteractiveRuntimeRecord = [src: string | 0, props: Record<string, unknown>];
+
+async function loadBeforeInteractiveRuntimeRecords(): Promise<void> {
+  const scope = self as typeof self & { __next_s?: BeforeInteractiveRuntimeRecord[] };
+  const records = scope.__next_s ?? [];
+  let pending = Promise.resolve();
+  const loadRecord = ([src, props]: BeforeInteractiveRuntimeRecord): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      const script = document.createElement("script");
+      for (const [name, value] of Object.entries(props)) {
+        if (name === "children" || value === undefined) continue;
+        if (name === "className" && typeof value === "string") {
+          script.setAttribute("class", value);
+        } else if (typeof value === "string") {
+          script.setAttribute(name, value);
+        } else if (typeof value === "boolean" && value) {
+          script.setAttribute(name, "");
+        }
+      }
+      if (src) {
+        script.src = src;
+        script.onload = () => resolve();
+        script.onerror = reject;
+      } else {
+        script.text = typeof props.children === "string" ? props.children : "";
+      }
+      document.head.appendChild(script);
+      if (!src) queueMicrotask(resolve);
+    });
+
+  const initialRecords = records.splice(0, records.length);
+  const originalPush = records.push.bind(records);
+  records.push = (...newRecords: BeforeInteractiveRuntimeRecord[]) => {
+    const length = originalPush(...newRecords);
+    for (const record of newRecords) {
+      pending = pending
+        .then(() => loadRecord(record))
+        .catch((error: unknown) => {
+          console.error(error);
+        });
+    }
+    return length;
+  };
+  scope.__next_s = records;
+
+  for (const record of initialRecords) {
+    pending = pending.then(() => loadRecord(record));
+  }
+  await pending;
+}
+
 function getBrowserRouteManifest(): RouteManifest | null {
   return getNavigationRuntime()?.bootstrap.routeManifest ?? null;
 }
@@ -1476,6 +1527,8 @@ function registerServerActionCallback(): void {
 
 async function main(): Promise<void> {
   if (!claimInitialAppRouterBootstrap()) return;
+
+  await loadBeforeInteractiveRuntimeRecords();
 
   if (hasServerActions) registerServerActionCallback();
   installAppNavigationFailureListeners();

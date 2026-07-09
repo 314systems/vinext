@@ -26,9 +26,9 @@ export function createBeforeInteractiveCollector(
         context.Provider,
         {
           value(script: BeforeInteractiveInlineScript) {
-            if (sealed) return false;
+            if (sealed) return "inline";
             scripts.push(script);
-            return true;
+            return "hoisted";
           },
         },
         element,

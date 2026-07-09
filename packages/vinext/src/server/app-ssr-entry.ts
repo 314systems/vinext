@@ -507,12 +507,10 @@ export async function handleSsr(
         // packages/vinext/src/shims/script.tsx for the capture side.
         const beforeInteractiveInlineScripts: BeforeInteractiveInlineScript[] = [];
         let beforeInteractiveSnapshotTaken = false;
-        const registerBeforeInteractiveInlineScript = (
-          script: BeforeInteractiveInlineScript,
-        ): boolean => {
-          if (beforeInteractiveSnapshotTaken) return false;
+        const registerBeforeInteractiveInlineScript = (script: BeforeInteractiveInlineScript) => {
+          if (beforeInteractiveSnapshotTaken) return "app-runtime" as const;
           beforeInteractiveInlineScripts.push(script);
-          return true;
+          return "hoisted" as const;
         };
         const treeWithBeforeInteractive = createReactElement(
           BeforeInteractiveContext.Provider,

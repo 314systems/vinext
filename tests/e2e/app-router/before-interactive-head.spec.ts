@@ -98,7 +98,7 @@ test.describe("inline beforeInteractive head ordering", () => {
     await expect
       .poll(() => page.evaluate(() => Reflect.get(window, "__vinextLateBeforeScriptExecutions")))
       .toBe(1);
-    await expect(page.locator('script[id="app-late-before-ready"]')).toHaveCount(0);
+    await expect(page.locator('script[id="app-late-before-ready"]')).toHaveCount(1);
 
     void consoleErrors;
   });

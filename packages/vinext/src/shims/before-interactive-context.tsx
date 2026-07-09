@@ -38,9 +38,11 @@ export type BeforeInteractiveInlineScript = {
   attributes?: Record<string, string | boolean>;
 };
 
+export type BeforeInteractiveRegistration = "hoisted" | "inline" | "app-runtime";
+
 export type RegisterBeforeInteractiveInlineScript = (
   script: BeforeInteractiveInlineScript,
-) => boolean;
+) => BeforeInteractiveRegistration;
 
 export const BeforeInteractiveContext =
   React.createContext<RegisterBeforeInteractiveInlineScript | null>(null);

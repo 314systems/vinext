@@ -23,6 +23,7 @@ import { ScriptNonceProvider } from "../packages/vinext/src/shims/script-nonce-c
 import {
   BeforeInteractiveContext,
   type BeforeInteractiveInlineScript,
+  type BeforeInteractiveRegistration,
 } from "../packages/vinext/src/shims/before-interactive-context.js";
 import { renderBeforeInteractiveInlineScripts } from "../packages/vinext/src/server/before-interactive-head.js";
 
@@ -188,6 +189,7 @@ describe("Script SSR rendering", () => {
     setGlobalValue("document", {
       querySelector: () => null,
       querySelectorAll(selector: string) {
+        if (selector === "script[data-vinext-before-interactive-runtime]") return [];
         expect(selector).toBe('script[data-nscript="beforeInteractive"]');
         return [
           {
@@ -264,9 +266,9 @@ describe("Script SSR rendering", () => {
       React.createElement(
         BeforeInteractiveContext.Provider,
         {
-          value: (script: BeforeInteractiveInlineScript) => {
+          value: (script: BeforeInteractiveInlineScript): BeforeInteractiveRegistration => {
             captured.push(script);
-            return true;
+            return "hoisted";
           },
         },
         React.createElement(Script, {
@@ -968,7 +970,7 @@ describe("Script beforeInteractive registry (#2016)", () => {
     const html = ReactDOMServer.renderToString(
       React.createElement(
         BeforeInteractiveContext.Provider,
-        { value: () => false },
+        { value: (): BeforeInteractiveRegistration => "inline" },
         React.createElement(
           Script,
           {
@@ -985,15 +987,38 @@ describe("Script beforeInteractive registry (#2016)", () => {
     expect(html).toContain("window.lateBeforeInteractive = true");
   });
 
+  it("renders late App beforeInteractive scripts as executable runtime records", () => {
+    const html = ReactDOMServer.renderToString(
+      React.createElement(
+        BeforeInteractiveContext.Provider,
+        { value: (): BeforeInteractiveRegistration => "app-runtime" },
+        React.createElement(
+          Script,
+          {
+            id: "late-app-script",
+            strategy: "beforeInteractive",
+          } as ScriptProps,
+          "window.lateAppScript = true",
+        ),
+      ),
+    );
+
+    expect(html).toContain('data-vinext-before-interactive-runtime="id:late-app-script"');
+    expect(html).toContain("(self.__next_s=self.__next_s||[]).push(");
+    expect(html).toContain('"data-vinext-script-key":"id:late-app-script"');
+    expect(html).toContain('"children":"window.lateAppScript = true"');
+    expect(html).not.toContain('data-nscript="beforeInteractive"');
+  });
+
   it("registers src beforeInteractive scripts so they are hoisted into <head>", () => {
     const captured: BeforeInteractiveInlineScript[] = [];
     const html = ReactDOMServer.renderToString(
       React.createElement(
         BeforeInteractiveContext.Provider,
         {
-          value: (s: BeforeInteractiveInlineScript) => {
+          value: (s: BeforeInteractiveInlineScript): BeforeInteractiveRegistration => {
             captured.push(s);
-            return true;
+            return "hoisted";
           },
         },
         React.createElement(Script, {
@@ -1018,9 +1043,9 @@ describe("Script beforeInteractive registry (#2016)", () => {
       React.createElement(
         BeforeInteractiveContext.Provider,
         {
-          value: (s: BeforeInteractiveInlineScript) => {
+          value: (s: BeforeInteractiveInlineScript): BeforeInteractiveRegistration => {
             captured.push(s);
-            return true;
+            return "hoisted";
           },
         },
         React.createElement(Script, {
@@ -1143,9 +1168,9 @@ describe("Script beforeInteractive registry (#2016)", () => {
       React.createElement(
         BeforeInteractiveContext.Provider,
         {
-          value: (script: BeforeInteractiveInlineScript) => {
+          value: (script: BeforeInteractiveInlineScript): BeforeInteractiveRegistration => {
             captured.push(script);
-            return true;
+            return "hoisted";
           },
         },
         React.createElement(Script, {
