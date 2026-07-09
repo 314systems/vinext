@@ -1819,22 +1819,25 @@ async function hydrate() {
   ${
     appModuleSource
       ? `
-  const appModule = await import("${appModuleSource}");
-  await preloadPagesDynamicModules(nextData.dynamicIds);
-  const AppComponent = appModule.default;
-  window.__VINEXT_APP__ = AppComponent;
-  element = React.createElement(AppComponent, {
-    ...props,
-    Component: PageComponent,
-    pageProps: rawPageProps,
-    router: Router,
-  });
+  try {
+    const appModule = await import("${appModuleSource}");
+    const AppComponent = appModule.default;
+    window.__VINEXT_APP__ = AppComponent;
+    element = React.createElement(AppComponent, {
+      ...props,
+      Component: PageComponent,
+      pageProps: rawPageProps,
+      router: Router,
+    });
+  } catch {
+    element = React.createElement(PageComponent, pageProps);
+  }
   `
       : `
-  await preloadPagesDynamicModules(nextData.dynamicIds);
   element = React.createElement(PageComponent, pageProps);
   `
   }
+  await preloadPagesDynamicModules(nextData.dynamicIds);
   let resolveHydrationCommit;
   const hydrationCommitted = new Promise((resolve) => { resolveHydrationCommit = resolve; });
   element = wrapWithRouterContext(element, resolveHydrationCommit);

@@ -253,7 +253,6 @@ async function hydrate() {
   let appModule;
   try {
     appModule = await appLoader();
-    await preloadPagesDynamicModules(nextData.dynamicIds);
     const AppComponent = appModule.default;
     window.__VINEXT_APP__ = AppComponent;
     element = React.createElement(AppComponent, {
@@ -267,10 +266,10 @@ async function hydrate() {
   }
   `
       : `
-  await preloadPagesDynamicModules(nextData.dynamicIds);
   element = React.createElement(PageComponent, pageProps);
   `
   }
+  await preloadPagesDynamicModules(nextData.dynamicIds);
 
   let resolveHydrationCommit;
   const hydrationCommitted = new Promise((resolve) => {

@@ -4,7 +4,9 @@
  */
 let recordModuleIds = (_moduleIds: readonly string[] | undefined): void => {};
 let readModuleIds = (): string[] | undefined => undefined;
-const clientInitializers = new Map<string, Set<() => Promise<unknown>>>();
+const clientInitializers = new Set<
+  (requestedIds: ReadonlySet<string>) => Promise<unknown> | undefined
+>();
 let clientPreloadFinished = false;
 let clientPreloadPromise: Promise<void> | undefined;
 
@@ -29,14 +31,12 @@ export function registerPagesDynamicInitializer(
   initializer: () => Promise<unknown>,
 ): void {
   if (typeof window === "undefined" || clientPreloadFinished || !moduleIds) return;
-  for (const moduleId of moduleIds) {
-    let initializers = clientInitializers.get(moduleId);
-    if (!initializers) {
-      initializers = new Set();
-      clientInitializers.set(moduleId, initializers);
+  const registeredIds = new Set(moduleIds);
+  clientInitializers.add((requestedIds) => {
+    for (const moduleId of registeredIds) {
+      if (requestedIds.has(moduleId)) return initializer();
     }
-    initializers.add(initializer);
-  }
+  });
 }
 
 export async function preloadPagesDynamicModules(
@@ -45,29 +45,18 @@ export async function preloadPagesDynamicModules(
   if (clientPreloadPromise) return clientPreloadPromise;
 
   const requestedIds = new Set(moduleIds.map(String));
-  clientPreloadPromise = (async () => {
+  clientPreloadPromise = (async (): Promise<void> => {
     do {
-      const initializers = Array.from(clientInitializers.entries());
+      const initializers = Array.from(clientInitializers);
       clientInitializers.clear();
-      const pending = new Set<Promise<unknown>>();
-      for (const [moduleId, moduleInitializers] of initializers) {
-        if (!requestedIds.has(moduleId)) continue;
-        for (const initializer of moduleInitializers) {
-          pending.add(initializer());
-        }
-      }
-      await Promise.all(Array.from(pending, (promise) => promise.catch(() => undefined)));
+      const pending = initializers
+        .map((initializer) => initializer(requestedIds))
+        .filter((promise): promise is Promise<unknown> => promise !== undefined);
+      await Promise.all(pending.map((promise) => promise.catch(() => undefined)));
     } while (clientInitializers.size > 0);
     clientPreloadFinished = true;
   })();
-
-  try {
-    await clientPreloadPromise;
-  } finally {
-    if (!clientPreloadFinished) {
-      clientPreloadPromise = undefined;
-    }
-  }
+  return clientPreloadPromise;
 }
 
 if (typeof window !== "undefined") {

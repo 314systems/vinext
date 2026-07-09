@@ -81,9 +81,13 @@ describe("next/dynamic Pages hydration preloading", () => {
     try {
       const loader = vi.fn(async () => ({ default: Hello }));
       const failingLoader = vi.fn(() => Promise.reject(new Error("dynamic load failed")));
+      const unmatchedLoader = vi.fn(async () => ({ default: Hello }));
       dynamic(loader, { loadableGenerated: { modules: ["pages/dynamic-hello.tsx"] } });
       dynamic(failingLoader, {
         loadableGenerated: { modules: ["pages/failing-dynamic.tsx"] },
+      });
+      dynamic(unmatchedLoader, {
+        loadableGenerated: { modules: ["pages/unmatched-dynamic.tsx"] },
       });
 
       await expect(
@@ -93,6 +97,7 @@ describe("next/dynamic Pages hydration preloading", () => {
 
       expect(loader).toHaveBeenCalledTimes(1);
       expect(failingLoader).toHaveBeenCalledTimes(1);
+      expect(unmatchedLoader).not.toHaveBeenCalled();
     } finally {
       Object.defineProperty(globalThis, "window", { configurable: true, value: originalWindow });
     }

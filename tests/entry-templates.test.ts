@@ -1387,6 +1387,9 @@ describe("Pages Router entry template", () => {
         'import { preloadPagesDynamicModules } from "vinext/shims/pages-dynamic";',
       );
       expect(code).toContain("await preloadPagesDynamicModules(nextData.dynamicIds);");
+      expect(code.indexOf("await appLoader()")).toBeLessThan(
+        code.indexOf("await preloadPagesDynamicModules(nextData.dynamicIds);"),
+      );
       expect(code.indexOf("await preloadPagesDynamicModules(nextData.dynamicIds);")).toBeLessThan(
         code.indexOf("hydrateRoot(container, element, hydrateRootOptions)"),
       );
