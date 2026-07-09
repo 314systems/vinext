@@ -1673,16 +1673,22 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         order: "pre",
         handler(server) {
           server.middlewares.use((req, res, next) => {
+            const requestUrl = req.url ?? "/";
+            const base = server.config.base === "/" ? "" : server.config.base.replace(/\/$/, "");
+            const urlWithoutBase =
+              base && (requestUrl === base || requestUrl.startsWith(`${base}/`))
+                ? requestUrl.slice(base.length) || "/"
+                : requestUrl;
             if (
-              req.url?.startsWith("/@fs/") ||
-              req.url?.startsWith("/@id/") ||
-              req.url?.startsWith("/@vite/") ||
-              req.url?.startsWith("/@react-refresh") ||
-              req.url?.startsWith("/node_modules/.vite/")
+              urlWithoutBase.startsWith("/@fs/") ||
+              urlWithoutBase.startsWith("/@id/") ||
+              urlWithoutBase.startsWith("/@vite/") ||
+              urlWithoutBase.startsWith("/@react-refresh") ||
+              urlWithoutBase.startsWith("/node_modules/.vite/")
             ) {
               return next();
             }
-            const location = getRepeatedSlashRedirect(req.url ?? "/");
+            const location = getRepeatedSlashRedirect(requestUrl);
             if (location === null) return next();
             res.writeHead(308, { Location: location });
             res.end(location);
