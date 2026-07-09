@@ -92,8 +92,9 @@ test.describe("inline beforeInteractive head ordering", () => {
           node instanceof HTMLScriptElement &&
           node.src.endsWith("/beforeinteractive-late-failed.js")
         ) {
+          const appended = appendChild.call(this, node) as T;
           queueMicrotask(() => node.dispatchEvent(new Event("error")));
-          return node;
+          return appended;
         }
         return appendChild.call(this, node) as T;
       };

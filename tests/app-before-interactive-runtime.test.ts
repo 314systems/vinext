@@ -94,6 +94,7 @@ describe("App beforeInteractive runtime records", () => {
 
     expect(onError).toHaveBeenCalledWith(error);
     expect(onReady).not.toHaveBeenCalled();
+    expect(scripts[0]?.attrs["data-vinext-script-status"]).toBe("error");
     expect(scripts[1]?.text).toBe("window.afterFailure = true");
     consoleError.mockRestore();
   });

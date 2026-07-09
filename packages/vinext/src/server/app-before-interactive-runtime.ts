@@ -58,12 +58,15 @@ export async function loadBeforeInteractiveRuntimeRecords(
         (typeof props.id === "string" && props.id) || (typeof src === "string" && src) || "";
       if (src) {
         script.src = src;
+        script.setAttribute("data-vinext-script-status", "pending");
         script.onload = () => {
+          script.setAttribute("data-vinext-script-status", "loaded");
           if (key) loadedScripts.add(key);
           deferredLoad?.resolve();
           resolve();
         };
         script.onerror = (error) => {
+          script.setAttribute("data-vinext-script-status", "error");
           deferredLoad?.reject(error);
           reject(error);
         };

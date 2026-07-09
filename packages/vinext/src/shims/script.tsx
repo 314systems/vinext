@@ -203,7 +203,7 @@ function createScriptKey(options: {
 
 function findServerRenderedBeforeInteractiveScript(options: {
   scriptKey: string;
-}): "head" | "body" | null {
+}): { location: "head" | "body"; loaded: boolean } | null {
   if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") {
     return null;
   }
@@ -211,7 +211,12 @@ function findServerRenderedBeforeInteractiveScript(options: {
   const scripts = document.querySelectorAll('script[data-nscript="beforeInteractive"]');
   for (const script of scripts) {
     if (script.getAttribute("data-vinext-script-key") !== options.scriptKey) continue;
-    return document.head?.contains(script) === false ? "body" : "head";
+    return {
+      location: document.head?.contains(script) === false ? "body" : "head",
+      loaded:
+        script.getAttribute("data-vinext-script-status") !== "pending" &&
+        script.getAttribute("data-vinext-script-status") !== "error",
+    };
   }
   return null;
 }
@@ -231,9 +236,9 @@ function seedServerRenderedBeforeInteractiveScript(options: {
   scriptKey: string;
   cacheKey: string;
 }): "head" | "body" | null {
-  const location = findServerRenderedBeforeInteractiveScript({ scriptKey: options.scriptKey });
-  if (location && options.cacheKey) loadedScripts.add(options.cacheKey);
-  return location;
+  const result = findServerRenderedBeforeInteractiveScript({ scriptKey: options.scriptKey });
+  if (result?.loaded && options.cacheKey) loadedScripts.add(options.cacheKey);
+  return result?.location ?? null;
 }
 
 /**
