@@ -6,7 +6,6 @@
   "main": "vinext/server/fetch-handler",
   "preview_urls": true,
   "assets": {
-    "not_found_handling": "none",
-    "run_worker_first": ["//*", "/*//*"]
+    "not_found_handling": "none"
   }
 }
