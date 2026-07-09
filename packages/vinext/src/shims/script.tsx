@@ -32,6 +32,19 @@ import {
 
 export { handleClientScriptLoad, initScriptLoader, type ScriptProps } from "./script-loader.js";
 
+function reportBeforeInteractiveError(
+  scriptKey: string,
+  onError: ScriptProps["onError"],
+  error: Event,
+): void {
+  const scope = self as typeof self & { __VINEXT_REPORTED_APP_SCRIPT_ERRORS__?: Set<string> };
+  const reportedErrors = scope.__VINEXT_REPORTED_APP_SCRIPT_ERRORS__ ?? new Set();
+  scope.__VINEXT_REPORTED_APP_SCRIPT_ERRORS__ = reportedErrors;
+  if (reportedErrors.has(scriptKey)) return;
+  reportedErrors.add(scriptKey);
+  onError?.(error);
+}
+
 /**
  * Insert `<link rel="stylesheet">` tags into `document.head` for each entry
  * in `stylesheets`. Used by the imperative client-side load path
@@ -325,6 +338,9 @@ function Script(props: ScriptProps): React.ReactElement | null {
     typeof window !== "undefined" &&
     (strategy === "beforeInteractive" || strategy === "beforePageRender") &&
     hasAppBeforeInteractiveRuntimeRecord(scriptKey);
+  const hasAppRuntimeQueue =
+    typeof window !== "undefined" &&
+    Array.isArray((window as typeof window & { __next_s?: unknown }).__next_s);
   const hasPagesClientRuntime =
     typeof window !== "undefined" &&
     typeof (window as typeof window & { next?: { router?: unknown } }).next?.router === "object";
@@ -337,10 +353,12 @@ function Script(props: ScriptProps): React.ReactElement | null {
       onReady();
       return;
     }
-    if (onReady && src && hasAppRuntimeRecord) {
-      void scriptCache.get(src)?.then(() => onReady());
+    if (src && hasAppRuntimeRecord && (onReady || onError)) {
+      void scriptCache
+        .get(src)
+        ?.then(onReady, (error) => reportBeforeInteractiveError(scriptKey, onError, error));
     }
-  }, [onReady, key, src, hasAppRuntimeRecord]);
+  }, [onReady, onError, key, src, scriptKey, hasAppRuntimeRecord]);
 
   useEffect(() => {
     if (hasLoadScriptEffectCalled.current) return;
@@ -353,7 +371,14 @@ function Script(props: ScriptProps): React.ReactElement | null {
       // dedupes against any SSR-emitted <link rel="stylesheet">, so this is
       // safe even when the server already hoisted them via React Float.
       insertClientStylesheets(stylesheets);
-      if (serverRenderedScriptLocation === "head" || !hasPagesClientRuntime) return;
+      if (
+        serverRenderedScriptLocation === "head" ||
+        hasAppRuntimeRecord ||
+        hasAppRuntimeQueue ||
+        !hasPagesClientRuntime
+      ) {
+        return;
+      }
 
       loadClientScript(
         {
@@ -362,7 +387,7 @@ function Script(props: ScriptProps): React.ReactElement | null {
           strategy,
           onLoad,
           onReady,
-          onError,
+          onError: (error) => reportBeforeInteractiveError(scriptKey, onError, error),
           children,
           dangerouslySetInnerHTML,
           stylesheets,
@@ -442,7 +467,10 @@ function Script(props: ScriptProps): React.ReactElement | null {
     key,
     resolvedNonce,
     rest,
+    scriptKey,
     serverRenderedScriptLocation,
+    hasAppRuntimeRecord,
+    hasAppRuntimeQueue,
     hasPagesClientRuntime,
   ]);
 

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { loadBeforeInteractiveRuntimeRecords } from "../packages/vinext/src/server/app-before-interactive-runtime.js";
+import { scriptCache } from "../packages/vinext/src/shims/script-loader.js";
 
 type RuntimeRecord = [src: string | 0, props: Record<string, unknown>];
 
@@ -68,6 +69,32 @@ describe("App beforeInteractive runtime records", () => {
     expect(scripts).toHaveLength(2);
     expect(scripts[1]?.text).toBe("window.afterFailure = true");
     expect(consoleError).toHaveBeenCalledWith(error);
+    consoleError.mockRestore();
+  });
+
+  it("publishes a rejected source load while continuing later records", async () => {
+    const scope: { __next_s: RuntimeRecord[] } = {
+      __next_s: [
+        ["/failed.js", {}],
+        [0, { children: "window.afterFailure = true" }],
+      ],
+    };
+    const error = new Error("failed runtime script");
+    const onReady = vi.fn();
+    const onError = vi.fn();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { document, scripts } = createRuntimeDocument((script) => {
+      if (script.src) queueMicrotask(() => script.onerror?.(error));
+    });
+
+    const bootstrap = loadBeforeInteractiveRuntimeRecords(scope, document);
+    await vi.waitFor(() => expect(scriptCache.get("/failed.js")).toBeInstanceOf(Promise));
+    await scriptCache.get("/failed.js")?.then(onReady, onError);
+    await bootstrap;
+
+    expect(onError).toHaveBeenCalledWith(error);
+    expect(onReady).not.toHaveBeenCalled();
+    expect(scripts[1]?.text).toBe("window.afterFailure = true");
     consoleError.mockRestore();
   });
 

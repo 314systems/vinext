@@ -19,6 +19,8 @@ declare global {
     __vinextLateBeforeReadyCalls?: number;
     __vinextLateBeforeScriptExecutions?: number;
     __vinextLateBeforeReadyFiredEarly?: boolean;
+    __vinextLateBeforeErrorCalls?: number;
+    __vinextLateFailedReadyCalls?: number;
   }
 }
 
@@ -29,6 +31,17 @@ function LateScript(): React.ReactElement {
         id="app-late-before-blocking"
         src="/beforeinteractive-late-blocking.js"
         strategy="beforeInteractive"
+      />
+      <Script
+        id="app-late-before-failed"
+        src="/beforeinteractive-late-failed.js"
+        strategy="beforeInteractive"
+        onError={() => {
+          window.__vinextLateBeforeErrorCalls = (window.__vinextLateBeforeErrorCalls ?? 0) + 1;
+        }}
+        onReady={() => {
+          window.__vinextLateFailedReadyCalls = (window.__vinextLateFailedReadyCalls ?? 0) + 1;
+        }}
       />
       <Script
         id="app-late-before-ready"

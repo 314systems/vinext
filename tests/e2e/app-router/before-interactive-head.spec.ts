@@ -72,13 +72,47 @@ test.describe("inline beforeInteractive head ordering", () => {
 
   test("hydrates a late Suspense script without suppressing or duplicating it", async ({
     page,
-    consoleErrors,
   }) => {
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.addInitScript(() => {
+      window.addEventListener("unhandledrejection", () => {
+        Reflect.set(
+          window,
+          "__vinextUnhandledRejectionCalls",
+          (Reflect.get(window, "__vinextUnhandledRejectionCalls") ?? 0) + 1,
+        );
+      });
+      const appendChild = Object.getOwnPropertyDescriptor(Node.prototype, "appendChild")?.value as (
+        this: Node,
+        node: Node,
+      ) => Node;
+      Node.prototype.appendChild = function <T extends Node>(node: T): T {
+        if (
+          node instanceof HTMLScriptElement &&
+          node.src.endsWith("/beforeinteractive-late-failed.js")
+        ) {
+          queueMicrotask(() => node.dispatchEvent(new Event("error")));
+          return node;
+        }
+        return appendChild.call(this, node) as T;
+      };
+    });
     await page.goto(`${BASE}/beforeinteractive-late-suspense`);
     await expect(
       page.getByRole("heading", { name: "Late Before Interactive Suspense" }),
     ).toBeVisible();
     await expect(page.getByRole("button", { name: "Toggle late script" })).toBeVisible();
+
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(window, "__vinextLateBeforeErrorCalls")))
+      .toBe(1);
+    expect(await page.evaluate(() => Reflect.get(window, "__vinextLateFailedReadyCalls"))).toBe(
+      undefined,
+    );
+    expect(await page.evaluate(() => Reflect.get(window, "__vinextUnhandledRejectionCalls"))).toBe(
+      undefined,
+    );
 
     await expect
       .poll(() => page.evaluate(() => Reflect.get(window, "__vinextLateBeforeScriptExecutions")))
@@ -103,6 +137,6 @@ test.describe("inline beforeInteractive head ordering", () => {
       .toBe(1);
     await expect(page.locator('script[id="app-late-before-ready"]')).toHaveCount(1);
 
-    void consoleErrors;
+    expect(pageErrors).toEqual([]);
   });
 });
