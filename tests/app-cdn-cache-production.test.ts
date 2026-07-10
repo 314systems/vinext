@@ -55,7 +55,7 @@ describe("App Router production responses with a CDN-managed cache", () => {
     ioServer = http.createServer((request, response) => {
       ioRequests += 1;
       const delay = new URL(request.url ?? "/", "http://localhost").searchParams.get("delay");
-      setTimeout(() => response.end(`io-${ioRequests}`), Number(delay) || 75);
+      setTimeout(() => response.end(`io-${ioRequests}`), delay === "750" ? 750 : 75);
     });
     await new Promise<void>((resolve, reject) => {
       ioServer.once("error", reject);
