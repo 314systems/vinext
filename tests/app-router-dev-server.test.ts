@@ -75,13 +75,64 @@ async function withCountingFetchTarget<T>(
 describe("App Router integration", () => {
   let server: ViteDevServer;
   let baseUrl: string;
+  let configCapturePathTarget: http.Server;
+  const configCapturePathRequests: string[] = [];
 
   beforeAll(async () => {
-    ({ server, baseUrl } = await startFixtureServer(APP_FIXTURE_DIR, { appRouter: true }));
+    configCapturePathTarget = http.createServer((req, res) => {
+      configCapturePathRequests.push(req.url ?? "");
+      res.end("proxied");
+    });
+    await new Promise<void>((resolve, reject) => {
+      configCapturePathTarget.once("error", reject);
+      configCapturePathTarget.listen(0, "127.0.0.1", () => {
+        configCapturePathTarget.off("error", reject);
+        resolve();
+      });
+    });
+    const address = configCapturePathTarget.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Config capture target did not bind to a TCP port");
+    }
+    process.env.TEST_CONFIG_CAPTURE_PATH_TARGET = `http://127.0.0.1:${address.port}`;
+    try {
+      ({ server, baseUrl } = await startFixtureServer(APP_FIXTURE_DIR, { appRouter: true }));
+    } finally {
+      delete process.env.TEST_CONFIG_CAPTURE_PATH_TARGET;
+    }
   }, 30000);
 
   afterAll(async () => {
-    await server?.close();
+    try {
+      await server?.close();
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        configCapturePathTarget?.close((error) => (error ? reject(error) : resolve()));
+      });
+      delete process.env.TEST_CONFIG_CAPTURE_PATH_TARGET;
+    }
+  });
+
+  // Next.js custom-route encoding oracle:
+  // https://github.com/vercel/next.js/blob/canary/test/integration/custom-routes/test/index.test.ts
+  // Double-encoded traversal oracle:
+  // https://github.com/vercel/next.js/blob/canary/test/integration/file-serving/test/index.test.ts
+  it("preserves encoded dot segments in config redirect source captures", async () => {
+    const res = await fetch(`${baseUrl}/source-capture-dot-redirect/%252e%252e/admin`, {
+      redirect: "manual",
+    });
+
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toBe("/safe/%252e%252e/admin");
+  });
+
+  it("preserves encoded dot segments in external rewrite source captures", async () => {
+    configCapturePathRequests.length = 0;
+    const res = await fetch(`${baseUrl}/source-capture-dot-rewrite/%252e%252e/admin`);
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("proxied");
+    expect(configCapturePathRequests).toEqual(["/safe/%252e%252e/admin"]);
   });
 
   it("renders the home page with root layout", async () => {

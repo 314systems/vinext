@@ -100,6 +100,11 @@ const nextConfig: NextConfig = {
         destination: "/config-capture-redirect/:segment",
         permanent: false,
       },
+      {
+        source: "/source-capture-dot-redirect/:path*",
+        destination: "/safe/:path*",
+        permanent: false,
+      },
     ];
   },
 
@@ -120,6 +125,14 @@ const nextConfig: NextConfig = {
               {
                 source: "/proxy-external-test/:path*",
                 destination: `${process.env.TEST_EXTERNAL_PROXY_TARGET}/:path*`,
+              },
+            ]
+          : []),
+        ...(process.env.TEST_CONFIG_CAPTURE_PATH_TARGET
+          ? [
+              {
+                source: "/source-capture-dot-rewrite/:path*",
+                destination: `${new URL(process.env.TEST_CONFIG_CAPTURE_PATH_TARGET).origin}/safe/:path*`,
               },
             ]
           : []),

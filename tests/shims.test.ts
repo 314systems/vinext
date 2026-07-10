@@ -12229,6 +12229,33 @@ describe("matchRewrite with external URLs", () => {
     expect(result).toBe("/api/foo&admin=true?q=foo%26admin%3Dtrue");
   });
 
+  it("restores the encoding layer on dot segments captured from config sources", async () => {
+    const { matchRewrite } = await import("../packages/vinext/src/config/config-matchers.js");
+    const { normalizePathnameForRouteMatchStrict } =
+      await import("../packages/vinext/src/routing/utils.js");
+    const rewrites = [
+      {
+        source: "/proxy/:path*",
+        destination: "https://api.example.test/safe/:path*",
+      },
+    ];
+    const pathname = normalizePathnameForRouteMatchStrict("/proxy/%252e%252e/admin");
+
+    expect(matchRewrite(pathname, rewrites, emptyCtx)).toBe(
+      "https://api.example.test/safe/%252e%252e/admin",
+    );
+  });
+
+  it("keeps ordinary pchars, encoded delimiters, and catch-all separators in source paths", async () => {
+    const { matchRewrite } = await import("../packages/vinext/src/config/config-matchers.js");
+    const { normalizePathnameForRouteMatchStrict } =
+      await import("../packages/vinext/src/routing/utils.js");
+    const rewrites = [{ source: "/proxy/:path*", destination: "/safe/:path*" }];
+    const pathname = normalizePathnameForRouteMatchStrict("/proxy/a%26b/nested%2Fvalue");
+
+    expect(matchRewrite(pathname, rewrites, emptyCtx)).toBe("/safe/a&b/nested%2Fvalue");
+  });
+
   it("uses the same query value encoding for inline and appended rewrite params", async () => {
     const { matchRewrite } = await import("../packages/vinext/src/config/config-matchers.js");
     const { normalizePathnameForRouteMatchStrict } =
