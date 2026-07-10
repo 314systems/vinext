@@ -1120,7 +1120,9 @@ export async function renderAppPageLifecycle(
     const verification = await verifyCdnCacheCandidateStream(safeHtmlStream);
     safeHtmlStream = verification.stream;
     if (verification.complete) {
-      dynamicUsedDuringRender = dynamicUsedBeforeContextCleanup || options.consumeDynamicUsage();
+      const searchParamsAccessed = await (htmlRender.searchParamsAccessed ?? false);
+      dynamicUsedDuringRender =
+        searchParamsAccessed || dynamicUsedBeforeContextCleanup || options.consumeDynamicUsage();
       dynamicUsedDuringHtmlRender = dynamicUsedDuringRender;
       dynamicUsageCheckComplete = true;
     }
