@@ -174,6 +174,17 @@ test.describe("Cloudflare Workers dynamic preloads", () => {
     );
     expect(legacyImmutable.status()).toBe(200);
     expect(legacyImmutable.headers()["cache-control"]).toBe("public, max-age=315360000, immutable");
+
+    for (const source of [
+      "/%5Fnext/static/media/static-image.bmp",
+      "/_next/static/%6dedia/static-image.bmp",
+      "/_next/static/%69mmutable/media/static-image.bmp",
+      "/_next/static/immutable/%6dedia/static-image.bmp",
+    ]) {
+      const encoded = await request.get(optimizerUrl(source));
+      expect(encoded.status()).toBe(200);
+      expect(encoded.headers()["cache-control"]).toBe("public, max-age=31536000, must-revalidate");
+    }
   });
 
   test("negotiates and caches weighted image formats in a pure App Worker", async ({ request }) => {

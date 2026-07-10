@@ -119,6 +119,23 @@ test.describe("Pages Router image request middleware ordering", () => {
       'attachment; filename="static-image.bmp"',
     );
     expect(immutable.headers()["content-length"]).toBe(String((await immutable.body()).byteLength));
+
+    const legacyImmutable = await request.get(
+      optimizerUrl("/_next/static/immutable/media/static-image.bmp"),
+    );
+    expect(legacyImmutable.status()).toBe(200);
+    expect(legacyImmutable.headers()["cache-control"]).toBe("public, max-age=315360000, immutable");
+
+    for (const source of [
+      "/%5Fnext/static/media/static-image.bmp",
+      "/_next/static/%6dedia/static-image.bmp",
+      "/_next/static/%69mmutable/media/static-image.bmp",
+      "/_next/static/immutable/%6dedia/static-image.bmp",
+    ]) {
+      const encoded = await request.get(optimizerUrl(source));
+      expect(encoded.status()).toBe(200);
+      expect(encoded.headers()["cache-control"]).toBe("public, max-age=3600, must-revalidate");
+    }
   });
 
   test("rejects nested image optimizer source paths before dispatch", async ({ request }) => {

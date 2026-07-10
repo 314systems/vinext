@@ -900,25 +900,21 @@ async function renderImageOptimizationUncached(
     return new Response("The requested resource isn't a valid image.", { status: 400 });
   }
   const { bytes: sourceBytes, response: source, contentType: sourceContentType } = sourceResult;
-  let sourcePathname: string;
-  try {
-    sourcePathname = decodeURIComponent(new URL(imageUrl, request.url).pathname).replaceAll(
-      "\\",
-      "/",
-    );
-  } catch {
-    sourcePathname = "";
-  }
+  const rawImageUrl = url.searchParams.get("url") ?? "";
+  const sourceOwnershipPathname = rawImageUrl.split(/[?#]/, 1)[0];
   const configuredBasePath = (imageConfig?.basePath ?? "").replace(/\/$/, "");
   // Next.js recognizes both current and legacy build-owned media directories.
-  // Keep them anchored to this app's basePath and require a segment boundary.
+  // Classify ownership from the literal optimizer source rather than its
+  // decoded routing pathname: encoded lookalikes may resolve to the same asset,
+  // but they are not build-emitted immutable namespaces. Keep both paths
+  // anchored to this app's basePath and require a segment boundary.
   // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/image-optimizer.ts
   const staticMediaPaths = [
     `${configuredBasePath}/_next/static/media`,
     `${configuredBasePath}/_next/static/immutable/media`,
   ];
   const sourceIsStatic = staticMediaPaths.some(
-    (path) => sourcePathname === path || sourcePathname.startsWith(`${path}/`),
+    (path) => sourceOwnershipPathname === path || sourceOwnershipPathname.startsWith(`${path}/`),
   );
   if (!sourceContentType) {
     return new Response("The requested resource isn't a valid image.", { status: 400 });

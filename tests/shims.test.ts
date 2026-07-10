@@ -22047,6 +22047,10 @@ describe("handleImageOptimization", () => {
       "/nested/docs/_next/static/immutable/media/nested.bmp",
       "/docs/_next/static/medial/not-a-segment.bmp",
       "/docs/_next/static/immutable/medial/not-a-segment.bmp",
+      "/docs/%5Fnext/static/media/encoded-namespace.bmp",
+      "/docs/_next/static/%6dedia/encoded-media.bmp",
+      "/docs/_next/static/%69mmutable/media/encoded-immutable.bmp",
+      "/docs/_next/static/immutable/%6dedia/encoded-legacy-media.bmp",
     ]) {
       expect((await optimize(source)).headers.get("Cache-Control")).toBe(
         "public, max-age=14400, must-revalidate",
