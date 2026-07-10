@@ -441,16 +441,16 @@ function endsWithDelimitedTag(window: string, prefix: string): string | null {
 }
 
 /**
- * Incrementally locate the document's real `</head>` token.
+ * Incrementally locate a real closing token outside inert HTML contexts.
  *
  * The insertion transform cannot use a substring search here: raw-text
  * elements, comments, attributes, and template contents may all contain the
  * same bytes without closing the document head. This deliberately small HTML
- * tokenizer tracks exactly the contexts that affect a closing-head token. It
- * retains no document data; the caller only holds a possible split `</head>`
- * prefix (at most six characters), preserving streaming and backpressure.
+ * tokenizer tracks exactly the contexts that affect a closing token. It
+ * retains no document data; the caller only holds a possible split-token
+ * prefix, preserving streaming and backpressure.
  */
-class HtmlHeadClosingTagScanner {
+class HtmlClosingTokenScanner {
   #commentTail = "";
   #declarationPrefix = "";
   #quote: '"' | "'" | null = null;
@@ -461,26 +461,36 @@ class HtmlHeadClosingTagScanner {
   #state: HeadScannerState = "data";
   #tagIsEnd = false;
   #tagName = "";
+  readonly #target: string;
   #templateDepth = 0;
 
-  scan(input: string, final: boolean): { consumed: number; headCloseIndex: number } {
+  constructor(target: string) {
+    this.#target = target.toLowerCase();
+  }
+
+  scan(input: string, final: boolean): { consumed: number; tokenIndex: number } {
     for (let index = 0; index < input.length; index++) {
-      const character = input[index];
+      let character = input[index];
 
       if (this.#state === "data") {
-        if (character !== "<") continue;
+        if (character !== "<") {
+          const nextTag = input.indexOf("<", index + 1);
+          if (nextTag === -1) return { consumed: input.length, tokenIndex: -1 };
+          index = nextTag;
+          character = "<";
+        }
 
         if (this.#templateDepth === 0) {
-          const candidate = input.slice(index, index + HEAD_CLOSE_TAG.length).toLowerCase();
-          if (candidate === HEAD_CLOSE_TAG) {
-            return { consumed: index, headCloseIndex: index };
+          const candidate = input.slice(index, index + this.#target.length).toLowerCase();
+          if (candidate === this.#target) {
+            return { consumed: index, tokenIndex: index };
           }
           if (
             !final &&
-            candidate.length < HEAD_CLOSE_TAG.length &&
-            HEAD_CLOSE_TAG.startsWith(candidate)
+            candidate.length < this.#target.length &&
+            this.#target.startsWith(candidate)
           ) {
-            return { consumed: index, headCloseIndex: -1 };
+            return { consumed: index, tokenIndex: -1 };
           }
         }
 
@@ -577,7 +587,7 @@ class HtmlHeadClosingTagScanner {
       }
     }
 
-    return { consumed: input.length, headCloseIndex: -1 };
+    return { consumed: input.length, tokenIndex: -1 };
   }
 
   #finishTag(): void {
@@ -727,10 +737,12 @@ export function createTickBufferedTransform(
   let preHeadInjected = false;
   let suffixStripped = false;
   let buffered: string[] = [];
+  let pendingDocumentClose = "";
   let pendingHtml = "";
   let pendingHeadClose = "";
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
-  const headCloseScanner = new HtmlHeadClosingTagScanner();
+  const documentCloseScanner = new HtmlClosingTokenScanner(DOCUMENT_CLOSE_SUFFIX);
+  const headCloseScanner = new HtmlClosingTokenScanner(HEAD_CLOSE_TAG);
   // Computed once at transform creation: every flush is a hot path, so we
   // avoid re-running Object.keys() on the manifest per chunk. Gates both the
   // split-link boundary buffering and the inline-css link rewrite below.
@@ -738,19 +750,24 @@ export function createTickBufferedTransform(
     inlineCssManifest !== undefined && Object.keys(inlineCssManifest).length > 0;
 
   /**
-   * Strip the first occurrence of `</body></html>` from `chunk` so it can be
-   * re-emitted at the very end of the stream. Returns the rewritten chunk and
-   * a flag indicating whether a suffix was found. If `suffixStripped` is
-   * already true (i.e. an earlier chunk contained the suffix), this is a
-   * no-op — additional matches in later chunks shouldn't happen in practice,
-   * but we leave them alone to avoid corrupting unexpected output.
+   * Strip a real `</body></html>` token from `chunk` so it can be re-emitted at
+   * the very end of the stream. The incremental scanner excludes raw-text,
+   * comment, attribute, and template lookalikes and retains only a possible
+   * split token prefix. Once the real suffix is found, later chunks pass
+   * through unchanged.
    */
-  const stripDocumentCloseSuffix = (chunk: string): string => {
+  const stripDocumentCloseSuffix = (chunk: string, final: boolean): string => {
     if (suffixStripped) return chunk;
-    const index = chunk.indexOf(DOCUMENT_CLOSE_SUFFIX);
-    if (index === -1) return chunk;
-    suffixStripped = true;
-    return chunk.slice(0, index) + chunk.slice(index + DOCUMENT_CLOSE_SUFFIX.length);
+    const scan = documentCloseScanner.scan(chunk, final);
+    if (scan.tokenIndex !== -1) {
+      suffixStripped = true;
+      return (
+        chunk.slice(0, scan.tokenIndex) +
+        chunk.slice(scan.tokenIndex + DOCUMENT_CLOSE_SUFFIX.length)
+      );
+    }
+    pendingDocumentClose = chunk.slice(scan.consumed);
+    return chunk.slice(0, scan.consumed);
   };
   const readInsertion = (): string =>
     typeof injectHTML === "function" ? injectHTML() : injectHTML;
@@ -799,9 +816,12 @@ export function createTickBufferedTransform(
     controller: TransformStreamDefaultController<Uint8Array>,
     final = false,
   ): void => {
-    if (buffered.length === 0 && !pendingHtml && !pendingHeadClose) return;
-    const rawHtml = pendingHeadClose + pendingHtml + buffered.join("");
+    if (buffered.length === 0 && !pendingDocumentClose && !pendingHtml && !pendingHeadClose) {
+      return;
+    }
+    const rawHtml = pendingHeadClose + pendingDocumentClose + pendingHtml + buffered.join("");
     buffered = [];
+    pendingDocumentClose = "";
     pendingHtml = "";
     pendingHeadClose = "";
 
@@ -843,19 +863,21 @@ export function createTickBufferedTransform(
     }
     if (!injected) {
       const scan = headCloseScanner.scan(working, final);
-      if (scan.headCloseIndex !== -1) {
-        const before = working.slice(0, scan.headCloseIndex);
-        const after = stripDocumentCloseSuffix(working.slice(scan.headCloseIndex));
-        controller.enqueue(
-          encoder.encode(before + readInlineCssPrependFallback() + readInsertion() + after),
+      if (scan.tokenIndex !== -1) {
+        const before = working.slice(0, scan.tokenIndex);
+        const after = working.slice(scan.tokenIndex);
+        working = stripDocumentCloseSuffix(
+          before + readInlineCssPrependFallback() + readInsertion() + after,
+          final,
         );
+        controller.enqueue(encoder.encode(working));
         injected = true;
         return;
       }
       pendingHeadClose = working.slice(scan.consumed);
       working = working.slice(0, scan.consumed);
     }
-    working = stripDocumentCloseSuffix(working);
+    working = stripDocumentCloseSuffix(working, final);
     if (working) {
       controller.enqueue(encoder.encode(working));
     }
