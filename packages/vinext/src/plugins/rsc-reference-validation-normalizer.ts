@@ -1,5 +1,6 @@
 import type { Plugin } from "vite";
 import type { PluginApi } from "@vitejs/plugin-rsc";
+import { toSlash } from "pathslash";
 
 const REFERENCE_VALIDATION_ID_PREFIX = "\0virtual:vite-rsc/reference-validation?";
 const SERVER_ACTION_VALIDATION_ID = "virtual:vinext-server-action-validation";
@@ -65,6 +66,25 @@ function hasAnyServerAction(
   );
 }
 
+function cleanFileId(id: string): string {
+  const queryIndex = id.search(/[?#]/);
+  const cleanId = queryIndex === -1 ? id : id.slice(0, queryIndex);
+  return toSlash(cleanId.startsWith("/@fs/") ? cleanId.slice("/@fs/".length) : cleanId);
+}
+
+function removeDeletedServerReference(
+  referenceMetaMap: Record<string, RscReferenceMeta> | undefined,
+  file: string,
+): void {
+  if (!referenceMetaMap) return;
+  const deletedFile = cleanFileId(file);
+  for (const [id, meta] of Object.entries(referenceMetaMap)) {
+    if (cleanFileId(id) === deletedFile || cleanFileId(meta.importId) === deletedFile) {
+      delete referenceMetaMap[id];
+    }
+  }
+}
+
 /**
  * @vitejs/plugin-rsc stores dev virtual client-reference keys in Vite's encoded
  * `/@id/__x00__...` form, but React's SSR consumer can ask validation for the
@@ -73,6 +93,7 @@ function hasAnyServerAction(
  */
 export function createRscReferenceValidationNormalizerPlugin(): Plugin {
   let rscApi: PluginApi | undefined;
+  const serverActionValidationModuleIds = new Set<string>();
 
   return {
     name: "vinext:rsc-reference-validation-normalizer",
@@ -107,6 +128,7 @@ export function createRscReferenceValidationNormalizerPlugin(): Plugin {
       },
       handler(id) {
         if (id.startsWith(`${RESOLVED_SERVER_ACTION_VALIDATION_ID}?`)) {
+          serverActionValidationModuleIds.add(id);
           const query = parseReferenceValidationQuery(id);
           const valid = query?.hasAny
             ? hasAnyServerAction(rscApi?.manager.serverReferenceMetaMap)
@@ -128,6 +150,33 @@ export function createRscReferenceValidationNormalizerPlugin(): Plugin {
         }
 
         return null;
+      },
+    },
+    hotUpdate: {
+      order: "post",
+      handler(ctx) {
+        // plugin-rsc updates its live reference metadata from the RSC transform
+        // during the same hot-update pass. Invalidate our result modules after
+        // that transform so the next progressive POST reads the current map.
+        // These virtual modules cannot express a normal dependency edge: their
+        // input is plugin state rather than source imported by the module.
+        if (this.environment.name !== "rsc") return;
+
+        // A deleted module cannot run plugin-rsc's transform again, so its
+        // metadata otherwise survives indefinitely and can make a markerless
+        // POST look actions-enabled or send stale action ids to module loading.
+        if (ctx.type === "delete") {
+          removeDeletedServerReference(rscApi?.manager.serverReferenceMetaMap, ctx.file);
+        }
+
+        for (const environment of Object.values(ctx.server.environments)) {
+          for (const id of serverActionValidationModuleIds) {
+            const mod = environment.moduleGraph.getModuleById(id);
+            if (mod) {
+              environment.moduleGraph.invalidateModule(mod, new Set(), ctx.timestamp, true);
+            }
+          }
+        }
       },
     },
   };
