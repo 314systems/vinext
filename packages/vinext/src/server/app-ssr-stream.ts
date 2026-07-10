@@ -400,13 +400,276 @@ function rewriteInlineCssStylesheetLinks(
   return { html: rewritten, consumedPrependCss };
 }
 
-/**
- * Match the `<head ...>` opening tag in a chunk. Matches both bare `<head>`
- * and `<head class="foo">` shapes. Used to splice HTML immediately after the
- * opening tag so injected content runs before any React-emitted resource
- * hints (stylesheets, modulepreloads) that React Float hoists into `<head>`.
- */
+/** Match the `<head ...>` opening tag in a tick-buffered batch. */
 const HEAD_OPEN_RE = /<head\b[^>]*>/;
+
+const HEAD_CLOSE_TAG = "</head>";
+const RAW_TEXT_ELEMENTS = new Set([
+  "iframe",
+  "noembed",
+  "noframes",
+  "noscript",
+  "script",
+  "style",
+  "textarea",
+  "title",
+  "xmp",
+]);
+const RAW_TAG_WINDOW_LENGTH = 16;
+
+type HeadScannerState =
+  | "bogus-comment"
+  | "comment"
+  | "data"
+  | "end-tag-open"
+  | "markup-declaration-open"
+  | "plaintext"
+  | "raw-end-tag"
+  | "raw-text"
+  | "tag-body"
+  | "tag-name"
+  | "tag-open";
+
+function isHtmlTagDelimiter(character: string): boolean {
+  return character === ">" || character === "/" || /[\t\n\f\r ]/.test(character);
+}
+
+function endsWithDelimitedTag(window: string, prefix: string): string | null {
+  const delimiter = window.at(-1);
+  if (!delimiter || !isHtmlTagDelimiter(delimiter)) return null;
+  return window.endsWith(prefix + delimiter) ? delimiter : null;
+}
+
+/**
+ * Incrementally locate the document's real `</head>` token.
+ *
+ * The insertion transform cannot use a substring search here: raw-text
+ * elements, comments, attributes, and template contents may all contain the
+ * same bytes without closing the document head. This deliberately small HTML
+ * tokenizer tracks exactly the contexts that affect a closing-head token. It
+ * retains no document data; the caller only holds a possible split `</head>`
+ * prefix (at most six characters), preserving streaming and backpressure.
+ */
+class HtmlHeadClosingTagScanner {
+  #commentTail = "";
+  #declarationPrefix = "";
+  #quote: '"' | "'" | null = null;
+  #rawDoubleEscaped = false;
+  #rawEscaped = false;
+  #rawTag: string | null = null;
+  #rawWindow = "";
+  #state: HeadScannerState = "data";
+  #tagIsEnd = false;
+  #tagName = "";
+  #templateDepth = 0;
+
+  scan(input: string, final: boolean): { consumed: number; headCloseIndex: number } {
+    for (let index = 0; index < input.length; index++) {
+      const character = input[index];
+
+      if (this.#state === "data") {
+        if (character !== "<") continue;
+
+        if (this.#templateDepth === 0) {
+          const candidate = input.slice(index, index + HEAD_CLOSE_TAG.length).toLowerCase();
+          if (candidate === HEAD_CLOSE_TAG) {
+            return { consumed: index, headCloseIndex: index };
+          }
+          if (
+            !final &&
+            candidate.length < HEAD_CLOSE_TAG.length &&
+            HEAD_CLOSE_TAG.startsWith(candidate)
+          ) {
+            return { consumed: index, headCloseIndex: -1 };
+          }
+        }
+
+        this.#state = "tag-open";
+        continue;
+      }
+
+      if (this.#state === "tag-open") {
+        if (character === "/") {
+          this.#tagIsEnd = true;
+          this.#tagName = "";
+          this.#state = "end-tag-open";
+        } else if (character === "!") {
+          this.#declarationPrefix = "";
+          this.#state = "markup-declaration-open";
+        } else if (character === "?") {
+          this.#state = "bogus-comment";
+        } else if (/[A-Za-z]/.test(character)) {
+          this.#tagIsEnd = false;
+          this.#tagName = character.toLowerCase();
+          this.#state = "tag-name";
+        } else {
+          this.#state = "data";
+        }
+        continue;
+      }
+
+      if (this.#state === "end-tag-open") {
+        if (/[A-Za-z]/.test(character)) {
+          this.#tagName = character.toLowerCase();
+          this.#state = "tag-name";
+        } else {
+          this.#state = character === ">" ? "data" : "bogus-comment";
+        }
+        continue;
+      }
+
+      if (this.#state === "tag-name") {
+        if (character === ">") {
+          this.#finishTag();
+        } else if (isHtmlTagDelimiter(character)) {
+          this.#quote = null;
+          this.#state = "tag-body";
+        } else {
+          this.#tagName += character.toLowerCase();
+        }
+        continue;
+      }
+
+      if (this.#state === "tag-body" || this.#state === "raw-end-tag") {
+        if (this.#quote) {
+          if (character === this.#quote) this.#quote = null;
+          continue;
+        }
+        if (character === '"' || character === "'") {
+          this.#quote = character;
+        } else if (character === ">") {
+          if (this.#state === "raw-end-tag") {
+            this.#leaveRawText();
+          } else {
+            this.#finishTag();
+          }
+        }
+        continue;
+      }
+
+      if (this.#state === "markup-declaration-open") {
+        this.#declarationPrefix += character;
+        if (this.#declarationPrefix === "--") {
+          this.#commentTail = "";
+          this.#state = "comment";
+        } else if (this.#declarationPrefix.length >= 2) {
+          this.#state = character === ">" ? "data" : "bogus-comment";
+        }
+        continue;
+      }
+
+      if (this.#state === "comment") {
+        this.#commentTail = (this.#commentTail + character).slice(-3);
+        if (this.#commentTail === "-->") {
+          this.#commentTail = "";
+          this.#state = "data";
+        }
+        continue;
+      }
+
+      if (this.#state === "bogus-comment") {
+        if (character === ">") this.#state = "data";
+        continue;
+      }
+
+      if (this.#state === "raw-text") {
+        this.#scanRawText(character);
+      }
+    }
+
+    return { consumed: input.length, headCloseIndex: -1 };
+  }
+
+  #finishTag(): void {
+    const name = this.#tagName;
+    const isEnd = this.#tagIsEnd;
+    this.#tagName = "";
+    this.#tagIsEnd = false;
+    this.#quote = null;
+
+    if (name === "template") {
+      this.#templateDepth = isEnd ? Math.max(0, this.#templateDepth - 1) : this.#templateDepth + 1;
+    }
+
+    if (!isEnd && name === "plaintext") {
+      this.#state = "plaintext";
+      return;
+    }
+
+    if (!isEnd && RAW_TEXT_ELEMENTS.has(name)) {
+      this.#rawTag = name;
+      this.#rawWindow = "";
+      this.#rawEscaped = false;
+      this.#rawDoubleEscaped = false;
+      this.#state = "raw-text";
+      return;
+    }
+
+    this.#state = "data";
+  }
+
+  #leaveRawText(): void {
+    this.#quote = null;
+    this.#rawTag = null;
+    this.#rawWindow = "";
+    this.#rawEscaped = false;
+    this.#rawDoubleEscaped = false;
+    this.#state = "data";
+  }
+
+  #scanRawText(character: string): void {
+    const rawTag = this.#rawTag;
+    if (!rawTag) {
+      this.#state = "data";
+      return;
+    }
+
+    this.#rawWindow = (this.#rawWindow + character.toLowerCase()).slice(-RAW_TAG_WINDOW_LENGTH);
+    const closingDelimiter = endsWithDelimitedTag(this.#rawWindow, `</${rawTag}`);
+
+    if (rawTag !== "script") {
+      if (closingDelimiter === ">") {
+        this.#leaveRawText();
+      } else if (closingDelimiter) {
+        this.#quote = null;
+        this.#state = "raw-end-tag";
+      }
+      return;
+    }
+
+    if (this.#rawDoubleEscaped) {
+      if (closingDelimiter) {
+        // In the HTML script-data-double-escaped state, `</script>` returns
+        // to escaped script data; it does not close the element yet.
+        this.#rawDoubleEscaped = false;
+        this.#rawEscaped = true;
+        this.#rawWindow = "";
+      }
+      return;
+    }
+
+    if (closingDelimiter === ">") {
+      this.#leaveRawText();
+      return;
+    }
+    if (closingDelimiter) {
+      this.#quote = null;
+      this.#state = "raw-end-tag";
+      return;
+    }
+
+    if (this.#rawEscaped && endsWithDelimitedTag(this.#rawWindow, "<script")) {
+      this.#rawDoubleEscaped = true;
+      this.#rawWindow = "";
+      return;
+    }
+    if (this.#rawWindow.endsWith("<!--")) {
+      this.#rawEscaped = true;
+    } else if (this.#rawEscaped && this.#rawWindow.endsWith("-->")) {
+      this.#rawEscaped = false;
+    }
+  }
+}
 
 /**
  * Final closing tags of the streamed HTML document. We track this suffix
@@ -465,7 +728,9 @@ export function createTickBufferedTransform(
   let suffixStripped = false;
   let buffered: string[] = [];
   let pendingHtml = "";
+  let pendingHeadClose = "";
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const headCloseScanner = new HtmlHeadClosingTagScanner();
   // Computed once at transform creation: every flush is a hot path, so we
   // avoid re-running Object.keys() on the manifest per chunk. Gates both the
   // split-link boundary buffering and the inline-css link rewrite below.
@@ -534,10 +799,11 @@ export function createTickBufferedTransform(
     controller: TransformStreamDefaultController<Uint8Array>,
     final = false,
   ): void => {
-    if (buffered.length === 0 && !pendingHtml) return;
-    const rawHtml = pendingHtml + buffered.join("");
+    if (buffered.length === 0 && !pendingHtml && !pendingHeadClose) return;
+    const rawHtml = pendingHeadClose + pendingHtml + buffered.join("");
     buffered = [];
     pendingHtml = "";
+    pendingHeadClose = "";
 
     const split =
       final || !hasInlineCssManifest
@@ -576,19 +842,23 @@ export function createTickBufferedTransform(
       }
     }
     if (!injected) {
-      const headEnd = working.indexOf("</head>");
-      if (headEnd !== -1) {
-        const before = working.slice(0, headEnd);
-        const after = stripDocumentCloseSuffix(working.slice(headEnd));
+      const scan = headCloseScanner.scan(working, final);
+      if (scan.headCloseIndex !== -1) {
+        const before = working.slice(0, scan.headCloseIndex);
+        const after = stripDocumentCloseSuffix(working.slice(scan.headCloseIndex));
         controller.enqueue(
           encoder.encode(before + readInlineCssPrependFallback() + readInsertion() + after),
         );
         injected = true;
         return;
       }
+      pendingHeadClose = working.slice(scan.consumed);
+      working = working.slice(0, scan.consumed);
     }
     working = stripDocumentCloseSuffix(working);
-    controller.enqueue(encoder.encode(working));
+    if (working) {
+      controller.enqueue(encoder.encode(working));
+    }
   };
 
   return new TransformStream<Uint8Array, Uint8Array>({

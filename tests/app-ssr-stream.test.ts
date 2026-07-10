@@ -262,6 +262,8 @@ async function runTransform(
 async function runDelayedTransform(
   chunks: string[],
   options: {
+    injectHTML?: string;
+    injectAfterHeadOpenHTML?: string;
     inlineCss?: Record<string, string>;
   } = {},
 ): Promise<string> {
@@ -284,7 +286,12 @@ async function runDelayedTransform(
 
   return new Response(
     source.pipeThrough(
-      createTickBufferedTransform(createNoopRscEmbedTransform(), "", "", options.inlineCss),
+      createTickBufferedTransform(
+        createNoopRscEmbedTransform(),
+        options.injectHTML ?? "",
+        options.injectAfterHeadOpenHTML ?? "",
+        options.inlineCss,
+      ),
     ),
   ).text();
 }
@@ -386,6 +393,75 @@ describe("createTickBufferedTransform pre-head splice", () => {
     expect(endIdx).toBeGreaterThan(-1);
     expect(startIdx).toBeLessThan(endIdx);
     expect(endIdx).toBeLessThan(closeIdx);
+  });
+
+  it("does not treat </head> inside a beforeInteractive script as the insertion point", async () => {
+    const script = '<script id="theme">self.theme = "</head><img data-payload src=x>";</script>';
+    const out = await runTransform(["<html><head></head><body></body></html>"], {
+      injectHTML: '<meta data-end-of-head="true">',
+      injectAfterHeadOpenHTML: script,
+    });
+
+    expect(out).toContain(`${script}<meta data-end-of-head="true"></head>`);
+  });
+
+  it.each([
+    ["script data", '<script>self.value = "</head>";</script>'],
+    ["style data", '<style>.x::after { content: "</head>"; }</style>'],
+    ["title data", "<title>before </head> after</title>"],
+    ["comment", "<!-- before </head> after -->"],
+    ["attribute", '<meta content="before </head> after">'],
+    ["template contents", "<template><div>before </head> after</div></template>"],
+  ])("ignores closing-head text in %s", async (_label, context) => {
+    const out = await runTransform([`<html><head>${context}</head><body></body></html>`], {
+      injectHTML: '<meta data-end-of-head="true">',
+    });
+
+    expect(out).toContain(`${context}<meta data-end-of-head="true"></head>`);
+  });
+
+  it("tracks script double-escaped data before finding the real head close", async () => {
+    const script = "<script><!--<script></head></script>--></script>";
+    const out = await runTransform([`<html><head>${script}</head><body></body></html>`], {
+      injectHTML: '<meta data-end-of-head="true">',
+    });
+
+    expect(out).toContain(`${script}<meta data-end-of-head="true"></head>`);
+  });
+
+  it("finds a real closing head tag split across flush ticks", async () => {
+    const out = await runDelayedTransform(
+      ["<html><head><title>x</title></he", "ad><body></body></html>"],
+      { injectHTML: '<meta data-end-of-head="true">' },
+    );
+
+    expect(out).toContain('<title>x</title><meta data-end-of-head="true"></head>');
+  });
+
+  it("continues streaming safe head content before later input arrives", async () => {
+    const transform = createTickBufferedTransform(
+      createNoopRscEmbedTransform(),
+      '<meta data-end-of-head="true">',
+    );
+    const source = new TransformStream<Uint8Array, Uint8Array>();
+    const reader = source.readable.pipeThrough(transform).getReader();
+    const writer = source.writable.getWriter();
+    const firstRead = reader.read();
+
+    await writer.write(new TextEncoder().encode("<html><head><meta name=first>"));
+    const first = await firstRead;
+    expect(first.done).toBe(false);
+    expect(new TextDecoder().decode(first.value)).toBe("<html><head><meta name=first>");
+
+    await writer.write(new TextEncoder().encode("</head><body></body></html>"));
+    await writer.close();
+    let remainder = "";
+    while (true) {
+      const result = await reader.read();
+      if (result.done) break;
+      remainder += new TextDecoder().decode(result.value);
+    }
+    expect(remainder).toContain('<meta data-end-of-head="true"></head>');
   });
 
   it("handles <head> with attributes", async () => {
