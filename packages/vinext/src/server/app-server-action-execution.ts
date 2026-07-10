@@ -825,7 +825,9 @@ const PROGRESSIVE_ACTION_REF_PREFIX = "$ACTION_REF_";
  * A normal form usually carries one marker. Forms with submitter overrides
  * may legitimately carry more than one, so preserve React's last-marker-wins
  * behavior and preflight each referenced action instead of rejecting the
- * shape outright.
+ * shape outright. A single marker needs no preflight because decodeAction
+ * returns that marker's promise and the caller awaits its rejection; the
+ * unhandled-rejection lifecycle exists only when an earlier marker is orphaned.
  */
 function getProgressiveActionIdsForPreflight(body: FormData): string[] | null | undefined {
   const markerKeys = new Set<string>();
