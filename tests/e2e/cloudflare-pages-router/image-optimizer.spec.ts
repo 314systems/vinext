@@ -80,7 +80,7 @@ test.describe("Cloudflare Pages Router image optimizer", () => {
     });
   });
 
-  test("bounds public assets and classifies both imported-image output layouts", async ({
+  test("bounds public assets and classifies build-owned static media as immutable", async ({
     request,
   }) => {
     expect((await request.get(optimizerUrl("/large-public.png"))).status()).toBe(413);
@@ -88,9 +88,7 @@ test.describe("Cloudflare Pages Router image optimizer", () => {
     expect(mutable.status()).toBe(200);
     expect(mutable.headers()["cache-control"]).toBe("public, max-age=123, must-revalidate");
 
-    const immutable = await request.get(
-      optimizerUrl("/_next/static/immutable/media/static-image.bmp"),
-    );
+    const immutable = await request.get(optimizerUrl("/_next/static/media/static-image.bmp"));
     expect(immutable.status()).toBe(200);
     expect(immutable.headers()["cache-control"]).toBe("public, max-age=315360000, immutable");
     expect(immutable.headers()["content-disposition"]).toBe(

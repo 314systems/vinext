@@ -55,6 +55,8 @@ export function isImageOptimizationPath(pathname: string): boolean {
  * Controls SVG handling and security headers for the image endpoint.
  */
 export type ImageConfig = {
+  /** App basePath, used to identify build-owned static image assets. */
+  basePath?: string;
   /** Allowed device widths. Defaults to Next.js device sizes. */
   deviceSizes?: number[];
   /** Allowed fixed-image widths. Defaults to Next.js image sizes. */
@@ -267,10 +269,7 @@ export function negotiateImageFormat(
     if (
       priority.quality > selectedPriority.quality ||
       (priority.quality === selectedPriority.quality &&
-        priority.specificity > selectedPriority.specificity) ||
-      (priority.quality === selectedPriority.quality &&
-        priority.specificity === selectedPriority.specificity &&
-        priority.order < selectedPriority.order)
+        priority.specificity > selectedPriority.specificity)
     ) {
       selected = format;
       selectedPriority = priority;
@@ -419,9 +418,18 @@ function toBase64Url(bytes: Uint8Array): string {
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 }
 
+function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  if (bytes.buffer instanceof ArrayBuffer) {
+    if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) return bytes.buffer;
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  }
+  return new Uint8Array(bytes).buffer;
+}
+
 async function getImageEtag(bytes: Uint8Array): Promise<string> {
-  const buffer = new Uint8Array(bytes).buffer;
-  return toBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", buffer)));
+  return toBase64Url(
+    new Uint8Array(await crypto.subtle.digest("SHA-256", exactArrayBuffer(bytes))),
+  );
 }
 
 async function extractImageEtag(etag: string | null, bytes: Uint8Array): Promise<string> {
@@ -607,7 +615,8 @@ export function createInternalImageRequest(
 }
 
 type CachedImageResponse = {
-  body: Uint8Array;
+  /** Immutable buffered body. Never expose a mutable view of this buffer. */
+  body: ArrayBuffer;
   headers: [string, string][];
   revalidateAfter: number;
 };
@@ -615,11 +624,14 @@ type CachedImageResponse = {
 type ImageResponseCache = {
   entries: Map<string, CachedImageResponse>;
   pending: Map<string, Promise<GeneratedImageResponse>>;
+  generationQueue: Array<() => void>;
+  activeGenerations: number;
+  pendingBodyBytes: number;
   totalBodyBytes: number;
 };
 
 type BufferedImageResponse = {
-  body: Uint8Array | null;
+  body: ArrayBuffer | null;
   headers: [string, string][];
   status: number;
   statusText: string;
@@ -631,13 +643,26 @@ type GeneratedImageResponse = {
 };
 
 const IMAGE_RESPONSE_CACHES = new WeakMap<object, ImageResponseCache>();
-const MAX_IMAGE_RESPONSE_CACHE_BYTES = 50 * 1024 * 1024;
+// A Worker isolate has 128 MiB for its heap, WebAssembly, and every concurrent
+// request. Keep the optional in-memory image cache deliberately small so one
+// near-limit source/transform still has room to complete.
+const MAX_IMAGE_RESPONSE_CACHE_BYTES = 8 * 1024 * 1024;
+const MAX_IMAGE_RESPONSE_ENTRY_BYTES = 4 * 1024 * 1024;
 const MAX_IMAGE_RESPONSE_CACHE_ENTRIES = 256;
+const MAX_IMAGE_GENERATIONS = 2;
+const MAX_PENDING_IMAGE_BODY_BYTES = 64 * 1024 * 1024;
 
 function getImageResponseCache(owner: object): ImageResponseCache {
   let cache = IMAGE_RESPONSE_CACHES.get(owner);
   if (!cache) {
-    cache = { entries: new Map(), pending: new Map(), totalBodyBytes: 0 };
+    cache = {
+      entries: new Map(),
+      pending: new Map(),
+      generationQueue: [],
+      activeGenerations: 0,
+      pendingBodyBytes: 0,
+      totalBodyBytes: 0,
+    };
     IMAGE_RESPONSE_CACHES.set(owner, cache);
   }
   return cache;
@@ -664,7 +689,7 @@ function writeCachedImageResponse(
     cache.totalBodyBytes -= previous.body.byteLength;
     cache.entries.delete(cacheKey);
   }
-  if (entry.body.byteLength > MAX_IMAGE_RESPONSE_CACHE_BYTES) return;
+  if (entry.body.byteLength > MAX_IMAGE_RESPONSE_ENTRY_BYTES) return;
   while (
     cache.entries.size >= MAX_IMAGE_RESPONSE_CACHE_ENTRIES ||
     cache.totalBodyBytes + entry.body.byteLength > MAX_IMAGE_RESPONSE_CACHE_BYTES
@@ -680,19 +705,23 @@ function writeCachedImageResponse(
 }
 
 function imageResponseCacheKey(
+  request: Request,
   params: { imageUrl: string; quality: number; width: number },
   format: string,
   allowedWidths: readonly number[],
   imageConfig: ImageConfig | undefined,
 ): string {
   return JSON.stringify({
-    version: 1,
+    version: 2,
+    origin: new URL(request.url).origin,
+    method: request.method.toUpperCase(),
     url: params.imageUrl,
     width: params.width,
     quality: params.quality,
     format,
     allowedWidths,
     config: {
+      basePath: imageConfig?.basePath ?? "",
       contentDispositionType: imageConfig?.contentDispositionType ?? "attachment",
       contentSecurityPolicy: imageConfig?.contentSecurityPolicy ?? IMAGE_CONTENT_SECURITY_POLICY,
       dangerouslyAllowSVG: imageConfig?.dangerouslyAllowSVG === true,
@@ -714,16 +743,6 @@ function imageResponseMaxAge(headers: Headers): number {
   return 0;
 }
 
-async function cacheImageResponse(response: Response): Promise<CachedImageResponse | null> {
-  if (response.status !== 200 || !response.body) return null;
-  const body = new Uint8Array(await response.arrayBuffer());
-  return {
-    body,
-    headers: [...response.headers.entries()],
-    revalidateAfter: Date.now() + imageResponseMaxAge(response.headers) * 1000,
-  };
-}
-
 function serveCachedImageResponse(
   request: Request,
   entry: CachedImageResponse,
@@ -740,21 +759,20 @@ function serveCachedImageResponse(
     return new Response(null, { status: 304, headers: conditionalHeaders });
   }
   headers.set("X-Nextjs-Cache", cacheStatus);
-  return new Response(request.method === "HEAD" ? null : entry.body.slice(), {
+  return new Response(request.method === "HEAD" ? null : entry.body, {
     status: 200,
     headers,
   });
 }
 
 function serveBufferedImageResponse(request: Request, response: BufferedImageResponse): Response {
-  return new Response(
-    request.method === "HEAD" || response.body === null ? null : response.body.slice(),
-    {
-      headers: response.headers,
-      status: response.status,
-      statusText: response.statusText,
-    },
-  );
+  const headers = new Headers(response.headers);
+  if (response.status === 200) headers.set("X-Nextjs-Cache", "MISS");
+  return new Response(request.method === "HEAD" || response.body === null ? null : response.body, {
+    headers,
+    status: response.status,
+    statusText: response.statusText,
+  });
 }
 
 async function generateCachedImageResponse(
@@ -773,17 +791,69 @@ async function generateCachedImageResponse(
     allowedWidths,
     imageConfig,
   );
-  const entry = await cacheImageResponse(response);
-  if (entry) return { entry, response: null };
+  const headers = [...response.headers.entries()] as [string, string][];
+  const body = response.body ? await response.arrayBuffer() : null;
+  if (
+    response.status === 200 &&
+    body !== null &&
+    body.byteLength <= MAX_IMAGE_RESPONSE_ENTRY_BYTES
+  ) {
+    return {
+      entry: {
+        body,
+        headers,
+        revalidateAfter: Date.now() + imageResponseMaxAge(response.headers) * 1000,
+      },
+      response: null,
+    };
+  }
   return {
     entry: null,
     response: {
-      body: response.body ? new Uint8Array(await response.arrayBuffer()) : null,
-      headers: [...response.headers.entries()],
+      body,
+      headers,
       status: response.status,
       statusText: response.statusText,
     },
   };
+}
+
+function generationReservation(imageConfig: ImageConfig | undefined): number {
+  const configured = imageConfig?.maximumResponseBody ?? 50_000_000;
+  const bounded = Number.isFinite(configured) && configured >= 0 ? configured : 50_000_000;
+  return Math.min(bounded, MAX_PENDING_IMAGE_BODY_BYTES);
+}
+
+async function runImageGeneration<T>(
+  cache: ImageResponseCache,
+  reservedBytes: number,
+  generate: () => Promise<T>,
+): Promise<T> {
+  await new Promise<void>((resolve) => {
+    const start = () => {
+      const hasGenerationSlot = cache.activeGenerations < MAX_IMAGE_GENERATIONS;
+      const hasByteCapacity =
+        cache.activeGenerations === 0 ||
+        cache.pendingBodyBytes + reservedBytes <= MAX_PENDING_IMAGE_BODY_BYTES;
+      if (!hasGenerationSlot || !hasByteCapacity) {
+        cache.generationQueue.push(start);
+        return;
+      }
+      cache.activeGenerations += 1;
+      cache.pendingBodyBytes += reservedBytes;
+      resolve();
+    };
+    start();
+  });
+
+  try {
+    return await generate();
+  } finally {
+    cache.activeGenerations -= 1;
+    cache.pendingBodyBytes -= reservedBytes;
+    const queued = cache.generationQueue.splice(0);
+    for (const resume of queued) resume();
+  }
 }
 
 /**
@@ -820,9 +890,19 @@ async function renderImageOptimizationUncached(
     return new Response("The requested resource isn't a valid image.", { status: 400 });
   }
   const { bytes: sourceBytes, response: source, contentType: sourceContentType } = sourceResult;
-  const sourceIsStatic = /\/_next\/static\/(?:media|immutable\/media)(?:$|\/)/.test(
-    new URL(imageUrl, request.url).pathname,
-  );
+  let sourcePathname: string;
+  try {
+    sourcePathname = decodeURIComponent(new URL(imageUrl, request.url).pathname).replaceAll(
+      "\\",
+      "/",
+    );
+  } catch {
+    sourcePathname = "";
+  }
+  const configuredBasePath = (imageConfig?.basePath ?? "").replace(/\/$/, "");
+  const staticMediaPath = `${configuredBasePath}/_next/static/media`;
+  const sourceIsStatic =
+    sourcePathname === staticMediaPath || sourcePathname.startsWith(`${staticMediaPath}/`);
   if (!sourceContentType) {
     return new Response("The requested resource isn't a valid image.", { status: 400 });
   }
@@ -906,7 +986,7 @@ async function renderImageOptimizationUncached(
   }
 
   // Fallback: serve original image with cache headers
-  const fallbackSource = new Response(sourceBytes.slice().buffer, {
+  const fallbackSource = new Response(exactArrayBuffer(sourceBytes), {
     status: source.status,
     statusText: source.statusText,
     headers: source.headers,
@@ -939,13 +1019,26 @@ export async function handleImageOptimization(
   );
   if (!params) return badRequestResponse();
 
+  // Next's optimizer is a GET/HEAD resource. Other methods may be observed by
+  // middleware and must never read from, coalesce with, or populate its cache.
+  const method = request.method.toUpperCase();
+  if (method !== "GET" && method !== "HEAD") {
+    return renderImageOptimizationUncached(request, handlers, allowedWidths, imageConfig);
+  }
+
   const negotiatedFormat = negotiateImageFormat(
     request.headers.get("Accept"),
     imageConfig?.formats ?? DEFAULT_IMAGE_FORMATS,
   );
   const owner = handlers.cacheOwner ?? handlers;
   const cache = getImageResponseCache(owner);
-  const cacheKey = imageResponseCacheKey(params, negotiatedFormat, allowedWidths, imageConfig);
+  const cacheKey = imageResponseCacheKey(
+    request,
+    params,
+    negotiatedFormat,
+    allowedWidths,
+    imageConfig,
+  );
   const cached = readCachedImageResponse(cache, cacheKey);
 
   if (cached && cached.revalidateAfter > Date.now()) {
@@ -955,7 +1048,9 @@ export async function handleImageOptimization(
   const regenerate = (): Promise<GeneratedImageResponse> => {
     const active = cache.pending.get(cacheKey);
     if (active) return active;
-    const pending = generateCachedImageResponse(request, handlers, allowedWidths, imageConfig)
+    const pending = runImageGeneration(cache, generationReservation(imageConfig), () =>
+      generateCachedImageResponse(request, handlers, allowedWidths, imageConfig),
+    )
       .then((generated) => {
         if (generated.entry) writeCachedImageResponse(cache, cacheKey, generated.entry);
         return generated;

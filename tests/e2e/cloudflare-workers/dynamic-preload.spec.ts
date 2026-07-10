@@ -113,7 +113,8 @@ test.describe("Cloudflare Workers dynamic preloads", () => {
     request,
   }) => {
     await request.get(`${BASE_URL}/image-test/reset`);
-    const post = await request.fetch(optimizerUrl("/image-test/source.png?method=post"), {
+    const postUrl = optimizerUrl("/image-test/source.png?method=post");
+    const post = await request.fetch(postUrl, {
       method: "POST",
     });
     expect(post.status()).toBe(200);
@@ -122,6 +123,12 @@ test.describe("Cloudflare Workers dynamic preloads", () => {
     expect(await (await request.get(`${BASE_URL}/image-test/state`)).json()).toEqual({
       count: 1,
       method: "POST",
+    });
+    const getAfterPost = await request.get(postUrl);
+    expect(getAfterPost.headers()["x-nextjs-cache"]).toBe("MISS");
+    expect(await (await request.get(`${BASE_URL}/image-test/state`)).json()).toEqual({
+      count: 2,
+      method: "GET",
     });
 
     await request.get(`${BASE_URL}/image-test/reset`);
@@ -147,7 +154,7 @@ test.describe("Cloudflare Workers dynamic preloads", () => {
     });
   });
 
-  test("bounds public assets and classifies both imported-image output layouts", async ({
+  test("bounds public assets and classifies build-owned static media as immutable", async ({
     request,
   }) => {
     expect((await request.get(optimizerUrl("/large-public.png"))).status()).toBe(413);
@@ -155,9 +162,7 @@ test.describe("Cloudflare Workers dynamic preloads", () => {
     expect(mutable.status()).toBe(200);
     expect(mutable.headers()["cache-control"]).toBe("public, max-age=123, must-revalidate");
 
-    const immutable = await request.get(
-      optimizerUrl("/_next/static/immutable/media/static-image.bmp"),
-    );
+    const immutable = await request.get(optimizerUrl("/_next/static/media/static-image.bmp"));
     expect(immutable.status()).toBe(200);
     expect(immutable.headers()["cache-control"]).toBe("public, max-age=315360000, immutable");
     expect(immutable.headers()["content-disposition"]).toBe(
@@ -184,8 +189,13 @@ test.describe("Cloudflare Workers dynamic preloads", () => {
 
     const cachedAvif = await request.get(url, { headers: { accept: "image/avif" } });
     expect(cachedAvif.headers()["x-nextjs-cache"]).toBe("HIT");
+    const tied = await request.get(optimizerUrl("/image-test/source.png?format=tied", 90), {
+      headers: { accept: "image/webp;q=0.8,image/avif;q=0.8" },
+    });
+    expect(tied.headers()["content-type"]).toContain("image/avif");
+    expect(await tied.text()).toBe("format:image/avif");
     expect(await (await request.get(`${BASE_URL}/image-test/state`)).json()).toEqual({
-      count: 2,
+      count: 3,
       method: "GET",
     });
   });

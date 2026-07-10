@@ -79,18 +79,17 @@ const configRewrites = vinextConfig?.rewrites ?? {
   fallback: [],
 };
 const configHeaders = vinextConfig?.headers ?? [];
-const imageConfig: ImageConfig | undefined = vinextConfig?.images
-  ? {
-      qualities: vinextConfig.images.qualities,
-      formats: vinextConfig.images.formats,
-      dangerouslyAllowSVG: vinextConfig.images.dangerouslyAllowSVG,
-      dangerouslyAllowLocalIP: vinextConfig.images.dangerouslyAllowLocalIP,
-      maximumResponseBody: vinextConfig.images.maximumResponseBody,
-      minimumCacheTTL: vinextConfig.images.minimumCacheTTL,
-      contentDispositionType: vinextConfig.images.contentDispositionType,
-      contentSecurityPolicy: vinextConfig.images.contentSecurityPolicy,
-    }
-  : undefined;
+const imageConfig: ImageConfig = {
+  basePath,
+  qualities: vinextConfig?.images?.qualities,
+  formats: vinextConfig?.images?.formats,
+  dangerouslyAllowSVG: vinextConfig?.images?.dangerouslyAllowSVG,
+  dangerouslyAllowLocalIP: vinextConfig?.images?.dangerouslyAllowLocalIP,
+  maximumResponseBody: vinextConfig?.images?.maximumResponseBody,
+  minimumCacheTTL: vinextConfig?.images?.minimumCacheTTL,
+  contentDispositionType: vinextConfig?.images?.contentDispositionType,
+  contentSecurityPolicy: vinextConfig?.images?.contentSecurityPolicy,
+};
 const IMAGE_CACHE_OWNER = {};
 
 export default {

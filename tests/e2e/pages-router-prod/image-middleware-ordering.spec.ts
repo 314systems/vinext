@@ -78,7 +78,8 @@ test.describe("Pages Router image request middleware ordering", () => {
     request,
   }) => {
     await request.get(`${BASE}/image-test/reset`);
-    const postResponse = await request.fetch(optimizerUrl("/image-test/source.png?method=post"), {
+    const postUrl = optimizerUrl("/image-test/source.png?method=post");
+    const postResponse = await request.fetch(postUrl, {
       method: "POST",
     });
     expect(postResponse.status()).toBe(200);
@@ -86,6 +87,10 @@ test.describe("Pages Router image request middleware ordering", () => {
     expect(expectedContentLength).toBeTruthy();
     let state = await (await request.get(`${BASE}/image-test/state`)).json();
     expect(state).toEqual({ count: 1, method: "POST" });
+    const getAfterPost = await request.get(postUrl);
+    expect(getAfterPost.headers()["x-nextjs-cache"]).toBe("MISS");
+    state = await (await request.get(`${BASE}/image-test/state`)).json();
+    expect(state).toEqual({ count: 2, method: "GET" });
 
     await request.get(`${BASE}/image-test/reset`);
     const headResponse = await request.fetch(optimizerUrl("/image-test/source.png?method=head"), {
@@ -99,7 +104,7 @@ test.describe("Pages Router image request middleware ordering", () => {
     expect(state).toEqual({ count: 1, method: "GET" });
   });
 
-  test("bounds public files and classifies both imported-image output layouts", async ({
+  test("bounds public files and classifies build-owned static media as immutable", async ({
     request,
   }) => {
     expect((await request.get(optimizerUrl("/large-public.png"))).status()).toBe(413);
@@ -107,9 +112,7 @@ test.describe("Pages Router image request middleware ordering", () => {
     expect(mutable.status()).toBe(200);
     expect(mutable.headers()["cache-control"]).toBe("public, max-age=3600, must-revalidate");
 
-    const immutable = await request.get(
-      optimizerUrl("/_next/static/immutable/media/static-image.bmp"),
-    );
+    const immutable = await request.get(optimizerUrl("/_next/static/media/static-image.bmp"));
     expect(immutable.status()).toBe(200);
     expect(immutable.headers()["cache-control"]).toBe("public, max-age=315360000, immutable");
     expect(immutable.headers()["content-disposition"]).toBe(

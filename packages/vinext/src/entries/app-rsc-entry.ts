@@ -241,6 +241,7 @@ export function generateRscEntry(
     ...(config?.imageConfig?.imageSizes ?? DEFAULT_IMAGE_SIZES),
   ];
   const imageConfig = {
+    basePath,
     qualities: config?.imageConfig?.qualities,
     formats: config?.imageConfig?.formats,
     dangerouslyAllowSVG: config?.imageConfig?.dangerouslyAllowSVG,
@@ -647,7 +648,7 @@ const __i18nConfig = ${JSON.stringify(i18nConfig)};
 const __configRedirects = ${JSON.stringify(redirects)};
 const __configRewrites = ${JSON.stringify(rewrites)};
 const __configHeaders = ${JSON.stringify(headers)};
-const __runtimeImageConfig = ${JSON.stringify(config?.imageConfig)};
+const __runtimeImageConfig = ${JSON.stringify(imageConfig)};
 const __publicFiles = new Set(${JSON.stringify(publicFiles)});
 const __allowedOrigins = ${JSON.stringify(allowedOrigins)};
 const __expireTime = ${JSON.stringify(expireTime)};

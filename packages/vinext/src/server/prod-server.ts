@@ -1320,6 +1320,7 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
       }
     }
   }
+  imageConfig = { ...imageConfig, basePath: appRouterBasePath };
   globalThis.__VINEXT_INLINE_CSS__ = appRouterInlineCss
     ? collectInlineCssManifest(clientDir, appRouterAssetPrefix)
     : undefined;
@@ -1667,18 +1668,17 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
     ...(vinextConfig?.images?.imageSizes ?? DEFAULT_IMAGE_SIZES),
   ];
   // Extract image security config for SVG handling and security headers
-  const pagesImageConfig: ImageConfig | undefined = vinextConfig?.images
-    ? {
-        dangerouslyAllowSVG: vinextConfig.images.dangerouslyAllowSVG,
-        dangerouslyAllowLocalIP: vinextConfig.images.dangerouslyAllowLocalIP,
-        maximumResponseBody: vinextConfig.images.maximumResponseBody,
-        minimumCacheTTL: vinextConfig.images.minimumCacheTTL,
-        qualities: vinextConfig.images.qualities,
-        formats: vinextConfig.images.formats,
-        contentDispositionType: vinextConfig.images.contentDispositionType,
-        contentSecurityPolicy: vinextConfig.images.contentSecurityPolicy,
-      }
-    : undefined;
+  const pagesImageConfig: ImageConfig = {
+    basePath,
+    dangerouslyAllowSVG: vinextConfig?.images?.dangerouslyAllowSVG,
+    dangerouslyAllowLocalIP: vinextConfig?.images?.dangerouslyAllowLocalIP,
+    maximumResponseBody: vinextConfig?.images?.maximumResponseBody,
+    minimumCacheTTL: vinextConfig?.images?.minimumCacheTTL,
+    qualities: vinextConfig?.images?.qualities,
+    formats: vinextConfig?.images?.formats,
+    contentDispositionType: vinextConfig?.images?.contentDispositionType,
+    contentSecurityPolicy: vinextConfig?.images?.contentSecurityPolicy,
+  };
 
   // Load client asset metadata used by the Pages renderer. Prerendered HTML is
   // rendered through this Node server too, so it needs the same globals that
