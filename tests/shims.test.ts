@@ -12107,6 +12107,75 @@ describe("matchRewrite with external URLs", () => {
     expect(result).toBe("/home?authorized=yes&path=docs%2Fintro");
   });
 
+  it("encodes condition captures substituted into rewrite path syntax", async () => {
+    const { matchRewrite } = await import("../packages/vinext/src/config/config-matchers.js");
+    const rewrites = [
+      {
+        source: "/source",
+        has: [{ type: "header" as const, key: "x-segment", value: "(?<segment>.+)" }],
+        destination: "/target/:segment",
+      },
+    ];
+    const result = matchRewrite("/source", rewrites, {
+      ...emptyCtx,
+      headers: new Headers({ "x-segment": "safe?admin=1#fragment" }),
+    });
+
+    expect(result).toBe("/target/safe%3Fadmin%3D1%23fragment");
+  });
+
+  it("keeps catch-all condition captures inert while preserving path separators", async () => {
+    const { matchRewrite } = await import("../packages/vinext/src/config/config-matchers.js");
+    const rewrites = [
+      {
+        source: "/source",
+        has: [{ type: "header" as const, key: "x-path", value: "(?<path>.+)" }],
+        destination: "/target/:path*",
+      },
+    ];
+    const result = matchRewrite("/source", rewrites, {
+      ...emptyCtx,
+      headers: new Headers({ "x-path": "safe/../../admin?role=root" }),
+    });
+
+    expect(result).toBe("/target/safe/%252e%252e/%252e%252e/admin%3Frole%3Droot");
+  });
+
+  it("fails closed when a condition capture would change an external rewrite authority", async () => {
+    const { matchRewrite } = await import("../packages/vinext/src/config/config-matchers.js");
+    const rules = [
+      {
+        source: "/source",
+        has: [{ type: "header" as const, key: "x-target", value: "(?<target>.+)" }],
+        destination: "http://:target.internal.invalid/capture",
+      },
+      { source: "/source", destination: "/safe-fallback" },
+    ];
+    const result = matchRewrite("/source", rules, {
+      ...emptyCtx,
+      headers: new Headers({ "x-target": "127.0.0.1:8080/reached?ignored=" }),
+    });
+
+    expect(result).toBe("/safe-fallback");
+  });
+
+  it("preserves valid condition captures in external rewrite hostnames", async () => {
+    const { matchRewrite } = await import("../packages/vinext/src/config/config-matchers.js");
+    const rules = [
+      {
+        source: "/source",
+        has: [{ type: "header" as const, key: "x-tenant", value: "(?<tenant>.+)" }],
+        destination: "https://:tenant.example.com/capture",
+      },
+    ];
+    const result = matchRewrite("/source", rules, {
+      ...emptyCtx,
+      headers: new Headers({ "x-tenant": "customer-1" }),
+    });
+
+    expect(result).toBe("https://customer-1.example.com/capture");
+  });
+
   it("escapes source params substituted into rewrite destination query values", async () => {
     const { matchRewrite } = await import("../packages/vinext/src/config/config-matchers.js");
     const { normalizePathnameForRouteMatchStrict } =
@@ -12248,6 +12317,27 @@ describe("matchRedirect destination param substitution", () => {
       headers: new Headers({ "x-authorized": "yes" }),
     });
     expect(result).toEqual({ destination: "/home?authorized=yes", permanent: false });
+  });
+
+  it("encodes condition captures substituted into redirect fragments", async () => {
+    const { matchRedirect } = await import("../packages/vinext/src/config/config-matchers.js");
+    const redirects = [
+      {
+        source: "/",
+        has: [{ type: "header" as const, key: "x-section", value: "(?<section>.+)" }],
+        destination: "/docs#:section",
+        permanent: false,
+      },
+    ];
+    const result = matchRedirect("/", redirects, {
+      ...emptyCtx,
+      headers: new Headers({ "x-section": "intro#admin?enabled=1" }),
+    });
+
+    expect(result).toEqual({
+      destination: "/docs#intro%23admin%3Fenabled%3D1",
+      permanent: false,
+    });
   });
 
   it("escapes source params substituted into redirect destination query values", async () => {

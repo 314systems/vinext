@@ -273,13 +273,18 @@ describe("App Router Production server (startProdServer)", () => {
 
     try {
       // Build the app-basic fixture to the default dist/ directory
-      const builder = await createBuilder({
-        root: APP_FIXTURE_DIR,
-        configFile: false,
-        plugins: [vinext({ appDir: APP_FIXTURE_DIR })],
-        logLevel: "silent",
-      });
-      await builder.buildApp();
+      process.env.TEST_CONFIG_CAPTURE_EXTERNAL = "1";
+      try {
+        const builder = await createBuilder({
+          root: APP_FIXTURE_DIR,
+          configFile: false,
+          plugins: [vinext({ appDir: APP_FIXTURE_DIR })],
+          logLevel: "silent",
+        });
+        await builder.buildApp();
+      } finally {
+        delete process.env.TEST_CONFIG_CAPTURE_EXTERNAL;
+      }
 
       // Start the production server on a random available port
       const { startProdServer } = await import("../packages/vinext/src/server/prod-server.js");
@@ -303,6 +308,7 @@ describe("App Router Production server (startProdServer)", () => {
         delete process.env.TEST_APP_STATIC_DYNAMIC_TARGET;
         delete process.env.TEST_APP_STATIC_REVALIDATE_TARGET;
         delete process.env.TEST_REVALIDATE_PATH_REWRITES_TARGET;
+        delete process.env.TEST_CONFIG_CAPTURE_EXTERNAL;
       }
       throw error;
     }
@@ -318,6 +324,7 @@ describe("App Router Production server (startProdServer)", () => {
     delete process.env.TEST_APP_STATIC_DYNAMIC_TARGET;
     delete process.env.TEST_APP_STATIC_REVALIDATE_TARGET;
     delete process.env.TEST_REVALIDATE_PATH_REWRITES_TARGET;
+    delete process.env.TEST_CONFIG_CAPTURE_EXTERNAL;
     fs.rmSync(outDir, { recursive: true, force: true });
   });
 
@@ -1223,6 +1230,45 @@ describe("App Router Production server (startProdServer)", () => {
     // recomputing the cache-busting `_rsc` param from the request headers
     // (rather than echoing the literal client value), so assert presence.
     expect(location).toContain("_rsc");
+  });
+
+  it("keeps request condition captures inert in config redirect paths", async () => {
+    const res = await fetch(`${baseUrl}/condition-capture-redirect`, {
+      redirect: "manual",
+      headers: { "x-redirect-segment": "safe?admin=1#fragment" },
+    });
+
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toBe(
+      "/config-capture-redirect/safe%3Fadmin%3D1%23fragment",
+    );
+  });
+
+  it("does not turn request condition captures into config rewrite query syntax", async () => {
+    const res = await fetch(`${baseUrl}/condition-capture-rewrite`, {
+      headers: { "x-rewrite-segment": "safe?admin=1" },
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      slug: ["safe?admin=1"],
+      query: {},
+    });
+  });
+
+  it("does not let request condition captures change a config rewrite authority", async () => {
+    await withCountingFetchTarget(async (targetUrl, getRequestCount) => {
+      const target = new URL(targetUrl);
+      const res = await fetch(`${baseUrl}/condition-capture-external`, {
+        headers: {
+          "x-rewrite-host": `${target.hostname}:${target.port}/reached?ignored=`,
+        },
+      });
+
+      expect(res.status).toBe(404);
+      await res.arrayBuffer();
+      expect(getRequestCount()).toBe(0);
+    });
   });
 
   it("serves static assets with cache headers", async () => {

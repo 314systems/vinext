@@ -1004,10 +1004,15 @@ export function matchRedirect(
             : _emptyParams();
         if (!conditionParams) continue;
         // Locale was omitted (the `?` made it optional) — param value is "".
-        const dest = substituteAndSanitizeDestination(redirect.destination, {
-          [entry.paramName]: "",
-          ...conditionParams,
-        });
+        const dest = substituteAndSanitizeDestination(
+          redirect.destination,
+          {
+            [entry.paramName]: "",
+            ...conditionParams,
+          },
+          conditionParams,
+        );
+        if (!isValidSubstitutedExternalDestination(redirect.destination, dest)) continue;
         localeMatch = { destination: dest, permanent: redirect.permanent };
         localeMatchIndex = entry.originalIndex;
         break; // bucket entries are in insertion order = original order
@@ -1034,10 +1039,15 @@ export function matchRedirect(
               ? collectConditionParams(redirect.has, redirect.missing, ctx)
               : _emptyParams();
           if (!conditionParams) continue;
-          const dest = substituteAndSanitizeDestination(redirect.destination, {
-            [entry.paramName]: localePart,
-            ...conditionParams,
-          });
+          const dest = substituteAndSanitizeDestination(
+            redirect.destination,
+            {
+              [entry.paramName]: localePart,
+              ...conditionParams,
+            },
+            conditionParams,
+          );
+          if (!isValidSubstitutedExternalDestination(redirect.destination, dest)) continue;
           localeMatch = { destination: dest, permanent: redirect.permanent };
           localeMatchIndex = entry.originalIndex;
           break; // bucket entries are in insertion order = original order
@@ -1065,10 +1075,15 @@ export function matchRedirect(
           : _emptyParams();
       if (!conditionParams) continue;
       // Collapse protocol-relative URLs (e.g. //evil.com from decoded %2F in catch-all params).
-      const dest = substituteAndSanitizeDestination(redirect.destination, {
-        ...params,
-        ...conditionParams,
-      });
+      const dest = substituteAndSanitizeDestination(
+        redirect.destination,
+        {
+          ...params,
+          ...conditionParams,
+        },
+        conditionParams,
+      );
+      if (!isValidSubstitutedExternalDestination(redirect.destination, dest)) continue;
       return { destination: dest, permanent: redirect.permanent };
     }
   }
@@ -1105,7 +1120,13 @@ export function matchRewrite(
         ...conditionParams,
       };
       // Collapse protocol-relative URLs (e.g. //evil.com from decoded %2F in catch-all params).
-      return substituteAndSanitizeRewriteDestination(rewrite.destination, rewriteParams);
+      const destination = substituteAndSanitizeRewriteDestination(
+        rewrite.destination,
+        rewriteParams,
+        conditionParams,
+      );
+      if (!isValidSubstitutedExternalDestination(rewrite.destination, destination)) continue;
+      return destination;
     }
   }
   return null;
@@ -1136,8 +1157,18 @@ export function matchesRewriteSource(
  *
  * Handles repeated params (e.g. `/api/:id/:id`) and catch-all suffix forms
  * (`:path*`, `:path+`) in a single pass. Unknown params are left intact.
+ * Request-condition captures are encoded for the URL component receiving
+ * them so request data cannot introduce new path, query, fragment, or
+ * authority structure. This is an intentional defense-in-depth divergence
+ * from Next.js's raw `prepareDestination` substitution.
+ *
+ * https://github.com/vercel/next.js/blob/canary/packages/next/src/shared/lib/router/utils/prepare-destination.ts
  */
-function substituteDestinationParams(destination: string, params: Record<string, string>): string {
+function substituteDestinationParams(
+  destination: string,
+  params: Record<string, string>,
+  conditionCaptureParams?: Readonly<Record<string, string>>,
+): string {
   const keys = Object.keys(params);
   if (keys.length === 0) return destination;
 
@@ -1157,8 +1188,45 @@ function substituteDestinationParams(destination: string, params: Record<string,
     _compiledDestinationParamCache.set(cacheKey, paramRe);
   }
 
-  const replaceParams = (value: string, encodeParam: (value: string) => string): string =>
-    value.replace(paramRe, (_token, key: string) => encodeParam(params[key]));
+  const replaceParams = (
+    value: string,
+    encodeParam: (value: string, key: string, modifier: string | undefined) => string,
+  ): string =>
+    value.replace(paramRe, (_token, key: string, modifier: string | undefined) =>
+      encodeParam(params[key], key, modifier),
+    );
+
+  const encodePathParam = (value: string, key: string, modifier: string | undefined): string => {
+    if (!conditionCaptureParams || !Object.hasOwn(conditionCaptureParams, key)) return value;
+    const encodeSegment = (segment: string): string => {
+      if (segment === ".") return "%252e";
+      if (segment === "..") return "%252e%252e";
+      return encodeURIComponent(segment);
+    };
+    return modifier === "*" || modifier === "+"
+      ? value.split("/").map(encodeSegment).join("/")
+      : encodeSegment(value);
+  };
+
+  const replaceAuthorityAndPathParams = (value: string): string => {
+    const authorityStart = value.match(/^[A-Za-z][A-Za-z\d+.-]*:\/\//)?.[0].length;
+    if (authorityStart === undefined) return replaceParams(value, encodePathParam);
+
+    const pathnameStart = value.indexOf("/", authorityStart);
+    if (pathnameStart === -1) {
+      return replaceParams(value, (param, key) =>
+        conditionCaptureParams && Object.hasOwn(conditionCaptureParams, key)
+          ? encodeURIComponent(param)
+          : param,
+      );
+    }
+    const authority = replaceParams(value.slice(0, pathnameStart), (param, key) =>
+      conditionCaptureParams && Object.hasOwn(conditionCaptureParams, key)
+        ? encodeURIComponent(param)
+        : param,
+    );
+    return authority + replaceParams(value.slice(pathnameStart), encodePathParam);
+  };
 
   const hashIndex = destination.indexOf("#");
   const beforeHash = hashIndex === -1 ? destination : destination.slice(0, hashIndex);
@@ -1168,13 +1236,21 @@ function substituteDestinationParams(destination: string, params: Record<string,
   if (queryIndex !== -1) {
     const beforeQuery = beforeHash.slice(0, queryIndex);
     const query = beforeHash.slice(queryIndex + 1);
-    return `${replaceParams(beforeQuery, (value) => value)}?${replaceParams(
+    return `${replaceAuthorityAndPathParams(beforeQuery)}?${replaceParams(
       query,
       encodeDestinationQueryParamValue,
-    )}${replaceParams(hash, (value) => value)}`;
+    )}${replaceParams(hash, (value, key) =>
+      conditionCaptureParams && Object.hasOwn(conditionCaptureParams, key)
+        ? encodeURIComponent(value)
+        : value,
+    )}`;
   }
 
-  return replaceParams(destination, (value) => value);
+  return `${replaceAuthorityAndPathParams(beforeHash)}${replaceParams(hash, (value, key) =>
+    conditionCaptureParams && Object.hasOwn(conditionCaptureParams, key)
+      ? encodeURIComponent(value)
+      : value,
+  )}`;
 }
 
 function encodeDestinationQueryParamValue(value: string): string {
@@ -1192,8 +1268,24 @@ function encodeDestinationQueryParamValue(value: string): string {
 function substituteAndSanitizeDestination(
   destination: string,
   params: Record<string, string>,
+  conditionCaptureParams?: Readonly<Record<string, string>>,
 ): string {
-  return sanitizeDestination(substituteDestinationParams(destination, params));
+  return sanitizeDestination(
+    substituteDestinationParams(destination, params, conditionCaptureParams),
+  );
+}
+
+// URL rejects encoded host delimiters such as `%2F`, `%3A`, and `%40`. Treat
+// such substitutions as a non-matching rule instead of proxying or redirecting
+// to a request-selected authority.
+function isValidSubstitutedExternalDestination(template: string, destination: string): boolean {
+  if (!/^https?:\/\//i.test(template)) return true;
+  try {
+    const parsed = new URL(destination);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -1206,8 +1298,9 @@ function substituteAndSanitizeDestination(
 function substituteAndSanitizeRewriteDestination(
   destination: string,
   params: Record<string, string>,
+  conditionCaptureParams?: Readonly<Record<string, string>>,
 ): string {
-  const rewritten = substituteAndSanitizeDestination(destination, params);
+  const rewritten = substituteAndSanitizeDestination(destination, params, conditionCaptureParams);
   if (!shouldAppendRewriteParamsToQuery(destination, params)) return rewritten;
 
   const existingQueryKeys = getDestinationQueryKeys(destination);
