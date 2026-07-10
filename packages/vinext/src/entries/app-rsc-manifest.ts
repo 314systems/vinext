@@ -19,10 +19,9 @@ type AppRscManifestCode = {
   rootLayoutVars: string[];
   globalErrorVar: string | null;
   /**
-   * Path expression for the `app/global-not-found.{tsx,ts,js,jsx}` module
-   * suitable for embedding in a generated `import()` call (already JSON-encoded
-   * with platform path separators normalized). `null` when the user did not
-   * define `global-not-found.tsx`.
+   * Path for the `app/global-not-found.{tsx,ts,js,jsx}` module with platform
+   * separators normalized. `null` when the user did not define
+   * `global-not-found.tsx`.
    *
    * We intentionally do NOT register this module as a static `import * as`
    * in the manifest. Statically importing it puts global-not-found.tsx in
@@ -38,7 +37,7 @@ type AppRscManifestCode = {
    *
    * @see Next.js test: test/e2e/app-dir/initial-css-order/initial-css-order.test.ts
    */
-  globalNotFoundImportSpecifier: string | null;
+  globalNotFoundModulePath: string | null;
 };
 
 type BuildAppRscManifestCodeOptions = {
@@ -508,10 +507,10 @@ export function buildAppRscManifestCode(
     ? imports.getImportVar(options.globalErrorPath)
     : null;
   // Intentionally NOT registered as a static `import * as` — see the docstring
-  // on `AppRscManifestCode.globalNotFoundImportSpecifier` for the chunk/CSS
+  // on `AppRscManifestCode.globalNotFoundModulePath` for the chunk/CSS
   // isolation rationale. We emit a dynamic `import()` from the entry instead.
-  const globalNotFoundImportSpecifier = options.globalNotFoundPath
-    ? JSON.stringify(toSlash(options.globalNotFoundPath))
+  const globalNotFoundModulePath = options.globalNotFoundPath
+    ? toSlash(options.globalNotFoundPath)
     : null;
 
   const dynamicMetadataRoutes = metadataRoutes.filter((r) => r.isDynamic);
@@ -536,6 +535,6 @@ export function buildAppRscManifestCode(
     rootUnauthorizedVar,
     rootLayoutVars,
     globalErrorVar,
-    globalNotFoundImportSpecifier,
+    globalNotFoundModulePath,
   };
 }

@@ -8,10 +8,14 @@ import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
 import vm from "node:vm";
+import { parseAst } from "vite";
 import { describe, it, expect } from "vite-plus/test";
 import { generateBrowserEntry } from "../packages/vinext/src/entries/app-browser-entry.js";
 import { buildAppRscManifestCode } from "../packages/vinext/src/entries/app-rsc-manifest.js";
-import { generateRscEntry } from "../packages/vinext/src/entries/app-rsc-entry.js";
+import {
+  generateRscActionSourceScanEntry,
+  generateRscEntry,
+} from "../packages/vinext/src/entries/app-rsc-entry.js";
 import { generateClientEntry } from "../packages/vinext/src/entries/pages-client-entry.js";
 import { generateServerEntry } from "../packages/vinext/src/entries/pages-server-entry.js";
 import { resolveNextConfig } from "../packages/vinext/src/config/next-config.js";
@@ -595,8 +599,8 @@ describe("App Router generated manifest construction", () => {
     // statically importing it co-locates global-not-found's CSS with the root
     // layout's CSS in a single chunk, and the CSS minifier (lightningcss) then
     // drops overlapping declarations as dead code, breaking the cascade for
-    // route-miss 404s. Emitting a JSON-encoded specifier lets the entry
-    // generator wrap the path in a dynamic `import()` for chunk isolation.
+    // route-miss 404s. The entry generator serializes this path at the dynamic
+    // `import()` sink for chunk isolation.
     // See https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/global-not-found
     // See Next.js test: test/e2e/app-dir/initial-css-order/initial-css-order.test.ts
     const manifest = buildAppRscManifestCode({
@@ -609,7 +613,7 @@ describe("App Router generated manifest construction", () => {
     // Must NOT appear in the static imports — that would defeat the chunk
     // isolation. The entry generator embeds it via `() => import(<specifier>)`.
     expect(manifest.imports.join("\n")).not.toContain("global-not-found");
-    expect(manifest.globalNotFoundImportSpecifier).toBe('"/tmp/test/app/global-not-found.tsx"');
+    expect(manifest.globalNotFoundModulePath).toBe("/tmp/test/app/global-not-found.tsx");
   });
 
   it("does not emit a global-not-found specifier when the path is absent", () => {
@@ -621,7 +625,31 @@ describe("App Router generated manifest construction", () => {
     });
 
     expect(manifest.imports.join("\n")).not.toContain("global-not-found");
-    expect(manifest.globalNotFoundImportSpecifier).toBeNull();
+    expect(manifest.globalNotFoundModulePath).toBeNull();
+  });
+
+  it("safely serializes hostile global-not-found paths at generated import sinks", () => {
+    const hostilePath =
+      '/tmp/test/app/global-not-found-");globalThis.__vinextInjected=true;//\n.tsx';
+
+    const scanEntry = generateRscActionSourceScanEntry(minimalAppRoutes, [], null, hostilePath);
+    expect(scanEntry).toContain(
+      `const load_global_not_found = () => import(${JSON.stringify(hostilePath)});`,
+    );
+    expect(() => parseAst(scanEntry)).not.toThrow();
+
+    const rscEntry = generateRscEntry(
+      "/tmp/test/app",
+      minimalAppRoutes,
+      null,
+      [],
+      null,
+      "",
+      false,
+      { globalNotFound: true, globalNotFoundPath: hostilePath },
+    );
+    expect(rscEntry).toContain(`() => import(${JSON.stringify(hostilePath)})`);
+    expect(() => parseAst(rscEntry)).not.toThrow();
   });
 
   it("serializes graph-minted ids without leaking the filesystem root", async () => {

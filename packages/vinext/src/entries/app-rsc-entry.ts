@@ -225,8 +225,10 @@ export function generateRscActionSourceScanEntry(
   });
   return [
     ...manifest.imports,
-    ...(manifest.globalNotFoundImportSpecifier
-      ? [`const load_global_not_found = () => import(${manifest.globalNotFoundImportSpecifier});`]
+    ...(manifest.globalNotFoundModulePath
+      ? [
+          `const load_global_not_found = () => import(${JSON.stringify(manifest.globalNotFoundModulePath)});`,
+        ]
       : []),
   ].join("\n");
 }
@@ -302,7 +304,7 @@ export function generateRscEntry(
     rootUnauthorizedVar,
     rootLayoutVars,
     globalErrorVar,
-    globalNotFoundImportSpecifier,
+    globalNotFoundModulePath,
   } = manifestCode;
   const loadPrerenderPagesRoutesCode = hasPagesDir
     ? `
@@ -645,7 +647,7 @@ const rootLayouts = [${rootLayoutVars.join(", ")}];
 // See https://github.com/vercel/next.js/blob/canary/packages/next/src/server/app-render/app-render.tsx#L495-L520
 // See Next.js test: test/e2e/app-dir/initial-css-order/initial-css-order.test.ts
 const __loadGlobalNotFoundModule = ${
-    globalNotFoundImportSpecifier ? `() => import(${globalNotFoundImportSpecifier})` : "null"
+    globalNotFoundModulePath ? `() => import(${JSON.stringify(globalNotFoundModulePath)})` : "null"
   };
 
 const createRscOnErrorHandler = (request, pathname, routePath) =>
