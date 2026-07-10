@@ -82,9 +82,11 @@ function cleanFileId(id: string): string {
 type DevActionSourceOptions = {
   getAppDir?: () => string | undefined;
   getPageExtensions?: () => readonly string[] | undefined;
+  getRoot?: () => string | undefined;
 };
 
 type DevActionSourceSnapshot = {
+  actionSourceIds: Set<string>;
   hasAnySourceAction: boolean;
   reachableIds: Set<string>;
 };
@@ -237,8 +239,8 @@ async function scanReachableActionSources(options: {
   resolve: (specifier: string, importer: string) => Promise<{ id?: string } | null>;
 }): Promise<DevActionSourceSnapshot> {
   const pending = await collectAppActionRoots(options.appDir, options.pageExtensions);
+  const actionSourceIds = new Set<string>();
   const reachableIds = new Set<string>();
-  let hasAnySourceAction = false;
 
   while (pending.length > 0) {
     const file = cleanFileId(pending.pop()!);
@@ -253,7 +255,7 @@ async function scanReachableActionSources(options: {
     }
     const facts = readSourceModuleFacts(code, file);
     if (!facts) continue;
-    hasAnySourceAction ||= facts.hasServerAction;
+    if (facts.hasServerAction) actionSourceIds.add(file);
 
     for (const specifier of facts.specifiers) {
       let resolved: { id?: string } | null;
@@ -272,7 +274,39 @@ async function scanReachableActionSources(options: {
     }
   }
 
-  return { hasAnySourceAction, reachableIds };
+  return {
+    actionSourceIds,
+    hasAnySourceAction: actionSourceIds.size > 0,
+    reachableIds,
+  };
+}
+
+function resolveReachableActionSource(
+  actionId: string | undefined,
+  root: string | undefined,
+  actionSourceIds: ReadonlySet<string>,
+): string | null {
+  if (!actionId) return null;
+  const separator = actionId.lastIndexOf("#");
+  if (separator <= 0 || separator === actionId.length - 1) return null;
+
+  const referenceId = cleanFileId(actionId.slice(0, separator));
+  if (root && referenceId.startsWith("/")) {
+    const rootedReference = cleanFileId(path.resolve(root, `.${referenceId}`));
+    if (actionSourceIds.has(rootedReference)) return rootedReference;
+  }
+
+  // Vite can key source files outside config.root as /@fs paths. Match only a
+  // unique source-indexed owner; exact manifest membership is still checked
+  // after the targeted transform, so a suffix collision cannot validate an ID.
+  const suffix = referenceId.startsWith("/") ? referenceId : `/${referenceId}`;
+  let match: string | null = null;
+  for (const file of actionSourceIds) {
+    if (!file.endsWith(suffix)) continue;
+    if (match !== null) return null;
+    match = file;
+  }
+  return match;
 }
 
 function collectReachableServerActions(
@@ -319,6 +353,7 @@ export function createRscReferenceValidationNormalizerPlugin(
 
   async function scanDevServerActions(
     pathname: string,
+    actionId: string | undefined,
     resolve: (specifier: string, importer: string) => Promise<{ id?: string } | null>,
   ): Promise<{ hasAnySourceAction: boolean; references: Set<string> }> {
     const manager = rscApi?.manager;
@@ -335,7 +370,11 @@ export function createRscReferenceValidationNormalizerPlugin(
     const pageExtensions = sourceOptions.getPageExtensions?.() ?? ["tsx", "ts", "jsx", "js"];
     const sourceSnapshot = appDir
       ? await scanReachableActionSources({ appDir, pageExtensions, resolve })
-      : { hasAnySourceAction: false, reachableIds: new Set<string>() };
+      : {
+          actionSourceIds: new Set<string>(),
+          hasAnySourceAction: false,
+          reachableIds: new Set<string>(),
+        };
 
     // Transform only the posted route's graph. This populates plugin-RSC's
     // exact reference keys without evaluating modules and without allowing a
@@ -352,6 +391,25 @@ export function createRscReferenceValidationNormalizerPlugin(
       await scanSourceGraph(ssrEnvironment, meta.importId);
     }
 
+    const knownReferences = collectReachableServerActions(
+      manager.serverReferenceMetaMap,
+      appDir ? sourceSnapshot.reachableIds : null,
+    );
+    if (actionId && !knownReferences.has(actionId)) {
+      const ownerSource = resolveReachableActionSource(
+        actionId,
+        sourceOptions.getRoot?.(),
+        sourceSnapshot.actionSourceIds,
+      );
+      if (ownerSource) {
+        // Next.js forwards to the route worker named by its global action
+        // manifest. Vinext has one RSC environment, so transforming the exact
+        // source-indexed owner establishes the same manifest membership
+        // without compiling or evaluating any unrelated route graph.
+        await rscEnvironment.transformRequest(`/@fs/${ownerSource}`);
+      }
+    }
+
     return {
       hasAnySourceAction: sourceSnapshot.hasAnySourceAction,
       references: collectReachableServerActions(
@@ -363,23 +421,25 @@ export function createRscReferenceValidationNormalizerPlugin(
 
   async function discoverDevServerActions(
     pathname: string,
+    actionId: string | undefined,
     resolve: (specifier: string, importer: string) => Promise<{ id?: string } | null>,
   ): Promise<{ hasAnySourceAction: boolean; references: Set<string> }> {
+    const discoveryKey = `${pathname}\0${actionId ?? ""}`;
     for (;;) {
-      const cached = discoverySnapshots.get(pathname);
+      const cached = discoverySnapshots.get(discoveryKey);
       if (cached?.generation === discoveryGeneration) return cached;
 
       const generation = discoveryGeneration;
       let result!: { hasAnySourceAction: boolean; references: Set<string> };
       const queued = discoveryQueue.then(async () => {
-        const current = discoverySnapshots.get(pathname);
+        const current = discoverySnapshots.get(discoveryKey);
         if (current?.generation === generation) {
           result = current;
           return;
         }
-        result = await scanDevServerActions(pathname, resolve);
+        result = await scanDevServerActions(pathname, actionId, resolve);
         if (generation === discoveryGeneration) {
-          discoverySnapshots.set(pathname, { generation, ...result });
+          discoverySnapshots.set(discoveryKey, { generation, ...result });
         }
       });
       discoveryQueue = queued.catch(() => {});
@@ -426,10 +486,14 @@ export function createRscReferenceValidationNormalizerPlugin(
           serverActionValidationModuleIds.add(id);
           const query = parseReferenceValidationQuery(id);
           const pathname = query?.pathname ?? "/";
-          const snapshot = await discoverDevServerActions(pathname, async (specifier, importer) => {
-            const resolved = await this.resolve(specifier, importer, { skipSelf: true });
-            return resolved ? { id: resolved.id } : null;
-          });
+          const snapshot = await discoverDevServerActions(
+            pathname,
+            query?.actionId,
+            async (specifier, importer) => {
+              const resolved = await this.resolve(specifier, importer, { skipSelf: true });
+              return resolved ? { id: resolved.id } : null;
+            },
+          );
           const valid = query?.hasAny
             ? snapshot.hasAnySourceAction || snapshot.references.size > 0
             : Boolean(query?.actionId && snapshot.references.has(query.actionId));

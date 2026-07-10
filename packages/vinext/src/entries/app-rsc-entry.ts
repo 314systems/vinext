@@ -1146,6 +1146,11 @@ export default createAppRscHandler({
       readActionBodyWithLimit: __readBodyWithLimit,
       readActionFormDataWithLimit: __readFormDataWithLimit,
     } = await __loadAppServerActionExecution();
+    // Dev action ownership is route-scoped. Validate first so a cold request
+    // posted after navigation can discover the exact owning source before
+    // loadServerAction consults plugin-RSC's live manifest. Production uses
+    // the immutable build-time membership set, so this remains a cheap lookup.
+    await __hasServerAction(actionId, cleanPathname);
     const __actionMatch = matchRoute(cleanPathname);
     if (__actionMatch) await __ensureRouteLoaded(__actionMatch.route);
     const __actionIsEdgeRuntime = __actionMatch

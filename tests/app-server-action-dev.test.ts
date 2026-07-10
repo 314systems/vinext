@@ -189,9 +189,69 @@ describe("App Router dev action imported only by a client boundary", () => {
     await server?.close();
   });
 
-  // Ported from Next.js: test/e2e/app-dir/actions-unrecognized/actions-unrecognized.test.ts
-  // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/actions-unrecognized/actions-unrecognized.test.ts
-  it("discovers the action cold without compiling a broken unrelated client route", async () => {
+  // Ported from Next.js: test/e2e/app-dir/actions/app-action.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/actions/app-action.test.ts
+  it("discovers cold cross-route progressive and delayed actions without compiling a broken route", async () => {
+    // Capture the browser-visible action reference from one dev process, then
+    // restart. The next process must handle the action on a different route
+    // without warming the owning /client-boundary route first.
+    const html = await (await fetch(`${baseUrl}/client-boundary`)).text();
+    const marker = html.match(/name="(\$ACTION_ID_[^"]+)"/)?.[1];
+    expect(marker).toBeDefined();
+    const actionId = marker!.slice("$ACTION_ID_".length);
+
+    await server.close();
+    server = await createServer({
+      root: CLIENT_BOUNDARY_ACTION_FIXTURE_DIR,
+      configFile: false,
+      logLevel: "silent",
+      plugins: [vinext({ appDir: CLIENT_BOUNDARY_ACTION_FIXTURE_DIR })],
+      server: { host: "127.0.0.1", port: 0 },
+    });
+    await server.listen();
+    let address = server.httpServer!.address() as AddressInfo;
+    baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const validBody = new FormData();
+    validBody.set(marker!, "");
+    const validResponse = await fetch(baseUrl, {
+      method: "POST",
+      headers: { origin: baseUrl },
+      body: validBody,
+    });
+    expect(validResponse.status).toBe(200);
+    expect(await validResponse.text()).toContain("Client-boundary action fixture");
+
+    // Match Next.js' delayed-action navigation case: the client retains an
+    // action reference, moves to another route, and dispatches it later as a
+    // fetch action. Restart again so this path is independently cold.
+    await server.close();
+    server = await createServer({
+      root: CLIENT_BOUNDARY_ACTION_FIXTURE_DIR,
+      configFile: false,
+      logLevel: "silent",
+      plugins: [vinext({ appDir: CLIENT_BOUNDARY_ACTION_FIXTURE_DIR })],
+      server: { host: "127.0.0.1", port: 0 },
+    });
+    await server.listen();
+    address = server.httpServer!.address() as AddressInfo;
+    baseUrl = `http://127.0.0.1:${address.port}`;
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const delayedResponse = await fetch(baseUrl, {
+      method: "POST",
+      headers: {
+        accept: "text/x-component",
+        "content-type": "text/plain;charset=UTF-8",
+        "next-action": actionId,
+        origin: baseUrl,
+      },
+      body: "[]",
+    });
+    expect(delayedResponse.status).toBe(200);
+    expect(delayedResponse.headers.get("content-type")).toContain("text/x-component");
+    expect(await delayedResponse.text()).toContain("client-boundary-action");
+
     const invalidBody = new FormData();
     invalidBody.set("$ACTION_ID_not-a-server-reference", "");
     const invalidResponse = await fetch(baseUrl, {
@@ -212,19 +272,6 @@ describe("App Router dev action imported only by a client boundary", () => {
 
     expect(routeResponse.status).toBe(200);
     await expect(routeResponse.json()).resolves.toEqual({ field: "route-handler-value" });
-
-    const html = await (await fetch(`${baseUrl}/client-boundary`)).text();
-    const marker = html.match(/name="(\$ACTION_ID_[^"]+)"/)?.[1];
-    expect(marker).toBeDefined();
-
-    const validBody = new FormData();
-    validBody.set(marker!, "");
-    const validResponse = await fetch(`${baseUrl}/client-boundary`, {
-      method: "POST",
-      headers: { origin: baseUrl },
-      body: validBody,
-    });
-    expect(validResponse.status).toBe(200);
 
     // The unrelated route is genuinely broken; its error remains local to a
     // request for that route instead of poisoning cold action discovery.

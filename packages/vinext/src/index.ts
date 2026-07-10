@@ -6694,6 +6694,7 @@ export const loadServerActionClient = ${
       createRscReferenceValidationNormalizerPlugin({
         getAppDir: () => appDir,
         getPageExtensions: () => fileMatcher?.extensions,
+        getRoot: () => root,
       }),
     );
   }
