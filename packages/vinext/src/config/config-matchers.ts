@@ -1214,16 +1214,10 @@ function substituteDestinationParams(
 
     const pathnameStart = value.indexOf("/", authorityStart);
     if (pathnameStart === -1) {
-      return replaceParams(value, (param, key) =>
-        conditionCaptureParams && Object.hasOwn(conditionCaptureParams, key)
-          ? encodeURIComponent(param)
-          : param,
-      );
+      return replaceParams(value, (param) => encodeURIComponent(param));
     }
-    const authority = replaceParams(value.slice(0, pathnameStart), (param, key) =>
-      conditionCaptureParams && Object.hasOwn(conditionCaptureParams, key)
-        ? encodeURIComponent(param)
-        : param,
+    const authority = replaceParams(value.slice(0, pathnameStart), (param) =>
+      encodeURIComponent(param),
     );
     return authority + replaceParams(value.slice(pathnameStart), encodePathParam);
   };

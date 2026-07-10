@@ -162,6 +162,10 @@ const nextConfig: NextConfig = {
                 ],
                 destination: "http://:target.internal.invalid/capture",
               },
+              {
+                source: "/source-capture-external/:target*",
+                destination: "http://:target.internal.invalid/capture",
+              },
             ]
           : []),
       ],

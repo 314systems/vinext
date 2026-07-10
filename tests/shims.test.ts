@@ -12159,6 +12159,18 @@ describe("matchRewrite with external URLs", () => {
     expect(result).toBe("/safe-fallback");
   });
 
+  it("fails closed when a source capture would change an external rewrite authority", async () => {
+    const { matchRewrite } = await import("../packages/vinext/src/config/config-matchers.js");
+    const rules = [
+      {
+        source: "/source/:target*",
+        destination: "http://:target.internal.invalid/capture",
+      },
+    ];
+
+    expect(matchRewrite("/source/127.0.0.1:8080/reached", rules, emptyCtx)).toBeNull();
+  });
+
   it("preserves valid condition captures in external rewrite hostnames", async () => {
     const { matchRewrite } = await import("../packages/vinext/src/config/config-matchers.js");
     const rules = [
