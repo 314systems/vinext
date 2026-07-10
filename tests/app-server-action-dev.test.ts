@@ -15,6 +15,10 @@ const CLIENT_BOUNDARY_ACTION_FIXTURE_DIR = path.resolve(
   import.meta.dirname,
   "fixtures/app-client-boundary-action-process",
 );
+const PACKAGE_ACTION_FIXTURE_DIR = path.resolve(
+  import.meta.dirname,
+  "fixtures/app-package-action-process",
+);
 
 async function retryUntil<T>(
   operation: () => Promise<T>,
@@ -276,6 +280,186 @@ describe("App Router dev action imported only by a client boundary", () => {
     // The unrelated route is genuinely broken; its error remains local to a
     // request for that route instead of poisoning cold action discovery.
     expect((await fetch(`${baseUrl}/broken`)).status).toBe(500);
+  });
+});
+
+describe("App Router dev action imported from a package", () => {
+  let server: ViteDevServer;
+  let baseUrl: string;
+
+  async function startServer(): Promise<void> {
+    server = await createServer({
+      root: PACKAGE_ACTION_FIXTURE_DIR,
+      configFile: false,
+      logLevel: "silent",
+      plugins: [vinext({ appDir: PACKAGE_ACTION_FIXTURE_DIR })],
+      server: { host: "127.0.0.1", port: 0 },
+    });
+    await server.listen();
+    const address = server.httpServer!.address() as AddressInfo;
+    baseUrl = `http://127.0.0.1:${address.port}`;
+  }
+
+  beforeAll(startServer, 30_000);
+
+  afterAll(async () => {
+    await server?.close();
+  });
+
+  // Ported from Next.js: test/e2e/app-dir/app-external/app-external.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/app-external/app-external.test.ts
+  it("discovers a cold package-owned action through a package re-export", async () => {
+    const html = await (await fetch(`${baseUrl}/package-action`)).text();
+    const marker = html.match(/name="(\$ACTION_ID_[^"]+)"/)?.[1];
+    expect(marker).toBeDefined();
+    const actionId = marker!.slice("$ACTION_ID_".length);
+
+    const ownerBody = new FormData();
+    ownerBody.set(marker!, "");
+    const ownerResponse = await fetch(`${baseUrl}/package-action`, {
+      method: "POST",
+      headers: { origin: baseUrl },
+      body: ownerBody,
+    });
+    expect(ownerResponse.status).toBe(200);
+    expect(await ownerResponse.text()).toContain("Package action fixture");
+
+    await server.close();
+    await startServer();
+
+    const crossRouteBody = new FormData();
+    crossRouteBody.set(marker!, "");
+    const crossRouteResponse = await fetch(baseUrl, {
+      method: "POST",
+      headers: { origin: baseUrl },
+      body: crossRouteBody,
+    });
+    expect(crossRouteResponse.status).toBe(200);
+    expect(await crossRouteResponse.text()).toContain("Package action fixture home");
+
+    await server.close();
+    await startServer();
+
+    const delayedResponse = await fetch(baseUrl, {
+      method: "POST",
+      headers: {
+        accept: "text/x-component",
+        "content-type": "text/plain;charset=UTF-8",
+        "next-action": actionId,
+        origin: baseUrl,
+      },
+      body: "[]",
+    });
+    expect(delayedResponse.status).toBe(200);
+    expect(delayedResponse.headers.get("content-type")).toContain("text/x-component");
+    expect(await delayedResponse.text()).toContain("package-action");
+
+    const unreachableActionId = actionId.replace(
+      "action.js#packageAction",
+      "unreachable.js#unreachablePackageAction",
+    );
+    expect(unreachableActionId).not.toBe(actionId);
+    const unreachableBody = new FormData();
+    unreachableBody.set(`$ACTION_ID_${unreachableActionId}`, "");
+    const unreachableResponse = await fetch(baseUrl, {
+      method: "POST",
+      headers: { origin: baseUrl },
+      body: unreachableBody,
+    });
+    expect(unreachableResponse.status).toBe(500);
+    expect(unreachableResponse.headers.get("content-type")).toContain("text/html");
+
+    const typeOnlyActionId = actionId.replace(
+      "action.js#packageAction",
+      "type-only.ts#typeOnlyPackageAction",
+    );
+    expect(typeOnlyActionId).not.toBe(actionId);
+    const typeOnlyBody = new FormData();
+    typeOnlyBody.set(`$ACTION_ID_${typeOnlyActionId}`, "");
+    const typeOnlyResponse = await fetch(baseUrl, {
+      method: "POST",
+      headers: { origin: baseUrl },
+      body: typeOnlyBody,
+    });
+    expect(typeOnlyResponse.status).toBe(500);
+    expect(typeOnlyResponse.headers.get("content-type")).toContain("text/html");
+
+    const forgedActionId = actionId.replace(
+      "/node_modules/dev-package-action/action.js",
+      "/node_modules/dev-forged-package/action.js",
+    );
+    expect(forgedActionId).not.toBe(actionId);
+    const forgedResponse = await fetch(baseUrl, {
+      method: "POST",
+      headers: {
+        accept: "text/x-component",
+        "content-type": "text/plain;charset=UTF-8",
+        "next-action": forgedActionId,
+        origin: baseUrl,
+      },
+      body: "[]",
+    });
+    expect(forgedResponse.status).toBe(404);
+    expect(forgedResponse.headers.get("x-nextjs-action-not-found")).toBe("1");
+
+    expect((await fetch(`${baseUrl}/broken-package`)).status).toBe(500);
+    expect((await fetch(baseUrl)).status).toBe(200);
+  });
+});
+
+describe("App Router dev package-action reachability", () => {
+  let server: ViteDevServer;
+  let baseUrl: string;
+  let tempDir: string;
+  let fixtureDir: string;
+
+  beforeAll(async () => {
+    tempDir = await mkdtemp(path.join(import.meta.dirname, ".tmp-dev-package-action-hmr-"));
+    fixtureDir = path.join(tempDir, "fixture");
+    await cp(PACKAGE_ACTION_FIXTURE_DIR, fixtureDir, { recursive: true });
+    server = await createServer({
+      root: fixtureDir,
+      configFile: false,
+      logLevel: "silent",
+      plugins: [vinext({ appDir: fixtureDir })],
+      server: { host: "127.0.0.1", port: 0 },
+    });
+    await server.listen();
+    const address = server.httpServer!.address() as AddressInfo;
+    baseUrl = `http://127.0.0.1:${address.port}`;
+  }, 30_000);
+
+  afterAll(async () => {
+    await server?.close();
+    if (tempDir) await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("rejects a stale package action after its runtime edge is removed", async () => {
+    const initialHtml = await (await fetch(`${baseUrl}/package-action`)).text();
+    const marker = initialHtml.match(/name="(\$ACTION_ID_[^"]+)"/)?.[1];
+    expect(marker).toBeDefined();
+
+    await writeFile(
+      path.join(fixtureDir, "app/package-action/client-form.tsx"),
+      `"use client";\nexport function PackageActionForm() { return <p>Package action removed</p>; }\n`,
+    );
+    const removedHtml = await retryUntil(
+      async () => (await fetch(`${baseUrl}/package-action`)).text(),
+      (html) => html.includes("Package action removed") && !html.includes("$ACTION_ID_"),
+    );
+    expect(removedHtml).not.toContain("$ACTION_ID_");
+
+    const staleBody = new FormData();
+    staleBody.set(marker!, "");
+    const staleResponse = await fetch(baseUrl, {
+      method: "POST",
+      headers: { origin: baseUrl },
+      body: staleBody,
+    });
+    expect(staleResponse.status).toBe(404);
+    expect(staleResponse.headers.get("x-nextjs-action-not-found")).toBe("1");
+    expect(await staleResponse.text()).toBe("Server action not found.");
+    expect((await fetch(baseUrl)).status).toBe(200);
   });
 });
 

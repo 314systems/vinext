@@ -268,8 +268,11 @@ async function scanReachableActionSources(options: {
       }
       if (!resolved?.id) continue;
       const dependency = cleanFileId(resolved.id);
-      if (!path.isAbsolute(dependency) || dependency.includes("/node_modules/")) continue;
+      if (!path.isAbsolute(dependency)) continue;
       if (!/\.(?:[cm]?[jt]sx?)$/i.test(dependency)) continue;
+      // Keep runtime-reachable package files in the lightweight source index.
+      // They are only parsed here; the exact indexed action owner named by a
+      // posted ID is the only package module cold-transformed below.
       pending.push(dependency);
     }
   }
