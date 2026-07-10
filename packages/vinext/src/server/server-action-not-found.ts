@@ -1,5 +1,6 @@
 import { NEXTJS_ACTION_NOT_FOUND_HEADER as SERVER_ACTION_NOT_FOUND_HEADER } from "./headers.js";
 import { UnrecognizedActionError } from "vinext/shims/unrecognized-action-error";
+import { SERVER_ACTION_CACHE_CONTROL } from "./server-action-response.js";
 
 const SERVER_ACTION_NOT_FOUND_DOCS =
   "https://nextjs.org/docs/messages/failed-to-find-server-action";
@@ -95,6 +96,7 @@ export function createServerActionNotFoundResponse(): Response {
     status: 404,
     headers: {
       [SERVER_ACTION_NOT_FOUND_HEADER]: "1",
+      "cache-control": SERVER_ACTION_CACHE_CONTROL,
       "content-type": "text/plain",
     },
   });

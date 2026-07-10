@@ -48,6 +48,7 @@ describe("App Router production server action process isolation", () => {
   let tempDir: string;
   let baseUrl: string;
   let validActionIds: string[];
+  let unselectedActionId: string;
   let boundActionMarker: string;
   let boundActionFields: [string, string][];
 
@@ -97,6 +98,26 @@ describe("App Router production server action process isolation", () => {
       .filter((match) => match[1].startsWith(boundFieldPrefix))
       .map((match) => [match[1], decodeHtmlAttribute(match[2])]);
     expect(boundActionFields).toHaveLength(2);
+
+    // Capture the lazily routed action id, then restart the production process
+    // so its module is definitely unevaluated for the preflight test below.
+    const unselectedHtml = await (await fetch(`${baseUrl}/unselected`)).text();
+    const unselectedMatch = unselectedHtml.match(/name="\$ACTION_ID_([^"]+)"/);
+    expect(unselectedMatch).toBeTruthy();
+    unselectedActionId = unselectedMatch![1];
+
+    child.kill("SIGTERM");
+    expect(await waitForExit(child, 3_000)).toBe(true);
+    output = "";
+    child = spawn(
+      process.execPath,
+      [SERVER_HELPER, path.join(runtimeDir, "prod-server.mjs"), outDir],
+      { cwd: path.resolve(import.meta.dirname, ".."), stdio: ["ignore", "pipe", "pipe"] },
+    );
+    child.stdout?.on("data", (chunk) => (output += chunk.toString()));
+    child.stderr?.on("data", (chunk) => (output += chunk.toString()));
+    const restartedPort = await waitForServerPort(child, () => output);
+    baseUrl = `http://127.0.0.1:${restartedPort}`;
   }, 60_000);
 
   afterAll(async () => {
@@ -134,6 +155,15 @@ describe("App Router production server action process isolation", () => {
         return body;
       },
     },
+    {
+      name: "missing export",
+      createBody: () => {
+        const body = new FormData();
+        const actionId = validActionIds[0];
+        body.set(`$ACTION_ID_${actionId.slice(0, actionId.lastIndexOf("#"))}#missing`, "");
+        return body;
+      },
+    },
   ])("returns Next.js' production 500 for $name page action references", async ({ createBody }) => {
     const response = await fetch(baseUrl, {
       method: "POST",
@@ -141,6 +171,9 @@ describe("App Router production server action process isolation", () => {
     });
     expect(response.status).toBe(500);
     expect(response.headers.get("x-nextjs-action-not-found")).toBeNull();
+    expect(response.headers.get("cache-control")).toBe(
+      "no-cache, no-store, max-age=0, must-revalidate",
+    );
     expect(await response.text()).toBe("Internal Server Error");
 
     expect(await waitForExit(child!, 500)).toBe(false);
@@ -166,9 +199,7 @@ describe("App Router production server action process isolation", () => {
     expect(child!.exitCode).toBeNull();
   });
 
-  // Ported from Next.js: test/e2e/app-dir/no-server-actions/no-server-actions.test.ts
-  // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/no-server-actions/no-server-actions.test.ts
-  it("keeps the action-not-found response for page multipart posts without an action marker", async () => {
+  it("returns Next.js' production 500 for an actions-enabled page without a marker", async () => {
     const body = new FormData();
     body.set("ordinary-field", "value");
 
@@ -177,9 +208,30 @@ describe("App Router production server action process isolation", () => {
       body,
     });
 
-    expect(response.status).toBe(404);
-    expect(response.headers.get("x-nextjs-action-not-found")).toBe("1");
-    expect(await response.text()).toBe("Server action not found.");
+    expect(response.status).toBe(500);
+    expect(response.headers.get("x-nextjs-action-not-found")).toBeNull();
+    expect(response.headers.get("cache-control")).toBe(
+      "no-cache, no-store, max-age=0, must-revalidate",
+    );
+    expect(await response.text()).toBe("Internal Server Error");
+    expect(child!.exitCode).toBeNull();
+  });
+
+  it("does not evaluate an unselected valid action module during preflight", async () => {
+    expect(await (await fetch(`${baseUrl}/module-loads`)).json()).toEqual({ unselected: 0 });
+
+    const body = new FormData();
+    body.set(`$ACTION_ID_${unselectedActionId}`, "");
+    body.set(`$ACTION_ID_${validActionIds[0]}`, "");
+    const response = await fetch(baseUrl, {
+      method: "POST",
+      body,
+      redirect: "manual",
+    });
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe(`${baseUrl}/success`);
+    expect(await (await fetch(`${baseUrl}/module-loads`)).json()).toEqual({ unselected: 0 });
     expect(child!.exitCode).toBeNull();
   });
 

@@ -169,6 +169,11 @@ type AppRouterConfig = {
   prefetchInlining?: PrefetchInliningConfig;
   /** Whether the RSC build discovered any server references. Defaults to true. */
   hasServerActions?: boolean;
+  /**
+   * Exact build-time server reference ids (`referenceKey#exportName`). `null`
+   * selects the dev-server membership module, which stays current across HMR.
+   */
+  serverActionReferences?: string[] | null;
   /** Internationalization routing config for middleware matcher locale handling. */
   i18n?: NextI18nConfig | null;
   imageConfig?: ImageConfig;
@@ -232,6 +237,7 @@ export function generateRscEntry(
   const cacheComponents = config?.cacheComponents === true;
   const prefetchInlining = config?.prefetchInlining ?? false;
   const hasServerActions = config?.hasServerActions !== false;
+  const serverActionReferences = config?.serverActionReferences ?? null;
   const i18nConfig = config?.i18n ?? null;
   const hasPagesDir = config?.hasPagesDir ?? false;
   const publicFiles = config?.publicFiles ?? [];
@@ -305,6 +311,24 @@ import { getNavigationContext as _getNavigationContext } from "next/navigation";
 import { configureMemoryCacheHandler as __configureMemoryCacheHandler } from "vinext/shims/cache-handler";
 import { headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, consumeInvalidDynamicUsageError, setHeadersAccessPhase } from "next/headers";
 import { mergeMetadata, resolveModuleMetadata, mergeViewport, resolveModuleViewport } from "vinext/metadata";
+${
+  hasServerActions
+    ? serverActionReferences
+      ? `const __serverActionReferences = new Set(${JSON.stringify(serverActionReferences)});
+async function __hasServerAction(actionId) {
+  return __serverActionReferences.has(actionId);
+}`
+      : `async function __hasServerAction(actionId) {
+  const validation = await import(
+    /* @vite-ignore */
+    "/@id/__x00__virtual:vinext-server-action-validation?actionId=" +
+      encodeURIComponent(actionId) +
+      "&lang.js"
+  );
+  return validation.default === true;
+}`
+    : ""
+}
 ${
   middlewarePath
     ? `import * as middlewareModule from ${JSON.stringify(toSlash(middlewarePath))};
@@ -1004,11 +1028,12 @@ export default createAppRscHandler({
       isProgressiveServerActionRequest: __isProgressiveServerActionRequest,
       readActionFormDataWithLimit: __readFormDataWithLimit,
     } = await __loadAppServerActionExecution();
-    // A multipart form POST to a page is always a server-action attempt, so a
-    // body that decodes to no action must surface as 404 action-not-found
-    // (#1340). Route handlers run after this dispatch and accept raw multipart
-    // POSTs, so only flag actual page routes. The __loadPage / __loadRouteHandler
-    // markers are static and available before lazy module hydration.
+    // Route handlers accept raw multipart POSTs, so only send actual page
+    // routes through progressive action handling. A build with no actions
+    // omits this callback and keeps the separate 404 action-not-found path;
+    // malformed posts in this actions-enabled build use Next.js' 500 path.
+    // The __loadPage / __loadRouteHandler markers are available before lazy
+    // module hydration.
     //
     // Only the progressive (multipart, no actionId) POST path consults
     // hasPageRoute, so skip the route match entirely for every other request
@@ -1037,8 +1062,8 @@ export default createAppRscHandler({
       decodeFormState,
       getAndClearPendingCookies,
       getDraftModeCookieHeader,
+      hasServerAction: __hasServerAction,
       hasPageRoute: __hasPageRoute,
-      loadServerAction,
       maxActionBodySize: __MAX_ACTION_BODY_SIZE,
       middlewareHeaders: middlewareContext.headers,
       readFormDataWithLimit: __readFormDataWithLimit,

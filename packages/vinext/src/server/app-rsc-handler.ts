@@ -90,6 +90,7 @@ import {
   createServerActionNotFoundResponse,
   getServerActionNotFoundMessage,
 } from "./server-action-not-found.js";
+import { applyServerActionCacheControl } from "./server-action-response.js";
 import {
   createRouteTreePrefetchResponse,
   isRouteTreePrefetchRequest,
@@ -850,7 +851,9 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       return createMissingServerActionResponse(options, null);
     }
   }
-  if (progressiveActionResult instanceof Response) return progressiveActionResult;
+  if (progressiveActionResult instanceof Response) {
+    return applyServerActionCacheControl(progressiveActionResult);
+  }
   const progressiveActionFormState =
     progressiveActionResult?.kind === "form-state" ? progressiveActionResult : null;
   const isProgressiveActionRender = progressiveActionFormState !== null;
@@ -890,7 +893,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
           searchParams: getResolvedSearchParams(),
         })
       : null;
-  if (serverActionResponse) return serverActionResponse;
+  if (serverActionResponse) return applyServerActionCacheControl(serverActionResponse);
   if (filesystemRouteEligible && isPostRequest && actionId && !options.handleServerActionRequest) {
     return createMissingServerActionResponse(options, actionId);
   }
@@ -1190,7 +1193,9 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   // res.setHeader('set-cookie', ...) flush in action-handler.ts / app-render.tsx.
   // Issue: https://github.com/cloudflare/vinext/issues/1483
   if (isProgressiveActionRender) {
-    return applyProgressiveActionSideEffects(pageResponse, progressiveActionFormState);
+    return applyServerActionCacheControl(
+      applyProgressiveActionSideEffects(pageResponse, progressiveActionFormState),
+    );
   }
   return pageResponse;
 }

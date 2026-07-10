@@ -11,6 +11,7 @@ import type {
   UserConfig,
   ViteDevServer,
 } from "vite";
+import type { PluginApi as RscPluginApi } from "@vitejs/plugin-rsc";
 import { createLogger, loadEnv, parseAst, transformWithOxc } from "vite";
 import {
   pagesRouter,
@@ -1505,15 +1506,41 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
       });
   }
 
+  async function resolveServerActionMetadata(
+    config: Pick<ResolvedConfig, "command" | "plugins">,
+  ): Promise<{ hasServerActions: boolean; references: string[] | null }> {
+    if (config.command !== "build") {
+      return { hasServerActions: true, references: null };
+    }
+
+    let pluginApi = (
+      config.plugins.find((plugin) => plugin.name === "rsc:minimal") as
+        | (Plugin & { api?: RscPluginApi })
+        | undefined
+    )?.api;
+    if (!pluginApi && rscPluginModulePromise) {
+      const { getPluginApi } = await rscPluginModulePromise;
+      pluginApi = getPluginApi(config);
+    }
+    if (!pluginApi || pluginApi.manager.isScanBuild) {
+      return { hasServerActions: true, references: null };
+    }
+
+    const referenceMetadata = pluginApi.manager.serverReferenceMetaMap as Record<
+      string,
+      { exportNames: string[]; referenceKey: string }
+    >;
+    const references = Object.values(referenceMetadata).flatMap((meta) =>
+      meta.exportNames.map((name) => `${meta.referenceKey}#${name}`),
+    );
+    references.sort((a, b) => a.localeCompare(b));
+    return { hasServerActions: references.length > 0, references };
+  }
+
   async function resolveHasServerActions(
     config: Pick<ResolvedConfig, "command" | "plugins">,
   ): Promise<boolean> {
-    if (config.command !== "build" || !rscPluginModulePromise) return true;
-
-    const { getPluginApi } = await rscPluginModulePromise;
-    const pluginApi = getPluginApi(config);
-    if (!pluginApi || pluginApi.manager.isScanBuild) return true;
-    return Object.keys(pluginApi.manager.serverReferenceMetaMap).length > 0;
+    return (await resolveServerActionMetadata(config)).hasServerActions;
   }
 
   const configuredReactOptions =
@@ -3581,7 +3608,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           if (id === RESOLVED_RSC_ENTRY && hasAppDir) {
             const routes = await appRouter(appDir, nextConfig?.pageExtensions, fileMatcher);
             const metaRoutes = scanMetadataFiles(appDir);
-            const hasServerActions = await resolveHasServerActions(this.environment.config);
+            const serverActionMetadata = await resolveServerActionMetadata(this.environment.config);
             // Check for global-error.tsx at app root
             const globalErrorPath = findFileWithExts(appDir, "global-error", fileMatcher);
             // Check for global-not-found.tsx at app root (Next.js 16+ feature)
@@ -3626,7 +3653,8 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 globalNotFound: nextConfig?.globalNotFound,
                 cacheComponents: nextConfig?.cacheComponents,
                 prefetchInlining: nextConfig?.prefetchInlining,
-                hasServerActions,
+                hasServerActions: serverActionMetadata.hasServerActions,
+                serverActionReferences: serverActionMetadata.references,
                 i18n: nextConfig?.i18n,
                 imageConfig: {
                   deviceSizes: nextConfig?.images?.deviceSizes,
@@ -6621,8 +6649,10 @@ export const loadServerActionClient = ${
   // Append auto-injected RSC plugins if applicable
   if (rscPluginPromise) {
     plugins.push(rscPluginPromise);
-    plugins.push(createRscReferenceValidationNormalizerPlugin());
     plugins.push(createRscClientReferenceLoadersPlugin());
+  }
+  if (earlyAppDirExists) {
+    plugins.push(createRscReferenceValidationNormalizerPlugin());
   }
 
   return plugins;

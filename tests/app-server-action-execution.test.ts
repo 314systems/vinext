@@ -130,13 +130,15 @@ function createOptions(
       return null;
     },
     hasPageRoute: true,
-    async loadServerAction() {
-      return () => undefined;
+    async hasServerAction() {
+      return true;
     },
     maxActionBodySize: 1024,
     middlewareHeaders: null,
     async readFormDataWithLimit() {
-      return new FormData();
+      const body = new FormData();
+      body.set("$ACTION_ID_test-action", "");
+      return body;
     },
     reportRequestError() {},
     request: createMultipartRequest(),
@@ -1016,32 +1018,37 @@ describe("app server action execution helpers", () => {
     }
   });
 
-  // Ported from Next.js: test/e2e/app-dir/no-server-actions/no-server-actions.test.ts
-  // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/no-server-actions/no-server-actions.test.ts
-  it("returns the action-not-found response for progressive action decode misses", async () => {
+  // Ported from Next.js: test/e2e/app-dir/actions-unrecognized/actions-unrecognized.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/actions-unrecognized/actions-unrecognized.test.ts
+  it("returns a production 500 for progressive action decode misses", async () => {
     const reportedErrors: Error[] = [];
     const clearContext = vi.fn();
 
-    const response = requireProgressiveActionResponse(
-      await handleProgressiveServerActionRequest(
-        createOptions({
-          clearRequestContext: clearContext,
-          async decodeAction() {
-            throw new Error(
-              "Failed to find Server Action. This request might be from an older or newer deployment.\nRead more: https://nextjs.org/docs/messages/failed-to-find-server-action",
-            );
-          },
-          reportRequestError(error) {
-            reportedErrors.push(error);
-          },
-        }),
+    const response = await withEnvVar("NODE_ENV", "production", async () =>
+      requireProgressiveActionResponse(
+        await handleProgressiveServerActionRequest(
+          createOptions({
+            clearRequestContext: clearContext,
+            async decodeAction() {
+              throw new Error(
+                "Failed to find Server Action. This request might be from an older or newer deployment.\nRead more: https://nextjs.org/docs/messages/failed-to-find-server-action",
+              );
+            },
+            reportRequestError(error) {
+              reportedErrors.push(error);
+            },
+          }),
+        ),
       ),
     );
 
-    expect(response.status).toBe(404);
-    expect(response.headers.get("x-nextjs-action-not-found")).toBe("1");
-    expect(await response.text()).toBe("Server action not found.");
-    expect(reportedErrors).toEqual([]);
+    expect(response.status).toBe(500);
+    expect(response.headers.get("x-nextjs-action-not-found")).toBeNull();
+    expect(response.headers.get("cache-control")).toBe(
+      "no-cache, no-store, max-age=0, must-revalidate",
+    );
+    expect(await response.text()).toBe("Internal Server Error");
+    expect(reportedErrors).toHaveLength(1);
     expect(clearContext).toHaveBeenCalledTimes(1);
   });
 
@@ -1049,82 +1056,66 @@ describe("app server action execution helpers", () => {
   // prod-build "server reference not found" shape thrown by
   // `@vitejs/plugin-rsc` when the referenced action id isn't in the built
   // manifest, including when the build has no server actions at all.
-  it("returns action-not-found when the prod build has no matching reference on a progressive action", async () => {
-    const response = requireProgressiveActionResponse(
-      await handleProgressiveServerActionRequest(
-        createOptions({
-          async decodeAction() {
-            throw new Error("server reference not found 'abc123'");
-          },
-        }),
+  it("returns a production 500 when decode loses a preflighted reference", async () => {
+    const response = await withEnvVar("NODE_ENV", "production", async () =>
+      requireProgressiveActionResponse(
+        await handleProgressiveServerActionRequest(
+          createOptions({
+            async decodeAction() {
+              throw new Error("server reference not found 'abc123'");
+            },
+          }),
+        ),
       ),
     );
 
-    expect(response.status).toBe(404);
-    expect(response.headers.get("x-nextjs-action-not-found")).toBe("1");
-    expect(await response.text()).toBe("Server action not found.");
+    expect(response.status).toBe(500);
+    expect(response.headers.get("x-nextjs-action-not-found")).toBeNull();
   });
 
-  it("returns action-not-found for progressive decode misses that include an action id", async () => {
-    const response = requireProgressiveActionResponse(
-      await handleProgressiveServerActionRequest(
-        createOptions({
-          async decodeAction() {
-            throw new Error(
-              'Failed to find Server Action "stale-action-id". This request might be from an older or newer deployment.\nRead more: https://nextjs.org/docs/messages/failed-to-find-server-action',
-            );
-          },
-        }),
+  it("returns a production 500 for progressive decode misses that name an action id", async () => {
+    const response = await withEnvVar("NODE_ENV", "production", async () =>
+      requireProgressiveActionResponse(
+        await handleProgressiveServerActionRequest(
+          createOptions({
+            async decodeAction() {
+              throw new Error(
+                'Failed to find Server Action "stale-action-id". This request might be from an older or newer deployment.\nRead more: https://nextjs.org/docs/messages/failed-to-find-server-action',
+              );
+            },
+          }),
+        ),
       ),
     );
 
-    expect(response.status).toBe(404);
-    expect(response.headers.get("x-nextjs-action-not-found")).toBe("1");
+    expect(response.status).toBe(500);
+    expect(response.headers.get("x-nextjs-action-not-found")).toBeNull();
   });
 
-  // Ported from Next.js: test/e2e/app-dir/no-server-actions/no-server-actions.test.ts
-  // ("should error when triggering an MPA action on an app with no server actions")
-  //
-  // A multipart form POST to a *page* route that decodes to no action at all
-  // (e.g. the build has no server actions, so `decodeAction` returns null
-  // rather than throwing) must surface Next.js' 404 + action-not-found, not
-  // fall through to a 200 page render. The fetch-action variant of this case
-  // (handled via the `Next-Action` header) already worked; the MPA/form-POST
-  // variant did not. See issue #1340.
-  it("returns action-not-found when an MPA action targets a page with no server actions", async () => {
+  it("returns a production 500 when an actions-enabled page has no action marker", async () => {
     const clearContext = vi.fn();
     const reportedErrors: Error[] = [];
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    try {
-      const response = requireProgressiveActionResponse(
+    const response = await withEnvVar("NODE_ENV", "production", async () =>
+      requireProgressiveActionResponse(
         await handleProgressiveServerActionRequest(
           createOptions({
             clearRequestContext: clearContext,
-            hasPageRoute: true,
-            async decodeAction() {
-              return null;
+            async readFormDataWithLimit() {
+              return new FormData();
             },
             reportRequestError(error) {
               reportedErrors.push(error);
             },
           }),
         ),
-      );
+      ),
+    );
 
-      expect(response.status).toBe(404);
-      expect(response.headers.get("x-nextjs-action-not-found")).toBe("1");
-      expect(await response.text()).toBe("Server action not found.");
-      expect(reportedErrors).toEqual([]);
-      expect(clearContext).toHaveBeenCalledTimes(1);
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "Failed to find Server Action. This request might be from an older or newer deployment.",
-        ),
-      );
-    } finally {
-      warnSpy.mockRestore();
-    }
+    expect(response.status).toBe(500);
+    expect(response.headers.get("x-nextjs-action-not-found")).toBeNull();
+    expect(await response.text()).toBe("Internal Server Error");
+    expect(reportedErrors).toHaveLength(1);
+    expect(clearContext).toHaveBeenCalledTimes(1);
   });
 
   // Route handlers (route.ts) bypass App Page action handling in Next.js and
@@ -1132,20 +1123,20 @@ describe("app server action execution helpers", () => {
   // exactly like progressive action markers.
   it("bypasses parsing and preflight for multipart posts to a non-page route", async () => {
     const readFormDataWithLimit = vi.fn();
-    const loadServerAction = vi.fn();
+    const hasServerAction = vi.fn();
     const decodeAction = vi.fn();
     const response = await handleProgressiveServerActionRequest(
       createOptions({
         hasPageRoute: false,
         decodeAction,
-        loadServerAction,
+        hasServerAction,
         readFormDataWithLimit,
       }),
     );
 
     expect(response).toBeNull();
     expect(readFormDataWithLimit).not.toHaveBeenCalled();
-    expect(loadServerAction).not.toHaveBeenCalled();
+    expect(hasServerAction).not.toHaveBeenCalled();
     expect(decodeAction).not.toHaveBeenCalled();
   });
 

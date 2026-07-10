@@ -57,6 +57,7 @@ import {
   isServerActionNotFoundError,
 } from "./server-action-not-found.js";
 import { internalServerErrorResponse, payloadTooLargeResponse } from "./http-error-responses.js";
+import { SERVER_ACTION_CACHE_CONTROL } from "./server-action-response.js";
 import { createStaticGenerationHeadersContext } from "./app-static-generation.js";
 
 type AppPageParams = Record<string, string | string[]>;
@@ -211,14 +212,13 @@ export type HandleProgressiveServerActionRequestOptions = {
   getDraftModeCookieHeader: () => string | null | undefined;
   /**
    * Whether the posted-to route resolves to an App Router *page* (as opposed to
-   * a route handler or no match). Multipart form POSTs to a page are always
-   * server-action attempts in Next.js, so a body that decodes to no action must
-   * surface as 404 action-not-found rather than rendering the page. Route
-   * handlers legitimately receive raw multipart POSTs, so they bypass this
-   * handler before the body is read. See issue #1340.
+   * a route handler or no match). Route handlers legitimately receive raw
+   * multipart POSTs, so they bypass this handler before the body is read. A
+   * build with no server actions omits this handler entirely and retains the
+   * separate Next.js 404 action-not-found response. See issue #1340.
    */
   hasPageRoute: boolean;
-  loadServerAction: (actionId: string) => Promise<unknown>;
+  hasServerAction: (actionId: string) => boolean | Promise<boolean>;
   maxActionBodySize: number;
   middlewareHeaders: Headers | null;
   readFormDataWithLimit: ReadFormDataWithLimit;
@@ -784,6 +784,7 @@ function createServerActionErrorResponse(
     process.env.NODE_ENV === "production"
       ? undefined
       : "Server action failed: " + getServerActionFailureMessage(error),
+    { headers: { "Cache-Control": SERVER_ACTION_CACHE_CONTROL } },
   );
 }
 
@@ -815,6 +816,12 @@ export function isProgressiveServerActionRequest(
 const PROGRESSIVE_ACTION_ID_PREFIX = "$ACTION_ID_";
 const PROGRESSIVE_ACTION_REF_PREFIX = "$ACTION_REF_";
 
+type ProgressiveActionPreflight = {
+  actionIds: string[];
+  markerKeys: string[];
+  selectedMarkerKey: string;
+};
+
 /**
  * React's progressive action decoder starts loading every distinct action
  * marker in form order, but only returns the promise for the last marker. A
@@ -828,7 +835,9 @@ const PROGRESSIVE_ACTION_REF_PREFIX = "$ACTION_REF_";
  * shape outright. Checking every marker also matches Next.js' production 500
  * behavior for a single stale or malformed progressive reference.
  */
-function getProgressiveActionIdsForPreflight(body: FormData): string[] | null | undefined {
+function getProgressiveActionPreflight(
+  body: FormData,
+): ProgressiveActionPreflight | null | undefined {
   const markerKeys = new Set<string>();
   for (const key of body.keys()) {
     if (key.startsWith(PROGRESSIVE_ACTION_ID_PREFIX)) {
@@ -873,7 +882,53 @@ function getProgressiveActionIdsForPreflight(body: FormData): string[] | null | 
     actionIds.push(descriptor.id);
   }
 
-  return [...new Set(actionIds)];
+  const markerKeyList = [...markerKeys];
+  return {
+    actionIds: [...new Set(actionIds)],
+    markerKeys: markerKeyList,
+    selectedMarkerKey: markerKeyList.at(-1)!,
+  };
+}
+
+function createInvalidProgressiveActionResult(
+  options: HandleProgressiveServerActionRequestOptions,
+): Response | ProgressiveServerActionResult {
+  getAndClearActionRevalidationKind();
+  const error = new Error(getServerActionNotFoundMessage(null));
+
+  // Next.js lets this error reach the normal App Router error renderer in
+  // development, producing its HTML 500 overlay response. Production keeps
+  // the intentionally terse plain-text 500.
+  if (process.env.NODE_ENV !== "production") {
+    options.getAndClearPendingCookies();
+    console.error("[vinext] Server action error:", error);
+    options.reportRequestError(
+      error,
+      {
+        path: options.cleanPathname,
+        method: options.request.method,
+        headers: Object.fromEntries(options.request.headers.entries()),
+      },
+      { routerKind: "App Router", routePath: options.cleanPathname, routeType: "action" },
+    );
+    return {
+      kind: "form-state",
+      formState: null,
+      actionError: error,
+      actionFailed: true,
+      pendingCookies: [],
+      draftCookie: null,
+      revalidationKind: 0,
+    };
+  }
+
+  return createServerActionErrorResponse(error, {
+    cleanPathname: options.cleanPathname,
+    clearRequestContext: options.clearRequestContext,
+    getAndClearPendingCookies: options.getAndClearPendingCookies,
+    reportRequestError: options.reportRequestError,
+    request: options.request,
+  });
 }
 
 export async function handleProgressiveServerActionRequest(
@@ -931,55 +986,31 @@ export async function handleProgressiveServerActionRequest(
       return payloadResponse;
     }
 
-    const actionIdsToPreflight = getProgressiveActionIdsForPreflight(body);
-    if (actionIdsToPreflight === undefined) {
-      getAndClearActionRevalidationKind();
-      return createServerActionErrorResponse(new Error(getServerActionNotFoundMessage(null)), {
-        cleanPathname: options.cleanPathname,
-        clearRequestContext: options.clearRequestContext,
-        getAndClearPendingCookies: options.getAndClearPendingCookies,
-        reportRequestError: options.reportRequestError,
-        request: options.request,
-      });
+    const preflight = getProgressiveActionPreflight(body);
+    if (!preflight) {
+      return createInvalidProgressiveActionResult(options);
     }
-    if (actionIdsToPreflight) {
-      // Invoke and await each loader before creating the next promise. Every
-      // rejection therefore has a consumer without allowing one multipart
-      // body to fan out into an unbounded batch of concurrent module loads.
-      for (const actionId of actionIdsToPreflight) {
-        let loadedAction: unknown;
-        try {
-          loadedAction = await options.loadServerAction(actionId);
-        } catch (error) {
-          if (!isServerActionNotFoundError(error, actionId)) {
-            throw error;
-          }
-        }
-        if (!isAppServerActionFunction(loadedAction)) {
-          getAndClearActionRevalidationKind();
-          return createServerActionErrorResponse(new Error(getServerActionNotFoundMessage(null)), {
-            cleanPathname: options.cleanPathname,
-            clearRequestContext: options.clearRequestContext,
-            getAndClearPendingCookies: options.getAndClearPendingCookies,
-            reportRequestError: options.reportRequestError,
-            request: options.request,
-          });
-        }
+
+    // Match Next.js' areAllActionIdsValid preflight: membership checks do not
+    // import or evaluate action modules. Validate every marker, then remove
+    // unselected markers before handing the body to React. React preserves
+    // the last distinct marker, but otherwise starts a module load for every
+    // marker it sees; narrowing the decoder input prevents one request from
+    // amplifying imports while retaining its selected action and form fields.
+    for (const actionId of preflight.actionIds) {
+      if (!(await options.hasServerAction(actionId))) {
+        return createInvalidProgressiveActionResult(options);
+      }
+    }
+    for (const key of preflight.markerKeys) {
+      if (key !== preflight.selectedMarkerKey) {
+        body.delete(key);
       }
     }
 
     const action = await options.decodeAction(body);
     if (!isAppServerActionFunction(action)) {
-      // A multipart POST to a *page* is always a server-action attempt; a body
-      // that decodes to no action means the referenced action doesn't exist
-      // (e.g. the build has no server actions). Mirror Next.js' 404 +
-      // action-not-found rather than rendering the page. Route handlers and
-      // unmatched routes have already bypassed this handler above. See issue
-      // #1340.
-      return createActionNotFoundResponse(null, {
-        clearRequestContext: options.clearRequestContext,
-        getAndClearPendingCookies: options.getAndClearPendingCookies,
-      });
+      return createInvalidProgressiveActionResult(options);
     }
 
     let actionRedirect: AppServerActionRedirect | null = null;
@@ -1094,10 +1125,7 @@ export async function handleProgressiveServerActionRequest(
     });
   } catch (error) {
     if (isServerActionNotFoundError(error, null)) {
-      return createActionNotFoundResponse(null, {
-        clearRequestContext: options.clearRequestContext,
-        getAndClearPendingCookies: options.getAndClearPendingCookies,
-      });
+      return createInvalidProgressiveActionResult(options);
     }
 
     getAndClearActionRevalidationKind();
