@@ -22,6 +22,7 @@ import type { LayoutClassificationOptions } from "../packages/vinext/src/server/
 import { createClientReuseManifestHeaderFromVisibleAppState } from "../packages/vinext/src/server/app-browser-client-reuse-manifest.js";
 import { createAppLayoutParamAccessTracker } from "../packages/vinext/src/server/app-layout-param-observation.js";
 import { renderAppPageLifecycle } from "../packages/vinext/src/server/app-page-render.js";
+import { isrSet as persistIsrEntry } from "../packages/vinext/src/server/isr-cache.js";
 import {
   parseClientReuseManifestHeader,
   type ClientReuseManifestParseResult,
@@ -35,6 +36,8 @@ import type { CachedAppPageValue } from "../packages/vinext/src/shims/cache.js";
 import {
   DefaultCdnCacheAdapter,
   setCdnCacheAdapter,
+  type CdnCacheAdapter,
+  type CdnCacheableHeaderInput,
 } from "../packages/vinext/src/shims/cdn-cache.js";
 import { markDynamicUsage } from "../packages/vinext/src/shims/headers.js";
 import {
@@ -69,6 +72,29 @@ function createDeferred<T = void>() {
     reject = promiseReject;
   });
   return { promise, reject, resolve };
+}
+
+class HybridCdnCacheAdapter implements CdnCacheAdapter {
+  readonly pageCacheMode = "hybrid";
+  readonly ownsBackgroundRevalidation = false;
+  readonly writes: Array<Parameters<CdnCacheAdapter["set"]>> = [];
+
+  async get() {
+    return null;
+  }
+
+  async set(...args: Parameters<CdnCacheAdapter["set"]>) {
+    this.writes.push(args);
+  }
+
+  buildResponseHeaders(input: CdnCacheableHeaderInput) {
+    if (input.pendingDynamicCheck || !input.cacheControl) {
+      return { "Cache-Control": "no-store", "CDN-Cache-Control": null };
+    }
+    return { "Cache-Control": "no-store", "CDN-Cache-Control": input.cacheControl };
+  }
+
+  async revalidateTag() {}
 }
 
 function createCommonOptions() {
@@ -813,6 +839,38 @@ describe("app page render lifecycle", () => {
       ["_N_T_/posts/post"],
       undefined,
     );
+  });
+
+  it("retains origin writes for a hybrid edge adapter that does not own revalidation", async () => {
+    const hybrid = new HybridCdnCacheAdapter();
+    setCdnCacheAdapter(hybrid);
+    const common = createCommonOptions();
+
+    try {
+      const response = await renderAppPageLifecycle({
+        ...common.options,
+        isProduction: true,
+        isrSet: persistIsrEntry,
+        revalidateSeconds: 30,
+      });
+
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("cdn-cache-control")).toBe("s-maxage=30, stale-while-revalidate");
+      await expect(response.text()).resolves.toBe("<html>page</html>");
+
+      expect(common.waitUntilPromises).toHaveLength(1);
+      await Promise.all(common.waitUntilPromises);
+      expect(hybrid.writes).toHaveLength(2);
+      expect(hybrid.writes.map(([key]) => key)).toEqual(["html:/posts/post", "rsc:/posts/post"]);
+      expect(hybrid.writes[0]?.[1]).toEqual(expect.objectContaining({ kind: "APP_PAGE" }));
+      expect(hybrid.writes[0]?.[2]).toEqual({
+        cacheControl: { revalidate: 30 },
+        revalidate: 30,
+        tags: ["_N_T_/posts/post"],
+      });
+    } finally {
+      setCdnCacheAdapter(new DefaultCdnCacheAdapter());
+    }
   });
 
   it("does not wait for cacheLife-only RSC capture before returning production HTML responses", async () => {

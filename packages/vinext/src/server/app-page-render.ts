@@ -765,18 +765,23 @@ export async function renderAppPageLifecycle(
     !options.isDraftMode &&
     !options.isForceDynamic &&
     !shouldBypassRscCacheForSkipTransport;
-  const isCdnManagedRuntime =
+  const cdnCacheAdapter = getCdnCacheAdapter();
+  const usesResponseEdgeCache =
     options.isProduction &&
     options.isPrerender !== true &&
-    !getCdnCacheAdapter().ownsBackgroundRevalidation;
+    cdnCacheAdapter.pageCacheMode !== "origin";
+  const skipOriginCacheWrite =
+    options.isProduction &&
+    options.isPrerender !== true &&
+    cdnCacheAdapter.pageCacheMode === "edge";
   const shouldCompleteDynamicUsageBeforeResponse =
-    isCdnManagedRuntime &&
+    usesResponseEdgeCache &&
     options.isProgressiveActionRender !== true &&
     (revalidateSeconds === null || revalidateSeconds > 0) &&
     !options.isDraftMode &&
     !options.isForceDynamic &&
     !shouldBypassRscCacheForSkipTransport;
-  const shouldCaptureRscBytes = shouldCaptureRscForCacheMetadata && !isCdnManagedRuntime;
+  const shouldCaptureRscBytes = shouldCaptureRscForCacheMetadata && !skipOriginCacheWrite;
   const createBufferedRscStream = (close: boolean): ReadableStream<Uint8Array> =>
     new ReadableStream<Uint8Array>({
       start(controller) {
@@ -925,14 +930,14 @@ export async function renderAppPageLifecycle(
       omitPendingDynamicCacheState: options.omitPendingDynamicCacheState,
       renderMode: options.renderMode,
       preserveClientResponseHeaders:
-        !isCdnManagedRuntime && rscResponsePolicy.cacheState !== "MISS",
+        !usesResponseEdgeCache && rscResponsePolicy.cacheState !== "MISS",
       expireSeconds,
       revalidateSeconds: resolveAppPageCacheWriteRevalidateSeconds({
         isDynamicError: options.isDynamicError,
         isForceStatic: options.isForceStatic,
         revalidateSeconds,
       }),
-      skipCacheWrite: isCdnManagedRuntime,
+      skipCacheWrite: skipOriginCacheWrite,
       waitUntil(promise) {
         options.waitUntil?.(promise);
       },
@@ -1236,7 +1241,7 @@ export async function renderAppPageLifecycle(
         isForceStatic: options.isForceStatic,
         revalidateSeconds,
       }),
-      skipCacheWrite: isCdnManagedRuntime,
+      skipCacheWrite: skipOriginCacheWrite,
       waitUntil(cachePromise) {
         options.waitUntil?.(cachePromise);
       },

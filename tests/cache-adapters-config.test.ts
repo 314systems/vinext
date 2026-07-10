@@ -281,6 +281,7 @@ describe("cdnAdapter builder + factory", () => {
   it("factory returns a CloudflareCdnCacheAdapter", () => {
     const adapter = createCloudflareCdnCacheAdapter();
     expect(adapter).toBeInstanceOf(CloudflareCdnCacheAdapter);
+    expect(adapter.pageCacheMode).toBe("edge");
     // Edge adapter does not own in-process background regeneration.
     expect(adapter.ownsBackgroundRevalidation).toBe(false);
   });

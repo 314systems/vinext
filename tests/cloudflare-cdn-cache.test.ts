@@ -32,6 +32,7 @@ describe("CloudflareCdnCacheAdapter", () => {
   const adapter = new CloudflareCdnCacheAdapter();
 
   it("does not own background revalidation (the edge re-requests origin)", () => {
+    expect(adapter.pageCacheMode).toBe("edge");
     expect(adapter.ownsBackgroundRevalidation).toBe(false);
   });
 

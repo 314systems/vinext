@@ -121,6 +121,9 @@ function formatCacheTag(tags: readonly string[]): string | null {
 }
 
 export class CloudflareCdnCacheAdapter implements CdnCacheAdapter {
+  // Response headers delegate page persistence entirely to Cloudflare's edge;
+  // the origin does not need to capture or write a duplicate artifact.
+  readonly pageCacheMode = "edge";
   // The Cloudflare edge revalidates by re-requesting the origin (UPDATING),
   // so the origin must not also run in-process background regeneration.
   readonly ownsBackgroundRevalidation = false;

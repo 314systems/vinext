@@ -88,6 +88,7 @@ describe("applyCdnResponseHeaders", () => {
   it("routes through the active adapter (edge: CDN-Cache-Control + Cache-Tag) and clears stale headers", () => {
     // Minimal edge adapter that splits headers and emits a tag header.
     const edge: CdnCacheAdapter = {
+      pageCacheMode: "edge",
       ownsBackgroundRevalidation: false,
       async get() {
         return null;
@@ -114,6 +115,7 @@ describe("applyCdnResponseHeaders", () => {
 
   it("applies adapter-owned header removals", () => {
     const edge: CdnCacheAdapter = {
+      pageCacheMode: "edge",
       ownsBackgroundRevalidation: false,
       async get() {
         return null;

@@ -34,6 +34,18 @@ import {
 /** A map of response header name -> value the adapter wants applied or removed. */
 export type CdnResponseHeaders = Record<string, string | null>;
 
+/**
+ * Where freshly rendered page responses are persisted.
+ *
+ * - `origin`: `set()` persists the response and no response-edge cache owns it.
+ * - `edge`: response headers delegate persistence entirely to the edge; the
+ *   framework may skip origin artifact capture and `set()` calls.
+ * - `hybrid`: an edge response cache is active, but `set()` also persists an
+ *   origin copy. The framework must verify response headers before sending and
+ *   must retain the origin write path.
+ */
+export type CdnPageCacheMode = "origin" | "edge" | "hybrid";
+
 export type CdnCacheableHeaderInput = {
   /**
    * The cacheable `Cache-Control` value the framework computed for shared
@@ -66,9 +78,16 @@ export type CdnCacheableHeaderInput = {
  */
 // Method names mirror the data cache adapter (`CacheHandler` in `./cache.ts`:
 // `get` / `set` / `revalidateTag`) so the two adapters read consistently.
-// `buildResponseHeaders` / `ownsBackgroundRevalidation` have no data-cache
-// equivalent and stay CDN-specific.
+// `buildResponseHeaders` / `pageCacheMode` / `ownsBackgroundRevalidation` have
+// no data-cache equivalent and stay CDN-specific.
 export type CdnCacheAdapter = {
+  /**
+   * Declares whether response persistence is origin-owned, edge-owned, or
+   * intentionally duplicated. This is independent of background regeneration:
+   * a hybrid adapter may let the edge revalidate while retaining origin writes.
+   */
+  readonly pageCacheMode: CdnPageCacheMode;
+
   /**
    * Read a page-level artifact. Returning a value lets the origin serve it
    * (HIT/STALE); returning `null` makes the origin render fresh.
@@ -125,6 +144,7 @@ const PENDING_DYNAMIC_CACHE_CONTROL = "no-store, must-revalidate";
  * framework's standard `Cache-Control` headers.
  */
 export class DefaultCdnCacheAdapter implements CdnCacheAdapter {
+  readonly pageCacheMode = "origin";
   readonly ownsBackgroundRevalidation = true;
 
   async get(key: string, ctx?: Record<string, unknown>): Promise<CacheHandlerValue | null> {
