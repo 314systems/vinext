@@ -574,6 +574,15 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     (!isPrerender || options.pprFallbackShell !== undefined) && serveStreamingMetadata;
   const isPrefetchDynamicShell = options.renderMode === APP_RSC_RENDER_MODE_PREFETCH_DYNAMIC_SHELL;
   const isDraftMode = isDraftModeRequest(options.request, options.draftModeSecret);
+  const shouldBailoutClientSearchParams =
+    isDynamicError ||
+    (options.isProduction &&
+      !isForceDynamic &&
+      !isDraftMode &&
+      options.isProgressiveActionRender !== true &&
+      !options.scriptNonce &&
+      (isPrerender ||
+        (currentRevalidateSeconds !== null && currentRevalidateSeconds > 0)));
   const requestHeadersContext = getHeadersContext();
   const shouldUseEmptySearchParams = isForceStatic || isPrefetchDynamicShell;
   const hasRequestSearchParams =
@@ -985,7 +994,11 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     pathname: options.displayPathname ?? options.cleanPathname,
     searchParams: pageSearchParams,
     params: navigationParams,
-    searchParamsAccessMode: isForceStatic ? "force-static" : isDynamicError ? "error" : "dynamic",
+    searchParamsAccessMode: isForceStatic
+      ? "force-static"
+      : shouldBailoutClientSearchParams
+        ? "bailout"
+        : "dynamic",
   });
 
   const layoutClassifications = getEffectiveLayoutClassifications(

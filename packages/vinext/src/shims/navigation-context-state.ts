@@ -19,7 +19,7 @@ export type NavigationContext = {
   pathname: string;
   searchParams: URLSearchParams;
   params: Record<string, string | string[]>;
-  searchParamsAccessMode?: "dynamic" | "error" | "force-static";
+  searchParamsAccessMode?: "dynamic" | "bailout" | "force-static";
   /** Set only while serializing useServerInsertedHTML callback results. */
   isRenderingServerInsertedHTML?: boolean;
   /**

@@ -1652,7 +1652,7 @@ export function useSearchParams(): ReadonlyURLSearchParams {
     markPprFallbackShellDynamicBoundary();
     const navigationContext = getNavigationContext();
     if (
-      navigationContext?.searchParamsAccessMode === "error" &&
+      navigationContext?.searchParamsAccessMode === "bailout" &&
       navigationContext.isRenderingServerInsertedHTML !== true
     ) {
       // Next.js turns Client Component useSearchParams() into a CSR bailout

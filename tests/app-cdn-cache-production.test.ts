@@ -133,7 +133,7 @@ describe("App Router production responses with a CDN-managed cache", () => {
     expect(first.headers.get("cache-control")).toMatch(/no-store/);
   });
 
-  it("does not edge-cache query-specific ISR HTML", async () => {
+  it("edge-caches the Suspense bailout for ISR client search params", async () => {
     const edge = createWorkersLikeEdge(handler);
     const pathname = `/query-isr/query-${Date.now()}`;
 
@@ -141,15 +141,15 @@ describe("App Router production responses with a CDN-managed cache", () => {
       new Request(`https://example.com${pathname}?q=EDGE_ATTACKER_PAYLOAD`),
     );
     const attackerHtml = await attacker.text();
-    expect(attackerHtml).toContain("EDGE_ATTACKER_PAYLOAD");
-    expect(attacker.headers.get("cdn-cache-control")).toBeNull();
-    expect(attacker.headers.get("cache-control")).toMatch(/no-store/);
+    expect(attackerHtml).toContain('id="query-loading"');
+    expect(attackerHtml).not.toContain("EDGE_ATTACKER_PAYLOAD");
+    expect(attacker.headers.get("cdn-cache-control")).toMatch(/public, max-age=60/);
 
     const victim = await edge.fetch(new Request(`https://example.com${pathname}`));
     const victimHtml = await victim.text();
-    expect(victimHtml).toContain("query:<!-- -->none");
+    expect(victimHtml).toBe(attackerHtml);
     expect(victimHtml).not.toContain("EDGE_ATTACKER_PAYLOAD");
-    expect(edge.originRequests).toBe(2);
+    expect(edge.originRequests).toBe(1);
   });
 
   it("observes query access while serializing server-inserted HTML", async () => {

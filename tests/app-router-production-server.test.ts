@@ -1615,28 +1615,30 @@ describe("App Router Production server (startProdServer)", () => {
   // boundary rather than caching request-specific HTML.
   // Ported from Next.js: test/e2e/app-dir/app-static/app-static.test.ts
   // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/app-static/app-static.test.ts
-  it("does not share client useSearchParams HTML between ISR requests", async () => {
+  it("caches client useSearchParams behind its ISR Suspense boundary", async () => {
     const slug = `query-poison-${Date.now()}`;
     const pathname = `/isr-client-search-poison/${slug}`;
 
     const attackerRes = await fetch(`${baseUrl}${pathname}?q=ATTACKER_PAYLOAD`);
     expect(attackerRes.status).toBe(200);
     const attackerHtml = await attackerRes.text();
-    expect(attackerHtml).toContain("ATTACKER_PAYLOAD");
+    expect(attackerHtml).toContain("loading");
+    expect(attackerHtml).not.toContain("ATTACKER_PAYLOAD");
 
     await new Promise((resolve) => setTimeout(resolve, 100));
 
     const victimRes = await fetch(`${baseUrl}${pathname}`);
     const victimHtml = await victimRes.text();
-    expect(victimRes.headers.get("x-vinext-cache")).not.toBe("HIT");
+    expect(victimRes.headers.get("x-vinext-cache")).toBe("HIT");
     expect(victimHtml).not.toContain("ATTACKER_PAYLOAD");
-    expect(victimHtml).toContain("Search query: <!-- -->none");
+    expect(victimHtml).toContain("loading");
 
     const otherVictimRes = await fetch(`${baseUrl}${pathname}?q=INNOCENT_PAYLOAD`);
     const otherVictimHtml = await otherVictimRes.text();
-    expect(otherVictimRes.headers.get("x-vinext-cache")).not.toBe("HIT");
+    expect(otherVictimRes.headers.get("x-vinext-cache")).toBe("HIT");
     expect(otherVictimHtml).not.toContain("ATTACKER_PAYLOAD");
-    expect(otherVictimHtml).toContain("INNOCENT_PAYLOAD");
+    expect(otherVictimHtml).toContain("loading");
+    expect(otherVictimHtml).not.toContain("INNOCENT_PAYLOAD");
   });
 
   it("keeps force-static client search params out of reusable ISR HTML", async () => {
