@@ -305,6 +305,8 @@ describe("registration is wired into the router/runtime entries", () => {
         imageSizes: [16, 32],
         qualities: [75, 90],
         formats: ["image/avif", "image/webp"],
+        unoptimized: true,
+        loader: "custom",
         dangerouslyAllowSVG: true,
       },
     });
@@ -315,6 +317,8 @@ describe("registration is wired into the router/runtime entries", () => {
     expect(code).toContain('"dangerouslyAllowSVG":true');
     expect(code).toContain('"qualities":[75,90]');
     expect(code).toContain('"formats":["image/avif","image/webp"]');
+    expect(code).toContain('"unoptimized":true');
+    expect(code).toContain('"loader":"custom"');
   });
 
   it("App Router RSC entry falls back to Next.js default widths when images is unset", () => {

@@ -1676,6 +1676,8 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
     minimumCacheTTL: vinextConfig?.images?.minimumCacheTTL,
     qualities: vinextConfig?.images?.qualities,
     formats: vinextConfig?.images?.formats,
+    unoptimized: vinextConfig?.images?.unoptimized,
+    loader: vinextConfig?.images?.loader,
     contentDispositionType: vinextConfig?.images?.contentDispositionType,
     contentSecurityPolicy: vinextConfig?.images?.contentSecurityPolicy,
   };

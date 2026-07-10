@@ -3631,6 +3631,8 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                   imageSizes: nextConfig?.images?.imageSizes,
                   qualities: nextConfig?.images?.qualities,
                   formats: nextConfig?.images?.formats,
+                  unoptimized: nextConfig?.images?.unoptimized,
+                  loader: nextConfig?.images?.loader,
                   dangerouslyAllowSVG: nextConfig?.images?.dangerouslyAllowSVG,
                   dangerouslyAllowLocalIP: nextConfig?.images?.dangerouslyAllowLocalIP,
                   maximumResponseBody: nextConfig?.images?.maximumResponseBody,

@@ -21162,6 +21162,89 @@ describe("isSafeImageContentType", () => {
 
 describe("handleImageOptimization", () => {
   const jpegBytes = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
+
+  // Minimal byte streams shaped like the fixtures covered by Next.js:
+  // test/integration/image-optimizer/test/util.ts.
+  const animatedGifBytes = new Uint8Array([
+    0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x2c, 0x00, 0x00,
+    0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x00, 0x2c, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
+    0x01, 0x00, 0x00, 0x02, 0x00, 0x3b,
+  ]);
+  const pngChunk = (name: string, data: number[] = []) =>
+    new Uint8Array([
+      0x00,
+      0x00,
+      0x00,
+      data.length,
+      ...name.split("").map((character) => character.charCodeAt(0)),
+      ...data,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+    ]);
+  const animatedPngBytes = new Uint8Array([
+    0x89,
+    0x50,
+    0x4e,
+    0x47,
+    0x0d,
+    0x0a,
+    0x1a,
+    0x0a,
+    ...pngChunk("acTL", [0, 0, 0, 2, 0, 0, 0, 0]),
+    ...pngChunk("fcTL"),
+    ...pngChunk("IDAT"),
+    ...pngChunk("fcTL"),
+    ...pngChunk("fdAT", [0, 0, 0, 1]),
+  ]);
+  const animatedWebpBytes = new Uint8Array([
+    0x52, 0x49, 0x46, 0x46, 0x0c, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50, 0x41, 0x4e, 0x49, 0x4d,
+    0x00, 0x00, 0x00, 0x00,
+  ]);
+
+  // Ported from Next.js: test/integration/image-optimizer/test/index.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/integration/image-optimizer/test/index.test.ts
+  it.each([{ unoptimized: true }, { loader: "cloudinary" as const }])(
+    "returns 404 before parameter validation when the endpoint is disabled: %j",
+    async (imageConfig) => {
+      const { handleImageOptimization } =
+        await import("../packages/vinext/src/server/image-optimization.js");
+      const fetchAsset = vi.fn();
+      const response = await handleImageOptimization(
+        new Request("http://localhost/_next/image"),
+        { fetchAsset },
+        undefined,
+        imageConfig,
+      );
+      expect(response.status).toBe(404);
+      expect(fetchAsset).not.toHaveBeenCalled();
+    },
+  );
+
+  // Ported from Next.js: test/integration/image-optimizer/test/util.ts
+  // https://github.com/vercel/next.js/blob/canary/test/integration/image-optimizer/test/util.ts
+  it.each([
+    ["GIF", "image/gif", animatedGifBytes],
+    ["APNG", "image/png", animatedPngBytes],
+    ["WebP", "image/webp", animatedWebpBytes],
+  ])("returns animated %s originals without transforming", async (_name, contentType, bytes) => {
+    const { handleImageOptimization } =
+      await import("../packages/vinext/src/server/image-optimization.js");
+    const transformImage = vi.fn(
+      async () => new Response("transformed", { headers: { "Content-Type": "image/webp" } }),
+    );
+    const response = await handleImageOptimization(
+      new Request("http://localhost/_next/image?url=%2Fanimated&w=640&q=75"),
+      {
+        fetchAsset: async () => new Response(bytes, { headers: { "Content-Type": contentType } }),
+        transformImage,
+      },
+    );
+    expect(response.status).toBe(200);
+    expect(transformImage).not.toHaveBeenCalled();
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
+  });
   const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   it("returns 400 for invalid params", async () => {
     const { handleImageOptimization } =
@@ -21732,33 +21815,67 @@ describe("handleImageOptimization", () => {
     expect(fetchCount).toBe(2);
   });
 
-  it("bounds 300 distinct concurrent generations by owner and pending-byte reservations", async () => {
+  it("bounds active and queued generations without serializing the default budget", async () => {
     const { handleImageOptimization } =
       await import("../packages/vinext/src/server/image-optimization.js");
     let active = 0;
     let maxActive = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     const handlers = {
       cacheOwner: {},
       async fetchAsset() {
         active += 1;
         maxActive = Math.max(maxActive, active);
-        await Promise.resolve();
+        await gate;
         active -= 1;
         return new Response(jpegBytes, { headers: { "Cache-Control": "max-age=60" } });
       },
     };
-    const responses = await Promise.all(
-      Array.from({ length: 300 }, (_, index) =>
-        handleImageOptimization(
-          new Request(`http://localhost/_next/image?url=%2Funique-${index}.jpg&w=640&q=75`),
-          handlers,
-        ),
+    const pending = Array.from({ length: 300 }, (_, index) =>
+      handleImageOptimization(
+        new Request(`http://localhost/_next/image?url=%2Funique-${index}.jpg&w=640&q=75`),
+        handlers,
       ),
     );
-    expect(responses.every((response) => response.status === 200)).toBe(true);
-    // The default 50 MB source allowance consumes nearly the full 64 MiB
-    // pending budget, so near-limit misses are serialized.
-    expect(maxActive).toBe(1);
+    await vi.waitFor(() => expect(active).toBe(2));
+    release();
+    const responses = await Promise.all(pending);
+    expect(responses.filter((response) => response.status === 200)).toHaveLength(34);
+    expect(responses.filter((response) => response.status === 503)).toHaveLength(266);
+    expect(maxActive).toBe(2);
+  });
+
+  it("removes aborted queued generations without consuming a later slot", async () => {
+    const { handleImageOptimization } =
+      await import("../packages/vinext/src/server/image-optimization.js");
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let fetchCount = 0;
+    const handlers = {
+      cacheOwner: {},
+      async fetchAsset() {
+        fetchCount += 1;
+        if (fetchCount <= 2) await gate;
+        return new Response(jpegBytes, { headers: { "Cache-Control": "max-age=60" } });
+      },
+    };
+    const request = (name: string, signal?: AbortSignal) =>
+      new Request(`http://localhost/_next/image?url=%2F${name}.jpg&w=640&q=75`, { signal });
+    const first = handleImageOptimization(request("first"), handlers);
+    const second = handleImageOptimization(request("second"), handlers);
+    const controller = new AbortController();
+    const aborted = handleImageOptimization(request("aborted", controller.signal), handlers);
+    controller.abort();
+    await expect(aborted).rejects.toMatchObject({ name: "AbortError" });
+    release();
+    await Promise.all([first, second]);
+    expect((await handleImageOptimization(request("later"), handlers)).status).toBe(200);
+    expect(fetchCount).toBe(3);
   });
 
   it("shares one immutable body backing across large concurrent cache hits", async () => {

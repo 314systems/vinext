@@ -17,7 +17,7 @@
  * as-is (no transformation) with security headers applied.
  */
 
-import { badRequestResponse } from "./http-error-responses.js";
+import { badRequestResponse, notFoundResponse } from "./http-error-responses.js";
 import { stripBasePath } from "../utils/base-path.js";
 
 /** The pathname that triggers image optimization (matches Next.js). */
@@ -65,6 +65,10 @@ export type ImageConfig = {
   qualities?: number[];
   /** Negotiated output formats. Defaults to Next.js 16's WebP-only list. */
   formats?: Array<"image/avif" | "image/webp">;
+  /** Disable the Image Optimization API. Default: false. */
+  unoptimized?: boolean;
+  /** Built-in image loader. Only the default loader exposes the optimization API. */
+  loader?: "default" | "custom" | "akamai" | "cloudinary" | "imgix";
   /** Allow SVG through the image optimization endpoint. Default: false. */
   dangerouslyAllowSVG?: boolean;
   /**
@@ -624,10 +628,17 @@ type CachedImageResponse = {
 type ImageResponseCache = {
   entries: Map<string, CachedImageResponse>;
   pending: Map<string, Promise<GeneratedImageResponse>>;
-  generationQueue: Array<() => void>;
+  generationQueue: Set<ImageGenerationWaiter>;
   activeGenerations: number;
-  pendingBodyBytes: number;
   totalBodyBytes: number;
+};
+
+type ImageGenerationWaiter = {
+  reject: (error: Error) => void;
+  resolve: () => void;
+  signal: AbortSignal;
+  timeout: ReturnType<typeof setTimeout>;
+  onAbort: () => void;
 };
 
 type BufferedImageResponse = {
@@ -651,7 +662,15 @@ const MAX_IMAGE_RESPONSE_CACHE_BYTES = 8 * 1024 * 1024;
 const MAX_IMAGE_RESPONSE_ENTRY_BYTES = 4 * 1024 * 1024;
 const MAX_IMAGE_RESPONSE_CACHE_ENTRIES = 256;
 const MAX_IMAGE_GENERATIONS = 2;
-const MAX_PENDING_IMAGE_BODY_BYTES = 64 * 1024 * 1024;
+const MAX_QUEUED_IMAGE_GENERATIONS = 32;
+const IMAGE_GENERATION_QUEUE_TIMEOUT_MS = 5_000;
+
+class ImageGenerationQueueError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ImageGenerationQueueError";
+  }
+}
 
 function getImageResponseCache(owner: object): ImageResponseCache {
   let cache = IMAGE_RESPONSE_CACHES.get(owner);
@@ -659,9 +678,8 @@ function getImageResponseCache(owner: object): ImageResponseCache {
     cache = {
       entries: new Map(),
       pending: new Map(),
-      generationQueue: [],
+      generationQueue: new Set(),
       activeGenerations: 0,
-      pendingBodyBytes: 0,
       totalBodyBytes: 0,
     };
     IMAGE_RESPONSE_CACHES.set(owner, cache);
@@ -828,42 +846,175 @@ async function generateCachedImageResponse(
   };
 }
 
-function generationReservation(imageConfig: ImageConfig | undefined): number {
-  const configured = imageConfig?.maximumResponseBody ?? 50_000_000;
-  const bounded = Number.isFinite(configured) && configured >= 0 ? configured : 50_000_000;
-  return Math.min(bounded, MAX_PENDING_IMAGE_BODY_BYTES);
+function startQueuedImageGenerations(cache: ImageResponseCache): void {
+  while (cache.activeGenerations < MAX_IMAGE_GENERATIONS && cache.generationQueue.size > 0) {
+    const waiter = cache.generationQueue.values().next().value as ImageGenerationWaiter | undefined;
+    if (!waiter) return;
+    cache.generationQueue.delete(waiter);
+    clearTimeout(waiter.timeout);
+    waiter.signal.removeEventListener("abort", waiter.onAbort);
+    cache.activeGenerations += 1;
+    waiter.resolve();
+  }
 }
 
 async function runImageGeneration<T>(
   cache: ImageResponseCache,
-  reservedBytes: number,
+  signal: AbortSignal,
   generate: () => Promise<T>,
 ): Promise<T> {
-  await new Promise<void>((resolve) => {
-    const start = () => {
-      const hasGenerationSlot = cache.activeGenerations < MAX_IMAGE_GENERATIONS;
-      const hasByteCapacity =
-        cache.activeGenerations === 0 ||
-        cache.pendingBodyBytes + reservedBytes <= MAX_PENDING_IMAGE_BODY_BYTES;
-      if (!hasGenerationSlot || !hasByteCapacity) {
-        cache.generationQueue.push(start);
-        return;
-      }
-      cache.activeGenerations += 1;
-      cache.pendingBodyBytes += reservedBytes;
-      resolve();
-    };
-    start();
-  });
+  if (signal.aborted) throw new DOMException("The request was aborted", "AbortError");
+
+  if (cache.activeGenerations < MAX_IMAGE_GENERATIONS) {
+    cache.activeGenerations += 1;
+  } else {
+    if (cache.generationQueue.size >= MAX_QUEUED_IMAGE_GENERATIONS) {
+      throw new ImageGenerationQueueError("The image generation queue is full");
+    }
+    await new Promise<void>((resolve, reject) => {
+      const rejectWaiter = (error: Error) => {
+        cache.generationQueue.delete(waiter);
+        clearTimeout(waiter.timeout);
+        signal.removeEventListener("abort", waiter.onAbort);
+        reject(error);
+      };
+      const waiter = {} as ImageGenerationWaiter;
+      waiter.resolve = resolve;
+      waiter.reject = reject;
+      waiter.signal = signal;
+      waiter.onAbort = () =>
+        rejectWaiter(new DOMException("The request was aborted", "AbortError"));
+      waiter.timeout = setTimeout(
+        () => rejectWaiter(new ImageGenerationQueueError("Timed out waiting to optimize image")),
+        IMAGE_GENERATION_QUEUE_TIMEOUT_MS,
+      );
+      cache.generationQueue.add(waiter);
+      signal.addEventListener("abort", waiter.onAbort, { once: true });
+      if (signal.aborted) waiter.onAbort();
+    });
+  }
 
   try {
     return await generate();
   } finally {
     cache.activeGenerations -= 1;
-    cache.pendingBodyBytes -= reservedBytes;
-    const queued = cache.generationQueue.splice(0);
-    for (const resume of queued) resume();
+    startQueuedImageGenerations(cache);
   }
+}
+
+function readUint32BigEndian(bytes: Uint8Array, offset: number): number {
+  return (
+    bytes[offset] * 0x1000000 +
+    bytes[offset + 1] * 0x10000 +
+    bytes[offset + 2] * 0x100 +
+    bytes[offset + 3]
+  );
+}
+
+function isAnimatedGif(bytes: Uint8Array): boolean {
+  if (bytes.length < 13 || bytes[0] !== 0x47 || bytes[1] !== 0x49 || bytes[2] !== 0x46) {
+    return false;
+  }
+  let offset = 13;
+  if ((bytes[10] & 0x80) !== 0) offset += 3 * 2 ** ((bytes[10] & 0x07) + 1);
+  let frames = 0;
+  const skipSubBlocks = (start: number): number => {
+    let cursor = start;
+    while (cursor < bytes.length) {
+      const size = bytes[cursor++];
+      if (size === 0) return cursor;
+      cursor += size;
+    }
+    return bytes.length;
+  };
+  while (offset < bytes.length && frames < 2) {
+    if (bytes[offset] === 0x2c) {
+      if (offset + 10 > bytes.length) return false;
+      frames += 1;
+      const packed = bytes[offset + 9];
+      offset += 10;
+      if ((packed & 0x80) !== 0) offset += 3 * 2 ** ((packed & 0x07) + 1);
+      if (offset >= bytes.length) return false;
+      offset = skipSubBlocks(offset + 1);
+    } else if (bytes[offset] === 0x21) {
+      if (offset + 2 > bytes.length) return false;
+      offset = skipSubBlocks(offset + 2);
+    } else if (bytes[offset] === 0x3b) {
+      break;
+    } else {
+      return false;
+    }
+  }
+  return frames > 1;
+}
+
+function isAnimatedPng(bytes: Uint8Array): boolean {
+  const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  if (bytes.length < signature.length || signature.some((byte, index) => bytes[index] !== byte)) {
+    return false;
+  }
+  let hasAnimationControl = false;
+  let hasImageData = false;
+  let previousChunk = "";
+  for (let offset = 8; offset + 12 <= bytes.length; ) {
+    const length = readUint32BigEndian(bytes, offset);
+    const chunkEnd = offset + 12 + length;
+    if (!Number.isSafeInteger(chunkEnd) || chunkEnd > bytes.length) return false;
+    const chunk = String.fromCharCode(
+      bytes[offset + 4],
+      bytes[offset + 5],
+      bytes[offset + 6],
+      bytes[offset + 7],
+    );
+    if (chunk === "acTL") hasAnimationControl = true;
+    if (chunk === "IDAT") {
+      if (!hasAnimationControl || (previousChunk !== "fcTL" && previousChunk !== "IDAT")) {
+        return false;
+      }
+      hasImageData = true;
+    }
+    if (chunk === "fdAT") {
+      if (!hasImageData || (previousChunk !== "fcTL" && previousChunk !== "fdAT")) return false;
+      return true;
+    }
+    previousChunk = chunk;
+    offset = chunkEnd;
+  }
+  return false;
+}
+
+function isAnimatedWebp(bytes: Uint8Array): boolean {
+  if (
+    bytes.length < 12 ||
+    bytes[0] !== 0x52 ||
+    bytes[1] !== 0x49 ||
+    bytes[2] !== 0x46 ||
+    bytes[3] !== 0x46 ||
+    bytes[8] !== 0x57 ||
+    bytes[9] !== 0x45 ||
+    bytes[10] !== 0x42 ||
+    bytes[11] !== 0x50
+  ) {
+    return false;
+  }
+  for (let index = 12; index + 3 < bytes.length; index++) {
+    if (
+      bytes[index] === 0x41 &&
+      bytes[index + 1] === 0x4e &&
+      bytes[index + 2] === 0x49 &&
+      bytes[index + 3] === 0x4d
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isAnimatedImage(bytes: Uint8Array, contentType: string): boolean {
+  if (contentType === "image/gif") return isAnimatedGif(bytes);
+  if (contentType === "image/png") return isAnimatedPng(bytes);
+  if (contentType === "image/webp") return isAnimatedWebp(bytes);
+  return false;
 }
 
 /**
@@ -924,6 +1075,21 @@ async function renderImageOptimizationUncached(
   // SVG is only allowed when dangerouslyAllowSVG is explicitly enabled.
   if (!isSafeImageContentType(sourceContentType, imageConfig?.dangerouslyAllowSVG)) {
     return new Response("The requested resource is not an allowed image type", { status: 400 });
+  }
+
+  // Ported from Next.js: packages/next/src/server/image-optimizer.ts
+  // Animated GIF, APNG, and WebP sources retain every frame and bypass the
+  // configured transform backend.
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/image-optimizer.ts
+  if (isAnimatedImage(sourceBytes, sourceContentType)) {
+    return createPassthroughImageResponse(
+      source,
+      imageConfig,
+      request,
+      sourceContentType,
+      sourceIsStatic ? "public, max-age=315360000, immutable" : undefined,
+      imageUrl,
+    );
   }
 
   const bypassTypes = new Set([
@@ -1024,6 +1190,13 @@ export async function handleImageOptimization(
   allowedWidths: number[] = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES],
   imageConfig?: ImageConfig,
 ): Promise<Response> {
+  // Next.js does not expose the Image Optimization API when global
+  // unoptimized mode or a non-default loader is configured.
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/next-server.ts
+  if (imageConfig?.unoptimized === true || (imageConfig?.loader ?? "default") !== "default") {
+    return notFoundResponse();
+  }
+
   const requestUrl = new URL(request.url);
   const params = parseImageParams(
     requestUrl,
@@ -1061,7 +1234,7 @@ export async function handleImageOptimization(
   const regenerate = (): Promise<GeneratedImageResponse> => {
     const active = cache.pending.get(cacheKey);
     if (active) return active;
-    const pending = runImageGeneration(cache, generationReservation(imageConfig), () =>
+    const pending = runImageGeneration(cache, request.signal, () =>
       generateCachedImageResponse(request, handlers, allowedWidths, imageConfig),
     )
       .then((generated) => {
@@ -1094,7 +1267,18 @@ export async function handleImageOptimization(
     return serveCachedImageResponse(request, cached, "STALE");
   }
 
-  const generated = await regenerate();
+  let generated: GeneratedImageResponse;
+  try {
+    generated = await regenerate();
+  } catch (error) {
+    if (error instanceof ImageGenerationQueueError) {
+      return new Response("Image optimizer is busy", {
+        status: 503,
+        headers: { "Retry-After": "1" },
+      });
+    }
+    throw error;
+  }
   if (generated.entry) return serveCachedImageResponse(request, generated.entry, "MISS");
   return generated.response
     ? serveBufferedImageResponse(request, generated.response)

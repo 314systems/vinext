@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-const BASE = "http://localhost:4175";
+const BASE = "http://127.0.0.1:4175";
 const PROTECTED_IMAGE = "/protected/private.png";
 
 function optimizerUrl(source: string, quality = 75): string {
@@ -147,5 +147,24 @@ test.describe("Pages Router image request middleware ordering", () => {
       count: 0,
       method: "",
     });
+  });
+
+  // Ported from Next.js: test/integration/image-optimizer/test/util.ts
+  // https://github.com/vercel/next.js/blob/canary/test/integration/image-optimizer/test/util.ts
+  test("returns animated GIF, PNG, and WebP originals without transforming", async ({
+    request,
+  }) => {
+    for (const [kind, contentType, signature] of [
+      ["gif", "image/gif", [0x47, 0x49, 0x46]],
+      ["png", "image/png", [0x89, 0x50, 0x4e, 0x47]],
+      ["webp", "image/webp", [0x52, 0x49, 0x46, 0x46]],
+    ] as const) {
+      const response = await request.get(
+        optimizerUrl(`/image-test/source.png?animated=${kind}`, 90),
+      );
+      expect(response.status()).toBe(200);
+      expect(response.headers()["content-type"]).toContain(contentType);
+      expect([...(await response.body()).subarray(0, signature.length)]).toEqual(signature);
+    }
   });
 });

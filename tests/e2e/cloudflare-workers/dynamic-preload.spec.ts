@@ -216,6 +216,25 @@ test.describe("Cloudflare Workers dynamic preloads", () => {
       method: "GET",
     });
   });
+
+  // Ported from Next.js: test/integration/image-optimizer/test/util.ts
+  // https://github.com/vercel/next.js/blob/canary/test/integration/image-optimizer/test/util.ts
+  test("returns animated GIF, PNG, and WebP originals in a pure App Worker", async ({
+    request,
+  }) => {
+    for (const [kind, contentType, signature] of [
+      ["gif", "image/gif", [0x47, 0x49, 0x46]],
+      ["png", "image/png", [0x89, 0x50, 0x4e, 0x47]],
+      ["webp", "image/webp", [0x52, 0x49, 0x46, 0x46]],
+    ] as const) {
+      const response = await request.get(
+        optimizerUrl(`/image-test/source.png?animated=${kind}`, 90),
+      );
+      expect(response.status()).toBe(200);
+      expect(response.headers()["content-type"]).toContain(contentType);
+      expect([...(await response.body()).subarray(0, signature.length)]).toEqual(signature);
+    }
+  });
 });
 
 test.describe("Cloudflare App Worker image passthrough without an optimizer", () => {
@@ -259,5 +278,40 @@ test.describe("Cloudflare App Worker image passthrough without an optimizer", ()
     expect(second.status()).toBe(200);
     expect(second.headers()["x-nextjs-cache"]).toBe("HIT");
     expect(await second.body()).toEqual(await first.body());
+  });
+});
+
+// Ported from Next.js: test/integration/image-optimizer/test/index.test.ts
+// https://github.com/vercel/next.js/blob/canary/test/integration/image-optimizer/test/index.test.ts
+test.describe("Cloudflare App Worker with image optimization disabled", () => {
+  let unoptimizedServer: ChildProcess;
+  const unoptimizedBaseUrl = "http://localhost:4197";
+
+  test.beforeAll(async () => {
+    unoptimizedServer = spawn(
+      "created_node_modules=0; if ! test -e node_modules && ! test -L node_modules; then ln -s ../../../../examples/app-router-cloudflare/node_modules node_modules; created_node_modules=1; fi; trap 'if test \"$created_node_modules\" = 1; then rm node_modules; fi' EXIT; TEST_IMAGE_UNOPTIMIZED=1 npx vp build --config vite.no-optimizer.config.mjs && npx wrangler dev --config dist/server/wrangler.json --port 4197",
+      { cwd: FIXTURE_DIR, shell: true, stdio: "inherit" },
+    );
+    for (let attempt = 0; attempt < 120; attempt++) {
+      if (unoptimizedServer.exitCode !== null) {
+        throw new Error(`unoptimized App Worker exited with code ${unoptimizedServer.exitCode}`);
+      }
+      try {
+        if ((await fetch(`${unoptimizedBaseUrl}/dynamic-preload`)).ok) return;
+      } catch {}
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    throw new Error("Timed out waiting for unoptimized App Worker");
+  });
+
+  test.afterAll(() => unoptimizedServer.kill());
+
+  test("returns 404 from the image optimization endpoint", async ({ request }) => {
+    const url = new URL("/_next/image", unoptimizedBaseUrl);
+    url.searchParams.set("url", "/static/media/static-image.bmp");
+    url.searchParams.set("w", "32");
+    url.searchParams.set("q", "75");
+
+    expect((await request.get(url.toString())).status()).toBe(404);
   });
 });

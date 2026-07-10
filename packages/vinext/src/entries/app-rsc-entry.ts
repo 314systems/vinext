@@ -246,6 +246,8 @@ export function generateRscEntry(
     imageSizes: config?.imageConfig?.imageSizes,
     qualities: config?.imageConfig?.qualities,
     formats: config?.imageConfig?.formats,
+    unoptimized: config?.imageConfig?.unoptimized,
+    loader: config?.imageConfig?.loader,
     dangerouslyAllowSVG: config?.imageConfig?.dangerouslyAllowSVG,
     dangerouslyAllowLocalIP: config?.imageConfig?.dangerouslyAllowLocalIP,
     maximumResponseBody: config?.imageConfig?.maximumResponseBody,

@@ -210,6 +210,7 @@ export type NextConfig = {
     >;
     domains?: string[];
     unoptimized?: boolean;
+    loader?: "default" | "custom" | "akamai" | "cloudinary" | "imgix";
     /** Allowed device widths for image optimization. Defaults to Next.js defaults: [640, 750, 828, 1080, 1200, 1920, 2048, 3840] */
     deviceSizes?: number[];
     /** Allowed image sizes for fixed-width images. Defaults to Next.js 16 defaults: [32, 48, 64, 96, 128, 256, 384] */

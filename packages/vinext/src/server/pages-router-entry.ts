@@ -83,6 +83,8 @@ const imageConfig: ImageConfig = {
   basePath,
   qualities: vinextConfig?.images?.qualities,
   formats: vinextConfig?.images?.formats,
+  unoptimized: vinextConfig?.images?.unoptimized,
+  loader: vinextConfig?.images?.loader,
   dangerouslyAllowSVG: vinextConfig?.images?.dangerouslyAllowSVG,
   dangerouslyAllowLocalIP: vinextConfig?.images?.dangerouslyAllowLocalIP,
   maximumResponseBody: vinextConfig?.images?.maximumResponseBody,

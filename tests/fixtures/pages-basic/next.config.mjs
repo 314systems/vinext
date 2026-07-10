@@ -8,6 +8,7 @@ const nextConfig = {
   images: {
     maximumResponseBody: 100,
     minimumCacheTTL: 123,
+    qualities: [75, 90],
   },
   async redirects() {
     return [

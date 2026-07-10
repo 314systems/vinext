@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { animatedImageSources } from "../app-basic/image-test-animated-sources";
 
 let imageSourceDispatchCount = 0;
 let imageSourceMethod = "";
@@ -35,17 +36,23 @@ export function middleware(request: NextRequest) {
         headers: { "content-type": "image/png" },
       });
     }
-    const body = url.searchParams.has("oversize")
-      ? new Uint8Array([...imageBytes, ...new Uint8Array(64)])
-      : imageBytes;
+    const animated = url.searchParams.get("animated") as keyof typeof animatedImageSources | null;
+    const animatedSource = animated ? animatedImageSources[animated] : undefined;
+    const body = animatedSource
+      ? animatedSource.bytes
+      : url.searchParams.has("oversize")
+        ? new Uint8Array([...imageBytes, ...new Uint8Array(64)])
+        : imageBytes;
     return new Response(body, {
       status: 200,
       headers: {
         "cache-control": "public, max-age=200",
         etag: '"middleware-source"',
-        "content-type": url.searchParams.has("wrong-type")
-          ? "text/html"
-          : "application/octet-stream",
+        "content-type": animatedSource
+          ? animatedSource.contentType
+          : url.searchParams.has("wrong-type")
+            ? "text/html"
+            : "application/octet-stream",
       },
     });
   }
