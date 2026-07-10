@@ -152,6 +152,24 @@ describe("App Router production responses with a CDN-managed cache", () => {
     expect(edge.originRequests).toBe(2);
   });
 
+  it("observes query access while serializing server-inserted HTML", async () => {
+    const edge = createWorkersLikeEdge(handler);
+    const pathname = `/query-inserted-error/query-${Date.now()}`;
+
+    const attacker = await edge.fetch(
+      new Request(`https://example.com${pathname}?q=INSERTED_EDGE_ATTACKER`),
+    );
+    expect(await attacker.text()).toContain('content="INSERTED_EDGE_ATTACKER"');
+    expect(attacker.headers.get("cdn-cache-control")).toBeNull();
+    expect(attacker.headers.get("cache-control")).toMatch(/no-store/);
+
+    const victim = await edge.fetch(new Request(`https://example.com${pathname}`));
+    const victimHtml = await victim.text();
+    expect(victimHtml).toContain('content="none"');
+    expect(victimHtml).not.toContain("INSERTED_EDGE_ATTACKER");
+    expect(edge.originRequests).toBe(2);
+  });
+
   it("still lets the edge cache a deferred response that remains static", async () => {
     const edge = createWorkersLikeEdge(handler);
 

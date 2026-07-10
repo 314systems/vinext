@@ -1656,16 +1656,39 @@ describe("App Router Production server (startProdServer)", () => {
     expect(secondHtml).not.toContain("SECOND_QUERY");
   });
 
-  it("rejects client useSearchParams under dynamic = 'error' without poisoning later requests", async () => {
+  it("keeps client useSearchParams private under dynamic = 'error'", async () => {
     const slug = `dynamic-error-query-${Date.now()}`;
-    const errorRes = await fetch(
+    const firstRes = await fetch(
       `${baseUrl}/isr-client-search-dynamic-error/${slug}?q=REQUEST_SPECIFIC`,
     );
-    expect(errorRes.status).toBe(500);
+    expect(firstRes.status).toBe(200);
+    expect(firstRes.headers.get("cache-control")).toMatch(/no-store/);
+    expect(await firstRes.text()).toContain("REQUEST_SPECIFIC");
 
-    const homeRes = await fetch(`${baseUrl}/`);
-    expect(homeRes.status).toBe(200);
-    expect(await homeRes.text()).toContain("Welcome to App Router");
+    const secondRes = await fetch(`${baseUrl}/isr-client-search-dynamic-error/${slug}`);
+    expect(secondRes.status).toBe(200);
+    expect(secondRes.headers.get("x-vinext-cache")).not.toBe("HIT");
+    const secondHtml = await secondRes.text();
+    expect(secondHtml).toContain("Dynamic-error query: <!-- -->none");
+    expect(secondHtml).not.toContain("REQUEST_SPECIFIC");
+  });
+
+  it("does not cache search params read while serializing server-inserted HTML", async () => {
+    const slug = `inserted-query-${Date.now()}`;
+    const pathname = `/isr-client-search-inserted-error/${slug}`;
+
+    const attackerRes = await fetch(`${baseUrl}${pathname}?q=INSERTED_ATTACKER`);
+    expect(attackerRes.status).toBe(200);
+    expect(await attackerRes.text()).toContain('content="INSERTED_ATTACKER"');
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const victimRes = await fetch(`${baseUrl}${pathname}`);
+    expect(victimRes.status).toBe(200);
+    expect(victimRes.headers.get("x-vinext-cache")).not.toBe("HIT");
+    const victimHtml = await victimRes.text();
+    expect(victimHtml).toContain('content="none"');
+    expect(victimHtml).not.toContain("INSERTED_ATTACKER");
   });
 
   // Route handler ISR caching tests

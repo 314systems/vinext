@@ -412,13 +412,11 @@ export async function handleSsr(
       ...incomingNavigationContext,
       onSearchParamsAccess() {
         if (incomingNavigationContext.searchParamsAccessMode === "force-static") return;
-        if (incomingNavigationContext.searchParamsAccessMode === "error") {
-          // Deliberate defense-in-depth divergence from Next.js's CSR bailout:
-          // record access here, then reject after SSR completes so a
-          // Suspense boundary cannot swallow the static-generation failure.
-          didAccessSearchParams = true;
-          return;
-        }
+        // Next.js bails client useSearchParams() to the nearest Suspense
+        // boundary during static generation. Vinext can render it during SSR,
+        // so keep the response private instead. Resolve this observation only
+        // when the stream flushes: useServerInsertedHTML callbacks are rendered
+        // by the stream transform after the main Fizz tree reaches allReady.
         didAccessSearchParams = true;
       },
     };
@@ -652,9 +650,6 @@ export async function handleSsr(
           });
           setTimeout(() => htmlAbortController.abort(), 0);
           htmlStream = (await pendingHtml).prelude;
-          if (options?.waitForAllReady === true) {
-            resolveSearchParamsAccess();
-          }
         } else {
           let streamingHtmlStream: Awaited<ReturnType<typeof renderToReadableStream>> | undefined;
           try {
@@ -664,10 +659,6 @@ export async function handleSsr(
 
             if (options?.waitForAllReady === true) {
               await streamingHtmlStream.allReady;
-              // Static-generation enforcement needs observations from content
-              // revealed after Suspense, but it does not need to drain and
-              // reconstruct the already-rendered HTML byte stream.
-              resolveSearchParamsAccess();
             } else {
               shouldDelayInitialHtmlPull = true;
             }

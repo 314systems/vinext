@@ -84,7 +84,6 @@ import type {
 } from "./app-layout-param-observation.js";
 import { getStaticLayoutObservationSkipRejection } from "./app-layout-param-observation.js";
 import { peekDynamicUsage } from "vinext/shims/headers";
-import { getAppPageStaticGenerationErrorMessage } from "./app-static-generation.js";
 
 type AppPageBoundaryOnError = (
   error: unknown,
@@ -757,8 +756,7 @@ export async function renderAppPageLifecycle(
   let revalidateSeconds = options.revalidateSeconds;
   let expireSeconds = options.expireSeconds;
   const shouldWaitForAllReady =
-    options.isDynamicError ||
-    (options.isPrerender === true && options.isSpeculativePrerender !== true);
+    options.isPrerender === true && options.isSpeculativePrerender !== true;
   const shouldReadRequestCacheLifeForPrerender = options.isPrerender === true;
   const shouldCaptureRscForCacheMetadata =
     options.isProgressiveActionRender !== true &&
@@ -1112,22 +1110,6 @@ export async function renderAppPageLifecycle(
   });
 
   let dynamicUsageCheckComplete = false;
-  if (options.isDynamicError) {
-    const searchParamsAccessed = await (htmlRender.searchParamsAccessed ?? false);
-    dynamicUsedDuringRender =
-      searchParamsAccessed || dynamicUsedBeforeContextCleanup || options.consumeDynamicUsage();
-    dynamicUsedDuringHtmlRender = dynamicUsedDuringRender;
-    dynamicUsageCheckComplete = true;
-    if (dynamicUsedDuringRender) {
-      const error = new Error(getAppPageStaticGenerationErrorMessage());
-      // No response will own this stream after the static-generation error.
-      // Cancel it so both deferred cleanup layers release their request-local
-      // state instead of leaving the completed React stream abandoned.
-      void safeHtmlStream.cancel(error).catch(() => {});
-      throw error;
-    }
-  }
-
   if (
     shouldCompleteDynamicUsageBeforeResponse &&
     !dynamicUsageCheckComplete &&
