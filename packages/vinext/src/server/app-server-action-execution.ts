@@ -218,6 +218,7 @@ export type HandleProgressiveServerActionRequestOptions = {
    * raw multipart POSTs, so they must still fall through. See issue #1340.
    */
   hasPageRoute: boolean;
+  loadServerAction: (actionId: string) => Promise<unknown>;
   maxActionBodySize: number;
   middlewareHeaders: Headers | null;
   readFormDataWithLimit: ReadFormDataWithLimit;
@@ -811,6 +812,69 @@ export function isProgressiveServerActionRequest(
   );
 }
 
+const PROGRESSIVE_ACTION_ID_PREFIX = "$ACTION_ID_";
+const PROGRESSIVE_ACTION_REF_PREFIX = "$ACTION_REF_";
+
+/**
+ * React's progressive action decoder starts loading every distinct action
+ * marker in form order, but only returns the promise for the last marker. A
+ * deployment-skewed or otherwise invalid earlier reference can therefore
+ * reject without a consumer when module loading is asynchronous. Next.js
+ * avoids that lifecycle by validating every reference before decodeAction.
+ *
+ * A normal form usually carries one marker. Forms with submitter overrides
+ * may legitimately carry more than one, so preserve React's last-marker-wins
+ * behavior and preflight each referenced action instead of rejecting the
+ * shape outright.
+ */
+function getProgressiveActionIdsForPreflight(body: FormData): string[] | null | undefined {
+  const markerKeys = new Set<string>();
+  for (const key of body.keys()) {
+    if (key.startsWith(PROGRESSIVE_ACTION_ID_PREFIX)) {
+      markerKeys.add(key);
+    } else if (key.startsWith(PROGRESSIVE_ACTION_REF_PREFIX)) {
+      markerKeys.add(key);
+    }
+  }
+
+  if (markerKeys.size <= 1) return null;
+
+  const actionIds: string[] = [];
+  for (const markerKey of markerKeys) {
+    if (markerKey.startsWith(PROGRESSIVE_ACTION_ID_PREFIX)) {
+      const actionId = markerKey.slice(PROGRESSIVE_ACTION_ID_PREFIX.length);
+      if (!actionId) return undefined;
+      actionIds.push(actionId);
+      continue;
+    }
+
+    const ref = markerKey.slice(PROGRESSIVE_ACTION_REF_PREFIX.length);
+    const descriptorValues = body.getAll(`$ACTION_${ref}:0`);
+    if (descriptorValues.length !== 1 || typeof descriptorValues[0] !== "string") {
+      return undefined;
+    }
+
+    let descriptor: unknown;
+    try {
+      descriptor = JSON.parse(descriptorValues[0]);
+    } catch {
+      return undefined;
+    }
+    if (
+      typeof descriptor !== "object" ||
+      descriptor === null ||
+      !("id" in descriptor) ||
+      typeof descriptor.id !== "string" ||
+      !descriptor.id
+    ) {
+      return undefined;
+    }
+    actionIds.push(descriptor.id);
+  }
+
+  return [...new Set(actionIds)];
+}
+
 export async function handleProgressiveServerActionRequest(
   options: HandleProgressiveServerActionRequestOptions,
 ): Promise<Response | ProgressiveServerActionResult | null> {
@@ -856,6 +920,30 @@ export async function handleProgressiveServerActionRequest(
       clearRejectedActionSideEffects(options.getAndClearPendingCookies);
       options.clearRequestContext();
       return payloadResponse;
+    }
+
+    const actionIdsToPreflight = getProgressiveActionIdsForPreflight(body);
+    if (actionIdsToPreflight === undefined) {
+      clearRejectedActionSideEffects(options.getAndClearPendingCookies);
+      options.clearRequestContext();
+      return new Response("Invalid server action payload", {
+        status: 400,
+        headers: { "Content-Type": "text/plain" },
+      });
+    }
+    if (actionIdsToPreflight) {
+      // Invoke and await each loader before creating the next promise. Every
+      // rejection therefore has a consumer without allowing one multipart
+      // body to fan out into an unbounded batch of concurrent module loads.
+      for (const actionId of actionIdsToPreflight) {
+        const loadedAction = await options.loadServerAction(actionId);
+        if (!isAppServerActionFunction(loadedAction)) {
+          return createActionNotFoundResponse(null, {
+            clearRequestContext: options.clearRequestContext,
+            getAndClearPendingCookies: options.getAndClearPendingCookies,
+          });
+        }
+      }
     }
 
     const action = await options.decodeAction(body);

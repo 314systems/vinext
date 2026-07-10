@@ -1038,6 +1038,7 @@ export default createAppRscHandler({
       getAndClearPendingCookies,
       getDraftModeCookieHeader,
       hasPageRoute: __hasPageRoute,
+      loadServerAction,
       maxActionBodySize: __MAX_ACTION_BODY_SIZE,
       middlewareHeaders: middlewareContext.headers,
       readFormDataWithLimit: __readFormDataWithLimit,

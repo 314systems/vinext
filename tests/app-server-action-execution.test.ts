@@ -130,6 +130,9 @@ function createOptions(
       return null;
     },
     hasPageRoute: false,
+    async loadServerAction() {
+      return () => undefined;
+    },
     maxActionBodySize: 1024,
     middlewareHeaders: null,
     async readFormDataWithLimit() {
