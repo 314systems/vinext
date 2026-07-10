@@ -495,6 +495,8 @@ test("force-static hydration reads search params from the current URL", async ({
   expect(hydrationErrors).toEqual([]);
 });
 
+// Next.js confirms useSearchParams wrapped in Suspense must retain a static shell:
+// https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/missing-suspense-with-csr-bailout/missing-suspense-with-csr-bailout.test.ts
 test("dynamic-error client search params bail out to cached Suspense HTML", async ({ page }) => {
   const hydrationErrors: string[] = [];
   page.on("console", (message) => {
@@ -515,16 +517,40 @@ test("dynamic-error client search params bail out to cached Suspense HTML", asyn
     "Dynamic-error query: FIRST_QUERY",
   );
 
-  await page.waitForTimeout(100);
+  await page.waitForTimeout(1_100);
 
-  const secondResponse = await page.goto(pathname);
+  const secondResponse = await page.goto(`${pathname}?q=SECOND_QUERY`);
   expect(secondResponse?.status()).toBe(200);
-  expect(secondResponse?.headers()["x-vinext-cache"]).toBe("HIT");
+  expect(secondResponse?.headers()["x-vinext-cache"]).toBe("STALE");
+  const secondHtml = await secondResponse?.text();
+  expect(secondHtml).toContain("loading");
+  expect(secondHtml).not.toContain("SECOND_QUERY");
   await waitForAppRouterHydration(page);
   await expect(page.getByTestId("dynamic-error-query-echo")).toHaveText(
-    "Dynamic-error query: none",
+    "Dynamic-error query: SECOND_QUERY",
   );
   await expect(page.locator("body")).not.toContainText("FIRST_QUERY");
+
+  await expect
+    .poll(
+      async () => {
+        const response = await page.request.get(pathname);
+        return response.headers()["x-vinext-cache"];
+      },
+      { timeout: 10_000 },
+    )
+    .toBe("HIT");
+
+  const thirdResponse = await page.goto(`${pathname}?q=THIRD_QUERY`);
+  expect(thirdResponse?.status()).toBe(200);
+  expect(thirdResponse?.headers()["x-vinext-cache"]).toBe("HIT");
+  const thirdHtml = await thirdResponse?.text();
+  expect(thirdHtml).toContain("loading");
+  expect(thirdHtml).not.toContain("THIRD_QUERY");
+  await waitForAppRouterHydration(page);
+  await expect(page.getByTestId("dynamic-error-query-echo")).toHaveText(
+    "Dynamic-error query: THIRD_QUERY",
+  );
   expect(hydrationErrors).toEqual([]);
 });
 

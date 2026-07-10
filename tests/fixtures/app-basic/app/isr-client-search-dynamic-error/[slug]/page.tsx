@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import DynamicErrorQueryEcho from "./client";
 
 export const dynamic = "error";
-export const revalidate = 60;
+export const revalidate = 1;
 
 export default function DynamicErrorClientSearchParamsPage() {
   return (

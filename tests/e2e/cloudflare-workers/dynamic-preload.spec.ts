@@ -76,17 +76,39 @@ test.describe("Cloudflare Workers dynamic preloads", () => {
     const slug = `worker-query-${Date.now()}`;
     const pathname = `/query-dynamic-error/${slug}`;
 
-    const first = await request.get(`${BASE_URL}${pathname}?q=WORKER_ATTACKER`);
+    const first = await request.get(`${BASE_URL}${pathname}?q=WORKER_FIRST`);
     expect(first.status()).toBe(200);
     const firstHtml = await first.text();
     expect(firstHtml).toContain("worker query fallback");
-    expect(firstHtml).not.toContain("WORKER_ATTACKER");
+    expect(firstHtml).not.toContain("WORKER_FIRST");
 
-    await page.waitForTimeout(100);
-    const second = await page.goto(`${BASE_URL}${pathname}?q=WORKER_VISITOR`);
+    await page.waitForTimeout(1_100);
+    const second = await page.goto(`${BASE_URL}${pathname}?q=WORKER_SECOND`);
     expect(second?.status()).toBe(200);
-    await expect(page.getByTestId("worker-query")).toHaveText("worker query:WORKER_VISITOR");
-    await expect(page.locator("body")).not.toContainText("WORKER_ATTACKER");
+    expect(second?.headers()["x-vinext-cache"]).toBe("STALE");
+    const secondHtml = await second?.text();
+    expect(secondHtml).toContain("worker query fallback");
+    expect(secondHtml).not.toContain("WORKER_SECOND");
+    await expect(page.getByTestId("worker-query")).toHaveText("worker query:WORKER_SECOND");
+    await expect(page.locator("body")).not.toContainText("WORKER_FIRST");
+
+    await expect
+      .poll(
+        async () => {
+          const response = await request.get(`${BASE_URL}${pathname}`);
+          return response.headers()["x-vinext-cache"];
+        },
+        { timeout: 10_000 },
+      )
+      .toBe("HIT");
+
+    const third = await page.goto(`${BASE_URL}${pathname}?q=WORKER_THIRD`);
+    expect(third?.status()).toBe(200);
+    expect(third?.headers()["x-vinext-cache"]).toBe("HIT");
+    const thirdHtml = await third?.text();
+    expect(thirdHtml).toContain("worker query fallback");
+    expect(thirdHtml).not.toContain("WORKER_THIRD");
+    await expect(page.getByTestId("worker-query")).toHaveText("worker query:WORKER_THIRD");
     void consoleErrors;
   });
 

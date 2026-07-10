@@ -520,6 +520,7 @@ async function runAppPageRevalidationContext<
       pathname: options.displayPathname ?? options.cleanPathname,
       searchParams: new URLSearchParams(),
       params: options.params,
+      searchParamsAccessMode: options.dynamicConfig === "force-static" ? "force-static" : "bailout",
     });
     return await runWithFetchDedupe(renderFn);
   });
