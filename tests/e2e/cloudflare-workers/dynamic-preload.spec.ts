@@ -426,7 +426,8 @@ test.describe("disabled image endpoint runtime seams", () => {
         env: "TEST_IMAGE_UNOPTIMIZED=1",
         label: "unoptimized Pages",
         readinessPath: "/",
-        setup: "",
+        setup:
+          "created_node_modules=0; if ! test -e node_modules && ! test -L node_modules; then ln -s ../../../../examples/pages-router-cloudflare/node_modules node_modules; created_node_modules=1; fi; trap 'if test \"$created_node_modules\" = 1; then rm node_modules; fi' EXIT; ",
         viteConfig: "",
       },
       {
@@ -434,7 +435,8 @@ test.describe("disabled image endpoint runtime seams", () => {
         env: "TEST_IMAGE_LOADER=cloudinary",
         label: "custom-loader Pages",
         readinessPath: "/",
-        setup: "",
+        setup:
+          "created_node_modules=0; if ! test -e node_modules && ! test -L node_modules; then ln -s ../../../../examples/pages-router-cloudflare/node_modules node_modules; created_node_modules=1; fi; trap 'if test \"$created_node_modules\" = 1; then rm node_modules; fi' EXIT; ",
         viteConfig: "",
       },
     ];
