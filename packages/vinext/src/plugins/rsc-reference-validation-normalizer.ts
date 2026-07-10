@@ -15,7 +15,7 @@ type RscReferenceMeta =
 
 function parseReferenceValidationQuery(
   id: string,
-): { type?: string; id?: string; actionId?: string } | null {
+): { type?: string; id?: string; actionId?: string; hasAny?: string } | null {
   const queryStart = id.indexOf("?");
   if (queryStart === -1) return null;
   return Object.fromEntries(new URLSearchParams(id.slice(queryStart + 1)));
@@ -53,6 +53,15 @@ function hasServerAction(
       normalizeReferenceKey(meta.referenceKey) === normalizedReferenceId &&
       Array.isArray(meta.exportNames) &&
       meta.exportNames.includes(exportName),
+  );
+}
+
+function hasAnyServerAction(
+  referenceMetaMap: Record<string, RscReferenceMeta> | undefined,
+): boolean {
+  if (!referenceMetaMap) return false;
+  return Object.values(referenceMetaMap).some(
+    (meta) => Array.isArray(meta.exportNames) && meta.exportNames.length > 0,
   );
 }
 
@@ -99,7 +108,9 @@ export function createRscReferenceValidationNormalizerPlugin(): Plugin {
       handler(id) {
         if (id.startsWith(`${RESOLVED_SERVER_ACTION_VALIDATION_ID}?`)) {
           const query = parseReferenceValidationQuery(id);
-          const valid = hasServerAction(rscApi?.manager.serverReferenceMetaMap, query?.actionId);
+          const valid = query?.hasAny
+            ? hasAnyServerAction(rscApi?.manager.serverReferenceMetaMap)
+            : hasServerAction(rscApi?.manager.serverReferenceMetaMap, query?.actionId);
           return `export default ${JSON.stringify(valid)};`;
         }
         if (!id.startsWith(REFERENCE_VALIDATION_ID_PREFIX)) return null;

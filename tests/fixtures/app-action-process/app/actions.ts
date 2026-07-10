@@ -13,3 +13,11 @@ export async function redirectOtherAction() {
 export async function redirectBoundAction(target: string) {
   redirect(target);
 }
+
+export async function stateAction(_previousState: { value: string }, formData: FormData) {
+  return { value: `state:${String(formData.get("value"))}` };
+}
+
+export async function unboundStateAction(formData: FormData) {
+  return { value: `unbound:${String(formData.get("value"))}` };
+}

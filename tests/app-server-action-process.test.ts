@@ -51,6 +51,10 @@ describe("App Router production server action process isolation", () => {
   let unselectedActionId: string;
   let boundActionMarker: string;
   let boundActionFields: [string, string][];
+  let stateActionMarker: string;
+  let stateActionFields: [string, string][];
+  let stateActionKey: string;
+  let unboundStateActionId: string;
 
   beforeAll(async () => {
     tempDir = await mkdtemp(path.join(import.meta.dirname, ".tmp-action-process-"));
@@ -98,6 +102,23 @@ describe("App Router production server action process isolation", () => {
       .filter((match) => match[1].startsWith(boundFieldPrefix))
       .map((match) => [match[1], decodeHtmlAttribute(match[2])]);
     expect(boundActionFields).toHaveLength(2);
+
+    const stateHtml = await (await fetch(`${baseUrl}/state`)).text();
+    const stateMarkerMatch = stateHtml.match(/name="(\$ACTION_REF_([^"]+))"/);
+    expect(stateMarkerMatch).toBeTruthy();
+    stateActionMarker = stateMarkerMatch![1];
+    const stateFieldPrefix = `$ACTION_${stateMarkerMatch![2]}:`;
+    stateActionFields = [...stateHtml.matchAll(/name="(\$ACTION_[^"]+)" value="([^"]*)"/g)]
+      .filter((match) => match[1].startsWith(stateFieldPrefix))
+      .map((match) => [match[1], decodeHtmlAttribute(match[2])]);
+    expect(stateActionFields.length).toBeGreaterThan(0);
+    const stateKeyMatch = stateHtml.match(/name="\$ACTION_KEY" value="([^"]*)"/);
+    expect(stateKeyMatch).toBeTruthy();
+    stateActionKey = decodeHtmlAttribute(stateKeyMatch![1]);
+
+    const unboundStateMatch = stateHtml.match(/name="\$ACTION_ID_([^"]+)"/);
+    expect(unboundStateMatch).toBeTruthy();
+    unboundStateActionId = unboundStateMatch![1];
 
     // Capture the lazily routed action id, then restart the production process
     // so its module is definitely unevaluated for the preflight test below.
@@ -199,6 +220,29 @@ describe("App Router production server action process isolation", () => {
     expect(child!.exitCode).toBeNull();
   });
 
+  it.each(["next-action", "x-rsc-action"])(
+    "passes a raw POST carrying %s through to App Route Handlers",
+    async (actionHeader) => {
+      const response = await fetch(`${baseUrl}/raw-action-request`, {
+        method: "POST",
+        headers: {
+          "content-type": "text/plain; charset=utf-8",
+          [actionHeader]: "not-a-page-action",
+        },
+        body: "raw-route-body",
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        body: "raw-route-body",
+        contentType: "text/plain; charset=utf-8",
+        nextAction: actionHeader === "next-action" ? "not-a-page-action" : null,
+        rscAction: actionHeader === "x-rsc-action" ? "not-a-page-action" : null,
+      });
+      expect(child!.exitCode).toBeNull();
+    },
+  );
+
   it("returns Next.js' production 500 for an actions-enabled page without a marker", async () => {
     const body = new FormData();
     body.set("ordinary-field", "value");
@@ -277,6 +321,30 @@ describe("App Router production server action process isolation", () => {
 
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toBe(`${baseUrl}/bound-success`);
+    expect(child!.exitCode).toBeNull();
+  });
+
+  it("preserves useActionState metadata when a later unbound marker wins", async () => {
+    // Next.js passes the original body to decodeFormState after React's
+    // last-marker-wins decodeAction selection:
+    // https://github.com/vercel/next.js/blob/v16.2.6/packages/next/src/server/app-render/action-handler.ts
+    const body = new FormData();
+    body.set(stateActionMarker, "");
+    for (const [key, value] of stateActionFields) body.set(key, value);
+    body.set("$ACTION_KEY", stateActionKey);
+    body.set("value", "mixed");
+    body.set(`$ACTION_ID_${unboundStateActionId}`, "");
+
+    const response = await fetch(`${baseUrl}/state`, {
+      method: "POST",
+      body,
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe(
+      "no-cache, no-store, max-age=0, must-revalidate",
+    );
+    expect(await response.text()).toContain('id="state-value">unbound:mixed</p>');
     expect(child!.exitCode).toBeNull();
   });
 });

@@ -3654,6 +3654,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 cacheComponents: nextConfig?.cacheComponents,
                 prefetchInlining: nextConfig?.prefetchInlining,
                 hasServerActions: serverActionMetadata.hasServerActions,
+                devServer: this.environment.config.command !== "build",
                 serverActionReferences: serverActionMetadata.references,
                 i18n: nextConfig?.i18n,
                 imageConfig: {

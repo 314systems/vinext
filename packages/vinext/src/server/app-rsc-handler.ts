@@ -18,6 +18,7 @@ import { headersContextFromRequest } from "vinext/shims/headers";
 import {
   ACTION_REVALIDATED_HEADER,
   NEXT_ACTION_HEADER,
+  NEXTJS_ACTION_NOT_FOUND_HEADER,
   RSC_ACTION_HEADER,
   RSC_HEADER,
   VINEXT_MW_CTX_HEADER,
@@ -90,7 +91,10 @@ import {
   createServerActionNotFoundResponse,
   getServerActionNotFoundMessage,
 } from "./server-action-not-found.js";
-import { applyServerActionCacheControl } from "./server-action-response.js";
+import {
+  applyServerActionCacheControl,
+  UNRECOGNIZED_ACTION_CACHE_CONTROL,
+} from "./server-action-response.js";
 import {
   createRouteTreePrefetchResponse,
   isRouteTreePrefetchRequest,
@@ -223,6 +227,7 @@ type ProgressiveActionSideEffects = {
   draftCookie: string | null | undefined;
   /** Numeric revalidation kind: `0` (none), `1` (static+dynamic), etc. */
   revalidationKind: number;
+  skipActionCacheControl?: true;
 };
 
 type ProgressiveActionFormStateResult =
@@ -815,6 +820,9 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   // Out-of-basePath Server Actions resolve those late rewrites above so this
   // match already uses their claimed destination.
   const preActionMatch = filesystemRouteEligible ? options.matchRoute(cleanPathname) : null;
+  const actionPageEligible = Boolean(
+    preActionMatch?.route.__loadPage && !preActionMatch.route.__loadRouteHandler,
+  );
   if (preActionMatch) {
     setRootParams(pickRootParams(preActionMatch.params, preActionMatch.route.rootParamNames));
   }
@@ -839,7 +847,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     contentType.startsWith("multipart/form-data") &&
     !actionId
   ) {
-    if (options.handleProgressiveActionRequest) {
+    if (actionPageEligible && options.handleProgressiveActionRequest) {
       progressiveActionResult = await options.handleProgressiveActionRequest({
         actionId,
         cleanPathname,
@@ -847,11 +855,14 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
         middlewareContext,
         request,
       });
-    } else if (preActionMatch?.route.__loadPage && !preActionMatch.route.__loadRouteHandler) {
+    } else if (actionPageEligible && !options.handleProgressiveActionRequest) {
       return createMissingServerActionResponse(options, null);
     }
   }
   if (progressiveActionResult instanceof Response) {
+    if (progressiveActionResult.headers.get(NEXTJS_ACTION_NOT_FOUND_HEADER) === "1") {
+      return progressiveActionResult;
+    }
     return applyServerActionCacheControl(progressiveActionResult);
   }
   const progressiveActionFormState =
@@ -880,7 +891,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   }
 
   const serverActionResponse =
-    filesystemRouteEligible && isPostRequest && actionId && options.handleServerActionRequest
+    actionPageEligible && isPostRequest && actionId && options.handleServerActionRequest
       ? await options.handleServerActionRequest({
           actionId,
           cleanPathname,
@@ -894,7 +905,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
         })
       : null;
   if (serverActionResponse) return applyServerActionCacheControl(serverActionResponse);
-  if (filesystemRouteEligible && isPostRequest && actionId && !options.handleServerActionRequest) {
+  if (actionPageEligible && isPostRequest && actionId && !options.handleServerActionRequest) {
     return createMissingServerActionResponse(options, actionId);
   }
 
@@ -1193,9 +1204,25 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   // res.setHeader('set-cookie', ...) flush in action-handler.ts / app-render.tsx.
   // Issue: https://github.com/cloudflare/vinext/issues/1483
   if (isProgressiveActionRender) {
-    return applyServerActionCacheControl(
-      applyProgressiveActionSideEffects(pageResponse, progressiveActionFormState),
-    );
+    const response = applyProgressiveActionSideEffects(pageResponse, progressiveActionFormState);
+    if (!progressiveActionFormState.skipActionCacheControl) {
+      return applyServerActionCacheControl(response);
+    }
+
+    // The progressive payload did not resolve to an action. Match Next.js'
+    // development error response without overwriting unrelated page renders.
+    try {
+      response.headers.set("Cache-Control", UNRECOGNIZED_ACTION_CACHE_CONTROL);
+      return response;
+    } catch {
+      const headers = new Headers(response.headers);
+      headers.set("Cache-Control", UNRECOGNIZED_ACTION_CACHE_CONTROL);
+      return new Response(response.body, {
+        headers,
+        status: response.status,
+        statusText: response.statusText,
+      });
+    }
   }
   return pageResponse;
 }

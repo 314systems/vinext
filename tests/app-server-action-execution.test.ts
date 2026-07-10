@@ -130,6 +130,9 @@ function createOptions(
       return null;
     },
     hasPageRoute: true,
+    async hasAnyServerAction() {
+      return true;
+    },
     async hasServerAction() {
       return true;
     },
@@ -668,7 +671,8 @@ describe("app server action execution helpers", () => {
         createOptions({
           clearRequestContext: clearContext,
           async decodeAction(body) {
-            expect(body).toBe(formData);
+            expect(body).not.toBe(formData);
+            expect([...body]).toEqual([...formData]);
             return () => {
               throw { digest: "NEXT_REDIRECT;replace;%2Fresult%3Fok%3D1;307" };
             };
@@ -875,8 +879,12 @@ describe("app server action execution helpers", () => {
     });
   });
 
-  it("returns decoded form state after successful non-redirect actions without consuming the original body", async () => {
+  it("filters decodeAction without mutating the original body used by decodeFormState", async () => {
     const formData = new FormData();
+    formData.set("$ACTION_REF_state", "");
+    formData.set("$ACTION_state:0", '{"id":"bound-action"}');
+    formData.set("$ACTION_state:1", "bound-argument");
+    formData.set("$ACTION_KEY", "state-key");
     formData.set("$ACTION_ID_test", "");
     formData.set("field", "value");
     const request = createMultipartBodyRequest(formData);
@@ -886,7 +894,11 @@ describe("app server action execution helpers", () => {
     const result = await handleProgressiveServerActionRequest(
       createOptions({
         contentType: request.headers.get("content-type") ?? "",
-        async decodeAction() {
+        async decodeAction(body) {
+          expect(body.get("$ACTION_REF_state")).toBeNull();
+          expect(body.get("$ACTION_ID_test")).toBe("");
+          expect(body.get("$ACTION_KEY")).toBe("state-key");
+          expect(body.get("field")).toBe("value");
           return () => {
             actionRan = true;
             return { count: 1 };
@@ -894,6 +906,10 @@ describe("app server action execution helpers", () => {
         },
         async decodeFormState(actionResult, body) {
           expect(actionResult).toEqual({ count: 1 });
+          expect(body.get("$ACTION_REF_state")).toBe("");
+          expect(body.get("$ACTION_state:0")).toBe('{"id":"bound-action"}');
+          expect(body.get("$ACTION_state:1")).toBe("bound-argument");
+          expect(body.get("$ACTION_KEY")).toBe("state-key");
           expect(body.get("$ACTION_ID_test")).toBe("");
           expect(body.get("field")).toBe("value");
           return formState;

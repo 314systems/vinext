@@ -1,4 +1,5 @@
 export const SERVER_ACTION_CACHE_CONTROL = "no-cache, no-store, max-age=0, must-revalidate";
+export const UNRECOGNIZED_ACTION_CACHE_CONTROL = "no-cache, must-revalidate";
 
 /**
  * Server Action responses are never cacheable. Next.js applies this policy

@@ -57,7 +57,10 @@ import {
   isServerActionNotFoundError,
 } from "./server-action-not-found.js";
 import { internalServerErrorResponse, payloadTooLargeResponse } from "./http-error-responses.js";
-import { SERVER_ACTION_CACHE_CONTROL } from "./server-action-response.js";
+import {
+  applyServerActionCacheControl,
+  SERVER_ACTION_CACHE_CONTROL,
+} from "./server-action-response.js";
 import { createStaticGenerationHeadersContext } from "./app-static-generation.js";
 
 type AppPageParams = Record<string, string | string[]>;
@@ -135,6 +138,13 @@ type ProgressiveServerActionSideEffects = {
   draftCookie: string | null | undefined;
   /** Resolved revalidation kind to emit via `x-action-revalidated`. */
   revalidationKind: ActionRevalidationKind;
+  /**
+   * Invalid progressive payloads in development fall through to the normal
+   * App Router error render. They have not resolved a Server Action, so the
+   * caller must preserve that render's development cache policy instead of
+   * stamping the recognized-action no-store policy.
+   */
+  skipActionCacheControl?: true;
 };
 
 type AppServerActionRouteRuntime = "edge" | "experimental-edge" | "nodejs" | null;
@@ -218,6 +228,7 @@ export type HandleProgressiveServerActionRequestOptions = {
    * separate Next.js 404 action-not-found response. See issue #1340.
    */
   hasPageRoute: boolean;
+  hasAnyServerAction: () => boolean | Promise<boolean>;
   hasServerAction: (actionId: string) => boolean | Promise<boolean>;
   maxActionBodySize: number;
   middlewareHeaders: Headers | null;
@@ -798,7 +809,7 @@ function createActionNotFoundResponse(
   options.getAndClearPendingCookies();
   console.warn(getServerActionNotFoundMessage(actionId));
   options.clearRequestContext();
-  return createServerActionNotFoundResponse();
+  return applyServerActionCacheControl(createServerActionNotFoundResponse());
 }
 
 export function isProgressiveServerActionRequest(
@@ -919,6 +930,7 @@ function createInvalidProgressiveActionResult(
       pendingCookies: [],
       draftCookie: null,
       revalidationKind: 0,
+      skipActionCacheControl: true,
     };
   }
 
@@ -944,6 +956,17 @@ export async function handleProgressiveServerActionRequest(
   // cloning, or decoding so route.ts can consume the raw request body.
   if (!options.hasPageRoute) {
     return null;
+  }
+
+  // Next.js rejects possible action POSTs before decoding when the application
+  // has no server references at all. In development this is resolved after
+  // loading the matched page so the live RSC manifest, rather than a static
+  // build assumption, determines whether a marker-less POST is a 404 or 500.
+  if (!(await options.hasAnyServerAction())) {
+    options.getAndClearPendingCookies();
+    console.warn(getServerActionNotFoundMessage(null));
+    options.clearRequestContext();
+    return createServerActionNotFoundResponse();
   }
 
   // Progressive form submissions (multipart form data without an actionId)
@@ -991,6 +1014,15 @@ export async function handleProgressiveServerActionRequest(
       return createInvalidProgressiveActionResult(options);
     }
 
+    // Keep the exact parsed body for decodeFormState. React reads
+    // `$ACTION_KEY` and every bound-reference marker from this body after the
+    // selected action has run; mutating it changes useActionState matching.
+    // decodeAction gets a filtered clone so unselected markers cannot start
+    // module loads while normal fields and descriptor rows retain their
+    // original ordering and values.
+    const actionBody = new FormData();
+    for (const [key, value] of body) actionBody.append(key, value);
+
     // Match Next.js' areAllActionIdsValid preflight: membership checks do not
     // import or evaluate action modules. Validate every marker, then remove
     // unselected markers before handing the body to React. React preserves
@@ -1004,11 +1036,11 @@ export async function handleProgressiveServerActionRequest(
     }
     for (const key of preflight.markerKeys) {
       if (key !== preflight.selectedMarkerKey) {
-        body.delete(key);
+        actionBody.delete(key);
       }
     }
 
-    const action = await options.decodeAction(body);
+    const action = await options.decodeAction(actionBody);
     if (!isAppServerActionFunction(action)) {
       return createInvalidProgressiveActionResult(options);
     }

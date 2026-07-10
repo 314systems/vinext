@@ -10,6 +10,10 @@ function serverActionValidationId(actionId: string) {
   return `\0virtual:vinext-server-action-validation?actionId=${encodeURIComponent(actionId)}&lang.js`;
 }
 
+function anyServerActionValidationId() {
+  return "\0virtual:vinext-server-action-validation?hasAny=1&lang.js";
+}
+
 async function configurePlugin(manager: unknown): Promise<Plugin> {
   const plugin = createRscReferenceValidationNormalizerPlugin();
   if (typeof plugin.configResolved !== "function") {
@@ -139,6 +143,25 @@ describe("rsc reference validation normalizer", () => {
       "export default true;",
     );
     await expect(load(plugin, serverActionValidationId("/app/actions.ts#missing"))).resolves.toBe(
+      "export default false;",
+    );
+  });
+
+  it("reports whether the live dev manifest contains any server action", async () => {
+    const withActions = await configurePlugin({
+      serverReferenceMetaMap: {
+        "/app/actions.ts": {
+          referenceKey: "/app/actions.ts",
+          exportNames: ["save"],
+        },
+      },
+    });
+    const withoutActions = await configurePlugin({ serverReferenceMetaMap: {} });
+
+    await expect(load(withActions, anyServerActionValidationId())).resolves.toBe(
+      "export default true;",
+    );
+    await expect(load(withoutActions, anyServerActionValidationId())).resolves.toBe(
       "export default false;",
     );
   });

@@ -169,6 +169,8 @@ type AppRouterConfig = {
   prefetchInlining?: PrefetchInliningConfig;
   /** Whether the RSC build discovered any server references. Defaults to true. */
   hasServerActions?: boolean;
+  /** Whether generated reference membership checks run against the live dev manifest. */
+  devServer?: boolean;
   /**
    * Exact build-time server reference ids (`referenceKey#exportName`). `null`
    * selects the dev-server membership module, which stays current across HMR.
@@ -237,6 +239,7 @@ export function generateRscEntry(
   const cacheComponents = config?.cacheComponents === true;
   const prefetchInlining = config?.prefetchInlining ?? false;
   const hasServerActions = config?.hasServerActions !== false;
+  const devServer = config?.devServer !== false;
   const serverActionReferences = config?.serverActionReferences ?? null;
   const i18nConfig = config?.i18n ?? null;
   const hasPagesDir = config?.hasPagesDir ?? false;
@@ -317,8 +320,12 @@ ${
       ? `const __serverActionReferences = new Set(${JSON.stringify(serverActionReferences)});
 async function __hasServerAction(actionId) {
   return __serverActionReferences.has(actionId);
+}
+async function __hasAnyServerAction() {
+  return __serverActionReferences.size > 0;
 }`
-      : `async function __hasServerAction(actionId) {
+      : devServer
+        ? `async function __hasServerAction(actionId) {
   const validation = await import(
     /* @vite-ignore */
     "/@id/__x00__virtual:vinext-server-action-validation?actionId=" +
@@ -326,6 +333,19 @@ async function __hasServerAction(actionId) {
       "&lang.js"
   );
   return validation.default === true;
+}
+async function __hasAnyServerAction() {
+  const validation = await import(
+    /* @vite-ignore */
+    "/@id/__x00__virtual:vinext-server-action-validation?hasAny=1&lang.js"
+  );
+  return validation.default === true;
+}`
+        : `async function __hasServerAction() {
+  return true;
+}
+async function __hasAnyServerAction() {
+  return true;
 }`
     : ""
 }
@@ -1049,6 +1069,7 @@ export default createAppRscHandler({
         __progressiveActionMatch.route.__loadPage &&
         !__progressiveActionMatch.route.__loadRouteHandler,
     );
+    if (__hasPageRoute) await __ensureRouteLoaded(__progressiveActionMatch.route);
     return __handleProgressiveServerActionRequest({
       actionId,
       allowedOrigins: __allowedOrigins,
@@ -1063,6 +1084,7 @@ export default createAppRscHandler({
       getAndClearPendingCookies,
       getDraftModeCookieHeader,
       hasServerAction: __hasServerAction,
+      hasAnyServerAction: __hasAnyServerAction,
       hasPageRoute: __hasPageRoute,
       maxActionBodySize: __MAX_ACTION_BODY_SIZE,
       middlewareHeaders: middlewareContext.headers,

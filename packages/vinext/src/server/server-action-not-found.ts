@@ -1,6 +1,6 @@
 import { NEXTJS_ACTION_NOT_FOUND_HEADER as SERVER_ACTION_NOT_FOUND_HEADER } from "./headers.js";
+import { UNRECOGNIZED_ACTION_CACHE_CONTROL } from "./server-action-response.js";
 import { UnrecognizedActionError } from "vinext/shims/unrecognized-action-error";
-import { SERVER_ACTION_CACHE_CONTROL } from "./server-action-response.js";
 
 const SERVER_ACTION_NOT_FOUND_DOCS =
   "https://nextjs.org/docs/messages/failed-to-find-server-action";
@@ -92,13 +92,19 @@ export function isServerActionNotFoundError(error: unknown, actionId: string | n
 }
 
 export function createServerActionNotFoundResponse(): Response {
+  const headers = new Headers({
+    [SERVER_ACTION_NOT_FOUND_HEADER]: "1",
+    "content-type": "text/plain",
+  });
+  // Development responses carry the dev server's revalidation policy.
+  // Production leaves the header absent until an action is recognized, at
+  // which point action dispatch applies the full no-store policy.
+  if (process.env.NODE_ENV !== "production") {
+    headers.set("cache-control", UNRECOGNIZED_ACTION_CACHE_CONTROL);
+  }
   return new Response(SERVER_ACTION_NOT_FOUND_BODY, {
     status: 404,
-    headers: {
-      [SERVER_ACTION_NOT_FOUND_HEADER]: "1",
-      "cache-control": SERVER_ACTION_CACHE_CONTROL,
-      "content-type": "text/plain",
-    },
+    headers,
   });
 }
 

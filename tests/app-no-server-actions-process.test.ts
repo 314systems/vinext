@@ -96,10 +96,31 @@ describe("App Router production build without server actions", () => {
 
     expect(response.status).toBe(404);
     expect(response.headers.get("x-nextjs-action-not-found")).toBe("1");
-    expect(response.headers.get("cache-control")).toBe(
-      "no-cache, no-store, max-age=0, must-revalidate",
-    );
+    expect(response.headers.get("cache-control")).toBeNull();
     expect(await response.text()).toBe("Server action not found.");
     expect(child!.exitCode).toBeNull();
   });
+
+  it.each(["next-action", "x-rsc-action"])(
+    "passes a raw POST carrying %s through to a Route Handler",
+    async (actionHeader) => {
+      const response = await fetch(`${baseUrl}/raw-action-request`, {
+        method: "POST",
+        headers: {
+          "content-type": "text/plain; charset=utf-8",
+          [actionHeader]: "not-a-page-action",
+        },
+        body: "raw-route-body",
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        body: "raw-route-body",
+        contentType: "text/plain; charset=utf-8",
+        nextAction: actionHeader === "next-action" ? "not-a-page-action" : null,
+        rscAction: actionHeader === "x-rsc-action" ? "not-a-page-action" : null,
+      });
+      expect(child!.exitCode).toBeNull();
+    },
+  );
 });
