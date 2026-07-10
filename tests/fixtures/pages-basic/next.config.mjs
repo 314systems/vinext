@@ -39,6 +39,11 @@ const nextConfig = {
         destination: "/config-capture-redirect/:segment",
         permanent: false,
       },
+      {
+        source: "/source-capture-dot-redirect/:path*",
+        destination: "https://redirect.example.test/safe/:path*",
+        permanent: false,
+      },
     ];
   },
   async rewrites() {

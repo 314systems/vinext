@@ -53,6 +53,25 @@ test.describe("Pages Router Production Build", () => {
     expect(response?.status()).toBe(404);
   });
 
+  test("config redirects preserve mixed encoded dot segments", async ({ request }) => {
+    // The Node production entry and Pages request pipeline each normalize one
+    // layer before config matching, hence the additional encoding layer here.
+    for (const [requestSegment, destinationSegment] of [
+      ["%25252e.", "%252e."],
+      [".%25252e", ".%252e"],
+    ]) {
+      const response = await request.get(
+        `${BASE}/source-capture-dot-redirect/${requestSegment}/admin`,
+        { maxRedirects: 0 },
+      );
+
+      expect(response.status()).toBe(307);
+      expect(response.headers().location).toBe(
+        `https://redirect.example.test/safe/${destinationSegment}/admin`,
+      );
+    }
+  });
+
   test("dynamic route renders with params", async ({ page }) => {
     const response = await page.goto(`${BASE}/blog/hello-world`);
     expect(response?.status()).toBe(200);

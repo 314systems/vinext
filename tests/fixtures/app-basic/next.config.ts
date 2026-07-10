@@ -102,7 +102,7 @@ const nextConfig: NextConfig = {
       },
       {
         source: "/source-capture-dot-redirect/:path*",
-        destination: "/safe/:path*",
+        destination: "https://redirect.example.test/safe/:path*",
         permanent: false,
       },
     ];

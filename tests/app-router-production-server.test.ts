@@ -1297,6 +1297,25 @@ describe("App Router Production server (startProdServer)", () => {
     });
   });
 
+  it("preserves mixed encoded dot segments after production request normalization", async () => {
+    // The Node production entry and App request handler each normalize one
+    // layer, so use an additional encoding layer to exercise the config
+    // matcher with the same `%2e.` / `.%2e` captures seen in dev and Workers.
+    for (const [requestSegment, destinationSegment] of [
+      ["%25252e.", "%252e."],
+      [".%25252e", ".%252e"],
+    ]) {
+      const res = await fetch(`${baseUrl}/source-capture-dot-redirect/${requestSegment}/admin`, {
+        redirect: "manual",
+      });
+
+      expect(res.status).toBe(307);
+      expect(res.headers.get("location")).toBe(
+        `https://redirect.example.test/safe/${destinationSegment}/admin`,
+      );
+    }
+  });
+
   it("serves static assets with cache headers", async () => {
     // Find an actual hashed JS asset from the build.
     const assetsDir = path.join(outDir, "client", "_next", "static", "chunks");

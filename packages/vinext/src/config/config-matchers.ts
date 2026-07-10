@@ -73,7 +73,7 @@ const _compiledConditionCache = new Map<string, RegExp | null>();
  */
 const _compiledDestinationParamCache = new Map<string, RegExp>();
 const ENCODED_DOT_SEGMENT_RE = /^%2e$/i;
-const ENCODED_DOT_DOT_SEGMENT_RE = /^(?:%2e){2}$/i;
+const ENCODED_DOT_DOT_SEGMENT_RE = /^(?:%2e%2e|%2e\.|\.%2e)$/i;
 
 /**
  * Generic helper for the regex compilation caches above.
@@ -1201,8 +1201,11 @@ function substituteDestinationParams(
   const encodePathParam = (value: string, key: string, modifier: string | undefined): string => {
     const isConditionCapture = conditionCaptureParams && Object.hasOwn(conditionCaptureParams, key);
     const encodeSegment = (segment: string): string => {
-      if (segment === "." || ENCODED_DOT_SEGMENT_RE.test(segment)) return "%252e";
-      if (segment === ".." || ENCODED_DOT_DOT_SEGMENT_RE.test(segment)) return "%252e%252e";
+      if (segment === ".") return "%252e";
+      if (segment === "..") return "%252e%252e";
+      if (ENCODED_DOT_SEGMENT_RE.test(segment) || ENCODED_DOT_DOT_SEGMENT_RE.test(segment)) {
+        return segment.replaceAll("%", "%25");
+      }
       if (!isConditionCapture) return segment;
       return encodeURIComponent(segment);
     };

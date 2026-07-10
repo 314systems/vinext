@@ -12230,7 +12230,8 @@ describe("matchRewrite with external URLs", () => {
   });
 
   it("restores the encoding layer on dot segments captured from config sources", async () => {
-    const { matchRewrite } = await import("../packages/vinext/src/config/config-matchers.js");
+    const { matchRedirect, matchRewrite } =
+      await import("../packages/vinext/src/config/config-matchers.js");
     const { normalizePathnameForRouteMatchStrict } =
       await import("../packages/vinext/src/routing/utils.js");
     const rewrites = [
@@ -12244,6 +12245,28 @@ describe("matchRewrite with external URLs", () => {
     expect(matchRewrite(pathname, rewrites, emptyCtx)).toBe(
       "https://api.example.test/safe/%252e%252e/admin",
     );
+    expect(
+      matchRewrite(normalizePathnameForRouteMatchStrict("/proxy/%252E./admin"), rewrites, emptyCtx),
+    ).toBe("https://api.example.test/safe/%252E./admin");
+    expect(
+      matchRewrite(normalizePathnameForRouteMatchStrict("/proxy/.%252e/admin"), rewrites, emptyCtx),
+    ).toBe("https://api.example.test/safe/.%252e/admin");
+    expect(
+      matchRedirect(
+        normalizePathnameForRouteMatchStrict("/proxy/%252e./admin"),
+        [
+          {
+            source: "/proxy/:path*",
+            destination: "https://redirect.example.test/safe/:path*",
+            permanent: false,
+          },
+        ],
+        emptyCtx,
+      ),
+    ).toEqual({
+      destination: "https://redirect.example.test/safe/%252e./admin",
+      permanent: false,
+    });
   });
 
   it("keeps ordinary pchars, encoded delimiters, and catch-all separators in source paths", async () => {

@@ -72,6 +72,12 @@ async function withCountingFetchTarget<T>(
   }
 }
 
+const ENCODED_DOT_SEGMENT_CASES = [
+  ["%252e%252e", "%252e%252e"],
+  ["%252e.", "%252e."],
+  [".%252e", ".%252e"],
+] as const;
+
 describe("App Router integration", () => {
   let server: ViteDevServer;
   let baseUrl: string;
@@ -117,23 +123,31 @@ describe("App Router integration", () => {
   // https://github.com/vercel/next.js/blob/canary/test/integration/custom-routes/test/index.test.ts
   // Double-encoded traversal oracle:
   // https://github.com/vercel/next.js/blob/canary/test/integration/file-serving/test/index.test.ts
-  it("preserves encoded dot segments in config redirect source captures", async () => {
-    const res = await fetch(`${baseUrl}/source-capture-dot-redirect/%252e%252e/admin`, {
-      redirect: "manual",
-    });
+  it.each(ENCODED_DOT_SEGMENT_CASES)(
+    "preserves encoded dot segment %s in config redirect source captures",
+    async (requestSegment, destinationSegment) => {
+      const res = await fetch(`${baseUrl}/source-capture-dot-redirect/${requestSegment}/admin`, {
+        redirect: "manual",
+      });
 
-    expect(res.status).toBe(307);
-    expect(res.headers.get("location")).toBe("/safe/%252e%252e/admin");
-  });
+      expect(res.status).toBe(307);
+      expect(res.headers.get("location")).toBe(
+        `https://redirect.example.test/safe/${destinationSegment}/admin`,
+      );
+    },
+  );
 
-  it("preserves encoded dot segments in external rewrite source captures", async () => {
-    configCapturePathRequests.length = 0;
-    const res = await fetch(`${baseUrl}/source-capture-dot-rewrite/%252e%252e/admin`);
+  it.each(ENCODED_DOT_SEGMENT_CASES)(
+    "preserves encoded dot segment %s in external rewrite source captures",
+    async (requestSegment, destinationSegment) => {
+      configCapturePathRequests.length = 0;
+      const res = await fetch(`${baseUrl}/source-capture-dot-rewrite/${requestSegment}/admin`);
 
-    expect(res.status).toBe(200);
-    expect(await res.text()).toBe("proxied");
-    expect(configCapturePathRequests).toEqual(["/safe/%252e%252e/admin"]);
-  });
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe("proxied");
+      expect(configCapturePathRequests).toEqual([`/safe/${destinationSegment}/admin`]);
+    },
+  );
 
   it("renders the home page with root layout", async () => {
     const { res, html } = await fetchHtml(baseUrl, "/");
