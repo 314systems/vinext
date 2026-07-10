@@ -903,6 +903,61 @@ describe("app page render lifecycle", () => {
     }
   });
 
+  it("checks dynamic-error observations after allReady without draining the HTML stream", async () => {
+    const common = createCommonOptions();
+    const releaseHtml = createDeferred();
+    let capturedWaitForAllReady: boolean | undefined;
+
+    const responsePromise = renderAppPageLifecycle({
+      ...common.options,
+      isDynamicError: true,
+      isProduction: true,
+      loadSsrHandler: async () => ({
+        async handleSsr(
+          _rscStream: ReadableStream<Uint8Array>,
+          _navContext: unknown,
+          _fontData: unknown,
+          options?: { waitForAllReady?: boolean },
+        ) {
+          capturedWaitForAllReady = options?.waitForAllReady;
+          let sent = false;
+          return {
+            htmlStream: new ReadableStream<Uint8Array>({
+              async pull(controller) {
+                if (sent) {
+                  controller.close();
+                  return;
+                }
+                sent = true;
+                await releaseHtml.promise;
+                controller.enqueue(new TextEncoder().encode("<html>static</html>"));
+              },
+            }),
+            metadataReady: Promise.resolve(),
+            capturedRscData: null,
+            searchParamsAccessed: Promise.resolve(false),
+          };
+        },
+      }),
+      revalidateSeconds: 60,
+    });
+
+    const timeout = Symbol("timeout");
+    const response = await Promise.race([
+      responsePromise,
+      new Promise<typeof timeout>((resolve) => setTimeout(() => resolve(timeout), 50)),
+    ]);
+    expect(response).not.toBe(timeout);
+    expect(response).toBeInstanceOf(Response);
+    expect(capturedWaitForAllReady).toBe(true);
+
+    releaseHtml.resolve();
+    if (!(response instanceof Response)) {
+      throw new Error("Expected dynamic-error render to return before the HTML stream drains");
+    }
+    await expect(response.text()).resolves.toBe("<html>static</html>");
+  });
+
   it("does not wait for cacheLife-only RSC capture before returning production HTML responses", async () => {
     const common = createCommonOptions();
     const releaseRsc = createDeferred();

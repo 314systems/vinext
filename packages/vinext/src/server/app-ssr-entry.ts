@@ -652,6 +652,9 @@ export async function handleSsr(
           });
           setTimeout(() => htmlAbortController.abort(), 0);
           htmlStream = (await pendingHtml).prelude;
+          if (options?.waitForAllReady === true) {
+            resolveSearchParamsAccess();
+          }
         } else {
           let streamingHtmlStream: Awaited<ReturnType<typeof renderToReadableStream>> | undefined;
           try {
@@ -661,6 +664,10 @@ export async function handleSsr(
 
             if (options?.waitForAllReady === true) {
               await streamingHtmlStream.allReady;
+              // Static-generation enforcement needs observations from content
+              // revealed after Suspense, but it does not need to drain and
+              // reconstruct the already-rendered HTML byte stream.
+              resolveSearchParamsAccess();
             } else {
               shouldDelayInitialHtmlPull = true;
             }

@@ -84,7 +84,6 @@ import type {
 } from "./app-layout-param-observation.js";
 import { getStaticLayoutObservationSkipRejection } from "./app-layout-param-observation.js";
 import { peekDynamicUsage } from "vinext/shims/headers";
-import { readStreamAsText } from "../utils/text-stream.js";
 import { getAppPageStaticGenerationErrorMessage } from "./app-static-generation.js";
 
 type AppPageBoundaryOnError = (
@@ -758,7 +757,8 @@ export async function renderAppPageLifecycle(
   let revalidateSeconds = options.revalidateSeconds;
   let expireSeconds = options.expireSeconds;
   const shouldWaitForAllReady =
-    options.isPrerender === true && options.isSpeculativePrerender !== true;
+    options.isDynamicError ||
+    (options.isPrerender === true && options.isSpeculativePrerender !== true);
   const shouldReadRequestCacheLifeForPrerender = options.isPrerender === true;
   const shouldCaptureRscForCacheMetadata =
     options.isProgressiveActionRender !== true &&
@@ -1113,7 +1113,6 @@ export async function renderAppPageLifecycle(
 
   let dynamicUsageCheckComplete = false;
   if (options.isDynamicError) {
-    const completedHtml = await readStreamAsText(safeHtmlStream);
     const searchParamsAccessed = await (htmlRender.searchParamsAccessed ?? false);
     dynamicUsedDuringRender =
       searchParamsAccessed || dynamicUsedBeforeContextCleanup || options.consumeDynamicUsage();
@@ -1122,7 +1121,6 @@ export async function renderAppPageLifecycle(
     if (dynamicUsedDuringRender) {
       throw new Error(getAppPageStaticGenerationErrorMessage());
     }
-    safeHtmlStream = new Response(completedHtml).body!;
   }
 
   if (
