@@ -924,6 +924,21 @@ describe("App Router Production server (startProdServer)", () => {
     expect(nestedRes.headers.get("e2e-headers")).toBe("middleware");
   });
 
+  // Ported from Next.js middleware request construction and encoded traversal coverage:
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/web/adapter.ts
+  // https://github.com/vercel/next.js/blob/canary/test/integration/file-serving/test/index.test.ts
+  it("preserves encoded dot segments in middleware-visible URLs in production", async () => {
+    for (const segment of ["%252e%252e", "%252e.", ".%252e"]) {
+      const pathname = `/protected/${segment}/public`;
+      const res = await fetch(`${baseUrl}${pathname}`);
+
+      expect(res.status).toBe(403);
+      expect(res.headers.get("x-mw-permissive")).toBe("false");
+      expect(res.headers.get("x-mw-url-pathname")).toBe(pathname);
+      expect(res.headers.get("x-mw-next-url-pathname")).toBe(pathname);
+    }
+  });
+
   // Regression test for issue 1487 — App Router page-segment `revalidate`
   // should produce a stable cached response. Two requests inside the
   // revalidate window must return identical HTML bytes (same Date.now()

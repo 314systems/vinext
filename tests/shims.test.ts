@@ -8080,7 +8080,7 @@ describe("double-encoded path handling in middleware", () => {
     expect(routeMatchingSource).not.toMatch(/\bdecodeURIComponent\s*\(/);
   });
 
-  it("App Router middleware receives a Request with the decoded pathname (not raw URL)", async () => {
+  it("App Router middleware receives the original encoded request URL", async () => {
     const { applyAppMiddleware } = await import("../packages/vinext/src/server/app-middleware.js");
     let capturedUrl: string | undefined;
     const module = {
@@ -8103,8 +8103,10 @@ describe("double-encoded path handling in middleware", () => {
     expect(result.kind).toBe("continue");
     expect(capturedUrl).toBeDefined();
     const mwPathname = new URL(capturedUrl!).pathname;
-    expect(mwPathname).toBe("/%64ashboard");
-    expect(mwPathname).not.toBe("/%2564ashboard");
+    // Next.js constructs NextRequest from the original adapter request URL.
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/web/adapter.ts
+    expect(mwPathname).toBe("/%2564ashboard");
+    expect(mwPathname).not.toBe("/%64ashboard");
   });
 
   it("App Router middleware preserves status from NextResponse.next()", async () => {
@@ -8307,7 +8309,7 @@ describe("double-encoded path handling in middleware", () => {
     }
   });
 
-  it("Pages Router runMiddleware passes decoded pathname to middleware function", async () => {
+  it("Pages Router runMiddleware passes the original encoded URL to middleware", async () => {
     const { runMiddleware } = await import("../packages/vinext/src/server/middleware.js");
     // Create a mock Vite server that returns a middleware module
     let capturedUrl: string | undefined;
@@ -8323,18 +8325,17 @@ describe("double-encoded path handling in middleware", () => {
       }),
     };
 
-    // Send a double-encoded path — after single decode, it should be /%64ashboard
+    // Send a double-encoded path. Routing uses its once-decoded form, while
+    // middleware observes the original request URL like Next.js.
     const testUrl = "http://localhost:3000/%2564ashboard";
     const request = new Request(testUrl);
     await runMiddleware(mockRunner as any, "/tmp/middleware.ts", request);
 
-    // Middleware should have received the decoded+normalized URL
     expect(capturedUrl).toBeDefined();
     const mwPathname = new URL(capturedUrl!).pathname;
-    // After single decode: %25 → %, so /%2564 → /%64
-    expect(mwPathname).toBe("/%64ashboard");
-    // It must NOT be the raw /%2564ashboard
-    expect(mwPathname).not.toBe("/%2564ashboard");
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/web/adapter.ts
+    expect(mwPathname).toBe("/%2564ashboard");
+    expect(mwPathname).not.toBe("/%64ashboard");
     // It must NOT be double-decoded to /dashboard
     expect(mwPathname).not.toBe("/dashboard");
   });
