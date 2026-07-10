@@ -826,6 +826,7 @@ export function isProgressiveServerActionRequest(
 
 const PROGRESSIVE_ACTION_ID_PREFIX = "$ACTION_ID_";
 const PROGRESSIVE_ACTION_REF_PREFIX = "$ACTION_REF_";
+const PROGRESSIVE_ACTION_DESCRIPTOR_ID_PREFIX = '{"id":"';
 
 type ProgressiveActionPreflight = {
   actionIds: string[];
@@ -875,9 +876,18 @@ function getProgressiveActionPreflight(
       return undefined;
     }
 
+    const descriptorValue = descriptorValues[0];
+    // Match Next.js' canonical bound-action wire shape. React emits `id` as
+    // the first descriptor field, and Next validates that raw prefix before
+    // reading the action id. Parsing first would accept reordered JSON that
+    // Next.js rejects before decodeAction.
+    if (!descriptorValue.startsWith(PROGRESSIVE_ACTION_DESCRIPTOR_ID_PREFIX)) {
+      return undefined;
+    }
+
     let descriptor: unknown;
     try {
-      descriptor = JSON.parse(descriptorValues[0]);
+      descriptor = JSON.parse(descriptorValue);
     } catch {
       return undefined;
     }
@@ -1151,10 +1161,12 @@ export async function handleProgressiveServerActionRequest(
     }
     setActionRevalidatedHeader(headers, actionRevalidationKind);
 
-    return new Response(null, {
-      status: 303,
-      headers,
-    });
+    return applyServerActionCacheControl(
+      new Response(null, {
+        status: 303,
+        headers,
+      }),
+    );
   } catch (error) {
     if (isServerActionNotFoundError(error, null)) {
       return createInvalidProgressiveActionResult(options);

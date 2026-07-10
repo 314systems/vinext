@@ -21,6 +21,15 @@ function decodeHtmlAttribute(value: string): string {
     .replaceAll("&amp;", "&");
 }
 
+function expectServerActionNoStore(response: Response): void {
+  expect(response.headers.get("cache-control")).toBe(
+    "no-cache, no-store, max-age=0, must-revalidate",
+  );
+  expect(response.headers.get("cdn-cache-control")).toBeNull();
+  expect(response.headers.get("cloudflare-cdn-cache-control")).toBeNull();
+  expect(response.headers.get("cache-tag")).toBeNull();
+}
+
 async function waitForServerPort(child: ChildProcess, getOutput: () => string): Promise<number> {
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
@@ -321,7 +330,39 @@ describe("App Router production server action process isolation", () => {
 
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toBe(`${baseUrl}/bound-success`);
+    expectServerActionNoStore(response);
     expect(child!.exitCode).toBeNull();
+  });
+
+  it("rejects reordered bound descriptors before decoding and keeps serving requests", async () => {
+    const descriptorEntry = boundActionFields.find(([key]) => key.endsWith(":0"));
+    expect(descriptorEntry).toBeTruthy();
+    const descriptor = JSON.parse(descriptorEntry![1]) as Record<string, unknown>;
+    const reorderedDescriptor = JSON.stringify({
+      ...Object.fromEntries(Object.entries(descriptor).filter(([key]) => key !== "id")),
+      id: descriptor.id,
+    });
+    expect(reorderedDescriptor.startsWith('{"id":"')).toBe(false);
+
+    const body = new FormData();
+    body.set(boundActionMarker, "");
+    for (const [key, value] of boundActionFields) {
+      body.set(key, key === descriptorEntry![0] ? reorderedDescriptor : value);
+    }
+
+    const response = await fetch(baseUrl, {
+      method: "POST",
+      body,
+      redirect: "manual",
+    });
+
+    expect(response.status).toBe(500);
+    expectServerActionNoStore(response);
+    expect(await response.text()).toBe("Internal Server Error");
+    expect(await waitForExit(child!, 500)).toBe(false);
+
+    const afterFailure = await fetch(baseUrl);
+    expect(afterFailure.status).toBe(200);
   });
 
   it("preserves useActionState metadata when a later unbound marker wins", async () => {
