@@ -46,7 +46,7 @@ import {
 import { installSocketErrorBackstop } from "./server/socket-error-backstop.js";
 import { shouldInvalidateAppRouteFile } from "./server/dev-route-files.js";
 import { createDirectRunner } from "./server/dev-module-runner.js";
-import { generateRscEntry } from "./entries/app-rsc-entry.js";
+import { generateRscActionSourceScanEntry, generateRscEntry } from "./entries/app-rsc-entry.js";
 import { generateSsrEntry } from "./entries/app-ssr-entry.js";
 import {
   VIRTUAL_CACHE_ADAPTERS,
@@ -979,6 +979,8 @@ const RESOLVED_PAGES_CLIENT_ASSETS = VIRTUAL_PREFIX + VIRTUAL_PAGES_CLIENT_ASSET
 // Virtual module IDs for App Router entries
 const VIRTUAL_RSC_ENTRY = "virtual:vinext-rsc-entry";
 const RESOLVED_RSC_ENTRY = VIRTUAL_PREFIX + VIRTUAL_RSC_ENTRY;
+const VIRTUAL_RSC_ACTION_SOURCE_SCAN = "virtual:vinext-rsc-action-source-scan";
+const RESOLVED_RSC_ACTION_SOURCE_SCAN = VIRTUAL_PREFIX + VIRTUAL_RSC_ACTION_SOURCE_SCAN;
 const VIRTUAL_APP_SSR_ENTRY = "virtual:vinext-app-ssr-entry";
 const RESOLVED_APP_SSR_ENTRY = VIRTUAL_PREFIX + VIRTUAL_APP_SSR_ENTRY;
 const VIRTUAL_APP_BROWSER_ENTRY = "virtual:vinext-app-browser-entry";
@@ -3503,6 +3505,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           }
           // App Router virtual modules
           if (cleanId === VIRTUAL_RSC_ENTRY) return RESOLVED_RSC_ENTRY;
+          if (cleanId === VIRTUAL_RSC_ACTION_SOURCE_SCAN) {
+            return RESOLVED_RSC_ACTION_SOURCE_SCAN;
+          }
           if (cleanId === VIRTUAL_APP_SSR_ENTRY) return RESOLVED_APP_SSR_ENTRY;
           if (cleanId === VIRTUAL_APP_BROWSER_ENTRY) return RESOLVED_APP_BROWSER_ENTRY;
           if (cleanId === VIRTUAL_APP_CAPABILITIES) return RESOLVED_APP_CAPABILITIES;
@@ -3526,6 +3531,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           }
           if (cleanId.endsWith("/" + VIRTUAL_RSC_ENTRY)) {
             return RESOLVED_RSC_ENTRY;
+          }
+          if (cleanId.endsWith("/" + VIRTUAL_RSC_ACTION_SOURCE_SCAN)) {
+            return RESOLVED_RSC_ACTION_SOURCE_SCAN;
           }
           if (cleanId.endsWith("/" + VIRTUAL_APP_SSR_ENTRY)) {
             return RESOLVED_APP_SSR_ENTRY;
@@ -3605,6 +3613,20 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             return `export default ${JSON.stringify(metadata)};`;
           }
           // App Router virtual modules
+          if (id === RESOLVED_RSC_ACTION_SOURCE_SCAN && hasAppDir) {
+            const routes = await appRouter(appDir, nextConfig?.pageExtensions, fileMatcher);
+            const metaRoutes = scanMetadataFiles(appDir);
+            const globalErrorPath = findFileWithExts(appDir, "global-error", fileMatcher);
+            const globalNotFoundPath = nextConfig?.globalNotFound
+              ? findFileWithExts(appDir, "global-not-found", fileMatcher)
+              : null;
+            return generateRscActionSourceScanEntry(
+              routes,
+              metaRoutes,
+              globalErrorPath,
+              globalNotFoundPath,
+            );
+          }
           if (id === RESOLVED_RSC_ENTRY && hasAppDir) {
             const routes = await appRouter(appDir, nextConfig?.pageExtensions, fileMatcher);
             const metaRoutes = scanMetadataFiles(appDir);

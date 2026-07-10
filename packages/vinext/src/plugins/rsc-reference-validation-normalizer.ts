@@ -1,10 +1,12 @@
-import type { Plugin } from "vite";
+import type { DevEnvironment, Plugin } from "vite";
 import type { PluginApi } from "@vitejs/plugin-rsc";
 import { toSlash } from "pathslash";
 
 const REFERENCE_VALIDATION_ID_PREFIX = "\0virtual:vite-rsc/reference-validation?";
 const SERVER_ACTION_VALIDATION_ID = "virtual:vinext-server-action-validation";
 const RESOLVED_SERVER_ACTION_VALIDATION_ID = `\0${SERVER_ACTION_VALIDATION_ID}`;
+const RSC_ACTION_SOURCE_SCAN_ID = "virtual:vinext-rsc-action-source-scan";
+const RESOLVED_RSC_ACTION_SOURCE_SCAN_ID = `\0${RSC_ACTION_SOURCE_SCAN_ID}`;
 
 type RscPluginWithApi = Plugin & {
   api?: PluginApi;
@@ -66,6 +68,28 @@ function hasAnyServerAction(
   );
 }
 
+async function scanSourceGraph(environment: DevEnvironment, root: string): Promise<void> {
+  const pending = [root];
+  const visited = new Set<string>();
+
+  while (pending.length > 0) {
+    const url = pending.pop()!;
+    if (visited.has(url)) continue;
+    visited.add(url);
+
+    await environment.transformRequest(url);
+    const module = await environment.moduleGraph.getModuleByUrl(url);
+    if (!module) continue;
+
+    for (const dependency of module.importedModules) {
+      const dependencyId = dependency.id ?? dependency.url;
+      if (dependency.type === "js" && !dependencyId.includes("virtual:vite-rsc/")) {
+        pending.push(dependency.url);
+      }
+    }
+  }
+}
+
 function cleanFileId(id: string): string {
   const queryIndex = id.search(/[?#]/);
   const cleanId = queryIndex === -1 ? id : id.slice(0, queryIndex);
@@ -94,6 +118,37 @@ function removeDeletedServerReference(
 export function createRscReferenceValidationNormalizerPlugin(): Plugin {
   let rscApi: PluginApi | undefined;
   const serverActionValidationModuleIds = new Set<string>();
+  const scannedClientReferences = new Set<string>();
+  let scannedRscSourceEntry = false;
+  let serverActionDiscovery: Promise<void> | undefined;
+
+  async function discoverDevServerActions(): Promise<void> {
+    const manager = rscApi?.manager;
+    const rscEnvironment = manager?.server?.environments.rsc;
+    const ssrEnvironment = manager?.server?.environments.ssr;
+    if (!rscEnvironment || !ssrEnvironment) return;
+
+    serverActionDiscovery ??= (async () => {
+      // This is the dev equivalent of plugin-RSC's production RSC scan: walk
+      // the generated entry's source graph so all route-level client
+      // references and direct server references reach the plugin transforms.
+      if (!scannedRscSourceEntry) {
+        await scanSourceGraph(rscEnvironment, RSC_ACTION_SOURCE_SCAN_ID);
+        scannedRscSourceEntry = true;
+      }
+
+      // Then mirror the production SSR scan by walking the original source
+      // graph behind each client-reference proxy in the SSR environment.
+      for (const meta of Object.values(manager.clientReferenceMetaMap)) {
+        if (scannedClientReferences.has(meta.importId)) continue;
+        await scanSourceGraph(ssrEnvironment, meta.importId);
+        scannedClientReferences.add(meta.importId);
+      }
+    })().finally(() => {
+      serverActionDiscovery = undefined;
+    });
+    await serverActionDiscovery;
+  }
 
   return {
     name: "vinext:rsc-reference-validation-normalizer",
@@ -126,9 +181,17 @@ export function createRscReferenceValidationNormalizerPlugin(): Plugin {
         // oxlint-disable-next-line no-control-regex -- null byte prefix is intentional (Vite virtual module convention)
         id: /^\u0000virtual:(?:vite-rsc\/reference-validation|vinext-server-action-validation)\?/,
       },
-      handler(id) {
+      async handler(id) {
         if (id.startsWith(`${RESOLVED_SERVER_ACTION_VALIDATION_ID}?`)) {
           serverActionValidationModuleIds.add(id);
+          // The production plugin-RSC scan walks every client-reference graph
+          // before it finalizes the server-action manifest. Dev normally waits
+          // for the browser to request those modules, which leaves actions
+          // imported exclusively behind a client boundary unknown during an
+          // unprimed progressive POST. Transform the same client source graph
+          // here so plugin-RSC can populate its live metadata without importing
+          // or evaluating application modules.
+          await discoverDevServerActions();
           const query = parseReferenceValidationQuery(id);
           const valid = query?.hasAny
             ? hasAnyServerAction(rscApi?.manager.serverReferenceMetaMap)
@@ -161,6 +224,23 @@ export function createRscReferenceValidationNormalizerPlugin(): Plugin {
         // These virtual modules cannot express a normal dependency edge: their
         // input is plugin state rather than source imported by the module.
         if (this.environment.name !== "rsc") return;
+
+        // Any changed dependency can alter the action capability of a known
+        // client boundary. Re-scan its source graph on the next validation;
+        // Vite's module graph keeps unchanged transforms cached.
+        scannedRscSourceEntry = false;
+        scannedClientReferences.clear();
+        const sourceScanModule = this.environment.moduleGraph.getModuleById(
+          RESOLVED_RSC_ACTION_SOURCE_SCAN_ID,
+        );
+        if (sourceScanModule) {
+          this.environment.moduleGraph.invalidateModule(
+            sourceScanModule,
+            new Set(),
+            ctx.timestamp,
+            true,
+          );
+        }
 
         // A deleted module cannot run plugin-rsc's transform again, so its
         // metadata otherwise survives indefinitely and can make a markerless

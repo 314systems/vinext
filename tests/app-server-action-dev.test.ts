@@ -7,6 +7,10 @@ import vinext from "../packages/vinext/src/index.js";
 
 const FIXTURE_DIR = path.resolve(import.meta.dirname, "fixtures/app-action-process");
 const NO_ACTIONS_FIXTURE_DIR = path.resolve(import.meta.dirname, "fixtures/app-no-actions-process");
+const CLIENT_BOUNDARY_ACTION_FIXTURE_DIR = path.resolve(
+  import.meta.dirname,
+  "fixtures/app-client-boundary-action-process",
+);
 
 async function retryUntil<T>(
   operation: () => Promise<T>,
@@ -109,6 +113,66 @@ describe("App Router dev build without server actions", () => {
   });
 });
 
+describe("App Router dev action imported only by a client boundary", () => {
+  let server: ViteDevServer;
+  let baseUrl: string;
+
+  beforeAll(async () => {
+    server = await createServer({
+      root: CLIENT_BOUNDARY_ACTION_FIXTURE_DIR,
+      configFile: false,
+      logLevel: "silent",
+      plugins: [vinext({ appDir: CLIENT_BOUNDARY_ACTION_FIXTURE_DIR })],
+      server: { host: "127.0.0.1", port: 0 },
+    });
+    await server.listen();
+    const address = server.httpServer!.address() as AddressInfo;
+    baseUrl = `http://127.0.0.1:${address.port}`;
+  }, 30_000);
+
+  afterAll(async () => {
+    await server?.close();
+  });
+
+  // Ported from Next.js: test/e2e/app-dir/actions-unrecognized/actions-unrecognized.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/actions-unrecognized/actions-unrecognized.test.ts
+  it("discovers the action before any browser module request without intercepting route handlers", async () => {
+    const invalidBody = new FormData();
+    invalidBody.set("$ACTION_ID_not-a-server-reference", "");
+    const invalidResponse = await fetch(baseUrl, {
+      method: "POST",
+      headers: { origin: baseUrl },
+      body: invalidBody,
+    });
+
+    expect(invalidResponse.status).toBe(500);
+    expect(invalidResponse.headers.get("content-type")).toContain("text/html");
+
+    const routeBody = new FormData();
+    routeBody.set("ordinary-field", "route-handler-value");
+    const routeResponse = await fetch(`${baseUrl}/raw-action-request`, {
+      method: "POST",
+      body: routeBody,
+    });
+
+    expect(routeResponse.status).toBe(200);
+    await expect(routeResponse.json()).resolves.toEqual({ field: "route-handler-value" });
+
+    const html = await (await fetch(`${baseUrl}/client-boundary`)).text();
+    const marker = html.match(/name="(\$ACTION_ID_[^"]+)"/)?.[1];
+    expect(marker).toBeDefined();
+
+    const validBody = new FormData();
+    validBody.set(marker!, "");
+    const validResponse = await fetch(`${baseUrl}/client-boundary`, {
+      method: "POST",
+      headers: { origin: baseUrl },
+      body: validBody,
+    });
+    expect(validResponse.status).toBe(200);
+  });
+});
+
 describe("App Router dev server-action HMR", () => {
   let server: ViteDevServer;
   let baseUrl: string;
@@ -154,8 +218,8 @@ describe("App Router dev server-action HMR", () => {
       `"use server";\nexport async function hotAction() { return "hot-action-ok"; }\n`,
     );
     await writeFile(
-      path.join(fixtureDir, "app/page.tsx"),
-      `import { hotAction } from "./actions";\nexport default function Page() { return <form action={hotAction}><button type="submit">Run hot action</button></form>; }\n`,
+      path.join(fixtureDir, "app/client-shell.tsx"),
+      `"use client";\nimport { hotAction } from "./actions";\nexport function ClientShell() { return <form action={hotAction}><button type="submit">Run hot action</button></form>; }\n`,
     );
 
     const addedHtml = await retryUntil(
@@ -182,8 +246,8 @@ describe("App Router dev server-action HMR", () => {
     expect(enabledMarkerless.status).toBe(500);
 
     await writeFile(
-      path.join(fixtureDir, "app/page.tsx"),
-      `export default function Page() { return <h1>No server actions after HMR</h1>; }\n`,
+      path.join(fixtureDir, "app/client-shell.tsx"),
+      `"use client";\nexport function ClientShell() { return <p>No server actions after HMR</p>; }\n`,
     );
     await unlink(path.join(fixtureDir, "app/actions.ts"));
 

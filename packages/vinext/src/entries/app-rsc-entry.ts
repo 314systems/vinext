@@ -204,6 +204,31 @@ type AppRouterConfig = {
 };
 
 /**
+ * Generate a transform-only entry containing every user route-module import.
+ * Dev server-action capability discovery walks this graph without evaluating
+ * it, mirroring plugin-RSC's production scan-build input.
+ */
+export function generateRscActionSourceScanEntry(
+  routes: AppRoute[],
+  metadataRoutes?: MetadataFileRoute[],
+  globalErrorPath?: string | null,
+  globalNotFoundPath?: string | null,
+): string {
+  const manifest = buildAppRscManifestCode({
+    routes,
+    metadataRoutes,
+    globalErrorPath,
+    globalNotFoundPath,
+  });
+  return [
+    ...manifest.imports,
+    ...(manifest.globalNotFoundImportSpecifier
+      ? [`const load_global_not_found = () => import(${manifest.globalNotFoundImportSpecifier});`]
+      : []),
+  ].join("\n");
+}
+
+/**
  * Generate the virtual RSC entry module.
  *
  * This runs in the `rsc` Vite environment (react-server condition).

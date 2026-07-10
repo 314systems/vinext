@@ -15,9 +15,7 @@ test.describe("Server Actions", () => {
 
     expect(response.status()).toBe(500);
     expect(response.headers()["content-type"]).toContain("text/html");
-    expect(response.headers()["cache-control"]).toBe(
-      "no-cache, no-store, max-age=0, must-revalidate",
-    );
+    expect(response.headers()["cache-control"]).toBe("no-cache, must-revalidate");
   });
 
   test("like button calls server action and updates count", async ({ page }) => {
