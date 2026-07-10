@@ -152,21 +152,33 @@ describe("App Router production responses with a CDN-managed cache", () => {
     expect(edge.originRequests).toBe(1);
   });
 
-  it("observes query access while serializing server-inserted HTML", async () => {
+  it("rejects query access while serializing server-inserted HTML", async () => {
     const edge = createWorkersLikeEdge(handler);
     const pathname = `/query-inserted-error/query-${Date.now()}`;
 
-    const attacker = await edge.fetch(
-      new Request(`https://example.com${pathname}?q=INSERTED_EDGE_ATTACKER`),
+    await expect(
+      edge.fetch(new Request(`https://example.com${pathname}?q=INSERTED_EDGE_ATTACKER`)),
+    ).rejects.toThrow("Bail out to client-side rendering: useSearchParams()");
+    await expect(edge.fetch(new Request(`https://example.com${pathname}`))).rejects.toThrow(
+      "Bail out to client-side rendering: useSearchParams()",
     );
-    expect(await attacker.text()).toContain('content="INSERTED_EDGE_ATTACKER"');
-    expect(attacker.headers.get("cdn-cache-control")).toBeNull();
-    expect(attacker.headers.get("cache-control")).toMatch(/no-store/);
+    expect(edge.originRequests).toBe(2);
+  });
 
-    const victim = await edge.fetch(new Request(`https://example.com${pathname}`));
-    const victimHtml = await victim.text();
-    expect(victimHtml).toContain('content="none"');
-    expect(victimHtml).not.toContain("INSERTED_EDGE_ATTACKER");
+  it("rejects unbounded dynamic-error client search params", async () => {
+    const edge = createWorkersLikeEdge(handler);
+    const pathname = `/query-dynamic-error-unbounded/query-${Date.now()}`;
+
+    const first = await edge.fetch(
+      new Request(`https://example.com${pathname}?q=EDGE_ATTACKER_PAYLOAD`),
+    );
+    expect(first.status).toBe(500);
+    expect(first.headers.get("cdn-cache-control")).toBeNull();
+    expect(first.headers.get("cache-control")).toMatch(/no-store/);
+
+    const second = await edge.fetch(new Request(`https://example.com${pathname}`));
+    expect(second.status).toBe(500);
+    expect(second.headers.get("cdn-cache-control")).toBeNull();
     expect(edge.originRequests).toBe(2);
   });
 

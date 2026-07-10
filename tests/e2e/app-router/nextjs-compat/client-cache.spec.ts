@@ -507,6 +507,9 @@ test("dynamic-error client search params bail out to cached Suspense HTML", asyn
 
   const firstResponse = await page.goto(`${pathname}?q=FIRST_QUERY`);
   expect(firstResponse?.status()).toBe(200);
+  const firstHtml = await firstResponse?.text();
+  expect(firstHtml).toContain("loading");
+  expect(firstHtml).not.toContain("FIRST_QUERY");
   await waitForAppRouterHydration(page);
   await expect(page.getByTestId("dynamic-error-query-echo")).toHaveText(
     "Dynamic-error query: FIRST_QUERY",
@@ -523,4 +526,54 @@ test("dynamic-error client search params bail out to cached Suspense HTML", asyn
   );
   await expect(page.locator("body")).not.toContainText("FIRST_QUERY");
   expect(hydrationErrors).toEqual([]);
+});
+
+test("unbounded dynamic-error client search params fail without a cache artifact", async ({
+  request,
+}) => {
+  const slug = `unbounded-dynamic-error-${Date.now()}`;
+  const pathname = `/isr-client-search-dynamic-error-unbounded/${slug}`;
+
+  const first = await request.get(`${pathname}?q=UNBOUNDED_ATTACKER`);
+  expect(first.status()).toBe(500);
+  expect(await first.text()).not.toContain("UNBOUNDED_ATTACKER");
+
+  const second = await request.get(pathname);
+  expect(second.status()).toBe(500);
+  expect(second.headers()["x-vinext-cache"]).not.toBe("HIT");
+});
+
+test("rewrite destination query is hidden from SSR client hooks", async ({ page }) => {
+  const hydrationErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") hydrationErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => hydrationErrors.push(error.message));
+
+  const response = await page.goto("/nextjs-compat/rewrite-query-visible?shown=yes");
+  expect(response?.status()).toBe(200);
+  const html = await response?.text();
+  expect(html).toContain("server:shown=<!-- -->yes<!-- -->&amp;hidden=<!-- -->secret");
+  expect(html).toContain("client:<!-- -->shown=yes");
+  expect(html).not.toContain("client:<!-- -->shown=yes&amp;hidden=secret");
+
+  await waitForAppRouterHydration(page);
+  await expect(page.getByTestId("rewrite-page-query")).toHaveText("server:shown=yes&hidden=secret");
+  await expect(page.getByTestId("rewrite-client-query")).toHaveText("client:shown=yes");
+  expect(hydrationErrors).toEqual([]);
+});
+
+test("server-inserted callback query access fails without cache publication", async ({
+  request,
+}) => {
+  const slug = `inserted-dynamic-error-${Date.now()}`;
+  const pathname = `/isr-client-search-inserted-error/${slug}`;
+
+  const first = await request.get(`${pathname}?q=INSERTED_ATTACKER`);
+  expect(first.status()).toBe(500);
+  expect(await first.text()).not.toContain("INSERTED_ATTACKER");
+
+  const second = await request.get(pathname);
+  expect(second.status()).toBe(500);
+  expect(second.headers()["x-vinext-cache"]).not.toBe("HIT");
 });

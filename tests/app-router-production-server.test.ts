@@ -1678,22 +1678,34 @@ describe("App Router Production server (startProdServer)", () => {
     expect(secondHtml).not.toContain("REQUEST_SPECIFIC");
   });
 
-  it("does not cache search params read while serializing server-inserted HTML", async () => {
+  it("rejects search params read while serializing server-inserted HTML", async () => {
     const slug = `inserted-query-${Date.now()}`;
     const pathname = `/isr-client-search-inserted-error/${slug}`;
 
     const attackerRes = await fetch(`${baseUrl}${pathname}?q=INSERTED_ATTACKER`);
-    expect(attackerRes.status).toBe(200);
-    expect(await attackerRes.text()).toContain('content="INSERTED_ATTACKER"');
+    expect(attackerRes.status).toBe(500);
+    expect(await attackerRes.text()).not.toContain("INSERTED_ATTACKER");
 
     await new Promise((resolve) => setTimeout(resolve, 100));
 
     const victimRes = await fetch(`${baseUrl}${pathname}`);
-    expect(victimRes.status).toBe(200);
+    expect(victimRes.status).toBe(500);
     expect(victimRes.headers.get("x-vinext-cache")).not.toBe("HIT");
     const victimHtml = await victimRes.text();
-    expect(victimHtml).toContain('content="none"');
     expect(victimHtml).not.toContain("INSERTED_ATTACKER");
+  });
+
+  it("rejects unbounded dynamic-error client search params without caching", async () => {
+    const slug = `unbounded-query-${Date.now()}`;
+    const pathname = `/isr-client-search-dynamic-error-unbounded/${slug}`;
+
+    const attackerRes = await fetch(`${baseUrl}${pathname}?q=UNBOUNDED_ATTACKER`);
+    expect(attackerRes.status).toBe(500);
+    expect(await attackerRes.text()).not.toContain("UNBOUNDED_ATTACKER");
+
+    const victimRes = await fetch(`${baseUrl}${pathname}`);
+    expect(victimRes.status).toBe(500);
+    expect(victimRes.headers.get("x-vinext-cache")).not.toBe("HIT");
   });
 
   // Route handler ISR caching tests

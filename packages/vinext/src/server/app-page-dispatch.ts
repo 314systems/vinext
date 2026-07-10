@@ -248,6 +248,7 @@ export type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
     },
   ) => Promise<AppPageElement>;
   clientReuseManifest?: ClientReuseManifestParseResult;
+  clientSearchParams?: URLSearchParams;
   cleanPathname: string;
   displayPathname?: string;
   clearRequestContext: () => void;
@@ -575,14 +576,13 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
   const isPrefetchDynamicShell = options.renderMode === APP_RSC_RENDER_MODE_PREFETCH_DYNAMIC_SHELL;
   const isDraftMode = isDraftModeRequest(options.request, options.draftModeSecret);
   const shouldBailoutClientSearchParams =
-    isDynamicError ||
-    (options.isProduction &&
-      !isForceDynamic &&
-      !isDraftMode &&
-      options.isProgressiveActionRender !== true &&
-      !options.scriptNonce &&
-      (isPrerender ||
-        (currentRevalidateSeconds !== null && currentRevalidateSeconds > 0)));
+    options.isProduction &&
+    (isDynamicError ||
+      (!isForceDynamic &&
+        !isDraftMode &&
+        options.isProgressiveActionRender !== true &&
+        !options.scriptNonce &&
+        (isPrerender || (currentRevalidateSeconds !== null && currentRevalidateSeconds > 0))));
   const requestHeadersContext = getHeadersContext();
   const shouldUseEmptySearchParams = isForceStatic || isPrefetchDynamicShell;
   const hasRequestSearchParams =
@@ -993,6 +993,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
   options.setNavigationContext({
     pathname: options.displayPathname ?? options.cleanPathname,
     searchParams: pageSearchParams,
+    clientSearchParams: options.clientSearchParams,
     params: navigationParams,
     searchParamsAccessMode: isForceStatic
       ? "force-static"

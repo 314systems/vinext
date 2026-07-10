@@ -775,7 +775,7 @@ export async function renderAppPageLifecycle(
     options.isPrerender !== true &&
     cdnCacheAdapter.pageCacheMode === "edge";
   const shouldCompleteDynamicUsageBeforeResponse =
-    usesResponseEdgeCache &&
+    (usesResponseEdgeCache || options.isDynamicError) &&
     options.isProgressiveActionRender !== true &&
     (revalidateSeconds === null || revalidateSeconds > 0) &&
     !options.isDraftMode &&

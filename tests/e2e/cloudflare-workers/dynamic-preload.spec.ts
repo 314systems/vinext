@@ -67,4 +67,62 @@ test.describe("Cloudflare Workers dynamic preloads", () => {
 
     void consoleErrors;
   });
+
+  test("keeps dynamic-error client queries out of shared Worker HTML", async ({
+    page,
+    request,
+    consoleErrors,
+  }) => {
+    const slug = `worker-query-${Date.now()}`;
+    const pathname = `/query-dynamic-error/${slug}`;
+
+    const first = await request.get(`${BASE_URL}${pathname}?q=WORKER_ATTACKER`);
+    expect(first.status()).toBe(200);
+    const firstHtml = await first.text();
+    expect(firstHtml).toContain("worker query fallback");
+    expect(firstHtml).not.toContain("WORKER_ATTACKER");
+
+    await page.waitForTimeout(100);
+    const second = await page.goto(`${BASE_URL}${pathname}?q=WORKER_VISITOR`);
+    expect(second?.status()).toBe(200);
+    await expect(page.getByTestId("worker-query")).toHaveText("worker query:WORKER_VISITOR");
+    await expect(page.locator("body")).not.toContainText("WORKER_ATTACKER");
+    void consoleErrors;
+  });
+
+  test("rejects unbounded and server-inserted query hooks in a pure App Worker", async ({
+    request,
+  }) => {
+    const slug = `worker-reject-${Date.now()}`;
+
+    const unbounded = await request.get(
+      `${BASE_URL}/query-dynamic-error-unbounded/${slug}?q=WORKER_ATTACKER`,
+    );
+    expect(unbounded.status()).toBe(500);
+    expect(await unbounded.text()).not.toContain("WORKER_ATTACKER");
+
+    const inserted = await request.get(
+      `${BASE_URL}/query-inserted-error/${slug}?q=WORKER_INSERTED_ATTACKER`,
+    );
+    expect(inserted.status()).toBe(500);
+    expect(await inserted.text()).not.toContain("WORKER_INSERTED_ATTACKER");
+  });
+
+  test("keeps rewrite destination query out of Worker client hooks", async ({
+    page,
+    consoleErrors,
+  }) => {
+    const response = await page.goto(`${BASE_URL}/rewrite-query-visible?shown=yes`);
+    expect(response?.status()).toBe(200);
+    const html = await response?.text();
+    expect(html).toContain("server:shown=<!-- -->yes<!-- -->&amp;hidden=<!-- -->secret");
+    expect(html).toContain("client:<!-- -->shown=yes");
+    expect(html).not.toContain("client:<!-- -->shown=yes&amp;hidden=secret");
+
+    await expect(page.getByTestId("worker-rewrite-server")).toHaveText(
+      "server:shown=yes&hidden=secret",
+    );
+    await expect(page.getByTestId("worker-rewrite-client")).toHaveText("client:shown=yes");
+    void consoleErrors;
+  });
 });

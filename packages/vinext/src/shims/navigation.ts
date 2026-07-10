@@ -1658,10 +1658,7 @@ export function useSearchParams(): ReadonlyURLSearchParams {
   if (isServer) {
     markPprFallbackShellDynamicBoundary();
     const navigationContext = getNavigationContext();
-    if (
-      navigationContext?.searchParamsAccessMode === "bailout" &&
-      navigationContext.isRenderingServerInsertedHTML !== true
-    ) {
+    if (navigationContext?.searchParamsAccessMode === "bailout") {
       // Next.js turns Client Component useSearchParams() into a CSR bailout
       // during static generation. A surrounding Suspense boundary can then be
       // cached safely and the browser reads the current URL during hydration.
