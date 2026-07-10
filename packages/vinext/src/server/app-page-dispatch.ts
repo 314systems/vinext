@@ -354,11 +354,7 @@ export type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
   scheduleBackgroundRegeneration: AppPageBackgroundRegenerator;
   scriptNonce?: string;
   searchParams: URLSearchParams;
-  setNavigationContext: (context: {
-    params: AppPageParams;
-    pathname: string;
-    searchParams: URLSearchParams;
-  }) => void;
+  setNavigationContext: (context: NavigationContext) => void;
   renderMode?: AppRscRenderMode;
 };
 
@@ -989,6 +985,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     pathname: options.displayPathname ?? options.cleanPathname,
     searchParams: pageSearchParams,
     params: navigationParams,
+    searchParamsAccessMode: isForceStatic ? "force-static" : isDynamicError ? "error" : "dynamic",
   });
 
   const layoutClassifications = getEffectiveLayoutClassifications(

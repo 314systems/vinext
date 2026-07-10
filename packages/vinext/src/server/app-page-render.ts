@@ -1194,6 +1194,7 @@ export async function renderAppPageLifecycle(
         return dynamicUsedBeforeContextCleanup;
       },
       capturedRscDataPromise: capturedRscDataRef.value,
+      searchParamsAccessedPromise: htmlRender.searchParamsAccessed,
       cleanPathname: options.cleanPathname,
       consumeDynamicUsage: options.consumeDynamicUsage,
       dynamicUsageCheckComplete,

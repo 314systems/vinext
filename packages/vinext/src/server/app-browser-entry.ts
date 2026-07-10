@@ -1421,7 +1421,10 @@ function applyRuntimeRscBootstrap(rsc: NavigationRuntimeRscBootstrap): void {
     applyClientParams(rsc.params);
   }
   if (rsc.nav) {
-    restoreHydrationNavigationContext(rsc.nav.pathname, rsc.nav.searchParams, params);
+    // Cached HTML can outlive the query that originally rendered it. The URL
+    // bar is authoritative for this visitor's search params; only the rendered
+    // pathname comes from the server navigation payload (for rewrite parity).
+    restoreHydrationNavigationContext(rsc.nav.pathname, window.location.search, params);
   }
 }
 

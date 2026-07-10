@@ -1649,6 +1649,12 @@ export function usePathname(): string | null {
 export function useSearchParams(): ReadonlyURLSearchParams {
   if (isServer) {
     markPprFallbackShellDynamicBoundary();
+    // Client Components execute this branch during SSR. App Router search
+    // params are request-specific, so observing them must invalidate a shared
+    // ISR render just like reading the page-level searchParams prop does.
+    // Keep the Pages Router compatibility path unchanged: it has its own cache
+    // semantics and does not install an App navigation context.
+    getNavigationContext()?.onSearchParamsAccess?.();
     // During SSR for "use client" components, the navigation context may not be set.
     // getServerSearchParamsSnapshot also covers the Pages Router compat shim.
     return getServerSearchParamsSnapshot();

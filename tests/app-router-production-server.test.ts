@@ -1611,6 +1611,63 @@ describe("App Router Production server (startProdServer)", () => {
     expect(html2).not.toContain('"filter">alpha<');
   });
 
+  // Next.js treats useSearchParams() during static generation as a dynamic/CSR
+  // boundary rather than caching request-specific HTML.
+  // Ported from Next.js: test/e2e/app-dir/app-static/app-static.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/app-static/app-static.test.ts
+  it("does not share client useSearchParams HTML between ISR requests", async () => {
+    const slug = `query-poison-${Date.now()}`;
+    const pathname = `/isr-client-search-poison/${slug}`;
+
+    const attackerRes = await fetch(`${baseUrl}${pathname}?q=ATTACKER_PAYLOAD`);
+    expect(attackerRes.status).toBe(200);
+    const attackerHtml = await attackerRes.text();
+    expect(attackerHtml).toContain("ATTACKER_PAYLOAD");
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const victimRes = await fetch(`${baseUrl}${pathname}`);
+    const victimHtml = await victimRes.text();
+    expect(victimRes.headers.get("x-vinext-cache")).not.toBe("HIT");
+    expect(victimHtml).not.toContain("ATTACKER_PAYLOAD");
+    expect(victimHtml).toContain("Search query: <!-- -->none");
+
+    const otherVictimRes = await fetch(`${baseUrl}${pathname}?q=INNOCENT_PAYLOAD`);
+    const otherVictimHtml = await otherVictimRes.text();
+    expect(otherVictimRes.headers.get("x-vinext-cache")).not.toBe("HIT");
+    expect(otherVictimHtml).not.toContain("ATTACKER_PAYLOAD");
+    expect(otherVictimHtml).toContain("INNOCENT_PAYLOAD");
+  });
+
+  it("keeps force-static client search params out of reusable ISR HTML", async () => {
+    const pathname = "/isr-client-search-force-static";
+    const firstRes = await fetch(`${baseUrl}${pathname}?q=FIRST_QUERY`);
+    expect(firstRes.status).toBe(200);
+    const firstHtml = await firstRes.text();
+    expect(firstHtml).toContain("Force-static query: <!-- -->none");
+    expect(firstHtml).not.toContain("FIRST_QUERY");
+
+    const secondRes = await fetch(`${baseUrl}${pathname}?q=SECOND_QUERY`);
+    expect(secondRes.status).toBe(200);
+    expect(secondRes.headers.get("x-vinext-cache")).toBe("HIT");
+    const secondHtml = await secondRes.text();
+    expect(secondHtml).toContain("Force-static query: <!-- -->none");
+    expect(secondHtml).not.toContain("FIRST_QUERY");
+    expect(secondHtml).not.toContain("SECOND_QUERY");
+  });
+
+  it("rejects client useSearchParams under dynamic = 'error' without poisoning later requests", async () => {
+    const slug = `dynamic-error-query-${Date.now()}`;
+    const errorRes = await fetch(
+      `${baseUrl}/isr-client-search-dynamic-error/${slug}?q=REQUEST_SPECIFIC`,
+    );
+    expect(errorRes.status).toBe(500);
+
+    const homeRes = await fetch(`${baseUrl}/`);
+    expect(homeRes.status).toBe(200);
+    expect(await homeRes.text()).toContain("Welcome to App Router");
+  });
+
   // Route handler ISR caching tests
   // These tests are ORDER-DEPENDENT: they share a single production server and
   // /api/static-data cache state persists across tests. HIT depends on MISS

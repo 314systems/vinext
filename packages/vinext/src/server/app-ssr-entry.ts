@@ -59,6 +59,7 @@ import { ssrAppRouterInstance } from "./app-ssr-router-instance.js";
 // @ts-expect-error — resolved by the vinext build plugin in SSR environments.
 import pagesClientAssets from "virtual:vinext-pages-client-assets";
 import { setPagesClientAssets, type PagesClientAssets } from "./pages-client-assets.js";
+import { getAppPageStaticGenerationErrorMessage } from "./app-static-generation.js";
 
 setPagesClientAssets(pagesClientAssets as PagesClientAssets);
 
@@ -315,7 +316,10 @@ function buildHeadInjectionHtml(
 ): string {
   const navPayload = {
     pathname: navContext.pathname,
-    searchParams: [...navContext.searchParams.entries()],
+    // Search params belong to the browser URL, not a pathname-keyed HTML
+    // artifact that may be reused by another request. The browser entry
+    // restores them from window.location during hydration.
+    searchParams: [] as [string, string][],
   };
   const rscMetadataScript = createInlineScriptTag(
     createNavigationRuntimeRscMetadataScript(
@@ -393,7 +397,28 @@ export async function handleSsr(
   },
 ): Promise<AppSsrRenderResult> {
   return runWithNavigationContext(async () => {
-    const ssrNavigationContext = requireNavigationContext(navContext);
+    const incomingNavigationContext = requireNavigationContext(navContext);
+    let didAccessSearchParams = false;
+    let resolveSearchParamsAccessed!: (accessed: boolean) => void;
+    const searchParamsAccessed = new Promise<boolean>((resolve) => {
+      resolveSearchParamsAccessed = resolve;
+    });
+    let didResolveSearchParamsAccessed = false;
+    const resolveSearchParamsAccess = (): void => {
+      if (didResolveSearchParamsAccessed) return;
+      didResolveSearchParamsAccessed = true;
+      resolveSearchParamsAccessed(didAccessSearchParams);
+    };
+    const ssrNavigationContext: NavigationContext = {
+      ...incomingNavigationContext,
+      onSearchParamsAccess() {
+        if (incomingNavigationContext.searchParamsAccessMode === "force-static") return;
+        if (incomingNavigationContext.searchParamsAccessMode === "error") {
+          throw new Error(getAppPageStaticGenerationErrorMessage());
+        }
+        didAccessSearchParams = true;
+      },
+    };
 
     await clientReferencePreloader.preload();
 
@@ -402,6 +427,7 @@ export async function handleSsr(
     clearServerInsertedHTML();
 
     const cleanup = (): void => {
+      resolveSearchParamsAccess();
       setNavigationContext(null);
       clearServerInsertedHTML();
     };
@@ -740,6 +766,7 @@ export async function handleSsr(
           // this promise expecting it to be load-bearing in production.
           metadataReady: Promise.resolve(),
           capturedRscData: options?.capturedRscDataRef?.value ?? null,
+          searchParamsAccessed,
           shellErrorRecovered,
           linkHeader: reactLinkHeader,
         };

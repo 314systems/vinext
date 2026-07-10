@@ -19,6 +19,13 @@ export type NavigationContext = {
   pathname: string;
   searchParams: URLSearchParams;
   params: Record<string, string | string[]>;
+  searchParamsAccessMode?: "dynamic" | "error" | "force-static";
+  /**
+   * SSR runs in a separate Vite environment. Its request-local callback records
+   * Client Component useSearchParams() access and reports the result back to
+   * the RSC-owned cache lifecycle after the HTML stream is consumed.
+   */
+  onSearchParamsAccess?: () => void;
 };
 
 type NavigationContextsGlobal = typeof globalThis & {
