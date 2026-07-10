@@ -958,6 +958,37 @@ describe("app page render lifecycle", () => {
     await expect(response.text()).resolves.toBe("<html>static</html>");
   });
 
+  it("cancels an abandoned dynamic-error HTML stream before rejecting", async () => {
+    const common = createCommonOptions();
+    const clearRequestContext = vi.fn();
+    const cancelHtml = vi.fn();
+
+    await expect(
+      renderAppPageLifecycle({
+        ...common.options,
+        clearRequestContext,
+        isDynamicError: true,
+        isProduction: true,
+        loadSsrHandler: async () => ({
+          async handleSsr() {
+            return {
+              htmlStream: new ReadableStream<Uint8Array>({
+                cancel: cancelHtml,
+              }),
+              metadataReady: Promise.resolve(),
+              capturedRscData: null,
+              searchParamsAccessed: Promise.resolve(true),
+            };
+          },
+        }),
+        revalidateSeconds: 60,
+      }),
+    ).rejects.toThrow('Page with `dynamic = "error"` used a dynamic API.');
+
+    expect(cancelHtml).toHaveBeenCalledOnce();
+    expect(clearRequestContext).toHaveBeenCalledOnce();
+  });
+
   it("does not wait for cacheLife-only RSC capture before returning production HTML responses", async () => {
     const common = createCommonOptions();
     const releaseRsc = createDeferred();

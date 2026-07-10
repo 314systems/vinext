@@ -414,7 +414,7 @@ export async function handleSsr(
         if (incomingNavigationContext.searchParamsAccessMode === "force-static") return;
         if (incomingNavigationContext.searchParamsAccessMode === "error") {
           // Deliberate defense-in-depth divergence from Next.js's CSR bailout:
-          // record access here, then reject after the stream drains so a
+          // record access here, then reject after SSR completes so a
           // Suspense boundary cannot swallow the static-generation failure.
           didAccessSearchParams = true;
           return;

@@ -1119,7 +1119,12 @@ export async function renderAppPageLifecycle(
     dynamicUsedDuringHtmlRender = dynamicUsedDuringRender;
     dynamicUsageCheckComplete = true;
     if (dynamicUsedDuringRender) {
-      throw new Error(getAppPageStaticGenerationErrorMessage());
+      const error = new Error(getAppPageStaticGenerationErrorMessage());
+      // No response will own this stream after the static-generation error.
+      // Cancel it so both deferred cleanup layers release their request-local
+      // state instead of leaving the completed React stream abandoned.
+      void safeHtmlStream.cancel(error).catch(() => {});
+      throw error;
     }
   }
 
