@@ -19,7 +19,7 @@ import type {
   PrefetchInliningConfig,
 } from "../config/next-config.js";
 import type { ImageConfig } from "../server/image-optimization.js";
-import type { AppRoute } from "../routing/app-router.js";
+import { matchAppRoute, type AppRoute } from "../routing/app-router.js";
 import { generateDevOriginCheckCode } from "../server/dev-origin-check.js";
 import type { MetadataFileRoute } from "../server/metadata-routes.js";
 import { isProxyFile } from "../server/middleware.js";
@@ -213,12 +213,15 @@ export function generateRscActionSourceScanEntry(
   metadataRoutes?: MetadataFileRoute[],
   globalErrorPath?: string | null,
   globalNotFoundPath?: string | null,
+  pathname?: string,
 ): string {
+  const matchedRoute = pathname ? matchAppRoute(pathname, routes) : null;
+  const selectedRoutes = pathname ? (matchedRoute ? [matchedRoute.route] : []) : routes;
   const manifest = buildAppRscManifestCode({
-    routes,
-    metadataRoutes,
-    globalErrorPath,
-    globalNotFoundPath,
+    routes: selectedRoutes,
+    metadataRoutes: pathname ? [] : metadataRoutes,
+    globalErrorPath: pathname ? null : globalErrorPath,
+    globalNotFoundPath: pathname ? null : globalNotFoundPath,
   });
   return [
     ...manifest.imports,
@@ -343,33 +346,37 @@ ${
   hasServerActions
     ? serverActionReferences
       ? `const __serverActionReferences = new Set(${JSON.stringify(serverActionReferences)});
-async function __hasServerAction(actionId) {
+async function __hasServerAction(actionId, _pathname) {
   return __serverActionReferences.has(actionId);
 }
-async function __hasAnyServerAction() {
+async function __hasAnyServerAction(_pathname) {
   return __serverActionReferences.size > 0;
 }`
       : devServer
-        ? `async function __hasServerAction(actionId) {
+        ? `async function __hasServerAction(actionId, pathname) {
   const validation = await import(
     /* @vite-ignore */
     "/@id/__x00__virtual:vinext-server-action-validation?actionId=" +
       encodeURIComponent(actionId) +
+      "&pathname=" +
+      encodeURIComponent(pathname) +
       "&lang.js"
   );
   return validation.default === true;
 }
-async function __hasAnyServerAction() {
+async function __hasAnyServerAction(pathname) {
   const validation = await import(
     /* @vite-ignore */
-    "/@id/__x00__virtual:vinext-server-action-validation?hasAny=1&lang.js"
+    "/@id/__x00__virtual:vinext-server-action-validation?hasAny=1&pathname=" +
+      encodeURIComponent(pathname) +
+      "&lang.js"
   );
   return validation.default === true;
 }`
-        : `async function __hasServerAction() {
+        : `async function __hasServerAction(_actionId, _pathname) {
   return true;
 }
-async function __hasAnyServerAction() {
+async function __hasAnyServerAction(_pathname) {
   return true;
 }`
     : ""
@@ -1108,8 +1115,12 @@ export default createAppRscHandler({
       decodeFormState,
       getAndClearPendingCookies,
       getDraftModeCookieHeader,
-      hasServerAction: __hasServerAction,
-      hasAnyServerAction: __hasAnyServerAction,
+      hasServerAction(actionId) {
+        return __hasServerAction(actionId, cleanPathname);
+      },
+      hasAnyServerAction() {
+        return __hasAnyServerAction(cleanPathname);
+      },
       hasPageRoute: __hasPageRoute,
       maxActionBodySize: __MAX_ACTION_BODY_SIZE,
       middlewareHeaders: middlewareContext.headers,

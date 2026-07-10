@@ -1,12 +1,13 @@
-import type { DevEnvironment, Plugin } from "vite";
+import { parseAst, type DevEnvironment, type Plugin } from "vite";
 import type { PluginApi } from "@vitejs/plugin-rsc";
-import { toSlash } from "pathslash";
+import type { Dirent } from "node:fs";
+import fs from "node:fs/promises";
+import path, { toSlash } from "pathslash";
 
 const REFERENCE_VALIDATION_ID_PREFIX = "\0virtual:vite-rsc/reference-validation?";
 const SERVER_ACTION_VALIDATION_ID = "virtual:vinext-server-action-validation";
 const RESOLVED_SERVER_ACTION_VALIDATION_ID = `\0${SERVER_ACTION_VALIDATION_ID}`;
 const RSC_ACTION_SOURCE_SCAN_ID = "virtual:vinext-rsc-action-source-scan";
-const RESOLVED_RSC_ACTION_SOURCE_SCAN_ID = `\0${RSC_ACTION_SOURCE_SCAN_ID}`;
 
 type RscPluginWithApi = Plugin & {
   api?: PluginApi;
@@ -16,9 +17,13 @@ type RscReferenceMeta =
   | PluginApi["manager"]["clientReferenceMetaMap"][string]
   | PluginApi["manager"]["serverReferenceMetaMap"][string];
 
-function parseReferenceValidationQuery(
-  id: string,
-): { type?: string; id?: string; actionId?: string; hasAny?: string } | null {
+function parseReferenceValidationQuery(id: string): {
+  type?: string;
+  id?: string;
+  actionId?: string;
+  hasAny?: string;
+  pathname?: string;
+} | null {
   const queryStart = id.indexOf("?");
   if (queryStart === -1) return null;
   return Object.fromEntries(new URLSearchParams(id.slice(queryStart + 1)));
@@ -40,37 +45,10 @@ function hasReference(
   );
 }
 
-function hasServerAction(
-  referenceMetaMap: Record<string, RscReferenceMeta> | undefined,
-  actionId: string | undefined,
-): boolean {
-  if (!referenceMetaMap || !actionId) return false;
-  const separator = actionId.lastIndexOf("#");
-  if (separator <= 0 || separator === actionId.length - 1) return false;
-
-  const referenceId = actionId.slice(0, separator);
-  const exportName = actionId.slice(separator + 1);
-  const normalizedReferenceId = normalizeReferenceKey(referenceId);
-  return Object.values(referenceMetaMap).some(
-    (meta) =>
-      normalizeReferenceKey(meta.referenceKey) === normalizedReferenceId &&
-      Array.isArray(meta.exportNames) &&
-      meta.exportNames.includes(exportName),
-  );
-}
-
-function hasAnyServerAction(
-  referenceMetaMap: Record<string, RscReferenceMeta> | undefined,
-): boolean {
-  if (!referenceMetaMap) return false;
-  return Object.values(referenceMetaMap).some(
-    (meta) => Array.isArray(meta.exportNames) && meta.exportNames.length > 0,
-  );
-}
-
-async function scanSourceGraph(environment: DevEnvironment, root: string): Promise<void> {
+async function scanSourceGraph(environment: DevEnvironment, root: string): Promise<Set<string>> {
   const pending = [root];
   const visited = new Set<string>();
+  const reachableIds = new Set<string>();
 
   while (pending.length > 0) {
     const url = pending.pop()!;
@@ -81,6 +59,9 @@ async function scanSourceGraph(environment: DevEnvironment, root: string): Promi
     const module = await environment.moduleGraph.getModuleByUrl(url);
     if (!module) continue;
 
+    if (module.id) reachableIds.add(cleanFileId(module.id));
+    reachableIds.add(cleanFileId(module.url));
+
     for (const dependency of module.importedModules) {
       const dependencyId = dependency.id ?? dependency.url;
       if (dependency.type === "js" && !dependencyId.includes("virtual:vite-rsc/")) {
@@ -88,6 +69,8 @@ async function scanSourceGraph(environment: DevEnvironment, root: string): Promi
       }
     }
   }
+
+  return reachableIds;
 }
 
 function cleanFileId(id: string): string {
@@ -96,17 +79,223 @@ function cleanFileId(id: string): string {
   return toSlash(cleanId.startsWith("/@fs/") ? cleanId.slice("/@fs/".length) : cleanId);
 }
 
-function removeDeletedServerReference(
-  referenceMetaMap: Record<string, RscReferenceMeta> | undefined,
-  file: string,
+type DevActionSourceOptions = {
+  getAppDir?: () => string | undefined;
+  getPageExtensions?: () => readonly string[] | undefined;
+};
+
+type DevActionSourceSnapshot = {
+  hasAnySourceAction: boolean;
+  reachableIds: Set<string>;
+};
+
+type AstNode = { type?: string; [key: string]: unknown };
+
+const APP_ACTION_ROOT_BASENAMES = new Set([
+  "default",
+  "error",
+  "forbidden",
+  "global-error",
+  "global-not-found",
+  "layout",
+  "loading",
+  "not-found",
+  "page",
+  "route",
+  "template",
+  "unauthorized",
+]);
+
+function parserLanguageForFile(file: string): "js" | "jsx" | "ts" | "tsx" {
+  const extension = path.extname(file).toLowerCase();
+  if (extension === ".tsx") return "tsx";
+  if (extension === ".ts" || extension === ".mts" || extension === ".cts") return "ts";
+  if (extension === ".jsx") return "jsx";
+  return "js";
+}
+
+function isDirectiveBody(node: AstNode, parent: AstNode | null): boolean {
+  if (node.type === "Program") return true;
+  if (node.type !== "BlockStatement") return false;
+  return Boolean(parent?.type?.includes("Function") || parent?.type === "ArrowFunctionExpression");
+}
+
+function bodyHasUseServerDirective(node: AstNode, parent: AstNode | null): boolean {
+  if (!isDirectiveBody(node, parent) || !Array.isArray(node.body)) return false;
+  for (const statement of node.body as AstNode[]) {
+    if (statement.type !== "ExpressionStatement") break;
+    const expression = statement.expression as AstNode | undefined;
+    const value = expression?.value;
+    if (typeof value !== "string") break;
+    if (value === "use server") return true;
+  }
+  return false;
+}
+
+function hasRuntimeModuleEdge(node: AstNode): boolean {
+  if (node.importKind === "type" || node.exportKind === "type") return false;
+  if (!Array.isArray(node.specifiers) || node.specifiers.length === 0) return true;
+  return (node.specifiers as AstNode[]).some(
+    (specifier) => specifier.importKind !== "type" && specifier.exportKind !== "type",
+  );
+}
+
+function walkAst(
+  node: unknown,
+  visit: (node: AstNode, parent: AstNode | null) => void,
+  parent: AstNode | null = null,
 ): void {
-  if (!referenceMetaMap) return;
-  const deletedFile = cleanFileId(file);
-  for (const [id, meta] of Object.entries(referenceMetaMap)) {
-    if (cleanFileId(id) === deletedFile || cleanFileId(meta.importId) === deletedFile) {
-      delete referenceMetaMap[id];
+  if (!node || typeof node !== "object") return;
+  if (Array.isArray(node)) {
+    for (const child of node) walkAst(child, visit, parent);
+    return;
+  }
+
+  const astNode = node as AstNode;
+  visit(astNode, parent);
+  for (const [key, value] of Object.entries(astNode)) {
+    if (key === "parent" || key === "loc" || key === "start" || key === "end") continue;
+    if (value && typeof value === "object") walkAst(value, visit, astNode);
+  }
+}
+
+function readSourceModuleFacts(
+  code: string,
+  file: string,
+): {
+  hasServerAction: boolean;
+  specifiers: string[];
+} | null {
+  let ast: ReturnType<typeof parseAst>;
+  try {
+    ast = parseAst(code, { lang: parserLanguageForFile(file) });
+  } catch {
+    // A broken unrelated route must not prevent capability discovery for a
+    // valid page. Its own request will still surface the parse error normally.
+    return null;
+  }
+
+  let hasServerAction = false;
+  const specifiers = new Set<string>();
+  walkAst(ast, (node, parent) => {
+    if (bodyHasUseServerDirective(node, parent)) hasServerAction = true;
+
+    if (
+      node.type === "ImportDeclaration" ||
+      node.type === "ExportNamedDeclaration" ||
+      node.type === "ExportAllDeclaration"
+    ) {
+      if (!hasRuntimeModuleEdge(node)) return;
+      const source = node.source as AstNode | undefined;
+      if (typeof source?.value === "string") specifiers.add(source.value);
+      return;
+    }
+
+    if (node.type === "ImportExpression") {
+      const source = node.source as AstNode | undefined;
+      if (typeof source?.value === "string") specifiers.add(source.value);
+    }
+  });
+  return { hasServerAction, specifiers: [...specifiers] };
+}
+
+async function collectAppActionRoots(
+  appDir: string,
+  pageExtensions: readonly string[],
+): Promise<string[]> {
+  const roots: string[] = [];
+  const extensions = new Set(pageExtensions.map((extension) => `.${extension.toLowerCase()}`));
+  const pending = [appDir];
+
+  while (pending.length > 0) {
+    const dir = pending.pop()!;
+    let entries: Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const file = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(file);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const extension = path.extname(entry.name).toLowerCase();
+      const basename = path.basename(entry.name, extension);
+      if (extensions.has(extension) && APP_ACTION_ROOT_BASENAMES.has(basename)) roots.push(file);
     }
   }
+
+  return roots;
+}
+
+async function scanReachableActionSources(options: {
+  appDir: string;
+  pageExtensions: readonly string[];
+  resolve: (specifier: string, importer: string) => Promise<{ id?: string } | null>;
+}): Promise<DevActionSourceSnapshot> {
+  const pending = await collectAppActionRoots(options.appDir, options.pageExtensions);
+  const reachableIds = new Set<string>();
+  let hasAnySourceAction = false;
+
+  while (pending.length > 0) {
+    const file = cleanFileId(pending.pop()!);
+    if (reachableIds.has(file)) continue;
+    reachableIds.add(file);
+
+    let code: string;
+    try {
+      code = await fs.readFile(file, "utf8");
+    } catch {
+      continue;
+    }
+    const facts = readSourceModuleFacts(code, file);
+    if (!facts) continue;
+    hasAnySourceAction ||= facts.hasServerAction;
+
+    for (const specifier of facts.specifiers) {
+      let resolved: { id?: string } | null;
+      try {
+        resolved = await options.resolve(specifier, file);
+      } catch {
+        // Resolution errors in another route are request-local build errors,
+        // not global action-capability failures.
+        continue;
+      }
+      if (!resolved?.id) continue;
+      const dependency = cleanFileId(resolved.id);
+      if (!path.isAbsolute(dependency) || dependency.includes("/node_modules/")) continue;
+      if (!/\.(?:[cm]?[jt]sx?)$/i.test(dependency)) continue;
+      pending.push(dependency);
+    }
+  }
+
+  return { hasAnySourceAction, reachableIds };
+}
+
+function collectReachableServerActions(
+  referenceMetaMap: Record<string, RscReferenceMeta> | undefined,
+  reachableIds: ReadonlySet<string> | null,
+): Set<string> {
+  const references = new Set<string>();
+  if (!referenceMetaMap) return references;
+
+  for (const [id, meta] of Object.entries(referenceMetaMap)) {
+    if (
+      reachableIds &&
+      !reachableIds.has(cleanFileId(id)) &&
+      !reachableIds.has(cleanFileId(meta.importId))
+    ) {
+      continue;
+    }
+    if (!Array.isArray(meta.exportNames)) continue;
+    for (const exportName of meta.exportNames) {
+      references.add(`${meta.referenceKey}#${exportName}`);
+    }
+  }
+  return references;
 }
 
 /**
@@ -115,39 +304,90 @@ function removeDeletedServerReference(
  * decoded `/@id/\0...` form. Treat those as equivalent and fall through to the
  * upstream validator for all other invalid references.
  */
-export function createRscReferenceValidationNormalizerPlugin(): Plugin {
+export function createRscReferenceValidationNormalizerPlugin(
+  sourceOptions: DevActionSourceOptions = {},
+): Plugin {
   let rscApi: PluginApi | undefined;
   const serverActionValidationModuleIds = new Set<string>();
-  const scannedClientReferences = new Set<string>();
-  let scannedRscSourceEntry = false;
-  let serverActionDiscovery: Promise<void> | undefined;
+  const sourceScanModuleIds = new Set<string>();
+  const discoverySnapshots = new Map<
+    string,
+    { generation: number; hasAnySourceAction: boolean; references: Set<string> }
+  >();
+  let discoveryGeneration = 0;
+  let discoveryQueue = Promise.resolve();
 
-  async function discoverDevServerActions(): Promise<void> {
+  async function scanDevServerActions(
+    pathname: string,
+    resolve: (specifier: string, importer: string) => Promise<{ id?: string } | null>,
+  ): Promise<{ hasAnySourceAction: boolean; references: Set<string> }> {
     const manager = rscApi?.manager;
     const rscEnvironment = manager?.server?.environments.rsc;
     const ssrEnvironment = manager?.server?.environments.ssr;
-    if (!rscEnvironment || !ssrEnvironment) return;
+    if (!rscEnvironment || !ssrEnvironment) {
+      return {
+        hasAnySourceAction: false,
+        references: collectReachableServerActions(manager?.serverReferenceMetaMap, null),
+      };
+    }
 
-    serverActionDiscovery ??= (async () => {
-      // This is the dev equivalent of plugin-RSC's production RSC scan: walk
-      // the generated entry's source graph so all route-level client
-      // references and direct server references reach the plugin transforms.
-      if (!scannedRscSourceEntry) {
-        await scanSourceGraph(rscEnvironment, RSC_ACTION_SOURCE_SCAN_ID);
-        scannedRscSourceEntry = true;
-      }
+    const appDir = sourceOptions.getAppDir?.();
+    const pageExtensions = sourceOptions.getPageExtensions?.() ?? ["tsx", "ts", "jsx", "js"];
+    const sourceSnapshot = appDir
+      ? await scanReachableActionSources({ appDir, pageExtensions, resolve })
+      : { hasAnySourceAction: false, reachableIds: new Set<string>() };
 
-      // Then mirror the production SSR scan by walking the original source
-      // graph behind each client-reference proxy in the SSR environment.
-      for (const meta of Object.values(manager.clientReferenceMetaMap)) {
-        if (scannedClientReferences.has(meta.importId)) continue;
-        await scanSourceGraph(ssrEnvironment, meta.importId);
-        scannedClientReferences.add(meta.importId);
-      }
-    })().finally(() => {
-      serverActionDiscovery = undefined;
-    });
-    await serverActionDiscovery;
+    // Transform only the posted route's graph. This populates plugin-RSC's
+    // exact reference keys without evaluating modules and without allowing a
+    // broken, unrelated route to block a valid cold action request.
+    const sourceScanUrl = `${RSC_ACTION_SOURCE_SCAN_ID}?pathname=${encodeURIComponent(pathname)}`;
+    const rscReachable = await scanSourceGraph(rscEnvironment, sourceScanUrl);
+    const sourceScanModule = await rscEnvironment.moduleGraph.getModuleByUrl(sourceScanUrl);
+    if (sourceScanModule?.id) sourceScanModuleIds.add(sourceScanModule.id);
+    const liveClientReferences = Object.entries(manager.clientReferenceMetaMap).filter(
+      ([id, meta]) =>
+        rscReachable.has(cleanFileId(id)) || rscReachable.has(cleanFileId(meta.importId)),
+    );
+    for (const [, meta] of liveClientReferences) {
+      await scanSourceGraph(ssrEnvironment, meta.importId);
+    }
+
+    return {
+      hasAnySourceAction: sourceSnapshot.hasAnySourceAction,
+      references: collectReachableServerActions(
+        manager.serverReferenceMetaMap,
+        appDir ? sourceSnapshot.reachableIds : null,
+      ),
+    };
+  }
+
+  async function discoverDevServerActions(
+    pathname: string,
+    resolve: (specifier: string, importer: string) => Promise<{ id?: string } | null>,
+  ): Promise<{ hasAnySourceAction: boolean; references: Set<string> }> {
+    for (;;) {
+      const cached = discoverySnapshots.get(pathname);
+      if (cached?.generation === discoveryGeneration) return cached;
+
+      const generation = discoveryGeneration;
+      let result!: { hasAnySourceAction: boolean; references: Set<string> };
+      const queued = discoveryQueue.then(async () => {
+        const current = discoverySnapshots.get(pathname);
+        if (current?.generation === generation) {
+          result = current;
+          return;
+        }
+        result = await scanDevServerActions(pathname, resolve);
+        if (generation === discoveryGeneration) {
+          discoverySnapshots.set(pathname, { generation, ...result });
+        }
+      });
+      discoveryQueue = queued.catch(() => {});
+      await queued;
+      if (generation === discoveryGeneration) return result;
+      // A hot update landed while the scan was in flight. Retry against the
+      // new graph rather than letting stale completion overwrite invalidation.
+    }
   }
 
   return {
@@ -184,18 +424,15 @@ export function createRscReferenceValidationNormalizerPlugin(): Plugin {
       async handler(id) {
         if (id.startsWith(`${RESOLVED_SERVER_ACTION_VALIDATION_ID}?`)) {
           serverActionValidationModuleIds.add(id);
-          // The production plugin-RSC scan walks every client-reference graph
-          // before it finalizes the server-action manifest. Dev normally waits
-          // for the browser to request those modules, which leaves actions
-          // imported exclusively behind a client boundary unknown during an
-          // unprimed progressive POST. Transform the same client source graph
-          // here so plugin-RSC can populate its live metadata without importing
-          // or evaluating application modules.
-          await discoverDevServerActions();
           const query = parseReferenceValidationQuery(id);
+          const pathname = query?.pathname ?? "/";
+          const snapshot = await discoverDevServerActions(pathname, async (specifier, importer) => {
+            const resolved = await this.resolve(specifier, importer, { skipSelf: true });
+            return resolved ? { id: resolved.id } : null;
+          });
           const valid = query?.hasAny
-            ? hasAnyServerAction(rscApi?.manager.serverReferenceMetaMap)
-            : hasServerAction(rscApi?.manager.serverReferenceMetaMap, query?.actionId);
+            ? snapshot.hasAnySourceAction || snapshot.references.size > 0
+            : Boolean(query?.actionId && snapshot.references.has(query.actionId));
           return `export default ${JSON.stringify(valid)};`;
         }
         if (!id.startsWith(REFERENCE_VALIDATION_ID_PREFIX)) return null;
@@ -225,28 +462,18 @@ export function createRscReferenceValidationNormalizerPlugin(): Plugin {
         // input is plugin state rather than source imported by the module.
         if (this.environment.name !== "rsc") return;
 
-        // Any changed dependency can alter the action capability of a known
-        // client boundary. Re-scan its source graph on the next validation;
-        // Vite's module graph keeps unchanged transforms cached.
-        scannedRscSourceEntry = false;
-        scannedClientReferences.clear();
-        const sourceScanModule = this.environment.moduleGraph.getModuleById(
-          RESOLVED_RSC_ACTION_SOURCE_SCAN_ID,
-        );
-        if (sourceScanModule) {
-          this.environment.moduleGraph.invalidateModule(
-            sourceScanModule,
-            new Set(),
-            ctx.timestamp,
-            true,
-          );
-        }
-
-        // A deleted module cannot run plugin-rsc's transform again, so its
-        // metadata otherwise survives indefinitely and can make a markerless
-        // POST look actions-enabled or send stale action ids to module loading.
-        if (ctx.type === "delete") {
-          removeDeletedServerReference(rscApi?.manager.serverReferenceMetaMap, ctx.file);
+        discoveryGeneration++;
+        discoverySnapshots.clear();
+        for (const id of sourceScanModuleIds) {
+          const sourceScanModule = this.environment.moduleGraph.getModuleById(id);
+          if (sourceScanModule) {
+            this.environment.moduleGraph.invalidateModule(
+              sourceScanModule,
+              new Set(),
+              ctx.timestamp,
+              true,
+            );
+          }
         }
 
         for (const environment of Object.values(ctx.server.environments)) {

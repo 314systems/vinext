@@ -1,12 +1,16 @@
 import type { AddressInfo } from "node:net";
-import { cp, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { createServer, type ViteDevServer } from "vite";
+import { createServer, type Plugin, type ViteDevServer } from "vite";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import vinext from "../packages/vinext/src/index.js";
 
 const FIXTURE_DIR = path.resolve(import.meta.dirname, "fixtures/app-action-process");
 const NO_ACTIONS_FIXTURE_DIR = path.resolve(import.meta.dirname, "fixtures/app-no-actions-process");
+const INLINE_ACTION_FIXTURE_DIR = path.resolve(
+  import.meta.dirname,
+  "fixtures/app-inline-action-process",
+);
 const CLIENT_BOUNDARY_ACTION_FIXTURE_DIR = path.resolve(
   import.meta.dirname,
   "fixtures/app-client-boundary-action-process",
@@ -23,6 +27,14 @@ async function retryUntil<T>(
     value = await operation();
   }
   return value;
+}
+
+function createDeferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 describe("App Router dev progressive action errors", () => {
@@ -61,6 +73,10 @@ describe("App Router dev progressive action errors", () => {
     expect(response.status).toBe(500);
     expect(response.headers.get("content-type")).toContain("text/html");
     expect(response.headers.get("cache-control")).toBe("no-cache, must-revalidate");
+    expect(response.headers.get("cdn-cache-control")).toBeNull();
+    expect(response.headers.get("cloudflare-cdn-cache-control")).toBeNull();
+    expect(response.headers.get("cache-tag")).toBeNull();
+    expect(response.headers.get("x-action-config-headers")).toBe("present");
   });
 
   it("preserves the development cache policy when an actions-enabled page has no marker", async () => {
@@ -75,6 +91,10 @@ describe("App Router dev progressive action errors", () => {
     expect(response.status).toBe(500);
     expect(response.headers.get("content-type")).toContain("text/html");
     expect(response.headers.get("cache-control")).toBe("no-cache, must-revalidate");
+    expect(response.headers.get("cdn-cache-control")).toBeNull();
+    expect(response.headers.get("cloudflare-cdn-cache-control")).toBeNull();
+    expect(response.headers.get("cache-tag")).toBeNull();
+    expect(response.headers.get("x-action-config-headers")).toBe("present");
   });
 });
 
@@ -113,6 +133,41 @@ describe("App Router dev build without server actions", () => {
   });
 });
 
+describe("App Router dev build with an inline server action", () => {
+  let server: ViteDevServer;
+  let baseUrl: string;
+
+  beforeAll(async () => {
+    server = await createServer({
+      root: INLINE_ACTION_FIXTURE_DIR,
+      configFile: false,
+      logLevel: "silent",
+      plugins: [vinext({ appDir: INLINE_ACTION_FIXTURE_DIR })],
+      server: { host: "127.0.0.1", port: 0 },
+    });
+    await server.listen();
+    const address = server.httpServer!.address() as AddressInfo;
+    baseUrl = `http://127.0.0.1:${address.port}`;
+  }, 30_000);
+
+  afterAll(async () => {
+    await server?.close();
+  });
+
+  // Ported from Next.js: test/e2e/app-dir/no-server-actions/no-server-actions.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/no-server-actions/no-server-actions.test.ts
+  it("classifies markerless posts globally without compiling an unrelated inline action route", async () => {
+    const response = await fetch(baseUrl, {
+      method: "POST",
+      headers: { origin: baseUrl },
+      body: new FormData(),
+    });
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get("content-type")).toContain("text/html");
+  });
+});
+
 describe("App Router dev action imported only by a client boundary", () => {
   let server: ViteDevServer;
   let baseUrl: string;
@@ -136,7 +191,7 @@ describe("App Router dev action imported only by a client boundary", () => {
 
   // Ported from Next.js: test/e2e/app-dir/actions-unrecognized/actions-unrecognized.test.ts
   // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/actions-unrecognized/actions-unrecognized.test.ts
-  it("discovers the action before any browser module request without intercepting route handlers", async () => {
+  it("discovers the action cold without compiling a broken unrelated client route", async () => {
     const invalidBody = new FormData();
     invalidBody.set("$ACTION_ID_not-a-server-reference", "");
     const invalidResponse = await fetch(baseUrl, {
@@ -170,6 +225,10 @@ describe("App Router dev action imported only by a client boundary", () => {
       body: validBody,
     });
     expect(validResponse.status).toBe(200);
+
+    // The unrelated route is genuinely broken; its error remains local to a
+    // request for that route instead of poisoning cold action discovery.
+    expect((await fetch(`${baseUrl}/broken`)).status).toBe(500);
   });
 });
 
@@ -215,7 +274,7 @@ describe("App Router dev server-action HMR", () => {
 
     await writeFile(
       path.join(fixtureDir, "app/actions.ts"),
-      `"use server";\nexport async function hotAction() { return "hot-action-ok"; }\n`,
+      `"use server";\nexport type HotActionResult = string;\nexport async function hotAction() { return "hot-action-ok"; }\n`,
     );
     await writeFile(
       path.join(fixtureDir, "app/client-shell.tsx"),
@@ -247,9 +306,11 @@ describe("App Router dev server-action HMR", () => {
 
     await writeFile(
       path.join(fixtureDir, "app/client-shell.tsx"),
-      `"use client";\nexport function ClientShell() { return <p>No server actions after HMR</p>; }\n`,
+      `"use client";\nimport { type HotActionResult } from "./actions";\nconst label: HotActionResult = "No server actions after HMR";\nexport function ClientShell() { return <p>{label}</p>; }\n`,
     );
-    await unlink(path.join(fixtureDir, "app/actions.ts"));
+    // Keep actions.ts and a type-only import on disk. Removing the final live
+    // import must prune its reference from capability validation even though
+    // plugin-RSC's metadata map is append-only across this HMR update.
 
     const removedHtml = await retryUntil(
       async () => (await fetch(baseUrl)).text(),
@@ -278,5 +339,93 @@ describe("App Router dev server-action HMR", () => {
 
     // Neither transition may poison the dev process for subsequent requests.
     expect((await fetch(baseUrl)).status).toBe(200);
+  }, 30_000);
+});
+
+describe("App Router dev server-action discovery races", () => {
+  let server: ViteDevServer;
+  let baseUrl: string;
+  let tempDir: string;
+  let fixtureDir: string;
+
+  beforeAll(async () => {
+    tempDir = await mkdtemp(path.join(import.meta.dirname, ".tmp-dev-action-race-"));
+    fixtureDir = path.join(tempDir, "fixture");
+    await cp(CLIENT_BOUNDARY_ACTION_FIXTURE_DIR, fixtureDir, { recursive: true });
+  });
+
+  afterAll(async () => {
+    await server?.close();
+    if (tempDir) await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("does not publish an in-flight pre-HMR capability snapshot", async () => {
+    const scanEntered = createDeferred();
+    const releaseScan = createDeferred();
+    const invalidationObserved = createDeferred();
+    let delayNextActionScan = true;
+    const racePlugin: Plugin = {
+      name: "test:delay-dev-action-discovery",
+      transform: {
+        filter: { id: /app\/client-boundary\/actions\.ts$/ },
+        async handler(code) {
+          if (this.environment.name !== "ssr" || !delayNextActionScan) return null;
+          delayNextActionScan = false;
+          scanEntered.resolve();
+          await releaseScan.promise;
+          return { code, map: null };
+        },
+      },
+      hotUpdate: {
+        handler(ctx) {
+          if (
+            this.environment.name === "rsc" &&
+            ctx.file.endsWith("/app/client-boundary/client-form.tsx")
+          ) {
+            invalidationObserved.resolve();
+          }
+        },
+      },
+    };
+
+    server = await createServer({
+      root: fixtureDir,
+      configFile: false,
+      logLevel: "silent",
+      plugins: [racePlugin, vinext({ appDir: fixtureDir })],
+      server: { host: "127.0.0.1", port: 0 },
+    });
+    await server.listen();
+    const address = server.httpServer!.address() as AddressInfo;
+    baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const body = new FormData();
+    body.set("ordinary-field", "value");
+    const pendingResponse = fetch(`${baseUrl}/client-boundary`, {
+      method: "POST",
+      headers: { origin: baseUrl },
+      body,
+    });
+
+    await scanEntered.promise;
+    await writeFile(
+      path.join(fixtureDir, "app/client-boundary/client-form.tsx"),
+      `"use client";\nexport function ClientForm() { return <p>No action after race</p>; }\n`,
+    );
+    await invalidationObserved.promise;
+    releaseScan.resolve();
+
+    const response = await pendingResponse;
+    expect(response.status).toBe(404);
+    expect(response.headers.get("x-nextjs-action-not-found")).toBe("1");
+    expect(await response.text()).toBe("Server action not found.");
+
+    const stableResponse = await fetch(`${baseUrl}/client-boundary`, {
+      method: "POST",
+      headers: { origin: baseUrl },
+      body: new FormData(),
+    });
+    expect(stableResponse.status).toBe(404);
+    expect(stableResponse.headers.get("x-nextjs-action-not-found")).toBe("1");
   }, 30_000);
 });

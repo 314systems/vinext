@@ -93,7 +93,7 @@ import {
 } from "./server-action-not-found.js";
 import {
   applyServerActionCacheControl,
-  UNRECOGNIZED_ACTION_CACHE_CONTROL,
+  applyUnrecognizedServerActionCacheControl,
 } from "./server-action-response.js";
 import {
   createRouteTreePrefetchResponse,
@@ -1209,20 +1209,10 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       return applyServerActionCacheControl(response);
     }
 
-    // The progressive payload did not resolve to an action. Match Next.js'
-    // development error response without overwriting unrelated page renders.
-    try {
-      response.headers.set("Cache-Control", UNRECOGNIZED_ACTION_CACHE_CONTROL);
-      return response;
-    } catch {
-      const headers = new Headers(response.headers);
-      headers.set("Cache-Control", UNRECOGNIZED_ACTION_CACHE_CONTROL);
-      return new Response(response.body, {
-        headers,
-        status: response.status,
-        statusText: response.statusText,
-      });
-    }
+    // Preserve development's weaker revalidation policy, but retain action
+    // classification until outer config/CDN header finalization has stripped
+    // every shared-cache header and tag.
+    return applyUnrecognizedServerActionCacheControl(response);
   }
   return pageResponse;
 }

@@ -3505,8 +3505,13 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           }
           // App Router virtual modules
           if (cleanId === VIRTUAL_RSC_ENTRY) return RESOLVED_RSC_ENTRY;
-          if (cleanId === VIRTUAL_RSC_ACTION_SOURCE_SCAN) {
-            return RESOLVED_RSC_ACTION_SOURCE_SCAN;
+          if (
+            cleanId === VIRTUAL_RSC_ACTION_SOURCE_SCAN ||
+            cleanId.startsWith(`${VIRTUAL_RSC_ACTION_SOURCE_SCAN}?`)
+          ) {
+            return (
+              RESOLVED_RSC_ACTION_SOURCE_SCAN + cleanId.slice(VIRTUAL_RSC_ACTION_SOURCE_SCAN.length)
+            );
           }
           if (cleanId === VIRTUAL_APP_SSR_ENTRY) return RESOLVED_APP_SSR_ENTRY;
           if (cleanId === VIRTUAL_APP_BROWSER_ENTRY) return RESOLVED_APP_BROWSER_ENTRY;
@@ -3532,8 +3537,12 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           if (cleanId.endsWith("/" + VIRTUAL_RSC_ENTRY)) {
             return RESOLVED_RSC_ENTRY;
           }
-          if (cleanId.endsWith("/" + VIRTUAL_RSC_ACTION_SOURCE_SCAN)) {
-            return RESOLVED_RSC_ACTION_SOURCE_SCAN;
+          const actionSourceScanIndex = cleanId.indexOf("/" + VIRTUAL_RSC_ACTION_SOURCE_SCAN);
+          if (actionSourceScanIndex !== -1) {
+            return (
+              RESOLVED_RSC_ACTION_SOURCE_SCAN +
+              cleanId.slice(actionSourceScanIndex + VIRTUAL_RSC_ACTION_SOURCE_SCAN.length + 1)
+            );
           }
           if (cleanId.endsWith("/" + VIRTUAL_APP_SSR_ENTRY)) {
             return RESOLVED_APP_SSR_ENTRY;
@@ -3613,7 +3622,12 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             return `export default ${JSON.stringify(metadata)};`;
           }
           // App Router virtual modules
-          if (id === RESOLVED_RSC_ACTION_SOURCE_SCAN && hasAppDir) {
+          if (id.startsWith(RESOLVED_RSC_ACTION_SOURCE_SCAN) && hasAppDir) {
+            const queryIndex = id.indexOf("?");
+            const pathname =
+              queryIndex === -1
+                ? undefined
+                : (new URLSearchParams(id.slice(queryIndex + 1)).get("pathname") ?? undefined);
             const routes = await appRouter(appDir, nextConfig?.pageExtensions, fileMatcher);
             const metaRoutes = scanMetadataFiles(appDir);
             const globalErrorPath = findFileWithExts(appDir, "global-error", fileMatcher);
@@ -3625,6 +3639,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               metaRoutes,
               globalErrorPath,
               globalNotFoundPath,
+              pathname,
             );
           }
           if (id === RESOLVED_RSC_ENTRY && hasAppDir) {
@@ -6675,7 +6690,12 @@ export const loadServerActionClient = ${
     plugins.push(createRscClientReferenceLoadersPlugin());
   }
   if (earlyAppDirExists) {
-    plugins.push(createRscReferenceValidationNormalizerPlugin());
+    plugins.push(
+      createRscReferenceValidationNormalizerPlugin({
+        getAppDir: () => appDir,
+        getPageExtensions: () => fileMatcher?.extensions,
+      }),
+    );
   }
 
   return plugins;
