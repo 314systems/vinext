@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { ReactFormState } from "react-dom/client";
 import type { NavigationContext } from "vinext/shims/navigation";
 import type { CachedAppPageValue } from "vinext/shims/cache-handler";
+import { getCdnCacheAdapter } from "vinext/shims/cdn-cache";
 import type { RootParams } from "vinext/shims/root-params";
 import { runWithFetchDedupe } from "vinext/shims/fetch-cache";
 import { AppElementsWire, isAppElementsRecord, type AppOutgoingElements } from "./app-elements.js";
@@ -20,6 +21,7 @@ import {
   type LayoutClassificationOptions,
 } from "./app-page-execution.js";
 import { probeAppPageBeforeRender } from "./app-page-probe.js";
+import { readStreamAsText } from "../utils/text-stream.js";
 import {
   buildAppPageHtmlResponse,
   buildAppPageRscResponse,
@@ -763,6 +765,11 @@ export async function renderAppPageLifecycle(
     !options.isDraftMode &&
     !options.isForceDynamic &&
     !shouldBypassRscCacheForSkipTransport;
+  const shouldCompleteDynamicUsageBeforeResponse =
+    options.isProduction &&
+    options.isPrerender !== true &&
+    shouldCaptureRscForCacheMetadata &&
+    !getCdnCacheAdapter().ownsBackgroundRevalidation;
   const createBufferedRscStream = (close: boolean): ReadableStream<Uint8Array> =>
     new ReadableStream<Uint8Array>({
       start(controller) {
@@ -794,8 +801,10 @@ export async function renderAppPageLifecycle(
 
   if (options.isRscRequest) {
     let requestCacheLifeForPrerender: AppPageRequestCacheLife | null = null;
-    if (shouldWaitForAllReady) {
+    let dynamicUsageCheckComplete = false;
+    if (shouldWaitForAllReady || shouldCompleteDynamicUsageBeforeResponse) {
       await settleCapturedRscRenderForCacheMetadata(capturedRscDataRef.value);
+      dynamicUsageCheckComplete = shouldCompleteDynamicUsageBeforeResponse;
     }
     if (shouldReadRequestCacheLifeForPrerender) {
       requestCacheLifeForPrerender = readRequestCacheLifeForPrerender(options);
@@ -890,6 +899,7 @@ export async function renderAppPageLifecycle(
         });
       },
       dynamicUsedDuringBuild,
+      dynamicUsageCheckComplete,
       getPageTags() {
         return options.getPageTags();
       },
@@ -1074,12 +1084,26 @@ export async function renderAppPageLifecycle(
   // Clearing the context synchronously here would race those executions, causing
   // headers()/cookies() to see a null context on warm (module-cached) requests.
   // See: https://github.com/cloudflare/vinext/issues/660
-  const safeHtmlStream = deferUntilStreamConsumed(htmlStream, () => {
+  let safeHtmlStream = deferUntilStreamConsumed(htmlStream, () => {
     dynamicUsedBeforeContextCleanup =
       dynamicUsedBeforeContextCleanup || options.consumeDynamicUsage();
     dynamicUsedDuringHtmlRender = dynamicUsedBeforeContextCleanup;
     options.clearRequestContext();
   });
+
+  let dynamicUsageCheckComplete = false;
+  if (shouldCompleteDynamicUsageBeforeResponse && !dynamicUsedDuringRender) {
+    // A CDN must decide from the response headers whether to cache the body,
+    // unlike the origin cache which can wait for the stream to drain before
+    // committing it. Buffer only CDN-managed cache candidates so late request
+    // APIs can still demote them; known-dynamic and origin-managed responses
+    // keep their normal streaming path.
+    const bufferedHtml = await readStreamAsText(safeHtmlStream);
+    safeHtmlStream = new Response(bufferedHtml).body!;
+    dynamicUsedDuringRender = dynamicUsedBeforeContextCleanup || options.consumeDynamicUsage();
+    dynamicUsedDuringHtmlRender = dynamicUsedDuringRender;
+    dynamicUsageCheckComplete = true;
+  }
 
   const htmlResponsePolicy = resolveAppPageHtmlResponsePolicy({
     dynamicUsedDuringRender,
@@ -1151,6 +1175,7 @@ export async function renderAppPageLifecycle(
       capturedRscDataPromise: capturedRscDataRef.value,
       cleanPathname: options.cleanPathname,
       consumeDynamicUsage: options.consumeDynamicUsage,
+      dynamicUsageCheckComplete,
       consumeRenderObservationState: options.consumeRenderObservationState,
       createHtmlRenderObservation(input) {
         return createAppPageRenderObservation({

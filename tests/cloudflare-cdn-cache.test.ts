@@ -54,15 +54,17 @@ describe("CloudflareCdnCacheAdapter", () => {
     });
   });
 
-  it("uses max-age (not s-maxage) and public on the edge directive, even pending-dynamic", () => {
+  it("does not emit edge-cacheable headers while the dynamic check is pending", () => {
     const headers = adapter.buildResponseHeaders({
       cacheControl: "s-maxage=60, stale-while-revalidate=540",
       pendingDynamicCheck: true,
     });
-    // Edge caches + SWRs via CDN-Cache-Control; the browser always revalidates.
-    // An already-valued stale-while-revalidate is passed through unchanged.
-    expect(headers["CDN-Cache-Control"]).toBe("public, max-age=60, stale-while-revalidate=540");
-    expect(headers["Cache-Control"]).toBe("public, max-age=0, must-revalidate");
+    expect(headers).toEqual({
+      "Cache-Control": "no-store",
+      "CDN-Cache-Control": null,
+      "Cloudflare-CDN-Cache-Control": null,
+      "Cache-Tag": null,
+    });
   });
 
   it("adds a Cache-Tag header from the page tags", () => {

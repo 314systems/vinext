@@ -1,0 +1,170 @@
+import fs from "node:fs/promises";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
+import { createBuilder } from "vite";
+import { cdnAdapter } from "../packages/cloudflare/src/cache/cdn-adapter.js";
+import vinext from "../packages/vinext/src/index.js";
+import {
+  DefaultCdnCacheAdapter,
+  setCdnCacheAdapter,
+} from "../packages/vinext/src/shims/cdn-cache.js";
+
+const FIXTURE_DIR = path.resolve(import.meta.dirname, "fixtures/cdn-late-dynamic");
+
+type AppHandler = (request: Request, env: unknown) => Promise<Response>;
+
+function responseIsEdgeCacheable(response: Response): boolean {
+  const policy = response.headers.get("cdn-cache-control") ?? "";
+  return /(?:^|,)\s*public\b/.test(policy) && !/\b(?:no-store|no-cache|private)\b/.test(policy);
+}
+
+function createWorkersLikeEdge(handler: AppHandler) {
+  const entries = new Map<string, Response>();
+  let originRequests = 0;
+
+  return {
+    get originRequests() {
+      return originRequests;
+    },
+    async fetch(request: Request): Promise<Response> {
+      const cacheKey = new URL(request.url).pathname;
+      const cached = entries.get(cacheKey);
+      if (cached) return cached.clone();
+
+      originRequests += 1;
+      const response = await handler(request, {});
+      const buffered = new Response(await response.arrayBuffer(), response);
+      if (responseIsEdgeCacheable(buffered)) {
+        entries.set(cacheKey, buffered.clone());
+      }
+      return buffered;
+    },
+  };
+}
+
+describe("App Router production responses with a CDN-managed cache", () => {
+  let handler: AppHandler;
+  let outputRoot: string;
+  let ioServer: http.Server;
+
+  beforeAll(async () => {
+    let ioRequests = 0;
+    ioServer = http.createServer((_request, response) => {
+      ioRequests += 1;
+      setTimeout(() => response.end(`io-${ioRequests}`), 75);
+    });
+    await new Promise<void>((resolve, reject) => {
+      ioServer.once("error", reject);
+      ioServer.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = ioServer.address();
+    if (!address || typeof address === "string") throw new Error("I/O server did not bind");
+    process.env.TEST_CDN_LATE_DYNAMIC_IO_URL = `http://127.0.0.1:${address.port}/data`;
+
+    outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-cdn-late-dynamic-"));
+    const rscOutDir = path.join(outputRoot, "server");
+    const builder = await createBuilder({
+      root: FIXTURE_DIR,
+      configFile: false,
+      plugins: [
+        vinext({
+          appDir: FIXTURE_DIR,
+          cache: { cdn: cdnAdapter() },
+          rscOutDir,
+          ssrOutDir: path.join(rscOutDir, "ssr"),
+          clientOutDir: path.join(outputRoot, "client"),
+        }),
+      ],
+      logLevel: "silent",
+    });
+    await builder.buildApp();
+    await fs.symlink(
+      path.resolve(import.meta.dirname, "../node_modules"),
+      path.join(outputRoot, "node_modules"),
+    );
+
+    const entry = path.join(rscOutDir, "index.js");
+    const built = (await import(pathToFileURL(entry).href)) as {
+      default: AppHandler;
+    };
+    if (typeof built.default !== "function") {
+      throw new Error(`Unexpected RSC entry exports: ${Object.keys(built).join(",")}`);
+    }
+    handler = built.default;
+  }, 120_000);
+
+  afterAll(async () => {
+    setCdnCacheAdapter(new DefaultCdnCacheAdapter());
+    delete process.env.TEST_CDN_LATE_DYNAMIC_IO_URL;
+    await new Promise<void>((resolve, reject) => {
+      ioServer.close((error) => (error ? reject(error) : resolve()));
+    });
+    await fs.rm(outputRoot, { force: true, recursive: true });
+  });
+
+  it("does not share a response personalized after deferred I/O", async () => {
+    // Next.js likewise classifies cookie-dependent content behind Suspense as dynamic:
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/ppr-metadata-streaming/app/fully-dynamic/page.tsx
+    const edge = createWorkersLikeEdge(handler);
+
+    const first = await edge.fetch(
+      new Request("https://example.com/late-dynamic", {
+        headers: { cookie: "session=user-a" },
+      }),
+    );
+    const firstHtml = await first.text();
+    expect(firstHtml).toContain('id="session"');
+    expect(firstHtml).toContain("user-a");
+
+    const second = await edge.fetch(
+      new Request("https://example.com/late-dynamic", {
+        headers: { cookie: "session=user-b" },
+      }),
+    );
+    const secondHtml = await second.text();
+    expect(secondHtml).toContain("user-b");
+    expect(secondHtml).not.toContain("user-a");
+    expect(edge.originRequests).toBe(2);
+    expect(first.headers.get("cdn-cache-control")).toBeNull();
+    expect(first.headers.get("cache-control")).toMatch(/no-store/);
+  });
+
+  it("still lets the edge cache a deferred response that remains static", async () => {
+    const edge = createWorkersLikeEdge(handler);
+
+    const first = await edge.fetch(new Request("https://example.com/static"));
+    expect(await first.text()).toContain("io-");
+    expect(first.headers.get("cdn-cache-control")).toMatch(/public, max-age=60/);
+
+    const second = await edge.fetch(new Request("https://example.com/static"));
+    expect(await second.text()).toContain("io-");
+    expect(edge.originRequests).toBe(1);
+  });
+
+  it("does not share a deferred personalized RSC response", async () => {
+    const edge = createWorkersLikeEdge(handler);
+
+    const first = await edge.fetch(
+      new Request("https://example.com/late-dynamic.rsc", {
+        headers: { accept: "text/x-component", cookie: "session=rsc-user-a", rsc: "1" },
+      }),
+    );
+    const firstPayload = await first.text();
+    expect(firstPayload).toContain("rsc-user-a");
+
+    const second = await edge.fetch(
+      new Request("https://example.com/late-dynamic.rsc", {
+        headers: { accept: "text/x-component", cookie: "session=rsc-user-b", rsc: "1" },
+      }),
+    );
+    const secondPayload = await second.text();
+    expect(secondPayload).toContain("rsc-user-b");
+    expect(secondPayload).not.toContain("rsc-user-a");
+    expect(edge.originRequests).toBe(2);
+    expect(first.headers.get("cdn-cache-control")).toBeNull();
+    expect(first.headers.get("cache-control")).toMatch(/no-store/);
+  });
+});

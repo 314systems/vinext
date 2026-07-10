@@ -39,6 +39,7 @@ type FinalizeAppPageHtmlCacheResponseOptions = {
   capturedRscDataPromise: Promise<ArrayBuffer> | null;
   cleanPathname: string;
   consumeDynamicUsage: () => boolean;
+  dynamicUsageCheckComplete?: boolean;
   consumeRenderObservationState?: () => AppPageRenderObservationState;
   createHtmlRenderObservation?: BuildAppPageCacheRenderObservation;
   createRscRenderObservation?: BuildAppPageCacheRenderObservation;
@@ -63,6 +64,7 @@ type ScheduleAppPageRscCacheWriteOptions = {
   consumeRenderObservationState?: () => AppPageRenderObservationState;
   createRscRenderObservation?: BuildAppPageCacheRenderObservation;
   dynamicUsedDuringBuild: boolean;
+  dynamicUsageCheckComplete?: boolean;
   getPageTags: () => string[];
   getRequestCacheLife?: () => AppPageRequestCacheLife | null;
   isrDebug?: AppPageDebugLogger;
@@ -81,10 +83,14 @@ type ScheduleAppPageRscCacheWriteOptions = {
 function applyPendingDynamicCdnHeaders(
   headers: Headers,
   tags?: readonly string[],
-  options: { omitCacheState?: boolean } = {},
+  options: { dynamicUsageCheckComplete?: boolean; omitCacheState?: boolean } = {},
 ): void {
   const cacheable = headers.get("Cache-Control") ?? "";
-  applyCdnResponseHeaders(headers, { cacheControl: cacheable, pendingDynamicCheck: true, tags });
+  applyCdnResponseHeaders(headers, {
+    cacheControl: cacheable,
+    pendingDynamicCheck: options.dynamicUsageCheckComplete !== true,
+    tags,
+  });
   if (options.omitCacheState === true) {
     headers.delete(VINEXT_CACHE_HEADER);
     headers.delete(NEXTJS_CACHE_HEADER);
@@ -138,6 +144,7 @@ export function finalizeAppPageHtmlCacheResponse(
   const clientHeaders = new Headers(response.headers);
   if (options.preserveClientResponseHeaders !== true) {
     applyPendingDynamicCdnHeaders(clientHeaders, options.getPageTags(), {
+      dynamicUsageCheckComplete: options.dynamicUsageCheckComplete,
       omitCacheState: options.omitPendingDynamicCacheState === true,
     });
   }
@@ -237,6 +244,7 @@ export function finalizeAppPageRscCacheResponse(
 
   const clientHeaders = new Headers(response.headers);
   applyPendingDynamicCdnHeaders(clientHeaders, options.getPageTags(), {
+    dynamicUsageCheckComplete: options.dynamicUsageCheckComplete,
     omitCacheState: options.omitPendingDynamicCacheState === true,
   });
 

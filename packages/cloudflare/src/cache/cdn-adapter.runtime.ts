@@ -143,6 +143,18 @@ export class CloudflareCdnCacheAdapter implements CdnCacheAdapter {
   }
 
   buildResponseHeaders(input: CdnCacheableHeaderInput): CdnResponseHeaders {
+    // Edge headers are irreversible once the response leaves the Worker. A
+    // streaming render can still discover request-specific data after its
+    // shell is ready, so only cache responses whose dynamic check completed.
+    if (input.pendingDynamicCheck) {
+      return {
+        "Cache-Control": NO_STORE,
+        "CDN-Cache-Control": null,
+        "Cloudflare-CDN-Cache-Control": null,
+        "Cache-Tag": null,
+      };
+    }
+
     // No cacheable policy → nobody stores it.
     if (!input.cacheControl) {
       return { "Cache-Control": NO_STORE };

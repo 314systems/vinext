@@ -46,10 +46,9 @@ export type CdnCacheableHeaderInput = {
    * dynamic-ness is not yet proven (late Server Component request-API usage can
    * only be detected after the stream drains).
    *
-   * The default adapter forces `no-store` for the browser in this case — the
-   * page is instead served from the origin store on subsequent requests. Edge
-   * adapters may instead emit edge-only cache headers (e.g. `CDN-Cache-Control`)
-   * so the CDN performs SWR while the browser still sees `no-store`.
+   * Adapters must not emit cacheable headers in this case. Origin-managed
+   * adapters can commit after the stream drains; CDN-managed adapters need the
+   * framework to complete the dynamic check before response headers are sent.
    */
   pendingDynamicCheck?: boolean;
   /**
