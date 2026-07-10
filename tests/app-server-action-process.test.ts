@@ -110,21 +110,77 @@ describe("App Router production server action process isolation", () => {
     await rm(path.join(FIXTURE_DIR, "next-env.d.ts"), { force: true });
   });
 
+  // Ported from Next.js: test/e2e/app-dir/actions-unrecognized/actions-unrecognized.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/actions-unrecognized/actions-unrecognized.test.ts
   // Next.js validates every progressive action reference before decoding:
   // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/app-render/action-handler.ts
-  it("contains malformed progressive action references without terminating the process", async () => {
-    const malformed = new FormData();
-    malformed.set("$ACTION_ID_a#b", "");
-    malformed.set("$ACTION_ID_c#d", "");
-    const malformedResponse = await fetch(baseUrl, {
+  it.each([
+    {
+      name: "unknown",
+      createBody: () => {
+        const body = new FormData();
+        body.set("$ACTION_ID_a#b", "");
+        body.set("$ACTION_ID_c#d", "");
+        return body;
+      },
+    },
+    {
+      name: "malformed bound",
+      createBody: () => {
+        const body = new FormData();
+        body.set(`$ACTION_ID_${validActionIds[0]}`, "");
+        body.set("$ACTION_REF_broken", "");
+        body.set("$ACTION_broken:0", "not-json");
+        return body;
+      },
+    },
+  ])("returns Next.js' production 500 for $name page action references", async ({ createBody }) => {
+    const response = await fetch(baseUrl, {
       method: "POST",
-      body: malformed,
+      body: createBody(),
     });
-    expect(malformedResponse.status).toBe(404);
+    expect(response.status).toBe(500);
+    expect(response.headers.get("x-nextjs-action-not-found")).toBeNull();
+    expect(await response.text()).toBe("Internal Server Error");
 
     expect(await waitForExit(child!, 500)).toBe(false);
-    const afterMalformed = await fetch(baseUrl);
-    expect(afterMalformed.status).toBe(200);
+    const afterFailure = await fetch(baseUrl);
+    expect(afterFailure.status).toBe(200);
+  });
+
+  it("passes action-shaped multipart fields through to App Route Handlers", async () => {
+    const body = new FormData();
+    body.set("$ACTION_ID_first", "first-value");
+    body.set("$ACTION_ID_second", "second-value");
+
+    const response = await fetch(`${baseUrl}/action-fields`, {
+      method: "POST",
+      body,
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual([
+      ["$ACTION_ID_first", "first-value"],
+      ["$ACTION_ID_second", "second-value"],
+    ]);
+    expect(child!.exitCode).toBeNull();
+  });
+
+  // Ported from Next.js: test/e2e/app-dir/no-server-actions/no-server-actions.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/no-server-actions/no-server-actions.test.ts
+  it("keeps the action-not-found response for page multipart posts without an action marker", async () => {
+    const body = new FormData();
+    body.set("ordinary-field", "value");
+
+    const response = await fetch(baseUrl, {
+      method: "POST",
+      body,
+    });
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get("x-nextjs-action-not-found")).toBe("1");
+    expect(await response.text()).toBe("Server action not found.");
+    expect(child!.exitCode).toBeNull();
   });
 
   it("still executes a valid progressive action after a malformed request", async () => {

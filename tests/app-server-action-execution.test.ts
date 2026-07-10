@@ -129,7 +129,7 @@ function createOptions(
     getDraftModeCookieHeader() {
       return null;
     },
-    hasPageRoute: false,
+    hasPageRoute: true,
     async loadServerAction() {
       return () => undefined;
     },
@@ -454,6 +454,7 @@ describe("app server action execution helpers", () => {
     const response = await handleProgressiveServerActionRequest(
       createOptions({
         contentType: request.headers.get("content-type") ?? "",
+        hasPageRoute: false,
         async decodeAction() {
           return null;
         },
@@ -1126,21 +1127,26 @@ describe("app server action execution helpers", () => {
     }
   });
 
-  // Route handlers (route.ts) accept raw multipart POSTs that legitimately
-  // decode to no action; those must still fall through to the route-handler
-  // dispatch rather than 404. The page-vs-route distinction comes from the
-  // caller (`hasPageRoute`).
-  it("falls through for multipart posts that decode to no action on a non-page route", async () => {
+  // Route handlers (route.ts) bypass App Page action handling in Next.js and
+  // must receive the original multipart request even when field names look
+  // exactly like progressive action markers.
+  it("bypasses parsing and preflight for multipart posts to a non-page route", async () => {
+    const readFormDataWithLimit = vi.fn();
+    const loadServerAction = vi.fn();
+    const decodeAction = vi.fn();
     const response = await handleProgressiveServerActionRequest(
       createOptions({
         hasPageRoute: false,
-        async decodeAction() {
-          return null;
-        },
+        decodeAction,
+        loadServerAction,
+        readFormDataWithLimit,
       }),
     );
 
     expect(response).toBeNull();
+    expect(readFormDataWithLimit).not.toHaveBeenCalled();
+    expect(loadServerAction).not.toHaveBeenCalled();
+    expect(decodeAction).not.toHaveBeenCalled();
   });
 
   it("returns null for non-fetch RSC action requests", async () => {
