@@ -830,8 +830,6 @@ const PROGRESSIVE_ACTION_DESCRIPTOR_ID_PREFIX = '{"id":"';
 
 type ProgressiveActionPreflight = {
   actionIds: string[];
-  markerKeys: string[];
-  selectedMarkerKey: string;
 };
 
 /**
@@ -903,11 +901,8 @@ function getProgressiveActionPreflight(
     actionIds.push(descriptor.id);
   }
 
-  const markerKeyList = [...markerKeys];
   return {
     actionIds: [...new Set(actionIds)],
-    markerKeys: markerKeyList,
-    selectedMarkerKey: markerKeyList.at(-1)!,
   };
 }
 
@@ -1024,33 +1019,18 @@ export async function handleProgressiveServerActionRequest(
       return createInvalidProgressiveActionResult(options);
     }
 
-    // Keep the exact parsed body for decodeFormState. React reads
-    // `$ACTION_KEY` and every bound-reference marker from this body after the
-    // selected action has run; mutating it changes useActionState matching.
-    // decodeAction gets a filtered clone so unselected markers cannot start
-    // module loads while normal fields and descriptor rows retain their
-    // original ordering and values.
-    const actionBody = new FormData();
-    for (const [key, value] of body) actionBody.append(key, value);
-
     // Match Next.js' areAllActionIdsValid preflight: membership checks do not
-    // import or evaluate action modules. Validate every marker, then remove
-    // unselected markers before handing the body to React. React preserves
-    // the last distinct marker, but otherwise starts a module load for every
-    // marker it sees; narrowing the decoder input prevents one request from
-    // amplifying imports while retaining its selected action and form fields.
+    // import or evaluate action modules. Validate every marker before handing
+    // the original FormData to React, which evaluates markers in form order
+    // and returns the last action. decodeFormState must receive that same body
+    // so `$ACTION_KEY` and bound-reference matching retain React/Next parity.
     for (const actionId of preflight.actionIds) {
       if (!(await options.hasServerAction(actionId))) {
         return createInvalidProgressiveActionResult(options);
       }
     }
-    for (const key of preflight.markerKeys) {
-      if (key !== preflight.selectedMarkerKey) {
-        actionBody.delete(key);
-      }
-    }
 
-    const action = await options.decodeAction(actionBody);
+    const action = await options.decodeAction(body);
     if (!isAppServerActionFunction(action)) {
       return createInvalidProgressiveActionResult(options);
     }

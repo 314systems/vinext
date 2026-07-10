@@ -671,7 +671,7 @@ describe("app server action execution helpers", () => {
         createOptions({
           clearRequestContext: clearContext,
           async decodeAction(body) {
-            expect(body).not.toBe(formData);
+            expect(body).toBe(formData);
             expect([...body]).toEqual([...formData]);
             return () => {
               throw { digest: "NEXT_REDIRECT;replace;%2Fresult%3Fok%3D1;307" };
@@ -879,7 +879,7 @@ describe("app server action execution helpers", () => {
     });
   });
 
-  it("filters decodeAction without mutating the original body used by decodeFormState", async () => {
+  it("passes the original full body to decodeAction and decodeFormState", async () => {
     const formData = new FormData();
     formData.set("$ACTION_REF_state", "");
     formData.set("$ACTION_state:0", '{"id":"bound-action"}');
@@ -890,12 +890,16 @@ describe("app server action execution helpers", () => {
     const request = createMultipartBodyRequest(formData);
     const formState = ["action-result", "key-path", "reference-id", 1] as never;
     let actionRan = false;
+    let decodedBody: FormData | undefined;
 
     const result = await handleProgressiveServerActionRequest(
       createOptions({
         contentType: request.headers.get("content-type") ?? "",
         async decodeAction(body) {
-          expect(body.get("$ACTION_REF_state")).toBeNull();
+          decodedBody = body;
+          expect(body.get("$ACTION_REF_state")).toBe("");
+          expect(body.get("$ACTION_state:0")).toBe('{"id":"bound-action"}');
+          expect(body.get("$ACTION_state:1")).toBe("bound-argument");
           expect(body.get("$ACTION_ID_test")).toBe("");
           expect(body.get("$ACTION_KEY")).toBe("state-key");
           expect(body.get("field")).toBe("value");
@@ -906,6 +910,7 @@ describe("app server action execution helpers", () => {
         },
         async decodeFormState(actionResult, body) {
           expect(actionResult).toEqual({ count: 1 });
+          expect(body).toBe(decodedBody);
           expect(body.get("$ACTION_REF_state")).toBe("");
           expect(body.get("$ACTION_state:0")).toBe('{"id":"bound-action"}');
           expect(body.get("$ACTION_state:1")).toBe("bound-argument");

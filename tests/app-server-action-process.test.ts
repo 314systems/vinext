@@ -28,6 +28,14 @@ function expectServerActionNoStore(response: Response): void {
   expect(response.headers.get("cdn-cache-control")).toBeNull();
   expect(response.headers.get("cloudflare-cdn-cache-control")).toBeNull();
   expect(response.headers.get("cache-tag")).toBeNull();
+  expect(response.headers.get("x-vinext-server-action-response")).toBeNull();
+}
+
+function getFormActionId(html: string, formId: string): string {
+  const form = html.match(new RegExp(`<form[^>]*id="${formId}"[^>]*>[\\s\\S]*?</form>`))?.[0];
+  const actionId = form?.match(/name="\$ACTION_ID_([^"]+)"/)?.[1];
+  if (!actionId) throw new Error(`Missing action id for form ${formId}`);
+  return actionId;
 }
 
 async function waitForServerPort(child: ChildProcess, getOutput: () => string): Promise<number> {
@@ -64,6 +72,8 @@ describe("App Router production server action process isolation", () => {
   let stateActionFields: [string, string][];
   let stateActionKey: string;
   let unboundStateActionId: string;
+  let successfulFetchActionId: string;
+  let failedFetchActionId: string;
 
   beforeAll(async () => {
     tempDir = await mkdtemp(path.join(import.meta.dirname, ".tmp-action-process-"));
@@ -128,6 +138,10 @@ describe("App Router production server action process isolation", () => {
     const unboundStateMatch = stateHtml.match(/name="\$ACTION_ID_([^"]+)"/);
     expect(unboundStateMatch).toBeTruthy();
     unboundStateActionId = unboundStateMatch![1];
+
+    const fetchActionsHtml = await (await fetch(`${baseUrl}/fetch-actions`)).text();
+    successfulFetchActionId = getFormActionId(fetchActionsHtml, "successful-fetch-action");
+    failedFetchActionId = getFormActionId(fetchActionsHtml, "failed-fetch-action");
 
     // Capture the lazily routed action id, then restart the production process
     // so its module is definitely unevaluated for the preflight test below.
@@ -201,9 +215,7 @@ describe("App Router production server action process isolation", () => {
     });
     expect(response.status).toBe(500);
     expect(response.headers.get("x-nextjs-action-not-found")).toBeNull();
-    expect(response.headers.get("cache-control")).toBe(
-      "no-cache, no-store, max-age=0, must-revalidate",
-    );
+    expectServerActionNoStore(response);
     expect(await response.text()).toBe("Internal Server Error");
 
     expect(await waitForExit(child!, 500)).toBe(false);
@@ -227,6 +239,17 @@ describe("App Router production server action process isolation", () => {
       ["$ACTION_ID_second", "second-value"],
     ]);
     expect(child!.exitCode).toBeNull();
+  });
+
+  it("applies the fixture's cacheable middleware and config headers to ordinary responses", async () => {
+    const response = await fetch(`${baseUrl}/success`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("public, max-age=3600");
+    expect(response.headers.get("cdn-cache-control")).toBe("public, max-age=3600");
+    expect(response.headers.get("cloudflare-cdn-cache-control")).toBe("public, max-age=3600");
+    expect(response.headers.get("cache-tag")).toBe("action-process-fixture");
+    expect(response.headers.get("x-action-config-headers")).toBe("present");
   });
 
   it.each(["next-action", "x-rsc-action"])(
@@ -263,14 +286,30 @@ describe("App Router production server action process isolation", () => {
 
     expect(response.status).toBe(500);
     expect(response.headers.get("x-nextjs-action-not-found")).toBeNull();
-    expect(response.headers.get("cache-control")).toBe(
-      "no-cache, no-store, max-age=0, must-revalidate",
-    );
+    expectServerActionNoStore(response);
     expect(await response.text()).toBe("Internal Server Error");
     expect(child!.exitCode).toBeNull();
   });
 
-  it("does not evaluate an unselected valid action module during preflight", async () => {
+  it("rejects an invalid reference before evaluating an earlier valid action module", async () => {
+    expect(await (await fetch(`${baseUrl}/module-loads`)).json()).toEqual({ unselected: 0 });
+
+    const body = new FormData();
+    body.set(`$ACTION_ID_${unselectedActionId}`, "");
+    body.set("$ACTION_ID_invalid#action", "");
+    const response = await fetch(baseUrl, {
+      method: "POST",
+      body,
+      redirect: "manual",
+    });
+
+    expect(response.status).toBe(500);
+    expectServerActionNoStore(response);
+    expect(await (await fetch(`${baseUrl}/module-loads`)).json()).toEqual({ unselected: 0 });
+    expect(await waitForExit(child!, 500)).toBe(false);
+  });
+
+  it("passes the original valid marker sequence to React's decoder", async () => {
     expect(await (await fetch(`${baseUrl}/module-loads`)).json()).toEqual({ unselected: 0 });
 
     const body = new FormData();
@@ -284,7 +323,8 @@ describe("App Router production server action process isolation", () => {
 
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toBe(`${baseUrl}/success`);
-    expect(await (await fetch(`${baseUrl}/module-loads`)).json()).toEqual({ unselected: 0 });
+    expectServerActionNoStore(response);
+    expect(await (await fetch(`${baseUrl}/module-loads`)).json()).toEqual({ unselected: 1 });
     expect(child!.exitCode).toBeNull();
   });
 
@@ -299,6 +339,7 @@ describe("App Router production server action process isolation", () => {
 
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toBe(`${baseUrl}/success`);
+    expectServerActionNoStore(response);
     expect(child!.exitCode).toBeNull();
   });
 
@@ -314,6 +355,7 @@ describe("App Router production server action process isolation", () => {
 
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toBe(`${baseUrl}/other-success`);
+    expectServerActionNoStore(response);
     expect(child!.exitCode).toBeNull();
   });
 
@@ -382,10 +424,34 @@ describe("App Router production server action process isolation", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(response.headers.get("cache-control")).toBe(
-      "no-cache, no-store, max-age=0, must-revalidate",
-    );
+    expectServerActionNoStore(response);
+    expect(response.headers.get("x-action-config-headers")).toBe("present");
     expect(await response.text()).toContain('id="state-value">unbound:mixed</p>');
     expect(child!.exitCode).toBeNull();
   });
+
+  it.each([
+    { name: "successful", getActionId: () => successfulFetchActionId, status: 200 },
+    { name: "failed", getActionId: () => failedFetchActionId, status: 500 },
+  ])(
+    "reasserts action cache isolation after middleware and config headers for $name fetch actions",
+    async ({ getActionId, status }) => {
+      const response = await fetch(`${baseUrl}/fetch-actions`, {
+        method: "POST",
+        headers: {
+          accept: "text/x-component",
+          "content-type": "text/plain;charset=UTF-8",
+          "next-action": getActionId(),
+          origin: baseUrl,
+          rsc: "1",
+        },
+        body: "[]",
+      });
+
+      expect(response.status).toBe(status);
+      expectServerActionNoStore(response);
+      expect(response.headers.get("x-action-config-headers")).toBe("present");
+      expect(child!.exitCode).toBeNull();
+    },
+  );
 });

@@ -21,3 +21,11 @@ export async function stateAction(_previousState: { value: string }, formData: F
 export async function unboundStateAction(formData: FormData) {
   return { value: `unbound:${String(formData.get("value"))}` };
 }
+
+export async function successfulFetchAction() {
+  return "fetch-success";
+}
+
+export async function failedFetchAction() {
+  throw new Error("fetch-action-failure");
+}
