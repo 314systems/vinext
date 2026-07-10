@@ -984,15 +984,21 @@ async function runImageGeneration<T>(
       { once: true },
     );
   });
-  try {
-    return await Promise.race([generate(controller.signal), aborted]);
-  } finally {
+  const generation = Promise.resolve().then(() => generate(controller.signal));
+  const releaseReservation = () => {
     clearTimeout(timeout);
-    if (!controller.signal.aborted) controller.abort();
     cache.activeGenerations -= 1;
     cache.activeGenerationBytes -= reservedBytes;
     startQueuedImageGenerations(cache);
-  }
+  };
+
+  // A deadline ends the caller's wait and asks cooperative work to stop, but
+  // it does not prove that an adapter actually stopped. Keep admission and
+  // memory charged until the underlying promise settles so a transform that
+  // ignores AbortSignal cannot run alongside replacement work outside the
+  // configured bounds.
+  void generation.then(releaseReservation, releaseReservation);
+  return await Promise.race([generation, aborted]);
 }
 
 function awaitImageGeneration<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -1467,7 +1473,7 @@ export type ImageOptimizer = {
   /** Transform the source image (resize, format, quality). */
   transformImage: (
     body: ReadableStream,
-    options: { width: number; format: string; quality: number; signal: AbortSignal },
+    options: { width: number; format: string; quality: number; signal?: AbortSignal },
   ) => Promise<Response>;
 };
 

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { animatedImageSources } from "../app-basic/image-test-animated-sources";
+import { animatedImageSources } from "./image-test-animated-sources";
 
 let imageSourceDispatchCount = 0;
 let imageSourceMethod = "";

@@ -5,5 +5,5 @@
   "compatibility_flags": ["nodejs_compat"],
   "main": "dist/pages_image_optimizer_cloudflare/index.js",
   "no_bundle": true,
-  "rules": [{ "type": "ESModule", "globs": ["**/*.js"] }]
+  "rules": [{ "type": "ESModule", "globs": ["**/*.js"] }],
 }

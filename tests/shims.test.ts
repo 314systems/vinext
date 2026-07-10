@@ -21964,6 +21964,60 @@ describe("handleImageOptimization", () => {
     }
   });
 
+  it("retains admission for a timed-out transform until non-cooperative work settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const { handleImageOptimization } =
+        await import("../packages/vinext/src/server/image-optimization.js");
+      const owner = {};
+      let releaseFirst!: () => void;
+      const firstGate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      let transformCalls = 0;
+      let activeTransforms = 0;
+      let maxActiveTransforms = 0;
+      const handlers = {
+        cacheOwner: owner,
+        fetchAsset: async () => new Response(jpegBytes),
+        async transformImage() {
+          transformCalls += 1;
+          activeTransforms += 1;
+          maxActiveTransforms = Math.max(maxActiveTransforms, activeTransforms);
+          try {
+            if (transformCalls === 1) await firstGate;
+            return new Response(jpegBytes, { headers: { "Content-Type": "image/jpeg" } });
+          } finally {
+            activeTransforms -= 1;
+          }
+        },
+      };
+
+      const timedOut = handleImageOptimization(
+        new Request("http://localhost/_next/image?url=%2Fzombie.jpg&w=640&q=75"),
+        handlers,
+      );
+      await vi.waitFor(() => expect(transformCalls).toBe(1));
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect((await timedOut).status).toBe(503);
+
+      const replacement = handleImageOptimization(
+        new Request("http://localhost/_next/image?url=%2Freplacement.jpg&w=640&q=75"),
+        handlers,
+      );
+      await Promise.resolve();
+      expect(transformCalls).toBe(1);
+      expect(activeTransforms).toBe(1);
+
+      releaseFirst();
+      expect((await replacement).status).toBe(200);
+      expect(transformCalls).toBe(2);
+      expect(maxActiveTransforms).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not let the first subscriber abort cancel shared in-flight generation", async () => {
     const { handleImageOptimization } =
       await import("../packages/vinext/src/server/image-optimization.js");
