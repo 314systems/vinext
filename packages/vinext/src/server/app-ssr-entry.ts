@@ -414,6 +414,9 @@ export async function handleSsr(
       onSearchParamsAccess() {
         if (incomingNavigationContext.searchParamsAccessMode === "force-static") return;
         if (incomingNavigationContext.searchParamsAccessMode === "error") {
+          // Deliberate defense-in-depth divergence from Next.js's CSR bailout:
+          // dynamic="error" rejects query-dependent SSR so it cannot enter
+          // pathname-keyed ISR HTML before the client takes over.
           throw new Error(getAppPageStaticGenerationErrorMessage());
         }
         didAccessSearchParams = true;
