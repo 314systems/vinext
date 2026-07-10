@@ -242,6 +242,8 @@ export function generateRscEntry(
   ];
   const imageConfig = {
     basePath,
+    deviceSizes: config?.imageConfig?.deviceSizes,
+    imageSizes: config?.imageConfig?.imageSizes,
     qualities: config?.imageConfig?.qualities,
     formats: config?.imageConfig?.formats,
     dangerouslyAllowSVG: config?.imageConfig?.dangerouslyAllowSVG,

@@ -5,6 +5,10 @@ const nextConfig = {
   env: {
     CUSTOM_VAR: "hello-from-config",
   },
+  images: {
+    maximumResponseBody: 100,
+    minimumCacheTTL: 123,
+  },
   async redirects() {
     return [
       {

@@ -1692,7 +1692,7 @@ describe("readPagesRouterEntrySource", () => {
     const content = readPagesRouterEntrySource();
     expect(content).toContain("vinextConfig?.images?.deviceSizes ?? DEFAULT_DEVICE_SIZES");
     expect(content).toContain("vinextConfig?.images?.imageSizes ?? DEFAULT_IMAGE_SIZES");
-    expect(content).toContain("qualities: vinextConfig.images.qualities");
+    expect(content).toContain("qualities: vinextConfig?.images?.qualities");
     expect(content).toContain("allowedWidths,");
     expect(content).toContain("imageConfig,");
   });
