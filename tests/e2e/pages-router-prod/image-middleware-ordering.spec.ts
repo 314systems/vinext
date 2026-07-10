@@ -37,6 +37,8 @@ test.describe("Pages Router image request middleware ordering", () => {
     expect(wrongType.status()).toBe(200);
     expect(wrongType.headers()["content-type"]).toContain("image/png");
     expect(wrongType.headers()["cache-control"]).toBe("public, max-age=200, must-revalidate");
+    expect(wrongType.headers()["content-disposition"]).toBe('inline; filename="source.png"');
+    expect(wrongType.headers()["content-length"]).toBe(String((await wrongType.body()).byteLength));
     expect(wrongType.headers().etag).toBeTruthy();
 
     for (const source of ["/image-test/source.png?auth=1", "/image-test/source.png?spoof=1"]) {
@@ -73,6 +75,8 @@ test.describe("Pages Router image request middleware ordering", () => {
       method: "POST",
     });
     expect(postResponse.status()).toBe(200);
+    const expectedContentLength = postResponse.headers()["content-length"];
+    expect(expectedContentLength).toBeTruthy();
     let state = await (await request.get(`${BASE}/image-test/state`)).json();
     expect(state).toEqual({ count: 1, method: "POST" });
 
@@ -82,8 +86,26 @@ test.describe("Pages Router image request middleware ordering", () => {
     });
     expect(headResponse.status()).toBe(200);
     expect((await headResponse.body()).byteLength).toBe(0);
+    expect(headResponse.headers()["content-length"]).toBe(expectedContentLength);
+    expect(headResponse.headers()["content-disposition"]).toBe('inline; filename="source.png"');
     state = await (await request.get(`${BASE}/image-test/state`)).json();
     expect(state).toEqual({ count: 1, method: "GET" });
+  });
+
+  test("bounds public files and classifies both imported-image output layouts", async ({
+    request,
+  }) => {
+    expect((await request.get(optimizerUrl("/large-public.png"))).status()).toBe(413);
+    for (const source of [
+      "/static/media/static-image.bmp",
+      "/_next/static/immutable/media/static-image.bmp",
+    ]) {
+      const response = await request.get(optimizerUrl(source));
+      expect(response.status()).toBe(200);
+      expect(response.headers()["cache-control"]).toBe("public, max-age=315360000, immutable");
+      expect(response.headers()["content-disposition"]).toBe('inline; filename="static-image.bmp"');
+      expect(response.headers()["content-length"]).toBe(String((await response.body()).byteLength));
+    }
   });
 
   test("rejects nested image optimizer source paths before dispatch", async ({ request }) => {

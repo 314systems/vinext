@@ -300,10 +300,10 @@ async function readImageSource(
     bytes[11] === 0x50
   )
     contentType = "image/webp";
-  else if (bytes.length >= 12 && startsWith(0x00, 0x00, 0x00, 0x0c, 0x4a, 0x58, 0x4c, 0x20))
+  else if (startsWith(0x00, 0x00, 0x00, 0x0c, 0x4a, 0x58, 0x4c, 0x20, 0x0d, 0x0a, 0x87, 0x0a))
     contentType = "image/jxl";
   else if (startsWith(0xff, 0x0a)) contentType = "image/jxl";
-  else if (bytes.length >= 12 && startsWith(0x00, 0x00, 0x00, 0x0c, 0x6a, 0x50, 0x20, 0x20))
+  else if (startsWith(0x00, 0x00, 0x00, 0x0c, 0x6a, 0x50, 0x20, 0x20, 0x0d, 0x0a, 0x87, 0x0a))
     contentType = "image/jp2";
   else if (
     bytes.length >= 12 &&
@@ -324,6 +324,7 @@ async function readImageSource(
 
   const headers = new Headers(response.headers);
   headers.set("ETag", await extractImageEtag(headers.get("ETag"), bytes));
+  headers.set("Content-Length", String(bytes.byteLength));
 
   return {
     bytes,
@@ -362,13 +363,74 @@ function isFreshImageRequest(request: Request, etag: string): boolean {
     .some((value) => value.trim() === "*" || normalize(value) === normalize(etag));
 }
 
+const IMAGE_EXTENSION_BY_CONTENT_TYPE: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/gif": "gif",
+  "image/webp": "webp",
+  "image/avif": "avif",
+  "image/jp2": "jp2",
+  "image/jxl": "jxl",
+  "image/x-icon": "ico",
+  "image/x-icns": "icns",
+  "image/vnd.microsoft.icon": "ico",
+  "image/bmp": "bmp",
+  "image/tiff": "tiff",
+  "image/svg+xml": "svg",
+};
+
+function getImageFilename(imageUrl: string, contentType: string | null): string {
+  let pathname = imageUrl.split("?", 1)[0];
+  try {
+    pathname = decodeURIComponent(pathname);
+  } catch {
+    // Keep the encoded pathname. It is still safe after the normalization below.
+  }
+  const sourceBasename = pathname.split("/").pop() || "image";
+  const sourceStem = sourceBasename.split(".", 1)[0] || "image";
+  const sanitizedStem = Array.from(sourceStem.normalize("NFC"), (character) => {
+    const codePoint = character.codePointAt(0)!;
+    return codePoint < 0x20 || codePoint === 0x7f || character === "/" || character === "\\"
+      ? "_"
+      : character;
+  })
+    .join("")
+    .slice(0, 200);
+  const mediaType = contentType?.split(";", 1)[0].trim().toLowerCase();
+  const extension = (mediaType && IMAGE_EXTENSION_BY_CONTENT_TYPE[mediaType]) || "bin";
+  return `${sanitizedStem || "image"}.${extension}`;
+}
+
+function imageContentDisposition(
+  imageUrl: string,
+  contentType: string | null,
+  dispositionType: "inline" | "attachment",
+): string {
+  const filename = getImageFilename(imageUrl, contentType);
+  const fallback = filename
+    .replace(/[^\x20-\x7e]/g, "?")
+    .replaceAll("\\", "\\\\")
+    .replaceAll('"', '\\"');
+  const encoded = encodeURIComponent(filename).replace(
+    /[!'()*]/g,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  const extended = /[^\x20-\x7e]/.test(filename) ? `; filename*=UTF-8''${encoded}` : "";
+  return `${dispositionType}; filename="${fallback}"${extended}`;
+}
+
 /**
  * Apply security headers to an image optimization response.
  * These headers are set on every response from the image endpoint,
  * regardless of whether the image was transformed or served as-is.
  * When an ImageConfig is provided, uses its values for CSP and Content-Disposition.
  */
-function setImageSecurityHeaders(headers: Headers, config?: ImageConfig): void {
+function setImageSecurityHeaders(
+  headers: Headers,
+  imageUrl: string,
+  contentType: string | null,
+  config?: ImageConfig,
+): void {
   headers.set(
     "Content-Security-Policy",
     config?.contentSecurityPolicy ?? IMAGE_CONTENT_SECURITY_POLICY,
@@ -376,7 +438,11 @@ function setImageSecurityHeaders(headers: Headers, config?: ImageConfig): void {
   headers.set("X-Content-Type-Options", "nosniff");
   headers.set(
     "Content-Disposition",
-    config?.contentDispositionType === "attachment" ? "attachment" : "inline",
+    imageContentDisposition(
+      imageUrl,
+      contentType,
+      config?.contentDispositionType === "attachment" ? "attachment" : "inline",
+    ),
   );
 }
 
@@ -386,6 +452,7 @@ function createPassthroughImageResponse(
   request?: Request,
   detectedContentType?: string,
   cacheControl?: string,
+  imageUrl = "/image",
 ): Response {
   const headers = new Headers();
   const contentType = detectedContentType ?? source.headers.get("Content-Type");
@@ -397,7 +464,9 @@ function createPassthroughImageResponse(
     return new Response(null, { status: 304, headers });
   }
   if (contentType) headers.set("Content-Type", contentType);
-  setImageSecurityHeaders(headers, config);
+  const contentLength = source.headers.get("Content-Length");
+  if (contentLength) headers.set("Content-Length", contentLength);
+  setImageSecurityHeaders(headers, imageUrl, contentType, config);
   return new Response(request?.method === "HEAD" ? null : source.body, { status: 200, headers });
 }
 
@@ -494,7 +563,7 @@ export async function handleImageOptimization(
     return new Response("The requested resource isn't a valid image.", { status: 400 });
   }
   const { bytes: sourceBytes, response: source, contentType: sourceContentType } = sourceResult;
-  const sourceIsStatic = /\/_next\/static\/media(?:$|\/)/.test(
+  const sourceIsStatic = /\/(?:static\/media|_next\/static\/immutable\/media)(?:$|\/)/.test(
     new URL(imageUrl, request.url).pathname,
   );
   if (!sourceContentType) {
@@ -514,10 +583,18 @@ export async function handleImageOptimization(
   // conversion) provides no benefit. Serve as-is with security headers.
   // This matches Next.js behavior where SVG is a "bypass type".
   if (sourceContentType === "image/svg+xml") {
-    return createPassthroughImageResponse(source, imageConfig, request, sourceContentType);
+    return createPassthroughImageResponse(
+      source,
+      imageConfig,
+      request,
+      sourceContentType,
+      undefined,
+      imageUrl,
+    );
   }
 
   // Transform if handler provided, otherwise serve original
+  let transformFailed = false;
   if (handlers.transformImage) {
     try {
       const transformed = await handlers.transformImage(source.body!, {
@@ -552,13 +629,15 @@ export async function handleImageOptimization(
         return new Response(null, { status: 304, headers });
       }
 
-      setImageSecurityHeaders(headers, imageConfig);
+      headers.set("Content-Length", String(transformedBytes.byteLength));
+      setImageSecurityHeaders(headers, imageUrl, headers.get("Content-Type"), imageConfig);
       return new Response(request.method === "HEAD" ? null : transformedBytes, {
         status: 200,
         headers,
       });
     } catch (e) {
       console.error("[vinext] Image optimization error:", e);
+      transformFailed = true;
     }
   }
 
@@ -573,7 +652,12 @@ export async function handleImageOptimization(
     imageConfig,
     request,
     sourceContentType,
-    sourceIsStatic ? "public, max-age=315360000, immutable" : undefined,
+    sourceIsStatic
+      ? "public, max-age=315360000, immutable"
+      : transformFailed
+        ? `public, max-age=${imageConfig?.minimumCacheTTL ?? 14_400}, must-revalidate`
+        : undefined,
+    imageUrl,
   );
 }
 

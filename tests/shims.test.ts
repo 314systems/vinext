@@ -21150,6 +21150,8 @@ describe("handleImageOptimization", () => {
     expect(response.headers.get("Cache-Control")).toBe("public, max-age=14400, must-revalidate");
     expect(response.headers.get("Vary")).toBe("Accept");
     expect(response.headers.get("ETag")).toBe("InNvdXJjZS1ldGFnIg");
+    expect(response.headers.get("Content-Length")).toBe(String(jpegBytes.byteLength));
+    expect(response.headers.get("Content-Disposition")).toBe('inline; filename="img.jpg"');
     expect(response.headers.get("x-middleware-header")).toBeNull();
   });
 
@@ -21179,6 +21181,11 @@ describe("handleImageOptimization", () => {
       new Uint8Array([0x00, 0x00, 0x00, 0x0c, 0x4a, 0x58, 0x4c, 0x20, 0x0d, 0x0a, 0x87, 0x0a]),
       "image/jxl",
     ],
+    [
+      "JPEG 2000 container",
+      new Uint8Array([0x00, 0x00, 0x00, 0x0c, 0x6a, 0x50, 0x20, 0x20, 0x0d, 0x0a, 0x87, 0x0a]),
+      "image/jp2",
+    ],
   ])("recognizes %s source bytes", async (_name, bytes, expectedContentType) => {
     const { handleImageOptimization } =
       await import("../packages/vinext/src/server/image-optimization.js");
@@ -21188,6 +21195,27 @@ describe("handleImageOptimization", () => {
     );
     expect(response.status).toBe(200);
     expect(response.headers.get("Content-Type")).toBe(expectedContentType);
+  });
+
+  it.each([
+    ["truncated JPEG XL container", [0x00, 0x00, 0x00, 0x0c, 0x4a, 0x58, 0x4c, 0x20]],
+    [
+      "spoofed JPEG XL container suffix",
+      [0x00, 0x00, 0x00, 0x0c, 0x4a, 0x58, 0x4c, 0x20, 0x00, 0x00, 0x00, 0x00],
+    ],
+    ["truncated JPEG 2000 container", [0x00, 0x00, 0x00, 0x0c, 0x6a, 0x50, 0x20, 0x20]],
+    [
+      "spoofed JPEG 2000 container suffix",
+      [0x00, 0x00, 0x00, 0x0c, 0x6a, 0x50, 0x20, 0x20, 0x00, 0x00, 0x00, 0x00],
+    ],
+  ])("rejects %s bytes", async (_name, bytes) => {
+    const { handleImageOptimization } =
+      await import("../packages/vinext/src/server/image-optimization.js");
+    const response = await handleImageOptimization(
+      new Request("http://localhost/_next/image?url=%2Fimage&w=640&q=75"),
+      { fetchAsset: async () => new Response(new Uint8Array(bytes)) },
+    );
+    expect(response.status).toBe(400);
   });
 
   it("returns 304 when a passthrough source ETag matches If-None-Match", async () => {
@@ -21283,6 +21311,8 @@ describe("handleImageOptimization", () => {
     expect(response.headers.get("ETag")).toBe("ZRfq3arq8xod6bd8OihOWGL0x1rnvCziYcEMvq_cX6U");
     expect(response.headers.get("Set-Cookie")).toBeNull();
     expect(response.headers.get("Location")).toBeNull();
+    expect(response.headers.get("Content-Length")).toBe("11");
+    expect(response.headers.get("Content-Disposition")).toBe('inline; filename="img.webp"');
   });
 
   it("falls back when the transform response is unsuccessful", async () => {
@@ -21291,16 +21321,21 @@ describe("handleImageOptimization", () => {
     const request = new Request("http://localhost/_next/image?url=%2Fimg.jpg&w=640&q=75");
     const handlers = {
       fetchAsset: async () =>
-        new Response(jpegBytes, { headers: { "Content-Type": "image/jpeg" } }),
+        new Response(jpegBytes, {
+          headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=200" },
+        }),
       transformImage: async () =>
         new Response("transform failed", {
           status: 502,
           headers: { "WWW-Authenticate": "must-not-leak" },
         }),
     };
-    const response = await handleImageOptimization(request, handlers);
+    const response = await handleImageOptimization(request, handlers, undefined, {
+      minimumCacheTTL: 123,
+    });
     expect(response.status).toBe(200);
     expect(response.headers.get("Content-Type")).toBe("image/jpeg");
+    expect(response.headers.get("Cache-Control")).toBe("public, max-age=123, must-revalidate");
     expect(response.headers.get("WWW-Authenticate")).toBeNull();
   });
 
@@ -21324,6 +21359,7 @@ describe("handleImageOptimization", () => {
     expect(response.status).toBe(304);
     expect(response.body).toBeNull();
     expect(response.headers.get("ETag")).toBe(etag);
+    expect(response.headers.get("Content-Length")).toBeNull();
   });
 
   it("falls back to original on transform error", async () => {
@@ -21522,7 +21558,7 @@ describe("handleImageOptimization", () => {
       "script-src 'none'; frame-src 'none'; sandbox;",
     );
     expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
-    expect(response.headers.get("Content-Disposition")).toBe("inline");
+    expect(response.headers.get("Content-Disposition")).toBe('inline; filename="img.jpg"');
   });
 
   it("sets Content-Security-Policy header on transformed responses", async () => {
@@ -21550,7 +21586,7 @@ describe("handleImageOptimization", () => {
       "script-src 'none'; frame-src 'none'; sandbox;",
     );
     expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
-    expect(response.headers.get("Content-Disposition")).toBe("inline");
+    expect(response.headers.get("Content-Disposition")).toBe('inline; filename="img.webp"');
   });
 
   it("overrides unsafe Content-Type from transform handler", async () => {
@@ -21686,7 +21722,7 @@ describe("handleImageOptimization", () => {
       "script-src 'none'; frame-src 'none'; sandbox;",
     );
     expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
-    expect(response.headers.get("Content-Disposition")).toBe("inline");
+    expect(response.headers.get("Content-Disposition")).toBe('inline; filename="logo.svg"');
   });
 
   it("applies custom contentDispositionType", async () => {
@@ -21704,7 +21740,7 @@ describe("handleImageOptimization", () => {
       contentDispositionType: "attachment",
     });
     expect(response.status).toBe(200);
-    expect(response.headers.get("Content-Disposition")).toBe("attachment");
+    expect(response.headers.get("Content-Disposition")).toBe('attachment; filename="img.jpg"');
   });
 
   it("defaults Content-Disposition to inline when contentDispositionType is invalid", async () => {
@@ -21722,7 +21758,21 @@ describe("handleImageOptimization", () => {
       contentDispositionType: "bogus" as "inline",
     });
     expect(response.status).toBe(200);
-    expect(response.headers.get("Content-Disposition")).toBe("inline");
+    expect(response.headers.get("Content-Disposition")).toBe('inline; filename="img.jpg"');
+  });
+
+  it("sanitizes source-derived Content-Disposition filenames", async () => {
+    const { handleImageOptimization } =
+      await import("../packages/vinext/src/server/image-optimization.js");
+    const request = new Request(
+      "http://localhost/_next/image?url=%2Ffile%22%3Bbad%0D%0AX-Evil%3A%20yes.jpg&w=640&q=75",
+    );
+    const response = await handleImageOptimization(request, {
+      fetchAsset: async () => new Response(jpegBytes),
+    });
+    const disposition = response.headers.get("Content-Disposition");
+    expect(disposition).toBe('inline; filename="file\\";bad__X-Evil: yes.jpg"');
+    expect(disposition).not.toMatch(/[\r\n]/);
   });
 
   it("applies custom contentSecurityPolicy", async () => {
@@ -21760,7 +21810,7 @@ describe("handleImageOptimization", () => {
     expect(response.headers.get("Content-Security-Policy")).toBe(
       "script-src 'none'; frame-src 'none'; sandbox;",
     );
-    expect(response.headers.get("Content-Disposition")).toBe("inline");
+    expect(response.headers.get("Content-Disposition")).toBe('inline; filename="img.jpg"');
   });
 });
 

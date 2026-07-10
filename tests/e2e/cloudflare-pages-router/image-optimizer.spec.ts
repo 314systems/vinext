@@ -43,7 +43,9 @@ test.describe("Cloudflare Pages Router image optimizer", () => {
     const initial = await request.get(url);
     expect(initial.status()).toBe(200);
     expect(initial.headers()["content-type"]).toContain("image/png");
-    expect(initial.headers()["cache-control"]).toBe("public, max-age=200, must-revalidate");
+    expect(initial.headers()["cache-control"]).toBe("public, max-age=123, must-revalidate");
+    expect(initial.headers()["content-disposition"]).toBe('inline; filename="source.png"');
+    expect(initial.headers()["content-length"]).toBe(String((await initial.body()).byteLength));
     const etag = initial.headers().etag;
     expect(etag).toBeTruthy();
     expect(await (await request.get(`${BASE_URL}/image-test/state`)).json()).toEqual({
@@ -71,5 +73,20 @@ test.describe("Cloudflare Pages Router image optimizer", () => {
       count: 1,
       method: "POST",
     });
+  });
+
+  test("bounds public assets and classifies both imported-image output layouts", async ({
+    request,
+  }) => {
+    expect((await request.get(optimizerUrl("/large-public.png"))).status()).toBe(413);
+    for (const source of [
+      "/static/media/static-image.bmp",
+      "/_next/static/immutable/media/static-image.bmp",
+    ]) {
+      const response = await request.get(optimizerUrl(source));
+      expect(response.status()).toBe(200);
+      expect(response.headers()["cache-control"]).toBe("public, max-age=315360000, immutable");
+      expect(response.headers()["content-disposition"]).toBe('inline; filename="static-image.bmp"');
+    }
   });
 });

@@ -83,7 +83,9 @@ test.describe("Cloudflare Workers dynamic preloads", () => {
     const initial = await request.get(url);
     expect(initial.status()).toBe(200);
     expect(initial.headers()["content-type"]).toContain("image/png");
-    expect(initial.headers()["cache-control"]).toBe("public, max-age=200, must-revalidate");
+    expect(initial.headers()["cache-control"]).toBe("public, max-age=123, must-revalidate");
+    expect(initial.headers()["content-disposition"]).toBe('inline; filename="source.png"');
+    expect(initial.headers()["content-length"]).toBe(String((await initial.body()).byteLength));
     const etag = initial.headers().etag;
     expect(etag).toBeTruthy();
 
@@ -107,6 +109,8 @@ test.describe("Cloudflare Workers dynamic preloads", () => {
     await request.get(`${BASE_URL}/image-test/reset`);
     const post = await request.fetch(optimizerUrl("/image-test/source.png"), { method: "POST" });
     expect(post.status()).toBe(200);
+    const expectedContentLength = post.headers()["content-length"];
+    expect(expectedContentLength).toBeTruthy();
     expect(await (await request.get(`${BASE_URL}/image-test/state`)).json()).toEqual({
       count: 1,
       method: "POST",
@@ -116,6 +120,8 @@ test.describe("Cloudflare Workers dynamic preloads", () => {
     const head = await request.fetch(optimizerUrl("/image-test/source.png"), { method: "HEAD" });
     expect(head.status()).toBe(200);
     expect((await head.body()).byteLength).toBe(0);
+    expect(head.headers()["content-length"]).toBe(expectedContentLength);
+    expect(head.headers()["content-disposition"]).toBe('inline; filename="source.png"');
     expect(await (await request.get(`${BASE_URL}/image-test/state`)).json()).toEqual({
       count: 1,
       method: "GET",
@@ -129,5 +135,20 @@ test.describe("Cloudflare Workers dynamic preloads", () => {
       count: 0,
       method: "",
     });
+  });
+
+  test("bounds public assets and classifies both imported-image output layouts", async ({
+    request,
+  }) => {
+    expect((await request.get(optimizerUrl("/large-public.png"))).status()).toBe(413);
+    for (const source of [
+      "/static/media/static-image.bmp",
+      "/_next/static/immutable/media/static-image.bmp",
+    ]) {
+      const response = await request.get(optimizerUrl(source));
+      expect(response.status()).toBe(200);
+      expect(response.headers()["cache-control"]).toBe("public, max-age=315360000, immutable");
+      expect(response.headers()["content-disposition"]).toBe('inline; filename="static-image.bmp"');
+    }
   });
 });

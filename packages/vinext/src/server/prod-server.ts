@@ -847,7 +847,8 @@ async function createStaticFileResponse(
     (isHashed && etagFromFilenameHash(resolved.path, ext)) ||
       `W/"${resolved.size}-${Math.floor(resolved.mtimeMs / 1000)}"`,
   );
-  return new Response(await fsp.readFile(resolved.path), { status, headers });
+  const body = Readable.toWeb(fs.createReadStream(resolved.path)) as ReadableStream<Uint8Array>;
+  return new Response(body, { status, headers });
 }
 
 async function statIfFile(filePath: string): Promise<{ size: number; mtimeMs: number } | null> {
@@ -1853,6 +1854,16 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         async (assetPath, optimizerRequest) => {
           const sourceRequest = createInternalImageRequest(assetPath, optimizerRequest, basePath);
           if (!sourceRequest) return new Response("Bad Request", { status: 400 });
+          const sourceAssetPath = resolveAppRouterAssetPath(
+            new URL(sourceRequest.url).pathname,
+            pagesAssetPathPrefix,
+            assetPrefix,
+          );
+          if (sourceAssetPath) {
+            return (
+              (await createStaticFileResponse(clientDir, sourceAssetPath)) ?? notFoundResponse()
+            );
+          }
           return dispatchPagesRequest(sourceRequest);
         },
         allowedImageWidths,
