@@ -12171,6 +12171,18 @@ describe("matchRewrite with external URLs", () => {
     expect(matchRewrite("/source/127.0.0.1:8080/reached", rules, emptyCtx)).toBeNull();
   });
 
+  it("fails closed when source captures construct an external rewrite scheme and authority", async () => {
+    const { matchRewrite } = await import("../packages/vinext/src/config/config-matchers.js");
+    const rules = [
+      {
+        source: "/source/:scheme/:target*",
+        destination: ":scheme://:target.internal.invalid/capture",
+      },
+    ];
+
+    expect(matchRewrite("/source/http/127.0.0.1:8080/reached", rules, emptyCtx)).toBeNull();
+  });
+
   it("preserves valid condition captures in external rewrite hostnames", async () => {
     const { matchRewrite } = await import("../packages/vinext/src/config/config-matchers.js");
     const rules = [
@@ -12367,6 +12379,23 @@ describe("matchRedirect destination param substitution", () => {
 
     expect(result).toEqual({
       destination: "/login?next=/foo%26next%3Devil.example&safe=1",
+      permanent: false,
+    });
+  });
+
+  it("fails closed when source captures construct a redirect scheme", async () => {
+    const { matchRedirect } = await import("../packages/vinext/src/config/config-matchers.js");
+    const redirects = [
+      {
+        source: "/go/:scheme/:target*",
+        destination: ":scheme://:target",
+        permanent: false,
+      },
+      { source: "/go/:path*", destination: "/safe-fallback", permanent: false },
+    ];
+
+    expect(matchRedirect("/go/https/evil.example/path", redirects, emptyCtx)).toEqual({
+      destination: "/safe-fallback",
       permanent: false,
     });
   });

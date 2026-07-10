@@ -1284,6 +1284,19 @@ describe("App Router Production server (startProdServer)", () => {
     });
   });
 
+  it("does not let source captures construct a config rewrite scheme and authority", async () => {
+    await withCountingFetchTarget(async (targetUrl, getRequestCount) => {
+      const target = new URL(targetUrl);
+      const res = await fetch(
+        `${baseUrl}/source-capture-scheme/http/${target.hostname}:${target.port}/reached`,
+      );
+
+      expect(res.status).toBe(404);
+      await res.arrayBuffer();
+      expect(getRequestCount()).toBe(0);
+    });
+  });
+
   it("serves static assets with cache headers", async () => {
     // Find an actual hashed JS asset from the build.
     const assetsDir = path.join(outDir, "client", "_next", "static", "chunks");

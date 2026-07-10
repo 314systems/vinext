@@ -166,6 +166,10 @@ const nextConfig: NextConfig = {
                 source: "/source-capture-external/:target*",
                 destination: "http://:target.internal.invalid/capture",
               },
+              {
+                source: "/source-capture-scheme/:scheme/:target*",
+                destination: ":scheme://:target.internal.invalid/capture",
+              },
             ]
           : []),
       ],

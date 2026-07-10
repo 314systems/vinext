@@ -1269,14 +1269,25 @@ function substituteAndSanitizeDestination(
   );
 }
 
-// URL rejects encoded host delimiters such as `%2F`, `%3A`, and `%40`. Treat
-// such substitutions as a non-matching rule instead of proxying or redirecting
-// to a request-selected authority.
+const URL_SCHEME_RE = /^([a-z][a-z0-9+.-]*):/i;
+
+// A substitution must not introduce or change a URL scheme. Besides keeping
+// relative destinations relative, this makes the pre-substitution component
+// split authoritative: a template such as `:scheme://:host` cannot evade the
+// authority encoder by acquiring its scheme only after source params are
+// inserted. Next.js rejects that template at config-load time; vinext does not
+// yet perform the same full validation, so the runtime must still fail closed.
+// For hierarchical absolute URLs, parsing also rejects encoded host delimiters
+// such as `%2F`, `%3A`, and `%40`.
 function isValidSubstitutedExternalDestination(template: string, destination: string): boolean {
-  if (!/^https?:\/\//i.test(template)) return true;
+  const templateScheme = URL_SCHEME_RE.exec(template)?.[1]?.toLowerCase();
+  const destinationScheme = URL_SCHEME_RE.exec(destination)?.[1]?.toLowerCase();
+  if (templateScheme !== destinationScheme) return false;
+  if (!templateScheme || !template.slice(template.indexOf(":") + 1).startsWith("//")) return true;
+
   try {
     const parsed = new URL(destination);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
+    return parsed.protocol.toLowerCase() === `${templateScheme}:`;
   } catch {
     return false;
   }
