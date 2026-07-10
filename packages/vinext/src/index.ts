@@ -38,6 +38,7 @@ import { handleApiRoute } from "./server/api-handler.js";
 import {
   DEFAULT_DEVICE_SIZES,
   DEFAULT_IMAGE_SIZES,
+  isImageOptimizationDisabled,
   isImageOptimizationPath,
   resolveDevImageRedirect,
 } from "./server/image-optimization.js";
@@ -4709,6 +4710,11 @@ export const loadServerActionClient = ${
               // ── Image optimization passthrough (dev mode) ─────────────
               // In dev, redirect to the original asset URL so Vite serves it.
               if (isImageOptimizationPath(url.split("?")[0]!)) {
+                if (isImageOptimizationDisabled(nextConfig.images)) {
+                  res.writeHead(404);
+                  res.end("This page could not be found");
+                  return;
+                }
                 const imageRequestUrl = new URL(url, requestOrigin);
                 const allowedWidths = [
                   ...(nextConfig.images?.deviceSizes ?? DEFAULT_DEVICE_SIZES),

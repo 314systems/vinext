@@ -1,8 +1,8 @@
-import type { ImageOptimizer } from "vinext/server/image-optimization";
-
-export default function createImageTestOptimizer(): ImageOptimizer {
+// Keep this adapter fixture-local and dependency-free: isolated Pages fixture
+// copies do not necessarily include the source package's type-only exports.
+export default function createImageTestOptimizer() {
   return {
-    async transformImage(body, options) {
+    async transformImage(body: ReadableStream, options: { format: string; quality: number }) {
       await new Response(body).arrayBuffer();
       if (options.quality === 90) {
         return new Response(`format:${options.format}`, {

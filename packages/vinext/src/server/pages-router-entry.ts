@@ -24,6 +24,7 @@ import {
   DEFAULT_IMAGE_SIZES,
   createInternalImageRequest,
   handleConfiguredImageOptimization,
+  isImageOptimizationDisabled,
   isImageOptimizationPath,
 } from "./image-optimization.js";
 import type { ImageConfig } from "./image-optimization.js";
@@ -160,7 +161,11 @@ async function handleRequest(
     }
 
     // Checked after basePath stripping so /<basePath>/_next/image works.
-    if (isImageOptimizationPath(pathname) && env?.ASSETS) {
+    const isImageRequest = isImageOptimizationPath(pathname);
+    if (isImageRequest && isImageOptimizationDisabled(imageConfig)) {
+      return new Response("This page could not be found", { status: 404 });
+    }
+    if (isImageRequest && env?.ASSETS) {
       const allowedWidths = [
         ...(vinextConfig?.images?.deviceSizes ?? DEFAULT_DEVICE_SIZES),
         ...(vinextConfig?.images?.imageSizes ?? DEFAULT_IMAGE_SIZES),

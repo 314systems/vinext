@@ -50,6 +50,11 @@ export function isImageOptimizationPath(pathname: string): boolean {
   return pathname === IMAGE_OPTIMIZATION_PATH || pathname === VINEXT_IMAGE_OPTIMIZATION_PATH;
 }
 
+/** Match Next.js's endpoint-level gate before redirects or parameter parsing. */
+export function isImageOptimizationDisabled(imageConfig?: ImageConfig): boolean {
+  return imageConfig?.unoptimized === true || (imageConfig?.loader ?? "default") !== "default";
+}
+
 /**
  * Image security configuration from next.config.js `images` section.
  * Controls SVG handling and security headers for the image endpoint.
@@ -332,6 +337,7 @@ export function isSafeImageContentType(
 async function readImageSource(
   response: Response,
   maximumResponseBody: number,
+  signal: AbortSignal,
 ): Promise<
   | { bytes: Uint8Array; response: Response; contentType: string | null; tooLarge: false }
   | { tooLarge: true }
@@ -339,17 +345,24 @@ async function readImageSource(
 > {
   if (!response.body) return null;
   const reader = response.body.getReader();
+  const onAbort = () => void reader.cancel(signal.reason);
+  signal.addEventListener("abort", onAbort, { once: true });
   const chunks: Uint8Array[] = [];
   let totalSize = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    totalSize += value.byteLength;
-    if (totalSize > maximumResponseBody) {
-      await reader.cancel();
-      return { tooLarge: true };
+  try {
+    while (true) {
+      if (signal.aborted) throw signal.reason;
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalSize += value.byteLength;
+      if (totalSize > maximumResponseBody) {
+        await reader.cancel();
+        return { tooLarge: true };
+      }
+      chunks.push(value);
     }
-    chunks.push(value);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
   }
   const bytes = new Uint8Array(totalSize);
   let offset = 0;
@@ -414,6 +427,41 @@ async function readImageSource(
     contentType,
     tooLarge: false,
   };
+}
+
+async function readTransformedImage(
+  response: Response,
+  maximumResponseBody: number,
+  signal: AbortSignal,
+): Promise<Uint8Array | null> {
+  if (!response.body) return null;
+  const reader = response.body.getReader();
+  const onAbort = () => void reader.cancel(signal.reason);
+  signal.addEventListener("abort", onAbort, { once: true });
+  const chunks: Uint8Array[] = [];
+  let totalSize = 0;
+  try {
+    while (true) {
+      if (signal.aborted) throw signal.reason;
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalSize += value.byteLength;
+      if (totalSize > maximumResponseBody) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+  const bytes = new Uint8Array(totalSize);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
 function toBase64Url(bytes: Uint8Array): string {
@@ -584,7 +632,7 @@ export type ImageHandlers = {
   /** Optional: Transform the image (resize, format, quality). */
   transformImage?: (
     body: ReadableStream,
-    options: { width: number; format: string; quality: number },
+    options: { width: number; format: string; quality: number; signal: AbortSignal },
   ) => Promise<Response>;
   /** Stable identity for the runtime/app that owns cached image responses. */
   cacheOwner?: object;
@@ -615,6 +663,7 @@ export function createInternalImageRequest(
   if (/\/(?:_next|_vinext)\/image(?:$|\/)/.test(withoutBasePath)) return null;
   return new Request(sourceUrl, {
     method: !request.method || request.method === "HEAD" ? "GET" : request.method,
+    signal: request.signal,
   });
 }
 
@@ -630,15 +679,15 @@ type ImageResponseCache = {
   pending: Map<string, Promise<GeneratedImageResponse>>;
   generationQueue: Set<ImageGenerationWaiter>;
   activeGenerations: number;
+  activeGenerationBytes: number;
   totalBodyBytes: number;
 };
 
 type ImageGenerationWaiter = {
   reject: (error: Error) => void;
   resolve: () => void;
-  signal: AbortSignal;
+  reservedBytes: number;
   timeout: ReturnType<typeof setTimeout>;
-  onAbort: () => void;
 };
 
 type BufferedImageResponse = {
@@ -664,11 +713,25 @@ const MAX_IMAGE_RESPONSE_CACHE_ENTRIES = 256;
 const MAX_IMAGE_GENERATIONS = 2;
 const MAX_QUEUED_IMAGE_GENERATIONS = 32;
 const IMAGE_GENERATION_QUEUE_TIMEOUT_MS = 5_000;
+const IMAGE_GENERATION_TIMEOUT_MS = 15_000;
+// Reading, sniffing, hashing, transforming, and buffering can retain several
+// views/copies of both source and output. Cap each body and reserve four times
+// that limit before starting work. Together with the 8 MiB resident cache this
+// keeps framework-owned image memory below a Worker's 128 MiB isolate limit.
+const MAX_IMAGE_BODY_BYTES = 20 * 1024 * 1024;
+const MAX_IMAGE_GENERATION_MEMORY_BYTES = 96 * 1024 * 1024;
 
 class ImageGenerationQueueError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ImageGenerationQueueError";
+  }
+}
+
+class ImageGenerationTimeoutError extends Error {
+  constructor() {
+    super("Timed out while optimizing image");
+    this.name = "ImageGenerationTimeoutError";
   }
 }
 
@@ -680,6 +743,7 @@ function getImageResponseCache(owner: object): ImageResponseCache {
       pending: new Map(),
       generationQueue: new Set(),
       activeGenerations: 0,
+      activeGenerationBytes: 0,
       totalBodyBytes: 0,
     };
     IMAGE_RESPONSE_CACHES.set(owner, cache);
@@ -812,16 +876,19 @@ async function generateCachedImageResponse(
   handlers: ImageHandlers,
   allowedWidths: number[] | undefined,
   imageConfig: ImageConfig | undefined,
+  signal: AbortSignal,
 ): Promise<GeneratedImageResponse> {
-  const renderRequest =
-    request.method === "HEAD"
-      ? new Request(request.url, { headers: request.headers, method: "GET" })
-      : request;
+  const renderRequest = new Request(request.url, {
+    headers: request.headers,
+    method: request.method === "HEAD" ? "GET" : request.method,
+    signal,
+  });
   const response = await renderImageOptimizationUncached(
     renderRequest,
     handlers,
     allowedWidths,
     imageConfig,
+    signal,
   );
   const headers = [...response.headers.entries()] as [string, string][];
   const body = response.body ? await response.blob() : null;
@@ -846,60 +913,105 @@ async function generateCachedImageResponse(
   };
 }
 
+function effectiveImageBodyLimit(imageConfig: ImageConfig | undefined): number {
+  const configured = imageConfig?.maximumResponseBody ?? 50_000_000;
+  if (!Number.isFinite(configured) || configured < 0) return MAX_IMAGE_BODY_BYTES;
+  return Math.min(configured, MAX_IMAGE_BODY_BYTES);
+}
+
+function imageGenerationReservation(imageConfig: ImageConfig | undefined): number {
+  return Math.max(1, effectiveImageBodyLimit(imageConfig)) * 4;
+}
+
+function canStartImageGeneration(cache: ImageResponseCache, reservedBytes: number): boolean {
+  return (
+    cache.activeGenerations < MAX_IMAGE_GENERATIONS &&
+    cache.activeGenerationBytes + reservedBytes <= MAX_IMAGE_GENERATION_MEMORY_BYTES
+  );
+}
+
 function startQueuedImageGenerations(cache: ImageResponseCache): void {
-  while (cache.activeGenerations < MAX_IMAGE_GENERATIONS && cache.generationQueue.size > 0) {
-    const waiter = cache.generationQueue.values().next().value as ImageGenerationWaiter | undefined;
-    if (!waiter) return;
+  for (const waiter of cache.generationQueue) {
+    if (!canStartImageGeneration(cache, waiter.reservedBytes)) continue;
     cache.generationQueue.delete(waiter);
     clearTimeout(waiter.timeout);
-    waiter.signal.removeEventListener("abort", waiter.onAbort);
     cache.activeGenerations += 1;
+    cache.activeGenerationBytes += waiter.reservedBytes;
     waiter.resolve();
+    if (cache.activeGenerations >= MAX_IMAGE_GENERATIONS) return;
   }
 }
 
 async function runImageGeneration<T>(
   cache: ImageResponseCache,
-  signal: AbortSignal,
-  generate: () => Promise<T>,
+  reservedBytes: number,
+  generate: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
-  if (signal.aborted) throw new DOMException("The request was aborted", "AbortError");
-
-  if (cache.activeGenerations < MAX_IMAGE_GENERATIONS) {
+  if (canStartImageGeneration(cache, reservedBytes)) {
     cache.activeGenerations += 1;
+    cache.activeGenerationBytes += reservedBytes;
   } else {
     if (cache.generationQueue.size >= MAX_QUEUED_IMAGE_GENERATIONS) {
       throw new ImageGenerationQueueError("The image generation queue is full");
     }
     await new Promise<void>((resolve, reject) => {
+      const waiter: ImageGenerationWaiter = {
+        reject,
+        resolve,
+        reservedBytes,
+        timeout: undefined as unknown as ReturnType<typeof setTimeout>,
+      };
       const rejectWaiter = (error: Error) => {
         cache.generationQueue.delete(waiter);
         clearTimeout(waiter.timeout);
-        signal.removeEventListener("abort", waiter.onAbort);
         reject(error);
       };
-      const waiter = {} as ImageGenerationWaiter;
-      waiter.resolve = resolve;
-      waiter.reject = reject;
-      waiter.signal = signal;
-      waiter.onAbort = () =>
-        rejectWaiter(new DOMException("The request was aborted", "AbortError"));
       waiter.timeout = setTimeout(
         () => rejectWaiter(new ImageGenerationQueueError("Timed out waiting to optimize image")),
         IMAGE_GENERATION_QUEUE_TIMEOUT_MS,
       );
       cache.generationQueue.add(waiter);
-      signal.addEventListener("abort", waiter.onAbort, { once: true });
-      if (signal.aborted) waiter.onAbort();
     });
   }
 
+  const controller = new AbortController();
+  const timeoutError = new ImageGenerationTimeoutError();
+  const timeout = setTimeout(() => controller.abort(timeoutError), IMAGE_GENERATION_TIMEOUT_MS);
+  const aborted = new Promise<never>((_resolve, reject) => {
+    controller.signal.addEventListener(
+      "abort",
+      () => reject(controller.signal.reason ?? timeoutError),
+      { once: true },
+    );
+  });
   try {
-    return await generate();
+    return await Promise.race([generate(controller.signal), aborted]);
   } finally {
+    clearTimeout(timeout);
+    if (!controller.signal.aborted) controller.abort();
     cache.activeGenerations -= 1;
+    cache.activeGenerationBytes -= reservedBytes;
     startQueuedImageGenerations(cache);
   }
+}
+
+function awaitImageGeneration<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted)
+    return Promise.reject(new DOMException("The request was aborted", "AbortError"));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new DOMException("The request was aborted", "AbortError"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
 }
 
 function readUint32BigEndian(bytes: Uint8Array, offset: number): number {
@@ -1029,6 +1141,7 @@ async function renderImageOptimizationUncached(
   handlers: ImageHandlers,
   allowedWidths?: number[],
   imageConfig?: ImageConfig,
+  signal: AbortSignal = request.signal,
 ): Promise<Response> {
   const url = new URL(request.url);
   const params = parseImageParams(url, allowedWidths, imageConfig?.qualities);
@@ -1042,7 +1155,8 @@ async function renderImageOptimizationUncached(
   // Fetch source image
   const sourceResult = await readImageSource(
     await handlers.fetchAsset(imageUrl, request),
-    imageConfig?.maximumResponseBody ?? 50_000_000,
+    effectiveImageBodyLimit(imageConfig),
+    signal,
   );
   if (sourceResult?.tooLarge) {
     return new Response("The requested resource is too large.", { status: 413 });
@@ -1129,11 +1243,17 @@ async function renderImageOptimizationUncached(
         width,
         format,
         quality,
+        signal,
       });
       if (!transformed.ok || !transformed.body) {
         throw new Error(`Image transform returned ${transformed.status}`);
       }
-      const transformedBytes = new Uint8Array(await transformed.arrayBuffer());
+      const transformedBytes = await readTransformedImage(
+        transformed,
+        effectiveImageBodyLimit(imageConfig),
+        signal,
+      );
+      if (!transformedBytes) throw new Error("Image transform response exceeded the memory limit");
       const headers = new Headers();
       const transformedContentType = transformed.headers.get("Content-Type");
       const transformedEtag = await getImageEtag(transformedBytes);
@@ -1154,7 +1274,7 @@ async function renderImageOptimizationUncached(
 
       headers.set("Content-Length", String(transformedBytes.byteLength));
       setImageSecurityHeaders(headers, imageUrl, headers.get("Content-Type"), imageConfig);
-      return new Response(request.method === "HEAD" ? null : transformedBytes, {
+      return new Response(request.method === "HEAD" ? null : exactArrayBuffer(transformedBytes), {
         status: 200,
         headers,
       });
@@ -1193,7 +1313,7 @@ export async function handleImageOptimization(
   // Next.js does not expose the Image Optimization API when global
   // unoptimized mode or a non-default loader is configured.
   // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/next-server.ts
-  if (imageConfig?.unoptimized === true || (imageConfig?.loader ?? "default") !== "default") {
+  if (isImageOptimizationDisabled(imageConfig)) {
     return notFoundResponse();
   }
 
@@ -1205,19 +1325,49 @@ export async function handleImageOptimization(
   );
   if (!params) return badRequestResponse();
 
-  // Next's optimizer is a GET/HEAD resource. Other methods may be observed by
-  // middleware and must never read from, coalesce with, or populate its cache.
   const method = request.method.toUpperCase();
-  if (method !== "GET" && method !== "HEAD") {
-    return renderImageOptimizationUncached(request, handlers, allowedWidths, imageConfig);
-  }
-
   const negotiatedFormat = negotiateImageFormat(
     request.headers.get("Accept"),
     imageConfig?.formats ?? DEFAULT_IMAGE_FORMATS,
   );
   const owner = handlers.cacheOwner ?? handlers;
   const cache = getImageResponseCache(owner);
+  const reservedBytes = imageGenerationReservation(imageConfig);
+
+  // Next's optimizer is a GET/HEAD resource. Other methods may be observed by
+  // middleware and remain uncached, but they still consume the same bounded
+  // admission, byte budget, deadline, and cancellation-aware source path.
+  if (method !== "GET" && method !== "HEAD") {
+    const work = runImageGeneration(cache, reservedBytes, async (signal) => {
+      const renderRequest = new Request(request.url, {
+        headers: request.headers,
+        method: request.method,
+        signal,
+      });
+      return renderImageOptimizationUncached(
+        renderRequest,
+        handlers,
+        allowedWidths,
+        imageConfig,
+        signal,
+      );
+    });
+    try {
+      return await awaitImageGeneration(work, request.signal);
+    } catch (error) {
+      if (
+        error instanceof ImageGenerationQueueError ||
+        error instanceof ImageGenerationTimeoutError
+      ) {
+        return new Response("Image optimizer is busy", {
+          status: 503,
+          headers: { "Retry-After": "1" },
+        });
+      }
+      throw error;
+    }
+  }
+
   const cacheKey = imageResponseCacheKey(
     request,
     params,
@@ -1234,8 +1384,8 @@ export async function handleImageOptimization(
   const regenerate = (): Promise<GeneratedImageResponse> => {
     const active = cache.pending.get(cacheKey);
     if (active) return active;
-    const pending = runImageGeneration(cache, request.signal, () =>
-      generateCachedImageResponse(request, handlers, allowedWidths, imageConfig),
+    const pending = runImageGeneration(cache, reservedBytes, (signal) =>
+      generateCachedImageResponse(request, handlers, allowedWidths, imageConfig, signal),
     )
       .then((generated) => {
         if (generated.entry) {
@@ -1269,9 +1419,12 @@ export async function handleImageOptimization(
 
   let generated: GeneratedImageResponse;
   try {
-    generated = await regenerate();
+    generated = await awaitImageGeneration(regenerate(), request.signal);
   } catch (error) {
-    if (error instanceof ImageGenerationQueueError) {
+    if (
+      error instanceof ImageGenerationQueueError ||
+      error instanceof ImageGenerationTimeoutError
+    ) {
       return new Response("Image optimizer is busy", {
         status: 503,
         headers: { "Retry-After": "1" },
@@ -1314,7 +1467,7 @@ export type ImageOptimizer = {
   /** Transform the source image (resize, format, quality). */
   transformImage: (
     body: ReadableStream,
-    options: { width: number; format: string; quality: number },
+    options: { width: number; format: string; quality: number; signal: AbortSignal },
   ) => Promise<Response>;
 };
 

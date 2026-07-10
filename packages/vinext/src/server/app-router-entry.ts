@@ -37,6 +37,7 @@ import { registerConfiguredImageOptimizer } from "virtual:vinext-image-adapters"
 import {
   createInternalImageRequest,
   handleConfiguredImageOptimization,
+  isImageOptimizationDisabled,
   isImageOptimizationPath,
 } from "./image-optimization.js";
 import { finalizeMissingStaticAssetResponse, resolveStaticAssetSignal } from "./worker-utils.js";
@@ -94,7 +95,11 @@ async function handleRequest(
 
   const url = new URL(request.url);
 
-  if (isImageOptimizationPath(stripBasePath(url.pathname, __workerBasePath)) && env?.ASSETS) {
+  const isImageRequest = isImageOptimizationPath(stripBasePath(url.pathname, __workerBasePath));
+  if (isImageRequest && isImageOptimizationDisabled(__rscImageConfig)) {
+    return new Response("This page could not be found", { status: 404 });
+  }
+  if (isImageRequest && env?.ASSETS) {
     return handleConfiguredImageOptimization(
       request,
       async (assetPath, optimizerRequest) => {

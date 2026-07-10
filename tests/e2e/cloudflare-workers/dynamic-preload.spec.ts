@@ -2,6 +2,8 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { expect, test } from "../fixtures";
 
 const FIXTURE_DIR = `${process.cwd()}/tests/e2e/cloudflare-workers/fixture`;
+const APP_FIXTURE_DIR = `${process.cwd()}/tests/fixtures/app-basic`;
+const PAGES_IMAGE_FIXTURE_DIR = `${process.cwd()}/tests/e2e/cloudflare-pages-router/image-fixture`;
 const BASE_URL = "http://localhost:4192";
 
 function optimizerUrl(source: string, quality = 75): string {
@@ -313,5 +315,154 @@ test.describe("Cloudflare App Worker with image optimization disabled", () => {
     url.searchParams.set("q", "75");
 
     expect((await request.get(url.toString())).status()).toBe(404);
+  });
+});
+
+async function waitForChildServer(child: ChildProcess, url: string, label: string): Promise<void> {
+  for (let attempt = 0; attempt < 120; attempt++) {
+    if (child.exitCode !== null) throw new Error(`${label} exited with code ${child.exitCode}`);
+    try {
+      if ((await fetch(url)).ok) return;
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`Timed out waiting for ${label}`);
+}
+
+async function stopChildServer(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || !child.pid) return;
+  try {
+    if (process.platform === "win32") child.kill();
+    else process.kill(-child.pid, "SIGTERM");
+  } catch {
+    child.kill();
+  }
+  for (let attempt = 0; attempt < 40 && child.exitCode === null; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
+// Ported from Next.js: test/integration/image-optimizer/test/index.test.ts
+// https://github.com/vercel/next.js/blob/canary/test/integration/image-optimizer/test/index.test.ts
+test.describe("disabled image endpoint runtime seams", () => {
+  test.describe.configure({ mode: "serial" });
+
+  test("returns 404 before redirecting in App and Pages development", async ({ request }) => {
+    const cases = [
+      {
+        cwd: APP_FIXTURE_DIR,
+        env: "TEST_IMAGE_UNOPTIMIZED=1",
+        label: "unoptimized App dev",
+        port: 4200,
+        command: "npx vp dev",
+      },
+      {
+        cwd: APP_FIXTURE_DIR,
+        env: "TEST_IMAGE_LOADER=cloudinary",
+        label: "custom-loader App dev",
+        port: 4201,
+        command: "npx vp dev",
+      },
+      {
+        cwd: `${process.cwd()}/tests/fixtures/pages-basic`,
+        env: "TEST_IMAGE_UNOPTIMIZED=1",
+        label: "unoptimized Pages dev",
+        port: 4202,
+        command: "npx vp dev",
+      },
+      {
+        cwd: `${process.cwd()}/tests/fixtures/pages-basic`,
+        env: "TEST_IMAGE_LOADER=cloudinary",
+        label: "custom-loader Pages dev",
+        port: 4203,
+        command: "npx vp dev",
+      },
+    ];
+
+    for (const fixtureCase of cases) {
+      const child = spawn(`${fixtureCase.env} ${fixtureCase.command} --port ${fixtureCase.port}`, {
+        cwd: fixtureCase.cwd,
+        detached: process.platform !== "win32",
+        shell: true,
+        stdio: "inherit",
+      });
+      try {
+        await waitForChildServer(child, `http://localhost:${fixtureCase.port}/`, fixtureCase.label);
+        const response = await request.get(`http://localhost:${fixtureCase.port}/_next/image`, {
+          maxRedirects: 0,
+        });
+        expect(response.status(), fixtureCase.label).toBe(404);
+        expect(response.headers().location, fixtureCase.label).toBeUndefined();
+      } finally {
+        await stopChildServer(child);
+      }
+    }
+  });
+
+  test("returns 404 without an ASSETS binding for both routers and disabling configs", async ({
+    request,
+  }) => {
+    const cases = [
+      {
+        cwd: FIXTURE_DIR,
+        env: "TEST_IMAGE_UNOPTIMIZED=1",
+        label: "unoptimized App",
+        readinessPath: "/dynamic-preload",
+        setup:
+          "created_node_modules=0; if ! test -e node_modules && ! test -L node_modules; then ln -s ../../../../examples/app-router-cloudflare/node_modules node_modules; created_node_modules=1; fi; trap 'if test \"$created_node_modules\" = 1; then rm node_modules; fi' EXIT; ",
+        viteConfig: " --config vite.no-optimizer.config.mjs",
+      },
+      {
+        cwd: FIXTURE_DIR,
+        env: "TEST_IMAGE_LOADER=cloudinary",
+        label: "custom-loader App",
+        readinessPath: "/dynamic-preload",
+        setup:
+          "created_node_modules=0; if ! test -e node_modules && ! test -L node_modules; then ln -s ../../../../examples/app-router-cloudflare/node_modules node_modules; created_node_modules=1; fi; trap 'if test \"$created_node_modules\" = 1; then rm node_modules; fi' EXIT; ",
+        viteConfig: " --config vite.no-optimizer.config.mjs",
+      },
+      {
+        cwd: PAGES_IMAGE_FIXTURE_DIR,
+        env: "TEST_IMAGE_UNOPTIMIZED=1",
+        label: "unoptimized Pages",
+        readinessPath: "/",
+        setup: "",
+        viteConfig: "",
+      },
+      {
+        cwd: PAGES_IMAGE_FIXTURE_DIR,
+        env: "TEST_IMAGE_LOADER=cloudinary",
+        label: "custom-loader Pages",
+        readinessPath: "/",
+        setup: "",
+        viteConfig: "",
+      },
+    ];
+    for (const [index, fixtureCase] of cases.entries()) {
+      const port = 4204 + index;
+      const child = spawn(
+        `${fixtureCase.setup}${fixtureCase.env} npx vp build${fixtureCase.viteConfig} && npx wrangler dev --config wrangler.no-assets.jsonc --persist-to /tmp/vinext-no-assets-${process.pid}-${port} --port ${port}`,
+        {
+          cwd: fixtureCase.cwd,
+          detached: process.platform !== "win32",
+          shell: true,
+          stdio: "inherit",
+        },
+      );
+      try {
+        await waitForChildServer(
+          child,
+          `http://localhost:${port}${fixtureCase.readinessPath}`,
+          `${fixtureCase.label} no-ASSETS Worker`,
+        );
+        const response = await request.get(`http://localhost:${port}/_next/image`, {
+          maxRedirects: 0,
+        });
+        expect(response.status(), fixtureCase.label).toBe(404);
+        expect(response.headers().location, fixtureCase.label).toBeUndefined();
+      } finally {
+        await stopChildServer(child);
+      }
+    }
   });
 });

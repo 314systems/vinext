@@ -15,6 +15,8 @@ const nextConfig: NextConfig = {
     maximumResponseBody: 100,
     minimumCacheTTL: 123,
     qualities: [75, 90],
+    unoptimized: process.env.TEST_IMAGE_UNOPTIMIZED === "1",
+    loader: process.env.TEST_IMAGE_LOADER === "cloudinary" ? "cloudinary" : undefined,
   },
   // Used by E2E: nextjs-compat/gesture-transitions.spec.ts — enabled
   // fixture-wide solely for that spec (the only observable effect is the
