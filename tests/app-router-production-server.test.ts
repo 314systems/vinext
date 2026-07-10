@@ -217,6 +217,8 @@ describe("App Router Production server (startProdServer)", () => {
   let appStaticDynamicTarget: StartedTextSequenceTarget | undefined;
   let appStaticRevalidateTarget: StartedTextSequenceTarget | undefined;
   let revalidatePathFetchTarget: StartedTextSequenceTarget | undefined;
+  let configCapturePathTarget: StartedTextSequenceTarget | undefined;
+  const configCapturePathRequests: string[] = [];
 
   function extractRequestId(html: string): string | undefined {
     return (
@@ -266,10 +268,16 @@ describe("App Router Production server (startProdServer)", () => {
     appStaticDynamicTarget = await startTextSequenceTarget({ prefix: "dynamic" });
     appStaticRevalidateTarget = await startTextSequenceTarget({ prefix: "revalidate" });
     revalidatePathFetchTarget = await startTextSequenceTarget();
+    configCapturePathTarget = await startTextSequenceTarget({
+      recordRequest(req) {
+        configCapturePathRequests.push(req.url ?? "");
+      },
+    });
     process.env.TEST_APP_STATIC_DELAY_TARGET = appStaticDelayTarget.url;
     process.env.TEST_APP_STATIC_DYNAMIC_TARGET = appStaticDynamicTarget.url;
     process.env.TEST_APP_STATIC_REVALIDATE_TARGET = appStaticRevalidateTarget.url;
     process.env.TEST_REVALIDATE_PATH_REWRITES_TARGET = revalidatePathFetchTarget.url;
+    process.env.TEST_CONFIG_CAPTURE_PATH_TARGET = configCapturePathTarget.url;
 
     try {
       // Build the app-basic fixture to the default dist/ directory
@@ -284,6 +292,7 @@ describe("App Router Production server (startProdServer)", () => {
         await builder.buildApp();
       } finally {
         delete process.env.TEST_CONFIG_CAPTURE_EXTERNAL;
+        delete process.env.TEST_CONFIG_CAPTURE_PATH_TARGET;
       }
 
       // Start the production server on a random available port
@@ -299,16 +308,19 @@ describe("App Router Production server (startProdServer)", () => {
         await appStaticDynamicTarget?.close();
         await appStaticRevalidateTarget?.close();
         await revalidatePathFetchTarget?.close();
+        await configCapturePathTarget?.close();
       } finally {
         appStaticDelayTarget = undefined;
         appStaticDynamicTarget = undefined;
         appStaticRevalidateTarget = undefined;
         revalidatePathFetchTarget = undefined;
+        configCapturePathTarget = undefined;
         delete process.env.TEST_APP_STATIC_DELAY_TARGET;
         delete process.env.TEST_APP_STATIC_DYNAMIC_TARGET;
         delete process.env.TEST_APP_STATIC_REVALIDATE_TARGET;
         delete process.env.TEST_REVALIDATE_PATH_REWRITES_TARGET;
         delete process.env.TEST_CONFIG_CAPTURE_EXTERNAL;
+        delete process.env.TEST_CONFIG_CAPTURE_PATH_TARGET;
       }
       throw error;
     }
@@ -320,11 +332,13 @@ describe("App Router Production server (startProdServer)", () => {
     await appStaticDynamicTarget?.close();
     await appStaticRevalidateTarget?.close();
     await revalidatePathFetchTarget?.close();
+    await configCapturePathTarget?.close();
     delete process.env.TEST_APP_STATIC_DELAY_TARGET;
     delete process.env.TEST_APP_STATIC_DYNAMIC_TARGET;
     delete process.env.TEST_APP_STATIC_REVALIDATE_TARGET;
     delete process.env.TEST_REVALIDATE_PATH_REWRITES_TARGET;
     delete process.env.TEST_CONFIG_CAPTURE_EXTERNAL;
+    delete process.env.TEST_CONFIG_CAPTURE_PATH_TARGET;
     fs.rmSync(outDir, { recursive: true, force: true });
   });
 
@@ -1298,12 +1312,12 @@ describe("App Router Production server (startProdServer)", () => {
   });
 
   it("preserves mixed encoded dot segments after production request normalization", async () => {
-    // The Node production entry and App request handler each normalize one
-    // layer, so use an additional encoding layer to exercise the config
-    // matcher with the same `%2e.` / `.%2e` captures seen in dev and Workers.
+    // Node production leaves the single decode/normalize pass to the App
+    // request handler, matching dev and Workers.
     for (const [requestSegment, destinationSegment] of [
-      ["%25252e.", "%252e."],
-      [".%25252e", ".%252e"],
+      ["%252e%252e", "%252e%252e"],
+      ["%252e.", "%252e."],
+      [".%252e", ".%252e"],
     ]) {
       const res = await fetch(`${baseUrl}/source-capture-dot-redirect/${requestSegment}/admin`, {
         redirect: "manual",
@@ -1313,6 +1327,21 @@ describe("App Router Production server (startProdServer)", () => {
       expect(res.headers.get("location")).toBe(
         `https://redirect.example.test/safe/${destinationSegment}/admin`,
       );
+    }
+  });
+
+  it("keeps encoded dot segments under the external rewrite prefix in production", async () => {
+    for (const [requestSegment, destinationSegment] of [
+      ["%252e%252e", "%252e%252e"],
+      ["%252e.", "%252e."],
+      [".%252e", ".%252e"],
+    ]) {
+      configCapturePathRequests.length = 0;
+      const res = await fetch(`${baseUrl}/source-capture-dot-rewrite/${requestSegment}/admin`);
+
+      expect(res.status).toBe(200);
+      await res.arrayBuffer();
+      expect(configCapturePathRequests).toEqual([`/safe/${destinationSegment}/admin`]);
     }
   });
 

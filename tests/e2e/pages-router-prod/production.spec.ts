@@ -54,11 +54,11 @@ test.describe("Pages Router Production Build", () => {
   });
 
   test("config redirects preserve mixed encoded dot segments", async ({ request }) => {
-    // The Node production entry and Pages request pipeline each normalize one
-    // layer before config matching, hence the additional encoding layer here.
+    // Pages production uses the same single normalization pass as dev.
     for (const [requestSegment, destinationSegment] of [
-      ["%25252e.", "%252e."],
-      [".%25252e", ".%252e"],
+      ["%252e%252e", "%252e%252e"],
+      ["%252e.", "%252e."],
+      [".%252e", ".%252e"],
     ]) {
       const response = await request.get(
         `${BASE}/source-capture-dot-redirect/${requestSegment}/admin`,
