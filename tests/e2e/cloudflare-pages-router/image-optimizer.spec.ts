@@ -94,6 +94,12 @@ test.describe("Cloudflare Pages Router image optimizer", () => {
     expect(immutable.headers()["content-disposition"]).toBe(
       'attachment; filename="static-image.bmp"',
     );
+
+    const legacyImmutable = await request.get(
+      optimizerUrl("/_next/static/immutable/media/static-image.bmp"),
+    );
+    expect(legacyImmutable.status()).toBe(200);
+    expect(legacyImmutable.headers()["cache-control"]).toBe("public, max-age=315360000, immutable");
   });
 
   test("negotiates configured formats and reuses each cached representation", async ({

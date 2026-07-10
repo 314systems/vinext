@@ -93,6 +93,12 @@ test.describe("App Router production image source parity", () => {
       'attachment; filename="static-image.bmp"',
     );
     expect(immutable.headers()["content-length"]).toBe(String((await immutable.body()).byteLength));
+
+    const legacyImmutable = await request.get(
+      optimizerUrl("/_next/static/immutable/media/static-image.bmp"),
+    );
+    expect(legacyImmutable.status()).toBe(200);
+    expect(legacyImmutable.headers()["cache-control"]).toBe("public, max-age=315360000, immutable");
   });
 
   test("rejects nested optimizer source suffixes before middleware dispatch", async ({

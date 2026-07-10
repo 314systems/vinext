@@ -168,6 +168,12 @@ test.describe("Cloudflare Workers dynamic preloads", () => {
     expect(immutable.headers()["content-disposition"]).toBe(
       'attachment; filename="static-image.bmp"',
     );
+
+    const legacyImmutable = await request.get(
+      optimizerUrl("/_next/static/immutable/media/static-image.bmp"),
+    );
+    expect(legacyImmutable.status()).toBe(200);
+    expect(legacyImmutable.headers()["cache-control"]).toBe("public, max-age=315360000, immutable");
   });
 
   test("negotiates and caches weighted image formats in a pure App Worker", async ({ request }) => {

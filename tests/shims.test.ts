@@ -21559,6 +21559,48 @@ describe("handleImageOptimization", () => {
     expect(seenMethods).toEqual(["GET", "GET", "POST", "POST"]);
   });
 
+  it("shares cached and in-flight image generations between GET and HEAD", async () => {
+    const { handleImageOptimization } =
+      await import("../packages/vinext/src/server/image-optimization.js");
+    const owner = {};
+    let fetchCount = 0;
+    let releaseFetch!: () => void;
+    let fetchGate: Promise<void> | null = null;
+    const handlers = {
+      cacheOwner: owner,
+      async fetchAsset() {
+        fetchCount += 1;
+        if (fetchGate) await fetchGate;
+        return new Response(jpegBytes, { headers: { "Cache-Control": "max-age=60" } });
+      },
+    };
+    const request = (source: string, method: "GET" | "HEAD") =>
+      new Request(`http://localhost/_next/image?url=${encodeURIComponent(source)}&w=640&q=75`, {
+        method,
+      });
+
+    const headMiss = await handleImageOptimization(request("/sequential.jpg", "HEAD"), handlers);
+    const getHit = await handleImageOptimization(request("/sequential.jpg", "GET"), handlers);
+    expect(headMiss.headers.get("X-Nextjs-Cache")).toBe("MISS");
+    expect((await headMiss.arrayBuffer()).byteLength).toBe(0);
+    expect(getHit.headers.get("X-Nextjs-Cache")).toBe("HIT");
+    expect(new Uint8Array(await getHit.arrayBuffer())).toEqual(jpegBytes);
+    expect(fetchCount).toBe(1);
+
+    fetchGate = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+    const pendingHead = handleImageOptimization(request("/coalesced.jpg", "HEAD"), handlers);
+    const pendingGet = handleImageOptimization(request("/coalesced.jpg", "GET"), handlers);
+    releaseFetch();
+    const [head, get] = await Promise.all([pendingHead, pendingGet]);
+    expect(head.headers.get("X-Nextjs-Cache")).toBe("MISS");
+    expect(get.headers.get("X-Nextjs-Cache")).toBe("MISS");
+    expect((await head.arrayBuffer()).byteLength).toBe(0);
+    expect(new Uint8Array(await get.arrayBuffer())).toEqual(jpegBytes);
+    expect(fetchCount).toBe(2);
+  });
+
   it("bounds 300 distinct concurrent generations by owner and pending-byte reservations", async () => {
     const { handleImageOptimization } =
       await import("../packages/vinext/src/server/image-optimization.js");
@@ -21588,7 +21630,7 @@ describe("handleImageOptimization", () => {
     expect(maxActive).toBe(1);
   });
 
-  it("keeps large concurrent hits correct while enforcing the resident-byte LRU", async () => {
+  it("shares one immutable body backing across large concurrent cache hits", async () => {
     const { handleImageOptimization } =
       await import("../packages/vinext/src/server/image-optimization.js");
     const body = new Uint8Array(3 * 1024 * 1024);
@@ -21613,13 +21655,31 @@ describe("handleImageOptimization", () => {
     expect(fetches.get("/large-a.jpg")).toBe(1);
     expect(fetches.get("/large-b.jpg")).toBe(2);
 
-    const hits = await Promise.all(
-      Array.from({ length: 12 }, () => handleImageOptimization(request("/large-b.jpg"), handlers)),
-    );
-    expect(hits.every((response) => response.headers.get("X-Nextjs-Cache") === "HIT")).toBe(true);
-    for (const response of hits)
-      expect((await response.arrayBuffer()).byteLength).toBe(body.length);
-    expect(fetches.get("/large-b.jpg")).toBe(2);
+    const NativeResponse = globalThis.Response;
+    const hitBodies: BodyInit[] = [];
+    class TrackingResponse extends NativeResponse {
+      constructor(responseBody?: BodyInit | null, init?: ResponseInit) {
+        super(responseBody, init);
+        if (new Headers(init?.headers).get("X-Nextjs-Cache") === "HIT" && responseBody) {
+          hitBodies.push(responseBody);
+        }
+      }
+    }
+    globalThis.Response = TrackingResponse as typeof Response;
+    try {
+      const hits = await Promise.all(
+        Array.from({ length: 40 }, () =>
+          handleImageOptimization(request("/large-b.jpg"), handlers),
+        ),
+      );
+      expect(hits.every((response) => response.headers.get("X-Nextjs-Cache") === "HIT")).toBe(true);
+      expect(hitBodies).toHaveLength(40);
+      expect(hitBodies[0]).toBeInstanceOf(Blob);
+      expect(new Set(hitBodies)).toHaveLength(1);
+      expect(fetches.get("/large-b.jpg")).toBe(2);
+    } finally {
+      globalThis.Response = NativeResponse;
+    }
   });
 
   it("reports uncached over-limit responses as MISS without retaining their bodies", async () => {
@@ -21642,6 +21702,54 @@ describe("handleImageOptimization", () => {
     expect(first.headers.get("X-Nextjs-Cache")).toBe("MISS");
     expect(second.headers.get("X-Nextjs-Cache")).toBe("MISS");
     expect(fetchCount).toBe(2);
+  });
+
+  it("shares one immutable body backing across coalesced over-limit misses", async () => {
+    const { handleImageOptimization } =
+      await import("../packages/vinext/src/server/image-optimization.js");
+    const body = new Uint8Array(5 * 1024 * 1024);
+    body.set(jpegBytes);
+    let releaseFetch!: () => void;
+    const fetchGate = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+    let fetchCount = 0;
+    const handlers = {
+      cacheOwner: {},
+      async fetchAsset() {
+        fetchCount += 1;
+        await fetchGate;
+        return new Response(body, { headers: { "Cache-Control": "max-age=60" } });
+      },
+    };
+    const url = "http://localhost/_next/image?url=%2Fcoalesced-large.jpg&w=640&q=75";
+    const NativeResponse = globalThis.Response;
+    const missBodies: BodyInit[] = [];
+    class TrackingResponse extends NativeResponse {
+      constructor(responseBody?: BodyInit | null, init?: ResponseInit) {
+        super(responseBody, init);
+        if (new Headers(init?.headers).get("X-Nextjs-Cache") === "MISS" && responseBody) {
+          missBodies.push(responseBody);
+        }
+      }
+    }
+    globalThis.Response = TrackingResponse as typeof Response;
+    try {
+      const pending = Array.from({ length: 24 }, () =>
+        handleImageOptimization(new Request(url), handlers),
+      );
+      releaseFetch();
+      const responses = await Promise.all(pending);
+      expect(fetchCount).toBe(1);
+      expect(responses.every((response) => response.headers.get("X-Nextjs-Cache") === "MISS")).toBe(
+        true,
+      );
+      expect(missBodies).toHaveLength(24);
+      expect(missBodies[0]).toBeInstanceOf(Blob);
+      expect(new Set(missBodies)).toHaveLength(1);
+    } finally {
+      globalThis.Response = NativeResponse;
+    }
   });
 
   it("serves stale image responses and regenerates through runtime ownership", async () => {
@@ -21669,6 +21777,122 @@ describe("handleImageOptimization", () => {
     expect(background).toHaveLength(1);
     await background[0];
     expect(fetchCount).toBe(2);
+  });
+
+  it("evicts stale entries after successful over-limit regeneration", async () => {
+    const { handleImageOptimization } =
+      await import("../packages/vinext/src/server/image-optimization.js");
+    const url = "http://localhost/_next/image?url=%2Fgrowing.jpg&w=640&q=75";
+    const large = new Uint8Array(5 * 1024 * 1024);
+    large.set(jpegBytes);
+    let fetchCount = 0;
+    let releaseCurrent!: () => void;
+    let currentGate: Promise<void> | null = null;
+    const background: Promise<unknown>[] = [];
+    const handlers = {
+      cacheOwner: {},
+      async fetchAsset() {
+        fetchCount += 1;
+        if (currentGate) await currentGate;
+        return new Response(fetchCount === 1 ? jpegBytes : large, {
+          headers: { "Cache-Control": "max-age=0" },
+        });
+      },
+      waitUntil(promise: Promise<unknown>) {
+        background.push(promise);
+      },
+    };
+    const config = { minimumCacheTTL: 0 };
+
+    const first = await handleImageOptimization(new Request(url), handlers, undefined, config);
+    const stale = await handleImageOptimization(new Request(url), handlers, undefined, config);
+    expect(first.headers.get("X-Nextjs-Cache")).toBe("MISS");
+    expect(stale.headers.get("X-Nextjs-Cache")).toBe("STALE");
+    await background[0];
+
+    currentGate = new Promise<void>((resolve) => {
+      releaseCurrent = resolve;
+    });
+    const currentRequests = [
+      handleImageOptimization(new Request(url), handlers, undefined, config),
+      handleImageOptimization(new Request(url), handlers, undefined, config),
+    ];
+    releaseCurrent();
+    const current = await Promise.all(currentRequests);
+    expect(fetchCount).toBe(3);
+    expect(current.every((response) => response.headers.get("X-Nextjs-Cache") === "MISS")).toBe(
+      true,
+    );
+    for (const response of current) expect((await response.blob()).size).toBe(large.length);
+  });
+
+  it("retains a stale entry when regeneration returns an invalid response", async () => {
+    const { handleImageOptimization } =
+      await import("../packages/vinext/src/server/image-optimization.js");
+    const url = "http://localhost/_next/image?url=%2Finvalid-regeneration.jpg&w=640&q=75";
+    let fetchCount = 0;
+    const background: Promise<unknown>[] = [];
+    const handlers = {
+      cacheOwner: {},
+      fetchAsset: async () => {
+        fetchCount += 1;
+        return fetchCount === 1
+          ? new Response(jpegBytes, { headers: { "Cache-Control": "max-age=0" } })
+          : new Response("not an image", { headers: { "Cache-Control": "max-age=0" } });
+      },
+      waitUntil(promise: Promise<unknown>) {
+        background.push(promise);
+      },
+    };
+    const config = { minimumCacheTTL: 0 };
+
+    await handleImageOptimization(new Request(url), handlers, undefined, config);
+    const firstStale = await handleImageOptimization(new Request(url), handlers, undefined, config);
+    await background[0];
+    const secondStale = await handleImageOptimization(
+      new Request(url),
+      handlers,
+      undefined,
+      config,
+    );
+    expect(firstStale.headers.get("X-Nextjs-Cache")).toBe("STALE");
+    expect(secondStale.headers.get("X-Nextjs-Cache")).toBe("STALE");
+    expect(new Uint8Array(await secondStale.arrayBuffer())).toEqual(jpegBytes);
+    await background[1];
+  });
+
+  it("retains a stale entry when regeneration throws", async () => {
+    const { handleImageOptimization } =
+      await import("../packages/vinext/src/server/image-optimization.js");
+    const url = "http://localhost/_next/image?url=%2Ffailed-regeneration.jpg&w=640&q=75";
+    let fetchCount = 0;
+    const background: Promise<unknown>[] = [];
+    const handlers = {
+      cacheOwner: {},
+      fetchAsset: async () => {
+        fetchCount += 1;
+        if (fetchCount > 1) throw new Error("regeneration failed");
+        return new Response(jpegBytes, { headers: { "Cache-Control": "max-age=0" } });
+      },
+      waitUntil(promise: Promise<unknown>) {
+        background.push(promise);
+      },
+    };
+    const config = { minimumCacheTTL: 0 };
+
+    await handleImageOptimization(new Request(url), handlers, undefined, config);
+    const firstStale = await handleImageOptimization(new Request(url), handlers, undefined, config);
+    await background[0];
+    const secondStale = await handleImageOptimization(
+      new Request(url),
+      handlers,
+      undefined,
+      config,
+    );
+    expect(firstStale.headers.get("X-Nextjs-Cache")).toBe("STALE");
+    expect(secondStale.headers.get("X-Nextjs-Cache")).toBe("STALE");
+    expect(new Uint8Array(await secondStale.arrayBuffer())).toEqual(jpegBytes);
+    await background[1];
   });
 
   it("falls back to original on transform error", async () => {
@@ -21778,7 +22002,7 @@ describe("handleImageOptimization", () => {
     expect(response.headers.get("Cache-Control")).toBe("public, max-age=315360000, immutable");
   });
 
-  it("does not treat invented _next/static/immutable/media paths as immutable", async () => {
+  it("preserves immutable caching for legacy static imported image paths", async () => {
     const { handleImageOptimization } =
       await import("../packages/vinext/src/server/image-optimization.js");
     const response = await handleImageOptimization(
@@ -21789,7 +22013,7 @@ describe("handleImageOptimization", () => {
         fetchAsset: async () => new Response(new Uint8Array([0x42, 0x4d, 0x00, 0x00])),
       },
     );
-    expect(response.headers.get("Cache-Control")).toBe("public, max-age=14400, must-revalidate");
+    expect(response.headers.get("Cache-Control")).toBe("public, max-age=315360000, immutable");
   });
 
   it("anchors immutable bypass responses to basePath-owned _next/static/media", async () => {
@@ -21811,10 +22035,18 @@ describe("handleImageOptimization", () => {
     expect(
       (await optimize("/docs/_next/static/media/static-image.bmp")).headers.get("Cache-Control"),
     ).toBe("public, max-age=315360000, immutable");
+    expect(
+      (await optimize("/docs/_next/static/immutable/media/legacy-static-image.bmp")).headers.get(
+        "Cache-Control",
+      ),
+    ).toBe("public, max-age=315360000, immutable");
     for (const source of [
       "/_next/static/media/wrong-tenant.bmp",
+      "/_next/static/immutable/media/wrong-tenant.bmp",
       "/nested/docs/_next/static/media/nested.bmp",
-      "/docs/_next/static/immutable/media/invented.bmp",
+      "/nested/docs/_next/static/immutable/media/nested.bmp",
+      "/docs/_next/static/medial/not-a-segment.bmp",
+      "/docs/_next/static/immutable/medial/not-a-segment.bmp",
     ]) {
       expect((await optimize(source)).headers.get("Cache-Control")).toBe(
         "public, max-age=14400, must-revalidate",

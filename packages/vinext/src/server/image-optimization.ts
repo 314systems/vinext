@@ -615,8 +615,8 @@ export function createInternalImageRequest(
 }
 
 type CachedImageResponse = {
-  /** Immutable buffered body. Never expose a mutable view of this buffer. */
-  body: ArrayBuffer;
+  /** Immutable body backing shared by every response served from this entry. */
+  body: Blob;
   headers: [string, string][];
   revalidateAfter: number;
 };
@@ -631,7 +631,8 @@ type ImageResponseCache = {
 };
 
 type BufferedImageResponse = {
-  body: ArrayBuffer | null;
+  /** Immutable body backing shared by all waiters on one generation. */
+  body: Blob | null;
   headers: [string, string][];
   status: number;
   statusText: string;
@@ -686,22 +687,32 @@ function writeCachedImageResponse(
 ): void {
   const previous = cache.entries.get(cacheKey);
   if (previous) {
-    cache.totalBodyBytes -= previous.body.byteLength;
+    cache.totalBodyBytes -= previous.body.size;
     cache.entries.delete(cacheKey);
   }
-  if (entry.body.byteLength > MAX_IMAGE_RESPONSE_ENTRY_BYTES) return;
+  if (entry.body.size > MAX_IMAGE_RESPONSE_ENTRY_BYTES) return;
   while (
     cache.entries.size >= MAX_IMAGE_RESPONSE_CACHE_ENTRIES ||
-    cache.totalBodyBytes + entry.body.byteLength > MAX_IMAGE_RESPONSE_CACHE_BYTES
+    cache.totalBodyBytes + entry.body.size > MAX_IMAGE_RESPONSE_CACHE_BYTES
   ) {
     const oldestKey = cache.entries.keys().next().value;
     if (oldestKey === undefined) break;
     const oldest = cache.entries.get(oldestKey)!;
     cache.entries.delete(oldestKey);
-    cache.totalBodyBytes -= oldest.body.byteLength;
+    cache.totalBodyBytes -= oldest.body.size;
   }
   cache.entries.set(cacheKey, entry);
-  cache.totalBodyBytes += entry.body.byteLength;
+  cache.totalBodyBytes += entry.body.size;
+}
+
+function deleteCachedImageResponse(
+  cache: ImageResponseCache,
+  cacheKey: string,
+  expected: CachedImageResponse,
+): void {
+  if (cache.entries.get(cacheKey) !== expected) return;
+  cache.entries.delete(cacheKey);
+  cache.totalBodyBytes -= expected.body.size;
 }
 
 function imageResponseCacheKey(
@@ -714,7 +725,10 @@ function imageResponseCacheKey(
   return JSON.stringify({
     version: 2,
     origin: new URL(request.url).origin,
-    method: request.method.toUpperCase(),
+    // GET and HEAD resolve the same representation. The caller controls
+    // whether the returned response includes a body, so they must also share
+    // cache entries and in-flight generation just as they do in Next.js.
+    method: "GET",
     url: params.imageUrl,
     width: params.width,
     quality: params.quality,
@@ -792,12 +806,8 @@ async function generateCachedImageResponse(
     imageConfig,
   );
   const headers = [...response.headers.entries()] as [string, string][];
-  const body = response.body ? await response.arrayBuffer() : null;
-  if (
-    response.status === 200 &&
-    body !== null &&
-    body.byteLength <= MAX_IMAGE_RESPONSE_ENTRY_BYTES
-  ) {
+  const body = response.body ? await response.blob() : null;
+  if (response.status === 200 && body !== null && body.size <= MAX_IMAGE_RESPONSE_ENTRY_BYTES) {
     return {
       entry: {
         body,
@@ -900,9 +910,16 @@ async function renderImageOptimizationUncached(
     sourcePathname = "";
   }
   const configuredBasePath = (imageConfig?.basePath ?? "").replace(/\/$/, "");
-  const staticMediaPath = `${configuredBasePath}/_next/static/media`;
-  const sourceIsStatic =
-    sourcePathname === staticMediaPath || sourcePathname.startsWith(`${staticMediaPath}/`);
+  // Next.js recognizes both current and legacy build-owned media directories.
+  // Keep them anchored to this app's basePath and require a segment boundary.
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/image-optimizer.ts
+  const staticMediaPaths = [
+    `${configuredBasePath}/_next/static/media`,
+    `${configuredBasePath}/_next/static/immutable/media`,
+  ];
+  const sourceIsStatic = staticMediaPaths.some(
+    (path) => sourcePathname === path || sourcePathname.startsWith(`${path}/`),
+  );
   if (!sourceContentType) {
     return new Response("The requested resource isn't a valid image.", { status: 400 });
   }
@@ -1052,7 +1069,18 @@ export async function handleImageOptimization(
       generateCachedImageResponse(request, handlers, allowedWidths, imageConfig),
     )
       .then((generated) => {
-        if (generated.entry) writeCachedImageResponse(cache, cacheKey, generated.entry);
+        if (generated.entry) {
+          writeCachedImageResponse(cache, cacheKey, generated.entry);
+        } else if (
+          cached &&
+          generated.response?.status === 200 &&
+          generated.response.body !== null
+        ) {
+          // A successful response can be intentionally nonresident when it is
+          // larger than the per-entry limit. Do not leave an older small entry
+          // serving stale forever after that successful regeneration.
+          deleteCachedImageResponse(cache, cacheKey, cached);
+        }
         return generated;
       })
       .finally(() => cache.pending.delete(cacheKey));
