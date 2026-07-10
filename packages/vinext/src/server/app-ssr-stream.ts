@@ -451,6 +451,7 @@ function endsWithDelimitedTag(window: string, prefix: string): string | null {
  * prefix, preserving streaming and backpressure.
  */
 class HtmlClosingTokenScanner {
+  #commentLength = 0;
   #commentTail = "";
   #declarationPrefix = "";
   #quote: '"' | "'" | null = null;
@@ -560,6 +561,7 @@ class HtmlClosingTokenScanner {
       if (this.#state === "markup-declaration-open") {
         this.#declarationPrefix += character;
         if (this.#declarationPrefix === "--") {
+          this.#commentLength = 0;
           this.#commentTail = "";
           this.#state = "comment";
         } else if (this.#declarationPrefix.length >= 2) {
@@ -569,10 +571,18 @@ class HtmlClosingTokenScanner {
       }
 
       if (this.#state === "comment") {
-        this.#commentTail = (this.#commentTail + character).slice(-3);
-        if (this.#commentTail === "-->") {
+        const closesAbruptly =
+          character === ">" &&
+          ((this.#commentLength <= 1 && this.#commentTail === "-".repeat(this.#commentLength)) ||
+            this.#commentTail.endsWith("--") ||
+            this.#commentTail.endsWith("--!"));
+        if (closesAbruptly) {
+          this.#commentLength = 0;
           this.#commentTail = "";
           this.#state = "data";
+        } else {
+          this.#commentLength++;
+          this.#commentTail = (this.#commentTail + character).slice(-3);
         }
         continue;
       }

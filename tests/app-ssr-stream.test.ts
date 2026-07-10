@@ -479,6 +479,16 @@ describe("createTickBufferedTransform pre-head splice", () => {
       "<!-- before </head> after -->",
     ],
     [
+      "abruptly closed comment",
+      ["<html><head><!-", "--></he", "ad><body></body></html>"],
+      "<!--->",
+    ],
+    [
+      "comment ending in --!>",
+      ["<html><head><!-- before --", "!></he", "ad><body></body></html>"],
+      "<!-- before --!>",
+    ],
+    [
       "quoted attribute",
       ['<html><head><meta content="before </he', 'ad> after">', "</head><body></body></html>"],
       '<meta content="before </head> after">',
