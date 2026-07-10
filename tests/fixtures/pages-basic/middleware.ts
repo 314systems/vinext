@@ -1,8 +1,54 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
+let imageSourceDispatchCount = 0;
+let imageSourceMethod = "";
+
+const imageBytes = new Uint8Array([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+  0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+  0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
+  0x00, 0x00, 0x02, 0x00, 0x01, 0xe2, 0x21, 0xbc, 0x33, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
+  0x44, 0xae, 0x42, 0x60, 0x82,
+]);
+
 export function middleware(request: NextRequest) {
   const url = new URL(request.url);
+
+  if (url.pathname === "/image-test/reset") {
+    imageSourceDispatchCount = 0;
+    imageSourceMethod = "";
+    return Response.json({ ok: true });
+  }
+  if (url.pathname === "/image-test/state") {
+    return Response.json({ count: imageSourceDispatchCount, method: imageSourceMethod });
+  }
+  if (url.pathname === "/image-test/source.png") {
+    imageSourceDispatchCount += 1;
+    imageSourceMethod = request.method;
+    if (url.searchParams.has("auth")) {
+      return new Response("Authentication required", { status: 401 });
+    }
+    if (url.searchParams.has("spoof")) {
+      return new Response("Authentication required", {
+        status: 401,
+        headers: { "content-type": "image/png" },
+      });
+    }
+    const body = url.searchParams.has("oversize")
+      ? new Uint8Array([...imageBytes, ...new Uint8Array(64)])
+      : imageBytes;
+    return new Response(body, {
+      status: 200,
+      headers: {
+        "cache-control": "public, max-age=200",
+        etag: '"middleware-source"',
+        "content-type": url.searchParams.has("wrong-type")
+          ? "text/html"
+          : "application/octet-stream",
+      },
+    });
+  }
 
   // Add a custom header to all matched requests
   const response = NextResponse.next();
@@ -14,17 +60,6 @@ export function middleware(request: NextRequest) {
 
   if (url.pathname === "/protected/private.png") {
     return new NextResponse("Authentication required", { status: 401 });
-  }
-
-  if (url.pathname === "/middleware-image-alias") {
-    return new NextResponse(
-      Uint8Array.from([
-        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
-        0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 16, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 240,
-        31, 0, 5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
-      ]),
-      { headers: { "Content-Type": "image/png" } },
-    );
   }
 
   // Redirect /old-page to /about

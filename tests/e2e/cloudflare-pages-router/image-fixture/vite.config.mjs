@@ -1,3 +1,4 @@
+import { cloudflare } from "@cloudflare/vite-plugin";
 import { defineConfig } from "vite-plus";
 import vinext from "vinext";
 import { fileURLToPath } from "node:url";
@@ -7,9 +8,10 @@ export default defineConfig({
     vinext({
       images: {
         optimizer: {
-          adapter: fileURLToPath(new URL("./image-test-optimizer.ts", import.meta.url)),
+          adapter: fileURLToPath(new URL("./image-test-optimizer.mjs", import.meta.url)),
         },
       },
     }),
+    cloudflare(),
   ],
 });

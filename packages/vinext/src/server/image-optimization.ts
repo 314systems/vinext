@@ -18,7 +18,7 @@
  */
 
 import { badRequestResponse } from "./http-error-responses.js";
-import { addBasePathToPathname, stripBasePath } from "../utils/base-path.js";
+import { stripBasePath } from "../utils/base-path.js";
 
 /** The pathname that triggers image optimization (matches Next.js). */
 export const IMAGE_OPTIMIZATION_PATH = "/_next/image";
@@ -50,23 +50,6 @@ export function isImageOptimizationPath(pathname: string): boolean {
   return pathname === IMAGE_OPTIMIZATION_PATH || pathname === VINEXT_IMAGE_OPTIMIZATION_PATH;
 }
 
-export function createInternalImageRequest(
-  imagePath: string,
-  request: Request,
-  basePath = "",
-): Request | null {
-  const url = new URL(imagePath, request.url);
-  let pathname: string;
-  try {
-    pathname = decodeURIComponent(url.pathname).replaceAll("\\", "/");
-  } catch {
-    return null;
-  }
-  if (isImageOptimizationPath(stripBasePath(pathname, basePath))) return null;
-  url.pathname = addBasePathToPathname(url.pathname, basePath);
-  return new Request(url, { method: "GET" });
-}
-
 /**
  * Image security configuration from next.config.js `images` section.
  * Controls SVG handling and security headers for the image endpoint.
@@ -94,6 +77,10 @@ export type ImageConfig = {
    * via the image shim instead.
    */
   dangerouslyAllowLocalIP?: boolean;
+  /** Maximum source response body size. Defaults to 50 MB. */
+  maximumResponseBody?: number;
+  /** Minimum optimized image cache lifetime in seconds. Defaults to 4 hours. */
+  minimumCacheTTL?: number;
   /** Content-Disposition header value. Default: "inline". */
   contentDispositionType?: "inline" | "attachment";
   /** Content-Security-Policy header value. Default: "script-src 'none'; frame-src 'none'; sandbox;" */
@@ -197,6 +184,12 @@ export function parseImageParams(
     if (resolved.origin !== base) {
       return null;
     }
+    // Next rejects any local source whose decoded pathname contains the image
+    // optimizer endpoint as a complete path segment. This covers basePath and
+    // nested suffix forms such as `/docs/_next/image/again`, not just an exact
+    // `/_next/image` source.
+    const decodedPathname = decodeURIComponent(resolved.pathname).replaceAll("\\", "/");
+    if (/\/(?:_next|_vinext)\/image(?:$|\/)/.test(decodedPathname)) return null;
   } catch {
     return null;
   }
@@ -214,12 +207,6 @@ export function negotiateImageFormat(acceptHeader: string | null): string {
   if (acceptHeader.includes("image/webp")) return "image/webp";
   return "image/jpeg";
 }
-
-/**
- * Standard Cache-Control header for optimized images.
- * Optimized images are immutable because the URL encodes the transform params.
- */
-export const IMAGE_CACHE_CONTROL = "public, max-age=31536000, immutable";
 
 /**
  * Content-Security-Policy for image optimization responses.
@@ -240,7 +227,10 @@ const SAFE_IMAGE_CONTENT_TYPES = new Set([
   "image/gif",
   "image/webp",
   "image/avif",
+  "image/jp2",
+  "image/jxl",
   "image/x-icon",
+  "image/x-icns",
   "image/vnd.microsoft.icon",
   "image/bmp",
   "image/tiff",
@@ -262,6 +252,116 @@ export function isSafeImageContentType(
   return false;
 }
 
+async function readImageSource(
+  response: Response,
+  maximumResponseBody: number,
+): Promise<
+  | { bytes: Uint8Array; response: Response; contentType: string | null; tooLarge: false }
+  | { tooLarge: true }
+  | null
+> {
+  if (!response.body) return null;
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalSize = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalSize += value.byteLength;
+    if (totalSize > maximumResponseBody) {
+      await reader.cancel();
+      return { tooLarge: true };
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(totalSize);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  const startsWith = (...signature: number[]) =>
+    bytes.length >= signature.length && signature.every((byte, index) => bytes[index] === byte);
+  const textPrefix = new TextDecoder()
+    .decode(bytes.subarray(0, 256))
+    .replace(/^\uFEFF/, "")
+    .trimStart()
+    .toLowerCase();
+  let contentType: string | null = null;
+  if (startsWith(0xff, 0xd8, 0xff)) contentType = "image/jpeg";
+  else if (startsWith(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) contentType = "image/png";
+  else if (startsWith(0x47, 0x49, 0x46, 0x38)) contentType = "image/gif";
+  if (
+    startsWith(0x52, 0x49, 0x46, 0x46) &&
+    bytes.length >= 12 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  )
+    contentType = "image/webp";
+  else if (bytes.length >= 12 && startsWith(0x00, 0x00, 0x00, 0x0c, 0x4a, 0x58, 0x4c, 0x20))
+    contentType = "image/jxl";
+  else if (startsWith(0xff, 0x0a)) contentType = "image/jxl";
+  else if (bytes.length >= 12 && startsWith(0x00, 0x00, 0x00, 0x0c, 0x6a, 0x50, 0x20, 0x20))
+    contentType = "image/jp2";
+  else if (
+    bytes.length >= 12 &&
+    bytes[4] === 0x66 &&
+    bytes[5] === 0x74 &&
+    bytes[6] === 0x79 &&
+    bytes[7] === 0x70
+  ) {
+    const brand = String.fromCharCode(bytes[8], bytes[9], bytes[10], bytes[11]);
+    if (brand === "avif" || brand === "avis") contentType = "image/avif";
+  } else if (startsWith(0x00, 0x00, 0x01, 0x00)) contentType = "image/x-icon";
+  else if (startsWith(0x69, 0x63, 0x6e, 0x73)) contentType = "image/x-icns";
+  else if (startsWith(0x42, 0x4d)) contentType = "image/bmp";
+  else if (startsWith(0x49, 0x49, 0x2a, 0x00) || startsWith(0x4d, 0x4d, 0x00, 0x2a))
+    contentType = "image/tiff";
+  else if (textPrefix.startsWith("<?xml") || textPrefix.startsWith("<svg"))
+    contentType = "image/svg+xml";
+
+  const headers = new Headers(response.headers);
+  headers.set("ETag", await extractImageEtag(headers.get("ETag"), bytes));
+
+  return {
+    bytes,
+    response: new Response(bytes, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    }),
+    contentType,
+    tooLarge: false,
+  };
+}
+
+function toBase64Url(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+
+async function getImageEtag(bytes: Uint8Array): Promise<string> {
+  const buffer = new Uint8Array(bytes).buffer;
+  return toBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", buffer)));
+}
+
+async function extractImageEtag(etag: string | null, bytes: Uint8Array): Promise<string> {
+  return etag ? toBase64Url(new TextEncoder().encode(etag)) : getImageEtag(bytes);
+}
+
+function isFreshImageRequest(request: Request, etag: string): boolean {
+  if (request.headers.get("Cache-Control")?.toLowerCase().includes("no-cache")) return false;
+  const ifNoneMatch = request.headers.get("If-None-Match");
+  if (!ifNoneMatch) return false;
+  const normalize = (value: string) => value.trim().replace(/^W\//, "");
+  return ifNoneMatch
+    .split(",")
+    .some((value) => value.trim() === "*" || normalize(value) === normalize(etag));
+}
+
 /**
  * Apply security headers to an image optimization response.
  * These headers are set on every response from the image endpoint,
@@ -280,25 +380,44 @@ function setImageSecurityHeaders(headers: Headers, config?: ImageConfig): void {
   );
 }
 
-function createPassthroughImageResponse(source: Response, config?: ImageConfig): Response {
+function createPassthroughImageResponse(
+  source: Response,
+  config?: ImageConfig,
+  request?: Request,
+  detectedContentType?: string,
+  cacheControl?: string,
+): Response {
   const headers = new Headers();
-  for (const name of ["Content-Type", "ETag"] as const) {
-    const value = source.headers.get(name);
-    if (value) headers.set(name, value);
-  }
-  headers.set("Cache-Control", IMAGE_CACHE_CONTROL);
+  const contentType = detectedContentType ?? source.headers.get("Content-Type");
+  const etag = source.headers.get("ETag");
+  if (etag) headers.set("ETag", etag);
+  headers.set("Cache-Control", cacheControl ?? imageCacheControl(source, config));
   headers.set("Vary", "Accept");
+  if (etag && request && isFreshImageRequest(request, etag)) {
+    return new Response(null, { status: 304, headers });
+  }
+  if (contentType) headers.set("Content-Type", contentType);
   setImageSecurityHeaders(headers, config);
-  return new Response(source.body, { status: 200, headers });
+  return new Response(request?.method === "HEAD" ? null : source.body, { status: 200, headers });
 }
 
-export function imageSourceResponseHeaders(source: Response): Headers {
-  const headers = new Headers();
-  for (const name of ["Content-Type", "Cache-Control", "ETag"] as const) {
-    const value = source.headers.get(name);
-    if (value) headers.set(name, value);
+function imageCacheControl(source: Response, config?: ImageConfig): string {
+  const directives = new Map(
+    (source.headers.get("Cache-Control") ?? "")
+      .split(",")
+      .map((directive) => directive.trim().split("=", 2))
+      .map(([key, value]) => [key.toLowerCase(), value]),
+  );
+  let upstreamMaxAge = directives.get("s-maxage") || directives.get("max-age") || "";
+  if (upstreamMaxAge.startsWith('"') && upstreamMaxAge.endsWith('"')) {
+    upstreamMaxAge = upstreamMaxAge.slice(1, -1);
   }
-  return headers;
+  const parsedMaxAge = Number.parseInt(upstreamMaxAge, 10);
+  const maxAge = Math.max(
+    config?.minimumCacheTTL ?? 14_400,
+    Number.isNaN(parsedMaxAge) ? 0 : parsedMaxAge,
+  );
+  return `public, max-age=${maxAge}, must-revalidate`;
 }
 
 /**
@@ -315,10 +434,30 @@ export type ImageHandlers = {
   ) => Promise<Response>;
 };
 
-async function cancelResponseBody(response: Response): Promise<void> {
+/**
+ * Build the request used to resolve a local image source through the app's
+ * normal request pipeline. This uses a credential-free synthetic request,
+ * preserving the optimizer request method except that HEAD is resolved as GET,
+ * matching Next.js and preventing external rewrites from forwarding caller credentials.
+ */
+export function createInternalImageRequest(
+  imageUrl: string,
+  request: Request,
+  basePath = "",
+): Request | null {
+  const sourceUrl = new URL(imageUrl, request.url);
+  let sourcePathname: string;
   try {
-    await response.body?.cancel();
-  } catch {}
+    sourcePathname = decodeURIComponent(sourceUrl.pathname);
+  } catch {
+    return null;
+  }
+  const normalizedPathname = sourcePathname.replaceAll("\\", "/");
+  const withoutBasePath = stripBasePath(normalizedPathname, basePath);
+  if (/\/(?:_next|_vinext)\/image(?:$|\/)/.test(withoutBasePath)) return null;
+  return new Request(sourceUrl, {
+    method: !request.method || request.method === "HEAD" ? "GET" : request.method,
+  });
 }
 
 /**
@@ -344,76 +483,98 @@ export async function handleImageOptimization(
   const { imageUrl, width, quality } = params;
 
   // Fetch source image
-  const source = await handlers.fetchAsset(imageUrl, request);
-  if (!source.ok || !source.body) {
-    await cancelResponseBody(source);
-    return new Response("Image not found", { status: 404 });
+  const sourceResult = await readImageSource(
+    await handlers.fetchAsset(imageUrl, request),
+    imageConfig?.maximumResponseBody ?? 50_000_000,
+  );
+  if (sourceResult?.tooLarge) {
+    return new Response("The requested resource is too large.", { status: 413 });
+  }
+  if (!sourceResult) {
+    return new Response("The requested resource isn't a valid image.", { status: 400 });
+  }
+  const { bytes: sourceBytes, response: source, contentType: sourceContentType } = sourceResult;
+  const sourceIsStatic = /\/_next\/static\/media(?:$|\/)/.test(
+    new URL(imageUrl, request.url).pathname,
+  );
+  if (!sourceContentType) {
+    return new Response("The requested resource isn't a valid image.", { status: 400 });
   }
 
   // Negotiate output format from Accept header
   const format = negotiateImageFormat(request.headers.get("Accept"));
 
-  // Block unsafe Content-Types (e.g., SVG which can contain embedded scripts).
-  // Check the source Content-Type before any processing. SVG is only allowed
-  // when dangerouslyAllowSVG is explicitly enabled in next.config.js.
-  const sourceContentType = source.headers.get("Content-Type");
+  // Block unsafe detected types (e.g., SVG which can contain embedded scripts).
+  // SVG is only allowed when dangerouslyAllowSVG is explicitly enabled.
   if (!isSafeImageContentType(sourceContentType, imageConfig?.dangerouslyAllowSVG)) {
-    await cancelResponseBody(source);
     return new Response("The requested resource is not an allowed image type", { status: 400 });
   }
 
   // SVG passthrough: SVG is a vector format, so transformation (resize, format
   // conversion) provides no benefit. Serve as-is with security headers.
   // This matches Next.js behavior where SVG is a "bypass type".
-  const sourceMediaType = sourceContentType?.split(";")[0].trim().toLowerCase();
-  if (sourceMediaType === "image/svg+xml") {
-    return createPassthroughImageResponse(source, imageConfig);
+  if (sourceContentType === "image/svg+xml") {
+    return createPassthroughImageResponse(source, imageConfig, request, sourceContentType);
   }
 
   // Transform if handler provided, otherwise serve original
   if (handlers.transformImage) {
     try {
-      const transformed = await handlers.transformImage(source.body, {
+      const transformed = await handlers.transformImage(source.body!, {
         width,
         format,
         quality,
       });
-      const headers = new Headers(transformed.headers);
-      headers.set("Cache-Control", IMAGE_CACHE_CONTROL);
+      if (!transformed.ok || !transformed.body) {
+        throw new Error(`Image transform returned ${transformed.status}`);
+      }
+      const transformedBytes = new Uint8Array(await transformed.arrayBuffer());
+      const headers = new Headers();
+      const transformedContentType = transformed.headers.get("Content-Type");
+      const transformedEtag = await getImageEtag(transformedBytes);
+      if (transformedContentType) headers.set("Content-Type", transformedContentType);
+      headers.set("ETag", transformedEtag);
+      headers.set(
+        "Cache-Control",
+        sourceIsStatic
+          ? "public, max-age=315360000, immutable"
+          : imageCacheControl(source, imageConfig),
+      );
       headers.set("Vary", "Accept");
-      setImageSecurityHeaders(headers, imageConfig);
-
       // Verify the transformed response also has a safe Content-Type.
       // A malicious or buggy transform handler could return HTML.
       if (!isSafeImageContentType(headers.get("Content-Type"), imageConfig?.dangerouslyAllowSVG)) {
         headers.set("Content-Type", format);
       }
 
-      return new Response(transformed.body, { status: 200, headers });
+      if (isFreshImageRequest(request, transformedEtag)) {
+        headers.delete("Content-Type");
+        return new Response(null, { status: 304, headers });
+      }
+
+      setImageSecurityHeaders(headers, imageConfig);
+      return new Response(request.method === "HEAD" ? null : transformedBytes, {
+        status: 200,
+        headers,
+      });
     } catch (e) {
       console.error("[vinext] Image optimization error:", e);
     }
   }
 
   // Fallback: serve original image with cache headers
-  try {
-    return createPassthroughImageResponse(source, imageConfig);
-  } catch (e) {
-    console.error("[vinext] Image fallback error, refetching source image:", e);
-    const refetchedSource = await handlers.fetchAsset(imageUrl, request);
-    if (!refetchedSource.ok || !refetchedSource.body) {
-      await cancelResponseBody(refetchedSource);
-      return new Response("Image not found", { status: 404 });
-    }
-
-    const refetchedContentType = refetchedSource.headers.get("Content-Type");
-    if (!isSafeImageContentType(refetchedContentType, imageConfig?.dangerouslyAllowSVG)) {
-      await cancelResponseBody(refetchedSource);
-      return new Response("The requested resource is not an allowed image type", { status: 400 });
-    }
-
-    return createPassthroughImageResponse(refetchedSource, imageConfig);
-  }
+  const fallbackSource = new Response(sourceBytes.slice().buffer, {
+    status: source.status,
+    statusText: source.statusText,
+    headers: source.headers,
+  });
+  return createPassthroughImageResponse(
+    fallbackSource,
+    imageConfig,
+    request,
+    sourceContentType,
+    sourceIsStatic ? "public, max-age=315360000, immutable" : undefined,
+  );
 }
 
 // ---------------------------------------------------------------------------

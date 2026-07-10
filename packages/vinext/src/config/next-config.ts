@@ -220,6 +220,10 @@ export type NextConfig = {
     dangerouslyAllowSVG?: boolean;
     /** Allow image optimization for hostnames that resolve to private IP addresses. This is a security risk (SSRF) — only enable for private networks when you understand the risk. */
     dangerouslyAllowLocalIP?: boolean;
+    /** Maximum image source response body size in bytes. Defaults to 50 MB. */
+    maximumResponseBody?: number;
+    /** Minimum optimized image cache lifetime in seconds. Defaults to 4 hours. */
+    minimumCacheTTL?: number;
     /** Content-Disposition header for image responses. Defaults to "inline". */
     contentDispositionType?: "inline" | "attachment";
     /** Content-Security-Policy header for image responses. Defaults to "script-src 'none'; frame-src 'none'; sandbox;" */

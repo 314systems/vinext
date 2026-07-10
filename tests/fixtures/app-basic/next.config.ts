@@ -11,6 +11,10 @@
 import type { NextConfig } from "vinext";
 
 const nextConfig: NextConfig = {
+  images: {
+    maximumResponseBody: 100,
+    minimumCacheTTL: 123,
+  },
   // Used by E2E: nextjs-compat/gesture-transitions.spec.ts — enabled
   // fixture-wide solely for that spec (the only observable effect is the
   // optional `experimental_gesturePush` method being attached). Note this

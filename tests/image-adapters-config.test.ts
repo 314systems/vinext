@@ -120,8 +120,9 @@ describe("image optimizer registry", () => {
       },
     });
 
+    const sourceBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     const fetchAsset = async () =>
-      new Response("source-bytes", { status: 200, headers: { "Content-Type": "image/png" } });
+      new Response(sourceBytes, { status: 200, headers: { "Content-Type": "image/png" } });
 
     const request = new Request("https://example.com/_next/image?url=%2Ffoo.png&w=640&q=75", {
       headers: { Accept: "image/webp" },
@@ -131,7 +132,7 @@ describe("image optimizer registry", () => {
     expect(transformCalled).toBe(true);
     expect(response.status).toBe(200);
     expect(response.headers.get("Content-Type")).toBe("image/webp");
-    expect(response.headers.get("Cache-Control")).toContain("immutable");
+    expect(response.headers.get("Cache-Control")).toContain("max-age=14400");
   });
 
   it("preserves `this` for an optimizer implemented as a class instance", async () => {
@@ -150,7 +151,10 @@ describe("image optimizer registry", () => {
     setImageOptimizer(new ClassOptimizer());
 
     const fetchAsset = async () =>
-      new Response("source-bytes", { status: 200, headers: { "Content-Type": "image/png" } });
+      new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), {
+        status: 200,
+        headers: { "Content-Type": "image/png" },
+      });
     const request = new Request("https://example.com/_next/image?url=%2Ffoo.png&w=640&q=75", {
       headers: { Accept: "image/webp" },
     });
@@ -162,15 +166,16 @@ describe("image optimizer registry", () => {
 
   it("serves the original (passthrough) when no optimizer is registered", async () => {
     setImageOptimizer(null);
+    const sourceBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     const fetchAsset = async () =>
-      new Response("source-bytes", { status: 200, headers: { "Content-Type": "image/png" } });
+      new Response(sourceBytes, { status: 200, headers: { "Content-Type": "image/png" } });
 
     const request = new Request("https://example.com/_next/image?url=%2Ffoo.png&w=640&q=75");
     const response = await handleConfiguredImageOptimization(request, fetchAsset, [640]);
 
     expect(response.status).toBe(200);
-    expect(await response.text()).toBe("source-bytes");
-    expect(response.headers.get("Cache-Control")).toContain("immutable");
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(sourceBytes);
+    expect(response.headers.get("Cache-Control")).toContain("max-age=14400");
   });
 });
 

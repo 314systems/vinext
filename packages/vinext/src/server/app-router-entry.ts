@@ -57,6 +57,7 @@ import {
   notFoundStaticAssetResponse,
 } from "./http-error-responses.js";
 import { assetPrefixPathname, isNextStaticPath } from "../utils/asset-prefix.js";
+import { stripBasePath } from "../utils/base-path.js";
 
 // Precompute the path components used for `_next/static/*` 404 short-circuit
 // detection. Both `__basePath` and `__assetPrefix` are inlined as
@@ -93,18 +94,30 @@ async function handleRequest(
 
   const url = new URL(request.url);
 
-  if (isImageOptimizationPath(url.pathname) && env?.ASSETS && getImageOptimizer()) {
+  if (
+    isImageOptimizationPath(stripBasePath(url.pathname, __workerBasePath)) &&
+    env?.ASSETS &&
+    getImageOptimizer()
+  ) {
     return handleConfiguredImageOptimization(
       request,
-      (assetPath, optimizerRequest) => {
+      async (assetPath, optimizerRequest) => {
         const sourceRequest = createInternalImageRequest(
           assetPath,
           optimizerRequest,
           __workerBasePath,
         );
-        return sourceRequest
-          ? handleRequest(sourceRequest, env, ctx)
-          : Promise.resolve(new Response("Bad Request", { status: 400 }));
+        if (!sourceRequest) return new Response("Bad Request", { status: 400 });
+        if (
+          isNextStaticPath(
+            new URL(sourceRequest.url).pathname,
+            __workerBasePath,
+            __workerAssetPathPrefix,
+          )
+        ) {
+          return env.ASSETS!.fetch(sourceRequest);
+        }
+        return handleRequest(sourceRequest, env, ctx);
       },
       __rscImageAllowedWidths,
       __rscImageConfig,

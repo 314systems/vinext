@@ -244,6 +244,8 @@ export function generateRscEntry(
     qualities: config?.imageConfig?.qualities,
     dangerouslyAllowSVG: config?.imageConfig?.dangerouslyAllowSVG,
     dangerouslyAllowLocalIP: config?.imageConfig?.dangerouslyAllowLocalIP,
+    maximumResponseBody: config?.imageConfig?.maximumResponseBody,
+    minimumCacheTTL: config?.imageConfig?.minimumCacheTTL,
     contentDispositionType: config?.imageConfig?.contentDispositionType,
     contentSecurityPolicy: config?.imageConfig?.contentSecurityPolicy,
   };

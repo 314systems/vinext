@@ -3,6 +3,14 @@ import { expect, test } from "@playwright/test";
 const BASE = "http://localhost:4175";
 const PROTECTED_IMAGE = "/protected/private.png";
 
+function optimizerUrl(source: string): string {
+  const url = new URL("/_next/image", BASE);
+  url.searchParams.set("url", source);
+  url.searchParams.set("w", "32");
+  url.searchParams.set("q", "75");
+  return url.toString();
+}
+
 test.describe("Pages Router image request middleware ordering", () => {
   test("runs middleware when the optimizer fetches a local source image", async ({ request }) => {
     // Next.js dispatches local image source requests through its normal request handler.
@@ -12,46 +20,80 @@ test.describe("Pages Router image request middleware ordering", () => {
     const directResponse = await request.get(`${BASE}${PROTECTED_IMAGE}`);
     expect(directResponse.status()).toBe(401);
 
-    const optimizerUrl = new URL("/_next/image", BASE);
-    optimizerUrl.searchParams.set("url", PROTECTED_IMAGE);
-    optimizerUrl.searchParams.set("w", "32");
-    optimizerUrl.searchParams.set("q", "75");
-
-    const optimizedResponse = await request.get(optimizerUrl.toString(), {
+    const optimizedResponse = await request.get(optimizerUrl(PROTECTED_IMAGE), {
       maxRedirects: 0,
     });
 
-    expect(optimizedResponse.status()).toBe(404);
+    expect(optimizedResponse.status()).toBe(400);
     expect(optimizedResponse.headers()["location"]).toBeUndefined();
     expect(optimizedResponse.headers()["x-mw-pathname"]).toBeUndefined();
-    expect(await optimizedResponse.text()).toBe("Image not found");
+    expect(await optimizedResponse.text()).not.toContain("not-a-real-png");
   });
 
-  test("does not expose source middleware headers on a successful image response", async ({
+  test("sniffs bytes, bounds source bodies, and applies the configured cache policy", async ({
     request,
   }) => {
-    const optimizerUrl = new URL("/_next/image", BASE);
-    optimizerUrl.searchParams.set("url", "/images/middleware-visible.png");
-    optimizerUrl.searchParams.set("w", "32");
-    optimizerUrl.searchParams.set("q", "75");
+    const wrongType = await request.get(optimizerUrl("/image-test/source.png?wrong-type=1"));
+    expect(wrongType.status()).toBe(200);
+    expect(wrongType.headers()["content-type"]).toContain("image/png");
+    expect(wrongType.headers()["cache-control"]).toBe("public, max-age=200, must-revalidate");
+    expect(wrongType.headers().etag).toBeTruthy();
 
-    const response = await request.get(optimizerUrl.toString());
+    for (const source of ["/image-test/source.png?auth=1", "/image-test/source.png?spoof=1"]) {
+      const invalid = await request.get(optimizerUrl(source));
+      expect(invalid.status()).toBe(400);
+      expect(await invalid.text()).toContain("isn't a valid image");
+    }
 
-    expect(response.status()).toBe(200);
-    expect(response.headers()["content-type"]).toBe("image/png");
-    expect(response.headers()["x-custom-middleware"]).toBeUndefined();
-    expect(response.headers()["x-mw-pathname"]).toBeUndefined();
+    const oversized = await request.get(optimizerUrl("/image-test/source.png?oversize=1"));
+    expect(oversized.status()).toBe(413);
   });
 
-  test("allows middleware to resolve an extensionless source as an image", async ({ request }) => {
-    const optimizerUrl = new URL("/_next/image", BASE);
-    optimizerUrl.searchParams.set("url", "/middleware-image-alias");
-    optimizerUrl.searchParams.set("w", "32");
-    optimizerUrl.searchParams.set("q", "75");
+  test("returns a bodyless 304 and omits entity-only image headers", async ({ request }) => {
+    const url = optimizerUrl("/image-test/source.png");
+    const initial = await request.get(url);
+    const etag = initial.headers().etag;
+    expect(initial.status()).toBe(200);
+    expect(etag).toBeTruthy();
 
-    const response = await request.get(optimizerUrl.toString());
+    const conditional = await request.get(url, { headers: { "if-none-match": etag } });
+    expect(conditional.status()).toBe(304);
+    expect((await conditional.body()).byteLength).toBe(0);
+    expect(conditional.headers().etag).toBe(etag);
+    expect(conditional.headers()["cache-control"]).toBe("public, max-age=200, must-revalidate");
+    expect(conditional.headers()["content-type"]).toBeUndefined();
+    expect(conditional.headers()["content-disposition"]).toBeUndefined();
+  });
 
-    expect(response.status()).toBe(200);
-    expect(response.headers()["content-type"]).toBe("image/png");
+  test("buffers one source dispatch on transform failure and preserves source methods", async ({
+    request,
+  }) => {
+    await request.get(`${BASE}/image-test/reset`);
+    const postResponse = await request.fetch(optimizerUrl("/image-test/source.png"), {
+      method: "POST",
+    });
+    expect(postResponse.status()).toBe(200);
+    let state = await (await request.get(`${BASE}/image-test/state`)).json();
+    expect(state).toEqual({ count: 1, method: "POST" });
+
+    await request.get(`${BASE}/image-test/reset`);
+    const headResponse = await request.fetch(optimizerUrl("/image-test/source.png"), {
+      method: "HEAD",
+    });
+    expect(headResponse.status()).toBe(200);
+    expect((await headResponse.body()).byteLength).toBe(0);
+    state = await (await request.get(`${BASE}/image-test/state`)).json();
+    expect(state).toEqual({ count: 1, method: "GET" });
+  });
+
+  test("rejects nested image optimizer source paths before dispatch", async ({ request }) => {
+    await request.get(`${BASE}/image-test/reset`);
+    for (const source of ["/_next/image/again", "/docs/_next/image/again"]) {
+      expect((await request.get(optimizerUrl(source))).status()).toBe(400);
+    }
+    expect(await (await request.get(`${BASE}/image-test/state`)).json()).toEqual({
+      count: 0,
+      method: "",
+    });
   });
 });

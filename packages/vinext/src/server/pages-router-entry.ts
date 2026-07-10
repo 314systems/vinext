@@ -20,9 +20,9 @@ import {
 } from "./pages-request-pipeline.js";
 import type { PagesPipelineDeps } from "./pages-request-pipeline.js";
 import {
-  createInternalImageRequest,
   DEFAULT_DEVICE_SIZES,
   DEFAULT_IMAGE_SIZES,
+  createInternalImageRequest,
   handleConfiguredImageOptimization,
   isImageOptimizationPath,
 } from "./image-optimization.js";
@@ -84,6 +84,8 @@ const imageConfig: ImageConfig | undefined = vinextConfig?.images
       qualities: vinextConfig.images.qualities,
       dangerouslyAllowSVG: vinextConfig.images.dangerouslyAllowSVG,
       dangerouslyAllowLocalIP: vinextConfig.images.dangerouslyAllowLocalIP,
+      maximumResponseBody: vinextConfig.images.maximumResponseBody,
+      minimumCacheTTL: vinextConfig.images.minimumCacheTTL,
       contentDispositionType: vinextConfig.images.contentDispositionType,
       contentSecurityPolicy: vinextConfig.images.contentSecurityPolicy,
     }
@@ -103,6 +105,7 @@ async function handleRequest(
   request: Request,
   env: PagesWorkerEnv | undefined,
   ctx: PagesWorkerExecutionContext | undefined,
+  resolveDirectAssets = false,
 ): Promise<Response> {
   // Pass the Worker env so binding-backed adapters (for example KV and Images)
   // can resolve their configured bindings before request handling begins.
@@ -161,11 +164,10 @@ async function handleRequest(
       ];
       return handleConfiguredImageOptimization(
         request,
-        (assetPath, optimizerRequest) => {
+        async (assetPath, optimizerRequest) => {
           const sourceRequest = createInternalImageRequest(assetPath, optimizerRequest, basePath);
-          return sourceRequest
-            ? handleRequest(sourceRequest, env, ctx)
-            : Promise.resolve(new Response("Bad Request", { status: 400 }));
+          if (!sourceRequest) return new Response("Bad Request", { status: 400 });
+          return handleRequest(sourceRequest, env, ctx, true);
         },
         allowedWidths,
         imageConfig,
@@ -200,8 +202,12 @@ async function handleRequest(
           : null,
       serveFilesystemRoute: async (requestPathname, _stagedHeaders, phase) => {
         if (!env?.ASSETS) return false;
-        return fetchWorkerFilesystemRoute(request, requestPathname, phase, (assetRequest) =>
-          Promise.resolve(env.ASSETS!.fetch(assetRequest)),
+        return fetchWorkerFilesystemRoute(
+          request,
+          requestPathname,
+          phase,
+          (assetRequest) => Promise.resolve(env.ASSETS!.fetch(assetRequest)),
+          resolveDirectAssets,
         );
       },
     };
