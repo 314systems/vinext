@@ -384,6 +384,19 @@ describe("App Router dev action imported from a package", () => {
     expect(typeOnlyResponse.status).toBe(500);
     expect(typeOnlyResponse.headers.get("content-type")).toContain("text/html");
 
+    const typeOnlyFetchResponse = await fetch(baseUrl, {
+      method: "POST",
+      headers: {
+        accept: "text/x-component",
+        "content-type": "text/plain;charset=UTF-8",
+        "next-action": typeOnlyActionId,
+        origin: baseUrl,
+      },
+      body: "[]",
+    });
+    expect(typeOnlyFetchResponse.status).toBe(404);
+    expect(typeOnlyFetchResponse.headers.get("x-nextjs-action-not-found")).toBe("1");
+
     const forgedActionId = actionId.replace(
       "/node_modules/dev-package-action/action.js",
       "/node_modules/dev-forged-package/action.js",
@@ -434,10 +447,94 @@ describe("App Router dev package-action reachability", () => {
     if (tempDir) await rm(tempDir, { recursive: true, force: true });
   });
 
-  it("rejects a stale package action after its runtime edge is removed", async () => {
+  it("rejects type-only and stale package actions across HMR", async () => {
     const initialHtml = await (await fetch(`${baseUrl}/package-action`)).text();
     const marker = initialHtml.match(/name="(\$ACTION_ID_[^"]+)"/)?.[1];
     expect(marker).toBeDefined();
+    const actionId = marker!.slice("$ACTION_ID_".length);
+    const typeOnlyActionId = actionId.replace(
+      "action.js#packageAction",
+      "type-only.ts#typeOnlyPackageAction",
+    );
+    expect(typeOnlyActionId).not.toBe(actionId);
+
+    const initialTypeOnlyBody = new FormData();
+    initialTypeOnlyBody.set(`$ACTION_ID_${typeOnlyActionId}`, "");
+    const initialTypeOnlyProgressive = await fetch(baseUrl, {
+      method: "POST",
+      headers: { origin: baseUrl },
+      body: initialTypeOnlyBody,
+    });
+    expect(initialTypeOnlyProgressive.status).toBe(500);
+    expect(initialTypeOnlyProgressive.headers.get("content-type")).toContain("text/html");
+
+    const initialTypeOnlyFetch = await fetch(baseUrl, {
+      method: "POST",
+      headers: {
+        accept: "text/x-component",
+        "content-type": "text/plain;charset=UTF-8",
+        "next-action": typeOnlyActionId,
+        origin: baseUrl,
+      },
+      body: "[]",
+    });
+    expect(initialTypeOnlyFetch.status).toBe(404);
+    expect(initialTypeOnlyFetch.headers.get("x-nextjs-action-not-found")).toBe("1");
+
+    await writeFile(
+      path.join(fixtureDir, "app/package-type-only/page.tsx"),
+      `import { PackageActionLabel } from "dev-package-action/type-only";\nimport { packageTypeOnlyLabel } from "dev-package-action/type-only-reexport";\nconst label: PackageActionLabel = packageTypeOnlyLabel;\nexport default function PackageTypeOnlyPage() { return <p>{label} after HMR</p>; }\n`,
+    );
+    const hotTypeOnlyHtml = await retryUntil(
+      async () => (await fetch(`${baseUrl}/package-type-only`)).text(),
+      (html) => html.includes("after HMR"),
+    );
+    expect(hotTypeOnlyHtml).toContain("after HMR");
+
+    const hotTypeOnlyBody = new FormData();
+    hotTypeOnlyBody.set(`$ACTION_ID_${typeOnlyActionId}`, "");
+    const hotTypeOnlyProgressive = await fetch(baseUrl, {
+      method: "POST",
+      headers: { origin: baseUrl },
+      body: hotTypeOnlyBody,
+    });
+    expect(hotTypeOnlyProgressive.status).toBe(500);
+    expect(hotTypeOnlyProgressive.headers.get("content-type")).toContain("text/html");
+
+    const hotTypeOnlyFetch = await fetch(baseUrl, {
+      method: "POST",
+      headers: {
+        accept: "text/x-component",
+        "content-type": "text/plain;charset=UTF-8",
+        "next-action": typeOnlyActionId,
+        origin: baseUrl,
+      },
+      body: "[]",
+    });
+    expect(hotTypeOnlyFetch.status).toBe(404);
+    expect(hotTypeOnlyFetch.headers.get("x-nextjs-action-not-found")).toBe("1");
+
+    const liveBody = new FormData();
+    liveBody.set(marker!, "");
+    const liveProgressive = await fetch(baseUrl, {
+      method: "POST",
+      headers: { origin: baseUrl },
+      body: liveBody,
+    });
+    expect(liveProgressive.status).toBe(200);
+
+    const liveFetch = await fetch(baseUrl, {
+      method: "POST",
+      headers: {
+        accept: "text/x-component",
+        "content-type": "text/plain;charset=UTF-8",
+        "next-action": actionId,
+        origin: baseUrl,
+      },
+      body: "[]",
+    });
+    expect(liveFetch.status).toBe(200);
+    expect(liveFetch.headers.get("content-type")).toContain("text/x-component");
 
     await writeFile(
       path.join(fixtureDir, "app/package-action/client-form.tsx"),

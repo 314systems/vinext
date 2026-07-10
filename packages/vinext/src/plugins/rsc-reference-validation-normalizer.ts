@@ -1,4 +1,4 @@
-import { parseAst, type DevEnvironment, type Plugin } from "vite";
+import { parseAst, transformWithOxc, type DevEnvironment, type Plugin } from "vite";
 import type { PluginApi } from "@vitejs/plugin-rsc";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
@@ -161,16 +161,17 @@ function walkAst(
   }
 }
 
-function readSourceModuleFacts(
+async function readSourceModuleFacts(
   code: string,
   file: string,
-): {
+): Promise<{
   hasServerAction: boolean;
   specifiers: string[];
-} | null {
-  let ast: ReturnType<typeof parseAst>;
+} | null> {
+  const sourceLanguage = parserLanguageForFile(file);
+  let sourceAst: ReturnType<typeof parseAst>;
   try {
-    ast = parseAst(code, { lang: parserLanguageForFile(file) });
+    sourceAst = parseAst(code, { lang: sourceLanguage });
   } catch {
     // A broken unrelated route must not prevent capability discovery for a
     // valid page. Its own request will still surface the parse error normally.
@@ -178,10 +179,51 @@ function readSourceModuleFacts(
   }
 
   let hasServerAction = false;
-  const specifiers = new Set<string>();
-  walkAst(ast, (node, parent) => {
+  walkAst(sourceAst, (node, parent) => {
     if (bodyHasUseServerDirective(node, parent)) hasServerAction = true;
+  });
 
+  let runtimeAst = sourceAst;
+  let sourceSpecifiers: Set<string> | null = null;
+  if (sourceLanguage === "ts" || sourceLanguage === "tsx") {
+    const authoredSpecifiers = new Set<string>();
+    sourceSpecifiers = authoredSpecifiers;
+    walkAst(sourceAst, (node) => {
+      if (
+        node.type !== "ImportDeclaration" &&
+        node.type !== "ExportNamedDeclaration" &&
+        node.type !== "ExportAllDeclaration" &&
+        node.type !== "ImportExpression"
+      ) {
+        return;
+      }
+      const source = node.source as AstNode | undefined;
+      if (typeof source?.value === "string") authoredSpecifiers.add(source.value);
+    });
+
+    try {
+      // The source index must follow the runtime graph rather than every
+      // syntactic TypeScript import. OXC performs the same local type erasure
+      // as Vite's normal transform, including implicit type-only bindings such
+      // as `import { T }` when T is used only in type positions. Parse its
+      // emitted module syntax, but keep resolving the unchanged specifiers
+      // relative to the original source file below.
+      const runtimeCode = (
+        await transformWithOxc(code, file, {
+          lang: sourceLanguage,
+          sourcemap: false,
+        })
+      ).code;
+      runtimeAst = parseAst(runtimeCode, { lang: "jsx" });
+    } catch {
+      // A broken unrelated route must not prevent capability discovery for a
+      // valid page. Its own request will still surface the transform error.
+      return null;
+    }
+  }
+
+  const specifiers = new Set<string>();
+  walkAst(runtimeAst, (node) => {
     if (
       node.type === "ImportDeclaration" ||
       node.type === "ExportNamedDeclaration" ||
@@ -189,13 +231,23 @@ function readSourceModuleFacts(
     ) {
       if (!hasRuntimeModuleEdge(node)) return;
       const source = node.source as AstNode | undefined;
-      if (typeof source?.value === "string") specifiers.add(source.value);
+      if (
+        typeof source?.value === "string" &&
+        (!sourceSpecifiers || sourceSpecifiers.has(source.value))
+      ) {
+        specifiers.add(source.value);
+      }
       return;
     }
 
     if (node.type === "ImportExpression") {
       const source = node.source as AstNode | undefined;
-      if (typeof source?.value === "string") specifiers.add(source.value);
+      if (
+        typeof source?.value === "string" &&
+        (!sourceSpecifiers || sourceSpecifiers.has(source.value))
+      ) {
+        specifiers.add(source.value);
+      }
     }
   });
   return { hasServerAction, specifiers: [...specifiers] };
@@ -253,7 +305,7 @@ async function scanReachableActionSources(options: {
     } catch {
       continue;
     }
-    const facts = readSourceModuleFacts(code, file);
+    const facts = await readSourceModuleFacts(code, file);
     if (!facts) continue;
     if (facts.hasServerAction) actionSourceIds.add(file);
 
