@@ -20,6 +20,8 @@ export type NavigationContext = {
   searchParams: URLSearchParams;
   params: Record<string, string | string[]>;
   searchParamsAccessMode?: "dynamic" | "error" | "force-static";
+  /** Set only while serializing useServerInsertedHTML callback results. */
+  isRenderingServerInsertedHTML?: boolean;
   /**
    * SSR runs in a separate Vite environment. Its request-local callback records
    * Client Component useSearchParams() access and reports the result back to

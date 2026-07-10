@@ -476,3 +476,26 @@ test("force-static hydration reads search params from the current URL", async ({
   );
   await expect(page.locator("body")).not.toContainText("FIRST_QUERY");
 });
+
+test("dynamic-error client search params bail out to cached Suspense HTML", async ({ page }) => {
+  const slug = `dynamic-error-hydration-${Date.now()}`;
+  const pathname = `/isr-client-search-dynamic-error/${slug}`;
+
+  const firstResponse = await page.goto(`${pathname}?q=FIRST_QUERY`);
+  expect(firstResponse?.status()).toBe(200);
+  await waitForAppRouterHydration(page);
+  await expect(page.getByTestId("dynamic-error-query-echo")).toHaveText(
+    "Dynamic-error query: FIRST_QUERY",
+  );
+
+  await page.waitForTimeout(100);
+
+  const secondResponse = await page.goto(pathname);
+  expect(secondResponse?.status()).toBe(200);
+  expect(secondResponse?.headers()["x-vinext-cache"]).toBe("HIT");
+  await waitForAppRouterHydration(page);
+  await expect(page.getByTestId("dynamic-error-query-echo")).toHaveText(
+    "Dynamic-error query: none",
+  );
+  await expect(page.locator("body")).not.toContainText("FIRST_QUERY");
+});

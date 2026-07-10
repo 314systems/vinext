@@ -1656,20 +1656,23 @@ describe("App Router Production server (startProdServer)", () => {
     expect(secondHtml).not.toContain("SECOND_QUERY");
   });
 
-  it("keeps client useSearchParams private under dynamic = 'error'", async () => {
+  it("bails client useSearchParams to Suspense under dynamic = 'error'", async () => {
     const slug = `dynamic-error-query-${Date.now()}`;
     const firstRes = await fetch(
       `${baseUrl}/isr-client-search-dynamic-error/${slug}?q=REQUEST_SPECIFIC`,
     );
     expect(firstRes.status).toBe(200);
-    expect(firstRes.headers.get("cache-control")).toMatch(/no-store/);
-    expect(await firstRes.text()).toContain("REQUEST_SPECIFIC");
+    const firstHtml = await firstRes.text();
+    expect(firstHtml).toContain("loading");
+    expect(firstHtml).not.toContain("REQUEST_SPECIFIC");
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
     const secondRes = await fetch(`${baseUrl}/isr-client-search-dynamic-error/${slug}`);
     expect(secondRes.status).toBe(200);
-    expect(secondRes.headers.get("x-vinext-cache")).not.toBe("HIT");
+    expect(secondRes.headers.get("x-vinext-cache")).toBe("HIT");
     const secondHtml = await secondRes.text();
-    expect(secondHtml).toContain("Dynamic-error query: <!-- -->none");
+    expect(secondHtml).toContain("loading");
     expect(secondHtml).not.toContain("REQUEST_SPECIFIC");
   });
 

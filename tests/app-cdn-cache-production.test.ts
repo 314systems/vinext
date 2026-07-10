@@ -170,6 +170,23 @@ describe("App Router production responses with a CDN-managed cache", () => {
     expect(edge.originRequests).toBe(2);
   });
 
+  it("edge-caches dynamic-error client search params as a Suspense bailout", async () => {
+    const edge = createWorkersLikeEdge(handler);
+    const pathname = `/query-dynamic-error/query-${Date.now()}`;
+
+    const first = await edge.fetch(
+      new Request(`https://example.com${pathname}?q=EDGE_ATTACKER_PAYLOAD`),
+    );
+    const firstHtml = await first.text();
+    expect(firstHtml).toContain("query fallback");
+    expect(firstHtml).not.toContain("EDGE_ATTACKER_PAYLOAD");
+    expect(first.headers.get("cdn-cache-control")).toMatch(/public, max-age=60/);
+
+    const second = await edge.fetch(new Request(`https://example.com${pathname}`));
+    expect(await second.text()).toBe(firstHtml);
+    expect(edge.originRequests).toBe(1);
+  });
+
   it("still lets the edge cache a deferred response that remains static", async () => {
     const edge = createWorkersLikeEdge(handler);
 

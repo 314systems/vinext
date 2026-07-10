@@ -705,7 +705,13 @@ export async function handleSsr(
         };
         let didInjectHeadHTML = false;
         const getInsertedHTML = (): string => {
-          const insertedHTML = renderInsertedHtml(renderServerInsertedHTML());
+          let insertedHTML: string;
+          ssrNavigationContext.isRenderingServerInsertedHTML = true;
+          try {
+            insertedHTML = renderInsertedHtml(renderServerInsertedHTML());
+          } finally {
+            ssrNavigationContext.isRenderingServerInsertedHTML = false;
+          }
           const errorMetaHTML = errorMetaRenderer.flush();
           const initialDevServerErrorHTML = createInitialDevServerErrorScript(
             options?.initialDevServerError,
