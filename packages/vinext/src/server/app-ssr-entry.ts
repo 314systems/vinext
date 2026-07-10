@@ -317,8 +317,9 @@ function buildHeadInjectionHtml(
     pathname: navContext.pathname,
     // Search params belong to the browser URL, not a pathname-keyed HTML
     // artifact that may be reused by another request. The browser entry
-    // restores them from window.location during hydration.
+    // exposes them from window.location after the neutral snapshot hydrates.
     searchParams: [] as [string, string][],
+    searchParamsAccessMode: navContext.searchParamsAccessMode,
   };
   const rscMetadataScript = createInlineScriptTag(
     createNavigationRuntimeRscMetadataScript(

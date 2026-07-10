@@ -438,26 +438,43 @@ test.describe("Next.js compat: client cache", () => {
 });
 
 test("ISR hydration uses the current visitor's search params", async ({ page, request }) => {
+  const hydrationErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") hydrationErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => hydrationErrors.push(error.message));
+
   const slug = `hydration-query-${Date.now()}`;
   const pathname = `/isr-client-search-poison/${slug}`;
 
   const attackerResponse = await request.get(`${pathname}?q=ATTACKER_PAYLOAD`);
   expect(attackerResponse.status()).toBe(200);
-  expect(await attackerResponse.text()).toContain("ATTACKER_PAYLOAD");
+  const attackerHtml = await attackerResponse.text();
+  expect(attackerHtml).toContain("loading");
+  expect(attackerHtml).not.toContain("ATTACKER_PAYLOAD");
+
+  await page.waitForTimeout(100);
 
   const victimResponse = await page.goto(pathname);
-  expect(victimResponse?.headers()["x-vinext-cache"]).not.toBe("HIT");
+  expect(victimResponse?.headers()["x-vinext-cache"]).toBe("HIT");
   await waitForAppRouterHydration(page);
   await expect(page.getByTestId("query-echo")).toHaveText("Search query: none");
 
   const otherVictimResponse = await page.goto(`${pathname}?q=INNOCENT_PAYLOAD`);
-  expect(otherVictimResponse?.headers()["x-vinext-cache"]).not.toBe("HIT");
+  expect(otherVictimResponse?.headers()["x-vinext-cache"]).toBe("HIT");
   await waitForAppRouterHydration(page);
   await expect(page.getByTestId("query-echo")).toHaveText("Search query: INNOCENT_PAYLOAD");
   await expect(page.locator("body")).not.toContainText("ATTACKER_PAYLOAD");
+  expect(hydrationErrors).toEqual([]);
 });
 
 test("force-static hydration reads search params from the current URL", async ({ page }) => {
+  const hydrationErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") hydrationErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => hydrationErrors.push(error.message));
+
   const pathname = "/isr-client-search-force-static";
 
   const firstResponse = await page.goto(`${pathname}?q=FIRST_QUERY`);
@@ -475,9 +492,16 @@ test("force-static hydration reads search params from the current URL", async ({
     "Force-static query: SECOND_QUERY",
   );
   await expect(page.locator("body")).not.toContainText("FIRST_QUERY");
+  expect(hydrationErrors).toEqual([]);
 });
 
 test("dynamic-error client search params bail out to cached Suspense HTML", async ({ page }) => {
+  const hydrationErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") hydrationErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => hydrationErrors.push(error.message));
+
   const slug = `dynamic-error-hydration-${Date.now()}`;
   const pathname = `/isr-client-search-dynamic-error/${slug}`;
 
@@ -498,4 +522,5 @@ test("dynamic-error client search params bail out to cached Suspense HTML", asyn
     "Dynamic-error query: none",
   );
   await expect(page.locator("body")).not.toContainText("FIRST_QUERY");
+  expect(hydrationErrors).toEqual([]);
 });

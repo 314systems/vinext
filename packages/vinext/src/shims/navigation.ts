@@ -1337,7 +1337,14 @@ let _cachedEmptyClientSearchParams: ReadonlyURLSearchParams | null = null;
  * be visible until the next commit.
  */
 function getSearchParamsSnapshot(): ReadonlyURLSearchParams {
-  if (getNavigationContext()) return getServerSearchParamsSnapshot();
+  const context = getNavigationContext();
+  if (
+    context &&
+    context.searchParamsAccessMode !== "bailout" &&
+    context.searchParamsAccessMode !== "force-static"
+  ) {
+    return getServerSearchParamsSnapshot();
+  }
 
   const pagesCtx = _getPagesNavigationContext();
   if (pagesCtx) {
