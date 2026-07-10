@@ -414,7 +414,6 @@ const RAW_TEXT_ELEMENTS = new Set([
   "title",
   "xmp",
 ]);
-const RAW_TAG_WINDOW_LENGTH = 16;
 const CLOSING_TOKEN_LOOKAHEAD_LIMIT = 4096;
 
 type ClosingTokenMatch = { kind: "match"; length: number } | { kind: "none" } | { kind: "partial" };
@@ -434,12 +433,6 @@ type HeadScannerState =
 
 function isHtmlTagDelimiter(character: string): boolean {
   return character === ">" || character === "/" || /[\t\n\f\r ]/.test(character);
-}
-
-function endsWithDelimitedTag(window: string, prefix: string): string | null {
-  const delimiter = window.at(-1);
-  if (!delimiter || !isHtmlTagDelimiter(delimiter)) return null;
-  return window.endsWith(prefix + delimiter) ? delimiter : null;
 }
 
 function matchClosingEndTag(
@@ -475,6 +468,20 @@ function matchClosingEndTag(
   }
 
   return final ? { kind: "none" } : { kind: "partial" };
+}
+
+type AsciiPrefixMatch = "match" | "none" | "partial";
+
+/** Compare an ASCII HTML token without allocating a lower-cased substring. */
+function matchAsciiPrefix(input: string, index: number, lowerCasePrefix: string): AsciiPrefixMatch {
+  const available = input.length - index;
+  const length = Math.min(available, lowerCasePrefix.length);
+  for (let offset = 0; offset < length; offset++) {
+    const code = input.charCodeAt(index + offset);
+    const lowerCaseCode = code >= 65 && code <= 90 ? code + 32 : code;
+    if (lowerCaseCode !== lowerCasePrefix.charCodeAt(offset)) return "none";
+  }
+  return available < lowerCasePrefix.length ? "partial" : "match";
 }
 
 function matchClosingTagSequence(
@@ -517,7 +524,7 @@ class HtmlClosingTokenScanner {
   #rawDoubleEscaped = false;
   #rawEscaped = false;
   #rawTag: string | null = null;
-  #rawWindow = "";
+  #rawBoundary = "";
   #state: HeadScannerState = "data";
   #tagIsEnd = false;
   #tagName = "";
@@ -653,7 +660,11 @@ class HtmlClosingTokenScanner {
       }
 
       if (this.#state === "raw-text") {
-        this.#scanRawText(character);
+        const rawTextEnd = this.#scanRawText(input, index, final);
+        if (rawTextEnd === input.length) {
+          return { consumed: input.length, tokenIndex: -1, tokenLength: 0 };
+        }
+        index = rawTextEnd;
       }
     }
 
@@ -678,7 +689,7 @@ class HtmlClosingTokenScanner {
 
     if (!isEnd && RAW_TEXT_ELEMENTS.has(name)) {
       this.#rawTag = name;
-      this.#rawWindow = "";
+      this.#rawBoundary = "";
       this.#rawEscaped = false;
       this.#rawDoubleEscaped = false;
       this.#state = "raw-text";
@@ -691,63 +702,111 @@ class HtmlClosingTokenScanner {
   #leaveRawText(): void {
     this.#quote = null;
     this.#rawTag = null;
-    this.#rawWindow = "";
+    this.#rawBoundary = "";
     this.#rawEscaped = false;
     this.#rawDoubleEscaped = false;
     this.#state = "data";
   }
 
-  #scanRawText(character: string): void {
+  /**
+   * Scan raw-text data by jumping between token candidates instead of doing
+   * rolling-string work for every byte. Only an incomplete candidate at the
+   * end of a chunk is retained for the next call.
+   */
+  #scanRawText(input: string, start: number, final: boolean): number {
     const rawTag = this.#rawTag;
     if (!rawTag) {
       this.#state = "data";
-      return;
+      return start;
     }
 
-    this.#rawWindow = (this.#rawWindow + character.toLowerCase()).slice(-RAW_TAG_WINDOW_LENGTH);
-    const closingDelimiter = endsWithDelimitedTag(this.#rawWindow, `</${rawTag}`);
+    const boundaryLength = this.#rawBoundary.length;
+    const currentInput = start === 0 ? input : input.slice(start);
+    const rawInput = boundaryLength === 0 ? currentInput : this.#rawBoundary + currentInput;
+    this.#rawBoundary = "";
+    const closingPrefix = `</${rawTag}`;
+    let cursor = 0;
 
-    if (rawTag !== "script") {
-      if (closingDelimiter === ">") {
-        this.#leaveRawText();
-      } else if (closingDelimiter) {
-        this.#quote = null;
-        this.#state = "raw-end-tag";
+    const retainPartial = (index: number): number => {
+      if (!final) this.#rawBoundary = rawInput.slice(index);
+      return input.length;
+    };
+    const inputIndex = (rawIndex: number): number => start + rawIndex - boundaryLength;
+
+    while (cursor < rawInput.length) {
+      const tagIndex = rawInput.indexOf("<", cursor);
+      const commentEndIndex =
+        rawTag === "script" && this.#rawEscaped && !this.#rawDoubleEscaped
+          ? rawInput.indexOf("-->", cursor)
+          : -1;
+
+      if (commentEndIndex !== -1 && (tagIndex === -1 || commentEndIndex < tagIndex)) {
+        this.#rawEscaped = false;
+        cursor = commentEndIndex + 3;
+        continue;
       }
-      return;
-    }
 
-    if (this.#rawDoubleEscaped) {
-      if (closingDelimiter) {
-        // In the HTML script-data-double-escaped state, `</script>` returns
-        // to escaped script data; it does not close the element yet.
-        this.#rawDoubleEscaped = false;
-        this.#rawEscaped = true;
-        this.#rawWindow = "";
+      if (tagIndex === -1) {
+        if (!final && rawTag === "script" && this.#rawEscaped) {
+          if (rawInput.endsWith("--")) this.#rawBoundary = "--";
+          else if (rawInput.endsWith("-")) this.#rawBoundary = "-";
+        }
+        return input.length;
       }
-      return;
+
+      const closingMatch = matchAsciiPrefix(rawInput, tagIndex, closingPrefix);
+      if (closingMatch === "partial") return retainPartial(tagIndex);
+      if (closingMatch === "match") {
+        const delimiterIndex = tagIndex + closingPrefix.length;
+        if (delimiterIndex === rawInput.length) return retainPartial(tagIndex);
+        const delimiter = rawInput[delimiterIndex];
+        if (isHtmlTagDelimiter(delimiter)) {
+          if (rawTag === "script" && this.#rawDoubleEscaped) {
+            // In the HTML script-data-double-escaped state, `</script>` returns
+            // to escaped script data; it does not close the element yet.
+            this.#rawDoubleEscaped = false;
+            this.#rawEscaped = true;
+            cursor = delimiterIndex + 1;
+            continue;
+          }
+          if (delimiter === ">") {
+            this.#leaveRawText();
+          } else {
+            this.#quote = null;
+            this.#state = "raw-end-tag";
+          }
+          return inputIndex(delimiterIndex);
+        }
+      }
+
+      if (rawTag === "script" && !this.#rawDoubleEscaped) {
+        if (this.#rawEscaped) {
+          const openingMatch = matchAsciiPrefix(rawInput, tagIndex, "<script");
+          if (openingMatch === "partial") return retainPartial(tagIndex);
+          if (openingMatch === "match") {
+            const delimiterIndex = tagIndex + "<script".length;
+            if (delimiterIndex === rawInput.length) return retainPartial(tagIndex);
+            if (isHtmlTagDelimiter(rawInput[delimiterIndex])) {
+              this.#rawDoubleEscaped = true;
+              cursor = delimiterIndex + 1;
+              continue;
+            }
+          }
+        }
+
+        const commentMatch = matchAsciiPrefix(rawInput, tagIndex, "<!--");
+        if (commentMatch === "partial") return retainPartial(tagIndex);
+        if (commentMatch === "match") {
+          this.#rawEscaped = true;
+          cursor = tagIndex + 4;
+          continue;
+        }
+      }
+
+      cursor = tagIndex + 1;
     }
 
-    if (closingDelimiter === ">") {
-      this.#leaveRawText();
-      return;
-    }
-    if (closingDelimiter) {
-      this.#quote = null;
-      this.#state = "raw-end-tag";
-      return;
-    }
-
-    if (this.#rawEscaped && endsWithDelimitedTag(this.#rawWindow, "<script")) {
-      this.#rawDoubleEscaped = true;
-      this.#rawWindow = "";
-      return;
-    }
-    if (this.#rawWindow.endsWith("<!--")) {
-      this.#rawEscaped = true;
-    } else if (this.#rawEscaped && this.#rawWindow.endsWith("-->")) {
-      this.#rawEscaped = false;
-    }
+    return input.length;
   }
 }
 

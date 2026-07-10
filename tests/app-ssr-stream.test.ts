@@ -461,6 +461,37 @@ describe("createTickBufferedTransform pre-head splice", () => {
     expect(out).toContain(`${script}<meta data-end-of-head="true"></head>`);
   });
 
+  it("skips over large raw-text bodies without lowercasing each character", async () => {
+    const toLowerCaseDescriptor = Object.getOwnPropertyDescriptor(String.prototype, "toLowerCase");
+    if (!toLowerCaseDescriptor) throw new Error("String.prototype.toLowerCase is unavailable");
+    const originalToLowerCase = toLowerCaseDescriptor.value as (this: string) => string;
+    let singleCharacterCalls = 0;
+    Object.defineProperty(String.prototype, "toLowerCase", {
+      ...toLowerCaseDescriptor,
+      value: function (this: string): string {
+        if (this.length === 1) singleCharacterCalls++;
+        return Reflect.apply(originalToLowerCase, this, []);
+      },
+    });
+
+    let out: string;
+    try {
+      const scriptBody = "a".repeat(5 * 1024 * 1024);
+      out = await runTransform(
+        [`<html><head><script>${scriptBody}</script></head><body></body></html>`],
+        { injectHTML: '<meta data-end-of-head="true">' },
+      );
+    } finally {
+      Object.defineProperty(String.prototype, "toLowerCase", toLowerCaseDescriptor);
+    }
+
+    expect(out).toContain('</script><meta data-end-of-head="true"></head>');
+    // Tag parsing still lowercases a bounded number of individual characters.
+    // Raw-text scanning must not make that count proportional to the script.
+    expect(singleCharacterCalls).toBeGreaterThan(0);
+    expect(singleCharacterCalls).toBeLessThan(1_000);
+  });
+
   it.each([
     [
       "script data",
