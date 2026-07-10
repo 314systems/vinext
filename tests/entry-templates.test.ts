@@ -16,6 +16,7 @@ import {
   generateRscActionSourceScanEntry,
   generateRscEntry,
 } from "../packages/vinext/src/entries/app-rsc-entry.js";
+import { GLOBAL_NOT_FOUND_MODULE_ID } from "../packages/vinext/src/entries/global-not-found-module.js";
 import { generateClientEntry } from "../packages/vinext/src/entries/pages-client-entry.js";
 import { generateServerEntry } from "../packages/vinext/src/entries/pages-server-entry.js";
 import { resolveNextConfig } from "../packages/vinext/src/config/next-config.js";
@@ -613,7 +614,7 @@ describe("App Router generated manifest construction", () => {
     // Must NOT appear in the static imports — that would defeat the chunk
     // isolation. The entry generator embeds it via `() => import(<specifier>)`.
     expect(manifest.imports.join("\n")).not.toContain("global-not-found");
-    expect(manifest.globalNotFoundModulePath).toBe("/tmp/test/app/global-not-found.tsx");
+    expect(manifest.globalNotFoundModuleId).toBe(GLOBAL_NOT_FOUND_MODULE_ID);
   });
 
   it("does not emit a global-not-found specifier when the path is absent", () => {
@@ -625,17 +626,16 @@ describe("App Router generated manifest construction", () => {
     });
 
     expect(manifest.imports.join("\n")).not.toContain("global-not-found");
-    expect(manifest.globalNotFoundModulePath).toBeNull();
+    expect(manifest.globalNotFoundModuleId).toBeNull();
   });
 
-  it("safely serializes hostile global-not-found paths at generated import sinks", () => {
+  it("keeps hostile global-not-found paths out of generated import source", () => {
     const hostilePath =
       '/tmp/test/app/global-not-found-");globalThis.__vinextInjected=true;//\n.tsx';
 
     const scanEntry = generateRscActionSourceScanEntry(minimalAppRoutes, [], null, hostilePath);
-    expect(scanEntry).toContain(
-      `const load_global_not_found = () => import(${JSON.stringify(hostilePath)});`,
-    );
+    expect(scanEntry).toContain(GLOBAL_NOT_FOUND_MODULE_ID);
+    expect(scanEntry).not.toContain(hostilePath);
     expect(() => parseAst(scanEntry)).not.toThrow();
 
     const rscEntry = generateRscEntry(
@@ -648,7 +648,8 @@ describe("App Router generated manifest construction", () => {
       false,
       { globalNotFound: true, globalNotFoundPath: hostilePath },
     );
-    expect(rscEntry).toContain(`() => import(${JSON.stringify(hostilePath)})`);
+    expect(rscEntry).toContain(GLOBAL_NOT_FOUND_MODULE_ID);
+    expect(rscEntry).not.toContain(hostilePath);
     expect(() => parseAst(rscEntry)).not.toThrow();
   });
 
@@ -1045,7 +1046,7 @@ describe("App Router entry templates", () => {
     );
   });
 
-  it("generateRscEntry threads globalNotFoundPath from config into the fallback renderer", () => {
+  it("generateRscEntry wires the global-not-found virtual module into the fallback renderer", () => {
     // The generated entry's createAppFallbackRenderer call must receive a
     // loader so route-miss 404s can render app/global-not-found.tsx standalone.
     //
@@ -1062,8 +1063,11 @@ describe("App Router entry templates", () => {
       globalNotFoundPath: "/tmp/test/app/global-not-found.tsx",
     });
 
-    // Loader uses dynamic `import()` — NOT a static `import * as`.
-    expect(code).toContain('() => import("/tmp/test/app/global-not-found.tsx")');
+    // Loader uses dynamic `import()` — NOT a static `import * as` — and the
+    // discovered filesystem path remains resolver data rather than generated
+    // JavaScript source.
+    expect(code).toContain(`() => import("${GLOBAL_NOT_FOUND_MODULE_ID}")`);
+    expect(code).not.toContain("/tmp/test/app/global-not-found.tsx");
     expect(code).not.toContain('from "/tmp/test/app/global-not-found.tsx"');
     // The renderer is wired with the loader binding (not just `null`).
     expect(code).toContain("loadGlobalNotFoundModule: __loadGlobalNotFoundModule");

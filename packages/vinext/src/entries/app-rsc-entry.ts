@@ -225,10 +225,8 @@ export function generateRscActionSourceScanEntry(
   });
   return [
     ...manifest.imports,
-    ...(manifest.globalNotFoundModulePath
-      ? [
-          `const load_global_not_found = () => import(${JSON.stringify(manifest.globalNotFoundModulePath)});`,
-        ]
+    ...(manifest.globalNotFoundModuleId
+      ? ['const load_global_not_found = () => import("virtual:vinext-global-not-found");']
       : []),
   ].join("\n");
 }
@@ -304,7 +302,7 @@ export function generateRscEntry(
     rootUnauthorizedVar,
     rootLayoutVars,
     globalErrorVar,
-    globalNotFoundModulePath,
+    globalNotFoundModuleId,
   } = manifestCode;
   const loadPrerenderPagesRoutesCode = hasPagesDir
     ? `
@@ -647,7 +645,7 @@ const rootLayouts = [${rootLayoutVars.join(", ")}];
 // See https://github.com/vercel/next.js/blob/canary/packages/next/src/server/app-render/app-render.tsx#L495-L520
 // See Next.js test: test/e2e/app-dir/initial-css-order/initial-css-order.test.ts
 const __loadGlobalNotFoundModule = ${
-    globalNotFoundModulePath ? `() => import(${JSON.stringify(globalNotFoundModulePath)})` : "null"
+    globalNotFoundModuleId ? '() => import("virtual:vinext-global-not-found")' : "null"
   };
 
 const createRscOnErrorHandler = (request, pathname, routePath) =>

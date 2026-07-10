@@ -47,6 +47,7 @@ import { installSocketErrorBackstop } from "./server/socket-error-backstop.js";
 import { shouldInvalidateAppRouteFile } from "./server/dev-route-files.js";
 import { createDirectRunner } from "./server/dev-module-runner.js";
 import { generateRscActionSourceScanEntry, generateRscEntry } from "./entries/app-rsc-entry.js";
+import { GLOBAL_NOT_FOUND_MODULE_ID } from "./entries/global-not-found-module.js";
 import { generateSsrEntry } from "./entries/app-ssr-entry.js";
 import {
   VIRTUAL_CACHE_ADAPTERS,
@@ -3505,6 +3506,13 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           }
           // App Router virtual modules
           if (cleanId === VIRTUAL_RSC_ENTRY) return RESOLVED_RSC_ENTRY;
+          if (
+            cleanId === GLOBAL_NOT_FOUND_MODULE_ID ||
+            cleanId.endsWith("/" + GLOBAL_NOT_FOUND_MODULE_ID)
+          ) {
+            if (!nextConfig?.globalNotFound) return null;
+            return findFileWithExts(appDir, "global-not-found", fileMatcher);
+          }
           if (
             cleanId === VIRTUAL_RSC_ACTION_SOURCE_SCAN ||
             cleanId.startsWith(`${VIRTUAL_RSC_ACTION_SOURCE_SCAN}?`)
