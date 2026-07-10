@@ -82,6 +82,7 @@ const configHeaders = vinextConfig?.headers ?? [];
 const imageConfig: ImageConfig | undefined = vinextConfig?.images
   ? {
       qualities: vinextConfig.images.qualities,
+      formats: vinextConfig.images.formats,
       dangerouslyAllowSVG: vinextConfig.images.dangerouslyAllowSVG,
       dangerouslyAllowLocalIP: vinextConfig.images.dangerouslyAllowLocalIP,
       maximumResponseBody: vinextConfig.images.maximumResponseBody,
@@ -90,6 +91,7 @@ const imageConfig: ImageConfig | undefined = vinextConfig?.images
       contentSecurityPolicy: vinextConfig.images.contentSecurityPolicy,
     }
   : undefined;
+const IMAGE_CACHE_OWNER = {};
 
 export default {
   async fetch(
@@ -171,6 +173,10 @@ async function handleRequest(
         },
         allowedWidths,
         imageConfig,
+        {
+          owner: IMAGE_CACHE_OWNER,
+          waitUntil: ctx?.waitUntil ? (promise) => ctx.waitUntil!(promise) : undefined,
+        },
       );
     }
 

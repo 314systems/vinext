@@ -242,6 +242,7 @@ export function generateRscEntry(
   ];
   const imageConfig = {
     qualities: config?.imageConfig?.qualities,
+    formats: config?.imageConfig?.formats,
     dangerouslyAllowSVG: config?.imageConfig?.dangerouslyAllowSVG,
     dangerouslyAllowLocalIP: config?.imageConfig?.dangerouslyAllowLocalIP,
     maximumResponseBody: config?.imageConfig?.maximumResponseBody,

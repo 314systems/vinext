@@ -59,12 +59,10 @@ export type ImageConfig = {
   deviceSizes?: number[];
   /** Allowed fixed-image widths. Defaults to Next.js image sizes. */
   imageSizes?: number[];
-  /**
-   * Allowed output qualities. When unset, any quality from 1-100 is permitted
-   * (matches Next.js: an unset `images.qualities` is not restricted to a single
-   * value). When set, only the listed qualities are accepted.
-   */
+  /** Allowed output qualities. Defaults to Next.js 16's `[75]`. */
   qualities?: number[];
+  /** Negotiated output formats. Defaults to Next.js 16's WebP-only list. */
+  formats?: Array<"image/avif" | "image/webp">;
   /** Allow SVG through the image optimization endpoint. Default: false. */
   dangerouslyAllowSVG?: boolean;
   /**
@@ -81,7 +79,7 @@ export type ImageConfig = {
   maximumResponseBody?: number;
   /** Minimum optimized image cache lifetime in seconds. Defaults to 4 hours. */
   minimumCacheTTL?: number;
-  /** Content-Disposition header value. Default: "inline". */
+  /** Content-Disposition header value. Default: "attachment". */
   contentDispositionType?: "inline" | "attachment";
   /** Content-Security-Policy header value. Default: "script-src 'none'; frame-src 'none'; sandbox;" */
   contentSecurityPolicy?: string;
@@ -93,7 +91,9 @@ export type ImageConfig = {
  * config is provided. Matches Next.js defaults exactly.
  */
 export const DEFAULT_DEVICE_SIZES = [640, 750, 828, 1080, 1200, 1920, 2048, 3840];
-export const DEFAULT_IMAGE_SIZES = [16, 32, 48, 64, 96, 128, 256, 384];
+export const DEFAULT_IMAGE_SIZES = [32, 48, 64, 96, 128, 256, 384];
+export const DEFAULT_IMAGE_QUALITIES = [75];
+export const DEFAULT_IMAGE_FORMATS = ["image/webp"] as const;
 const DEV_BLUR_MAX_WIDTH = 8;
 const DEV_BLUR_QUALITY = 70;
 
@@ -104,7 +104,7 @@ export type ParseImageParamsOptions = {
 export function resolveDevImageRedirect(
   requestUrl: URL,
   allowedWidths: number[] = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES],
-  allowedQualities?: number[],
+  allowedQualities: number[] = [...DEFAULT_IMAGE_QUALITIES],
   options: ParseImageParamsOptions = { isDev: true },
 ): string | null {
   const params = parseImageParams(requestUrl, allowedWidths, allowedQualities, options);
@@ -132,7 +132,7 @@ export function resolveDevImageRedirect(
 export function parseImageParams(
   url: URL,
   allowedWidths: number[] = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES],
-  allowedQualities?: number[],
+  allowedQualities: number[] = [...DEFAULT_IMAGE_QUALITIES],
   options: ParseImageParamsOptions = {},
 ): { imageUrl: string; width: number; quality: number } | null {
   // Intentional hardening divergence from Next.js: reject duplicate and unknown
@@ -160,9 +160,7 @@ export function parseImageParams(
   const isDevBlurQuality = options.isDev && quality === DEV_BLUR_QUALITY;
   if (width <= 0 || (!allowedWidths.includes(width) && !isDevBlurWidth)) return null;
   if (quality < 1 || quality > 100) return null;
-  // Only enforce the quality allowlist when `images.qualities` is configured.
-  // Matches Next.js: an unset `qualities` permits any quality from 1-100.
-  if (allowedQualities && !allowedQualities.includes(quality) && !isDevBlurQuality) {
+  if (!allowedQualities.includes(quality) && !isDevBlurQuality) {
     return null;
   }
 
@@ -201,11 +199,86 @@ export function parseImageParams(
  * Negotiate the best output format based on the Accept header.
  * Returns an IANA media type.
  */
-export function negotiateImageFormat(acceptHeader: string | null): string {
-  if (!acceptHeader) return "image/jpeg";
-  if (acceptHeader.includes("image/avif")) return "image/avif";
-  if (acceptHeader.includes("image/webp")) return "image/webp";
-  return "image/jpeg";
+type AcceptedMediaRange = {
+  order: number;
+  quality: number;
+  subtype: string;
+  type: string;
+};
+
+function parseAcceptedMediaRanges(acceptHeader: string): AcceptedMediaRange[] {
+  const ranges: AcceptedMediaRange[] = [];
+  for (const [order, raw] of acceptHeader.split(",").entries()) {
+    const [mediaRange = "", ...parameters] = raw.trim().split(";");
+    const [type, subtype] = mediaRange.trim().toLowerCase().split("/", 2);
+    if (!type || !subtype) continue;
+    let quality = 1;
+    for (const parameter of parameters) {
+      const [name, value] = parameter.trim().split("=", 2);
+      if (name.toLowerCase() !== "q") continue;
+      quality = Number.parseFloat(value ?? "");
+      break;
+    }
+    ranges.push({
+      order,
+      quality: Number.isFinite(quality) && quality >= 0 && quality <= 1 ? quality : 0,
+      subtype,
+      type,
+    });
+  }
+  return ranges;
+}
+
+function mediaRangePriority(
+  mediaType: string,
+  ranges: readonly AcceptedMediaRange[],
+): { order: number; quality: number; specificity: number } {
+  const [type, subtype] = mediaType.toLowerCase().split("/", 2);
+  let selected = { order: Number.POSITIVE_INFINITY, quality: 0, specificity: -1 };
+  for (const range of ranges) {
+    if (range.type !== "*" && range.type !== type) continue;
+    if (range.subtype !== "*" && range.subtype !== subtype) continue;
+    const specificity = (range.type === type ? 2 : 0) + (range.subtype === subtype ? 1 : 0);
+    if (
+      specificity > selected.specificity ||
+      (specificity === selected.specificity && range.quality > selected.quality) ||
+      (specificity === selected.specificity &&
+        range.quality === selected.quality &&
+        range.order < selected.order)
+    ) {
+      selected = { order: range.order, quality: range.quality, specificity };
+    }
+  }
+  return selected;
+}
+
+/** Match Next.js's `getSupportedMimeType(formats, Accept)` negotiation. */
+export function negotiateImageFormat(
+  acceptHeader: string | null,
+  formats: readonly string[] = DEFAULT_IMAGE_FORMATS,
+): string {
+  if (!acceptHeader || formats.length === 0) return "";
+  const ranges = parseAcceptedMediaRanges(acceptHeader);
+  let selected = "";
+  let selectedPriority = { order: Number.POSITIVE_INFINITY, quality: 0, specificity: -1 };
+  for (const format of formats) {
+    const priority = mediaRangePriority(format, ranges);
+    if (priority.quality <= 0) continue;
+    if (
+      priority.quality > selectedPriority.quality ||
+      (priority.quality === selectedPriority.quality &&
+        priority.specificity > selectedPriority.specificity) ||
+      (priority.quality === selectedPriority.quality &&
+        priority.specificity === selectedPriority.specificity &&
+        priority.order < selectedPriority.order)
+    ) {
+      selected = format;
+      selectedPriority = priority;
+    }
+  }
+  // Next's wrapper rejects a wildcard-only match: the selected configured
+  // format must also occur explicitly in the Accept header.
+  return selected && acceptHeader.toLowerCase().includes(selected.toLowerCase()) ? selected : "";
 }
 
 /**
@@ -229,6 +302,7 @@ const SAFE_IMAGE_CONTENT_TYPES = new Set([
   "image/avif",
   "image/jp2",
   "image/jxl",
+  "image/heic",
   "image/x-icon",
   "image/x-icns",
   "image/vnd.microsoft.icon",
@@ -314,6 +388,7 @@ async function readImageSource(
   ) {
     const brand = String.fromCharCode(bytes[8], bytes[9], bytes[10], bytes[11]);
     if (brand === "avif" || brand === "avis") contentType = "image/avif";
+    else if (brand === "heic") contentType = "image/heic";
   } else if (startsWith(0x00, 0x00, 0x01, 0x00)) contentType = "image/x-icon";
   else if (startsWith(0x69, 0x63, 0x6e, 0x73)) contentType = "image/x-icns";
   else if (startsWith(0x42, 0x4d)) contentType = "image/bmp";
@@ -371,6 +446,7 @@ const IMAGE_EXTENSION_BY_CONTENT_TYPE: Record<string, string> = {
   "image/avif": "avif",
   "image/jp2": "jp2",
   "image/jxl": "jxl",
+  "image/heic": "heic",
   "image/x-icon": "ico",
   "image/x-icns": "icns",
   "image/vnd.microsoft.icon": "ico",
@@ -441,7 +517,7 @@ function setImageSecurityHeaders(
     imageContentDisposition(
       imageUrl,
       contentType,
-      config?.contentDispositionType === "attachment" ? "attachment" : "inline",
+      config?.contentDispositionType === "inline" ? "inline" : "attachment",
     ),
   );
 }
@@ -460,9 +536,6 @@ function createPassthroughImageResponse(
   if (etag) headers.set("ETag", etag);
   headers.set("Cache-Control", cacheControl ?? imageCacheControl(source, config));
   headers.set("Vary", "Accept");
-  if (etag && request && isFreshImageRequest(request, etag)) {
-    return new Response(null, { status: 304, headers });
-  }
   if (contentType) headers.set("Content-Type", contentType);
   const contentLength = source.headers.get("Content-Length");
   if (contentLength) headers.set("Content-Length", contentLength);
@@ -501,6 +574,10 @@ export type ImageHandlers = {
     body: ReadableStream,
     options: { width: number; format: string; quality: number },
   ) => Promise<Response>;
+  /** Stable identity for the runtime/app that owns cached image responses. */
+  cacheOwner?: object;
+  /** Schedule stale image regeneration without delaying the response. */
+  waitUntil?: (promise: Promise<unknown>) => void;
 };
 
 /**
@@ -529,6 +606,186 @@ export function createInternalImageRequest(
   });
 }
 
+type CachedImageResponse = {
+  body: Uint8Array;
+  headers: [string, string][];
+  revalidateAfter: number;
+};
+
+type ImageResponseCache = {
+  entries: Map<string, CachedImageResponse>;
+  pending: Map<string, Promise<GeneratedImageResponse>>;
+  totalBodyBytes: number;
+};
+
+type BufferedImageResponse = {
+  body: Uint8Array | null;
+  headers: [string, string][];
+  status: number;
+  statusText: string;
+};
+
+type GeneratedImageResponse = {
+  entry: CachedImageResponse | null;
+  response: BufferedImageResponse | null;
+};
+
+const IMAGE_RESPONSE_CACHES = new WeakMap<object, ImageResponseCache>();
+const MAX_IMAGE_RESPONSE_CACHE_BYTES = 50 * 1024 * 1024;
+const MAX_IMAGE_RESPONSE_CACHE_ENTRIES = 256;
+
+function getImageResponseCache(owner: object): ImageResponseCache {
+  let cache = IMAGE_RESPONSE_CACHES.get(owner);
+  if (!cache) {
+    cache = { entries: new Map(), pending: new Map(), totalBodyBytes: 0 };
+    IMAGE_RESPONSE_CACHES.set(owner, cache);
+  }
+  return cache;
+}
+
+function readCachedImageResponse(
+  cache: ImageResponseCache,
+  cacheKey: string,
+): CachedImageResponse | undefined {
+  const entry = cache.entries.get(cacheKey);
+  if (!entry) return undefined;
+  cache.entries.delete(cacheKey);
+  cache.entries.set(cacheKey, entry);
+  return entry;
+}
+
+function writeCachedImageResponse(
+  cache: ImageResponseCache,
+  cacheKey: string,
+  entry: CachedImageResponse,
+): void {
+  const previous = cache.entries.get(cacheKey);
+  if (previous) {
+    cache.totalBodyBytes -= previous.body.byteLength;
+    cache.entries.delete(cacheKey);
+  }
+  if (entry.body.byteLength > MAX_IMAGE_RESPONSE_CACHE_BYTES) return;
+  while (
+    cache.entries.size >= MAX_IMAGE_RESPONSE_CACHE_ENTRIES ||
+    cache.totalBodyBytes + entry.body.byteLength > MAX_IMAGE_RESPONSE_CACHE_BYTES
+  ) {
+    const oldestKey = cache.entries.keys().next().value;
+    if (oldestKey === undefined) break;
+    const oldest = cache.entries.get(oldestKey)!;
+    cache.entries.delete(oldestKey);
+    cache.totalBodyBytes -= oldest.body.byteLength;
+  }
+  cache.entries.set(cacheKey, entry);
+  cache.totalBodyBytes += entry.body.byteLength;
+}
+
+function imageResponseCacheKey(
+  params: { imageUrl: string; quality: number; width: number },
+  format: string,
+  allowedWidths: readonly number[],
+  imageConfig: ImageConfig | undefined,
+): string {
+  return JSON.stringify({
+    version: 1,
+    url: params.imageUrl,
+    width: params.width,
+    quality: params.quality,
+    format,
+    allowedWidths,
+    config: {
+      contentDispositionType: imageConfig?.contentDispositionType ?? "attachment",
+      contentSecurityPolicy: imageConfig?.contentSecurityPolicy ?? IMAGE_CONTENT_SECURITY_POLICY,
+      dangerouslyAllowSVG: imageConfig?.dangerouslyAllowSVG === true,
+      formats: imageConfig?.formats ?? DEFAULT_IMAGE_FORMATS,
+      maximumResponseBody: imageConfig?.maximumResponseBody ?? 50_000_000,
+      minimumCacheTTL: imageConfig?.minimumCacheTTL ?? 14_400,
+      qualities: imageConfig?.qualities ?? DEFAULT_IMAGE_QUALITIES,
+    },
+  });
+}
+
+function imageResponseMaxAge(headers: Headers): number {
+  for (const directive of (headers.get("Cache-Control") ?? "").split(",")) {
+    const [name, value] = directive.trim().split("=", 2);
+    if (name.toLowerCase() !== "max-age") continue;
+    const seconds = Number.parseInt(value ?? "", 10);
+    return Number.isFinite(seconds) && seconds >= 0 ? seconds : 0;
+  }
+  return 0;
+}
+
+async function cacheImageResponse(response: Response): Promise<CachedImageResponse | null> {
+  if (response.status !== 200 || !response.body) return null;
+  const body = new Uint8Array(await response.arrayBuffer());
+  return {
+    body,
+    headers: [...response.headers.entries()],
+    revalidateAfter: Date.now() + imageResponseMaxAge(response.headers) * 1000,
+  };
+}
+
+function serveCachedImageResponse(
+  request: Request,
+  entry: CachedImageResponse,
+  cacheStatus: "MISS" | "HIT" | "STALE",
+): Response {
+  const headers = new Headers(entry.headers);
+  const etag = headers.get("ETag");
+  if (etag && isFreshImageRequest(request, etag)) {
+    const conditionalHeaders = new Headers();
+    for (const name of ["Cache-Control", "ETag", "Vary"] as const) {
+      const value = headers.get(name);
+      if (value) conditionalHeaders.set(name, value);
+    }
+    return new Response(null, { status: 304, headers: conditionalHeaders });
+  }
+  headers.set("X-Nextjs-Cache", cacheStatus);
+  return new Response(request.method === "HEAD" ? null : entry.body.slice(), {
+    status: 200,
+    headers,
+  });
+}
+
+function serveBufferedImageResponse(request: Request, response: BufferedImageResponse): Response {
+  return new Response(
+    request.method === "HEAD" || response.body === null ? null : response.body.slice(),
+    {
+      headers: response.headers,
+      status: response.status,
+      statusText: response.statusText,
+    },
+  );
+}
+
+async function generateCachedImageResponse(
+  request: Request,
+  handlers: ImageHandlers,
+  allowedWidths: number[] | undefined,
+  imageConfig: ImageConfig | undefined,
+): Promise<GeneratedImageResponse> {
+  const renderRequest =
+    request.method === "HEAD"
+      ? new Request(request.url, { headers: request.headers, method: "GET" })
+      : request;
+  const response = await renderImageOptimizationUncached(
+    renderRequest,
+    handlers,
+    allowedWidths,
+    imageConfig,
+  );
+  const entry = await cacheImageResponse(response);
+  if (entry) return { entry, response: null };
+  return {
+    entry: null,
+    response: {
+      body: response.body ? new Uint8Array(await response.arrayBuffer()) : null,
+      headers: [...response.headers.entries()],
+      status: response.status,
+      statusText: response.statusText,
+    },
+  };
+}
+
 /**
  * Handle image optimization requests.
  *
@@ -536,7 +793,7 @@ export function createInternalImageRequest(
  * handlers, optionally transforms it, and returns the response with appropriate
  * cache headers.
  */
-export async function handleImageOptimization(
+async function renderImageOptimizationUncached(
   request: Request,
   handlers: ImageHandlers,
   allowedWidths?: number[],
@@ -563,15 +820,12 @@ export async function handleImageOptimization(
     return new Response("The requested resource isn't a valid image.", { status: 400 });
   }
   const { bytes: sourceBytes, response: source, contentType: sourceContentType } = sourceResult;
-  const sourceIsStatic = /\/(?:static\/media|_next\/static\/immutable\/media)(?:$|\/)/.test(
+  const sourceIsStatic = /\/_next\/static\/(?:media|immutable\/media)(?:$|\/)/.test(
     new URL(imageUrl, request.url).pathname,
   );
   if (!sourceContentType) {
     return new Response("The requested resource isn't a valid image.", { status: 400 });
   }
-
-  // Negotiate output format from Accept header
-  const format = negotiateImageFormat(request.headers.get("Accept"));
 
   // Block unsafe detected types (e.g., SVG which can contain embedded scripts).
   // SVG is only allowed when dangerouslyAllowSVG is explicitly enabled.
@@ -579,19 +833,34 @@ export async function handleImageOptimization(
     return new Response("The requested resource is not an allowed image type", { status: 400 });
   }
 
-  // SVG passthrough: SVG is a vector format, so transformation (resize, format
-  // conversion) provides no benefit. Serve as-is with security headers.
-  // This matches Next.js behavior where SVG is a "bypass type".
-  if (sourceContentType === "image/svg+xml") {
+  const bypassTypes = new Set([
+    "image/svg+xml",
+    "image/x-icon",
+    "image/x-icns",
+    "image/bmp",
+    "image/jxl",
+    "image/heic",
+  ]);
+  if (bypassTypes.has(sourceContentType)) {
     return createPassthroughImageResponse(
       source,
       imageConfig,
       request,
       sourceContentType,
-      undefined,
+      sourceIsStatic ? "public, max-age=315360000, immutable" : undefined,
       imageUrl,
     );
   }
+
+  const negotiatedFormat = negotiateImageFormat(
+    request.headers.get("Accept"),
+    imageConfig?.formats ?? DEFAULT_IMAGE_FORMATS,
+  );
+  const format =
+    negotiatedFormat ||
+    (sourceContentType !== "image/webp" && sourceContentType !== "image/avif"
+      ? sourceContentType
+      : "image/jpeg");
 
   // Transform if handler provided, otherwise serve original
   let transformFailed = false;
@@ -624,11 +893,6 @@ export async function handleImageOptimization(
         headers.set("Content-Type", format);
       }
 
-      if (isFreshImageRequest(request, transformedEtag)) {
-        headers.delete("Content-Type");
-        return new Response(null, { status: 304, headers });
-      }
-
       headers.set("Content-Length", String(transformedBytes.byteLength));
       setImageSecurityHeaders(headers, imageUrl, headers.get("Content-Type"), imageConfig);
       return new Response(request.method === "HEAD" ? null : transformedBytes, {
@@ -659,6 +923,63 @@ export async function handleImageOptimization(
         : undefined,
     imageUrl,
   );
+}
+
+export async function handleImageOptimization(
+  request: Request,
+  handlers: ImageHandlers,
+  allowedWidths: number[] = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES],
+  imageConfig?: ImageConfig,
+): Promise<Response> {
+  const requestUrl = new URL(request.url);
+  const params = parseImageParams(
+    requestUrl,
+    allowedWidths,
+    imageConfig?.qualities ?? [...DEFAULT_IMAGE_QUALITIES],
+  );
+  if (!params) return badRequestResponse();
+
+  const negotiatedFormat = negotiateImageFormat(
+    request.headers.get("Accept"),
+    imageConfig?.formats ?? DEFAULT_IMAGE_FORMATS,
+  );
+  const owner = handlers.cacheOwner ?? handlers;
+  const cache = getImageResponseCache(owner);
+  const cacheKey = imageResponseCacheKey(params, negotiatedFormat, allowedWidths, imageConfig);
+  const cached = readCachedImageResponse(cache, cacheKey);
+
+  if (cached && cached.revalidateAfter > Date.now()) {
+    return serveCachedImageResponse(request, cached, "HIT");
+  }
+
+  const regenerate = (): Promise<GeneratedImageResponse> => {
+    const active = cache.pending.get(cacheKey);
+    if (active) return active;
+    const pending = generateCachedImageResponse(request, handlers, allowedWidths, imageConfig)
+      .then((generated) => {
+        if (generated.entry) writeCachedImageResponse(cache, cacheKey, generated.entry);
+        return generated;
+      })
+      .finally(() => cache.pending.delete(cacheKey));
+    cache.pending.set(cacheKey, pending);
+    return pending;
+  };
+
+  if (cached) {
+    const regeneration = regenerate().catch((error) => {
+      console.error("[vinext] Image cache regeneration error:", error);
+      return { entry: null, response: null };
+    });
+    if (handlers.waitUntil) handlers.waitUntil(regeneration);
+    else void regeneration;
+    return serveCachedImageResponse(request, cached, "STALE");
+  }
+
+  const generated = await regenerate();
+  if (generated.entry) return serveCachedImageResponse(request, generated.entry, "MISS");
+  return generated.response
+    ? serveBufferedImageResponse(request, generated.response)
+    : new Response("Unable to optimize image", { status: 500 });
 }
 
 // ---------------------------------------------------------------------------
@@ -744,6 +1065,10 @@ export function handleConfiguredImageOptimization(
   fetchAsset: (path: string, request: Request) => Promise<Response>,
   allowedWidths?: number[],
   imageConfig?: ImageConfig,
+  cacheOptions?: {
+    owner?: object;
+    waitUntil?: (promise: Promise<unknown>) => void;
+  },
 ): Promise<Response> {
   const optimizer = getImageOptimizer();
   return handleImageOptimization(
@@ -755,6 +1080,8 @@ export function handleConfiguredImageOptimization(
       transformImage: optimizer
         ? (body, options) => optimizer.transformImage(body, options)
         : undefined,
+      cacheOwner: cacheOptions?.owner ?? fetchAsset,
+      waitUntil: cacheOptions?.waitUntil,
     },
     allowedWidths,
     imageConfig,

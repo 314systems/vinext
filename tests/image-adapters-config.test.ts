@@ -304,6 +304,7 @@ describe("registration is wired into the router/runtime entries", () => {
         deviceSizes: [320, 640],
         imageSizes: [16, 32],
         qualities: [75, 90],
+        formats: ["image/avif", "image/webp"],
         dangerouslyAllowSVG: true,
       },
     });
@@ -313,12 +314,13 @@ describe("registration is wired into the router/runtime entries", () => {
     expect(code).toContain("[320,640,16,32]");
     expect(code).toContain('"dangerouslyAllowSVG":true');
     expect(code).toContain('"qualities":[75,90]');
+    expect(code).toContain('"formats":["image/avif","image/webp"]');
   });
 
   it("App Router RSC entry falls back to Next.js default widths when images is unset", () => {
     const code = generateRscEntry("/tmp/test/app", minimalAppRoutes, null, [], null, "", false);
     // Next.js defaults: deviceSizes then imageSizes.
-    expect(code).toContain("[640,750,828,1080,1200,1920,2048,3840,16,32,48,64,96,128,256,384]");
+    expect(code).toContain("[640,750,828,1080,1200,1920,2048,3840,32,48,64,96,128,256,384]");
   });
 
   it("Pages Router worker entry registers the optimizer with env and uses the registry", () => {

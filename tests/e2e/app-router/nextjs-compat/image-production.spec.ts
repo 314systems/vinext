@@ -1,10 +1,10 @@
 import { expect, test } from "@playwright/test";
 
-function optimizerUrl(source: string): string {
+function optimizerUrl(source: string, quality = 75): string {
   const url = new URL("/_next/image", "http://localhost:4191");
   url.searchParams.set("url", source);
   url.searchParams.set("w", "32");
-  url.searchParams.set("q", "75");
+  url.searchParams.set("q", String(quality));
   return url.toString();
 }
 
@@ -16,12 +16,14 @@ test.describe("App Router production image source parity", () => {
   test("validates source bytes, honors config, and serves conditional requests", async ({
     request,
   }) => {
+    await request.get("/image-test/reset");
     const url = optimizerUrl("/image-test/source.png?wrong-type=1");
     const initial = await request.get(url);
     expect(initial.status()).toBe(200);
     expect(initial.headers()["content-type"]).toContain("image/png");
     expect(initial.headers()["cache-control"]).toBe("public, max-age=200, must-revalidate");
-    expect(initial.headers()["content-disposition"]).toBe('inline; filename="source.png"');
+    expect(initial.headers()["content-disposition"]).toBe('attachment; filename="source.png"');
+    expect(initial.headers()["x-nextjs-cache"]).toBe("MISS");
     const initialBody = await initial.body();
     expect(initial.headers()["content-length"]).toBe(String(initialBody.byteLength));
     const etag = initial.headers().etag;
@@ -32,6 +34,10 @@ test.describe("App Router production image source parity", () => {
     expect((await conditional.body()).byteLength).toBe(0);
     expect(conditional.headers()["content-type"]).toBeUndefined();
     expect(conditional.headers()["content-disposition"]).toBeUndefined();
+    expect(await (await request.get("/image-test/state")).json()).toEqual({
+      count: 1,
+      method: "GET",
+    });
 
     for (const source of ["/image-test/source.png?auth=1", "/image-test/source.png?spoof=1"]) {
       const invalid = await request.get(optimizerUrl(source));
@@ -47,7 +53,7 @@ test.describe("App Router production image source parity", () => {
     request,
   }) => {
     await request.get("/image-test/reset");
-    const post = await request.fetch(optimizerUrl("/image-test/source.png"), {
+    const post = await request.fetch(optimizerUrl("/image-test/source.png?method=post"), {
       method: "POST",
     });
     expect(post.status()).toBe(200);
@@ -59,11 +65,13 @@ test.describe("App Router production image source parity", () => {
     });
 
     await request.get("/image-test/reset");
-    const head = await request.fetch(optimizerUrl("/image-test/source.png"), { method: "HEAD" });
+    const head = await request.fetch(optimizerUrl("/image-test/source.png?method=head"), {
+      method: "HEAD",
+    });
     expect(head.status()).toBe(200);
     expect((await head.body()).byteLength).toBe(0);
     expect(head.headers()["content-length"]).toBe(expectedContentLength);
-    expect(head.headers()["content-disposition"]).toBe('inline; filename="source.png"');
+    expect(head.headers()["content-disposition"]).toBe('attachment; filename="source.png"');
     expect(await (await request.get("/image-test/state")).json()).toEqual({
       count: 1,
       method: "GET",
@@ -74,16 +82,19 @@ test.describe("App Router production image source parity", () => {
     request,
   }) => {
     expect((await request.get(optimizerUrl("/large-public.png"))).status()).toBe(413);
-    for (const source of [
-      "/static/media/static-image.bmp",
-      "/_next/static/immutable/media/static-image.bmp",
-    ]) {
-      const response = await request.get(optimizerUrl(source));
-      expect(response.status()).toBe(200);
-      expect(response.headers()["cache-control"]).toBe("public, max-age=315360000, immutable");
-      expect(response.headers()["content-disposition"]).toBe('inline; filename="static-image.bmp"');
-      expect(response.headers()["content-length"]).toBe(String((await response.body()).byteLength));
-    }
+    const mutable = await request.get(optimizerUrl("/static/media/static-image.bmp"));
+    expect(mutable.status()).toBe(200);
+    expect(mutable.headers()["cache-control"]).toBe("public, max-age=3600, must-revalidate");
+
+    const immutable = await request.get(
+      optimizerUrl("/_next/static/immutable/media/static-image.bmp"),
+    );
+    expect(immutable.status()).toBe(200);
+    expect(immutable.headers()["cache-control"]).toBe("public, max-age=315360000, immutable");
+    expect(immutable.headers()["content-disposition"]).toBe(
+      'attachment; filename="static-image.bmp"',
+    );
+    expect(immutable.headers()["content-length"]).toBe(String((await immutable.body()).byteLength));
   });
 
   test("rejects nested optimizer source suffixes before middleware dispatch", async ({

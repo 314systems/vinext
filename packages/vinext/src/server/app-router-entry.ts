@@ -36,7 +36,6 @@ import { registerConfiguredCacheAdapters } from "virtual:vinext-cache-adapters";
 import { registerConfiguredImageOptimizer } from "virtual:vinext-image-adapters";
 import {
   createInternalImageRequest,
-  getImageOptimizer,
   handleConfiguredImageOptimization,
   isImageOptimizationPath,
 } from "./image-optimization.js";
@@ -66,6 +65,7 @@ const __workerBasePath: string = typeof __rscBasePath === "string" ? __rscBasePa
 const __workerAssetPathPrefix: string = assetPrefixPathname(
   typeof __rscAssetPrefix === "string" ? __rscAssetPrefix : "",
 );
+const IMAGE_CACHE_OWNER = {};
 
 type WorkerAssetEnv = {
   ASSETS?: {
@@ -94,11 +94,7 @@ async function handleRequest(
 
   const url = new URL(request.url);
 
-  if (
-    isImageOptimizationPath(stripBasePath(url.pathname, __workerBasePath)) &&
-    env?.ASSETS &&
-    getImageOptimizer()
-  ) {
+  if (isImageOptimizationPath(stripBasePath(url.pathname, __workerBasePath)) && env?.ASSETS) {
     return handleConfiguredImageOptimization(
       request,
       async (assetPath, optimizerRequest) => {
@@ -121,6 +117,10 @@ async function handleRequest(
       },
       __rscImageAllowedWidths,
       __rscImageConfig,
+      {
+        owner: IMAGE_CACHE_OWNER,
+        waitUntil: ctx?.waitUntil ? (promise) => ctx.waitUntil!(promise) : undefined,
+      },
     );
   }
 

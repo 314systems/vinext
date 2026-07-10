@@ -20682,19 +20682,15 @@ describe("image optimization request parsing", () => {
     ).toBeNull();
   });
 
-  it("parseImageParams permits any quality 1-100 when qualities is unset", async () => {
-    // Matches Next.js: an unset `images.qualities` is not restricted to a single
-    // value. Regression test for non-75 qualities (e.g. `<Image quality={90}>`)
-    // returning 400 from the image optimization endpoint.
+  it("parseImageParams defaults to Next.js 16's quality 75 allowlist", async () => {
     const { parseImageParams } =
       await import("../packages/vinext/src/server/image-optimization.js");
-    for (const q of [1, 50, 75, 90, 100]) {
-      const params = parseImageParams(
-        new URL(`http://localhost/_next/image?url=%2Fimg.jpg&w=640&q=${q}`),
-      );
-      expect(params).not.toBeNull();
-      expect(params!.quality).toBe(q);
-    }
+    expect(
+      parseImageParams(new URL("http://localhost/_next/image?url=%2Fimg.jpg&w=640&q=75")),
+    ).not.toBeNull();
+    expect(
+      parseImageParams(new URL("http://localhost/_next/image?url=%2Fimg.jpg&w=640&q=90")),
+    ).toBeNull();
   });
 
   it("parseImageParams enforces the allowlist only when qualities is configured", async () => {
@@ -20818,9 +20814,7 @@ describe("image optimization request parsing", () => {
     ).toBeNull();
   });
 
-  it("parseImageParams allows any quality 1-100 when qualities is unset", async () => {
-    // Matches Next.js: an unset `images.qualities` does not restrict the quality
-    // to a single value — any integer from 1-100 is accepted.
+  it("parseImageParams rejects non-default quality when qualities is unset", async () => {
     const { parseImageParams } =
       await import("../packages/vinext/src/server/image-optimization.js");
     expect(
@@ -20828,7 +20822,7 @@ describe("image optimization request parsing", () => {
     ).not.toBeNull();
     expect(
       parseImageParams(new URL("http://localhost/_next/image?url=%2Fimg.jpg&w=640&q=80")),
-    ).not.toBeNull();
+    ).toBeNull();
   });
 
   it("parseImageParams accepts configured qualities", async () => {
@@ -20891,10 +20885,15 @@ describe("image optimization request parsing", () => {
     expect(params!.width).toBe(64);
   });
 
-  it("negotiateImageFormat prefers AVIF over WebP", async () => {
+  it("negotiateImageFormat honors configured formats and client weights", async () => {
     const { negotiateImageFormat } =
       await import("../packages/vinext/src/server/image-optimization.js");
-    expect(negotiateImageFormat("image/avif,image/webp,image/jpeg")).toBe("image/avif");
+    expect(
+      negotiateImageFormat("image/avif;q=0.4,image/webp;q=0.9", ["image/avif", "image/webp"]),
+    ).toBe("image/webp");
+    expect(
+      negotiateImageFormat("image/avif;q=0.9,image/webp;q=0.4", ["image/avif", "image/webp"]),
+    ).toBe("image/avif");
   });
 
   it("negotiateImageFormat selects WebP when no AVIF", async () => {
@@ -20903,11 +20902,17 @@ describe("image optimization request parsing", () => {
     expect(negotiateImageFormat("image/webp,image/jpeg")).toBe("image/webp");
   });
 
-  it("negotiateImageFormat falls back to JPEG", async () => {
+  it("negotiateImageFormat defaults to WebP-only even when AVIF has higher weight", async () => {
     const { negotiateImageFormat } =
       await import("../packages/vinext/src/server/image-optimization.js");
-    expect(negotiateImageFormat("image/png,image/jpeg")).toBe("image/jpeg");
-    expect(negotiateImageFormat(null)).toBe("image/jpeg");
+    expect(negotiateImageFormat("image/avif;q=1,image/webp;q=0.5")).toBe("image/webp");
+  });
+
+  it("negotiateImageFormat returns no configured transform format when unsupported", async () => {
+    const { negotiateImageFormat } =
+      await import("../packages/vinext/src/server/image-optimization.js");
+    expect(negotiateImageFormat("image/png,image/jpeg")).toBe("");
+    expect(negotiateImageFormat(null)).toBe("");
   });
 
   it("IMAGE_OPTIMIZATION_PATH is /_next/image", async () => {
@@ -20940,7 +20945,7 @@ describe("image optimization request parsing", () => {
     const { DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } =
       await import("../packages/vinext/src/server/image-optimization.js");
     expect(DEFAULT_DEVICE_SIZES).toEqual([640, 750, 828, 1080, 1200, 1920, 2048, 3840]);
-    expect(DEFAULT_IMAGE_SIZES).toEqual([16, 32, 48, 64, 96, 128, 256, 384]);
+    expect(DEFAULT_IMAGE_SIZES).toEqual([32, 48, 64, 96, 128, 256, 384]);
   });
 });
 
@@ -21151,7 +21156,7 @@ describe("handleImageOptimization", () => {
     expect(response.headers.get("Vary")).toBe("Accept");
     expect(response.headers.get("ETag")).toBe("InNvdXJjZS1ldGFnIg");
     expect(response.headers.get("Content-Length")).toBe(String(jpegBytes.byteLength));
-    expect(response.headers.get("Content-Disposition")).toBe('inline; filename="img.jpg"');
+    expect(response.headers.get("Content-Disposition")).toBe('attachment; filename="img.jpg"');
     expect(response.headers.get("x-middleware-header")).toBeNull();
   });
 
@@ -21186,6 +21191,11 @@ describe("handleImageOptimization", () => {
       new Uint8Array([0x00, 0x00, 0x00, 0x0c, 0x6a, 0x50, 0x20, 0x20, 0x0d, 0x0a, 0x87, 0x0a]),
       "image/jp2",
     ],
+    [
+      "HEIC container",
+      new Uint8Array([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63]),
+      "image/heic",
+    ],
   ])("recognizes %s source bytes", async (_name, bytes, expectedContentType) => {
     const { handleImageOptimization } =
       await import("../packages/vinext/src/server/image-optimization.js");
@@ -21195,6 +21205,33 @@ describe("handleImageOptimization", () => {
     );
     expect(response.status).toBe(200);
     expect(response.headers.get("Content-Type")).toBe(expectedContentType);
+  });
+
+  it.each([
+    ["ICNS", new Uint8Array([0x69, 0x63, 0x6e, 0x73])],
+    ["BMP", new Uint8Array([0x42, 0x4d])],
+    ["JPEG XL", new Uint8Array([0xff, 0x0a])],
+    [
+      "HEIC",
+      new Uint8Array([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63]),
+    ],
+  ])("bypasses transformation for %s", async (_name, bytes) => {
+    const { handleImageOptimization } =
+      await import("../packages/vinext/src/server/image-optimization.js");
+    let transformCount = 0;
+    const response = await handleImageOptimization(
+      new Request("http://localhost/_next/image?url=%2Fimage&w=640&q=75"),
+      {
+        fetchAsset: async () => new Response(bytes),
+        transformImage: async () => {
+          transformCount += 1;
+          return new Response("transformed", { headers: { "Content-Type": "image/webp" } });
+        },
+      },
+    );
+    expect(response.status).toBe(200);
+    expect(transformCount).toBe(0);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
   });
 
   it.each([
@@ -21222,13 +21259,17 @@ describe("handleImageOptimization", () => {
     const { handleImageOptimization } =
       await import("../packages/vinext/src/server/image-optimization.js");
     const url = "http://localhost/_next/image?url=%2Fimg.jpg&w=640&q=75";
+    let fetchCount = 0;
     const handlers = {
-      fetchAsset: async () =>
-        new Response(jpegBytes, {
+      fetchAsset: async () => {
+        fetchCount += 1;
+        return new Response(jpegBytes, {
           headers: { "Content-Type": "image/jpeg", ETag: 'W/"source-etag"' },
-        }),
+        });
+      },
     };
     const initialResponse = await handleImageOptimization(new Request(url), handlers);
+    expect(initialResponse.headers.get("X-Nextjs-Cache")).toBe("MISS");
     const etag = initialResponse.headers.get("ETag");
     expect(etag).toBeTruthy();
     const response = await handleImageOptimization(
@@ -21239,6 +21280,7 @@ describe("handleImageOptimization", () => {
     expect(response.body).toBeNull();
     expect(response.headers.get("ETag")).toBe(etag);
     expect(response.headers.get("Content-Disposition")).toBeNull();
+    expect(fetchCount).toBe(1);
   });
 
   it("uses HTTP freshness semantics for passthrough source ETags", async () => {
@@ -21312,7 +21354,7 @@ describe("handleImageOptimization", () => {
     expect(response.headers.get("Set-Cookie")).toBeNull();
     expect(response.headers.get("Location")).toBeNull();
     expect(response.headers.get("Content-Length")).toBe("11");
-    expect(response.headers.get("Content-Disposition")).toBe('inline; filename="img.webp"');
+    expect(response.headers.get("Content-Disposition")).toBe('attachment; filename="img.webp"');
   });
 
   it("falls back when the transform response is unsuccessful", async () => {
@@ -21343,13 +21385,19 @@ describe("handleImageOptimization", () => {
     const { handleImageOptimization } =
       await import("../packages/vinext/src/server/image-optimization.js");
     const url = "http://localhost/_next/image?url=%2Fimg.jpg&w=640&q=75";
+    let fetchCount = 0;
+    let transformCount = 0;
     const handlers = {
-      fetchAsset: async () =>
-        new Response(jpegBytes, { headers: { "Content-Type": "image/jpeg" } }),
-      transformImage: async () =>
-        new Response("transformed", {
+      fetchAsset: async () => {
+        fetchCount += 1;
+        return new Response(jpegBytes, { headers: { "Content-Type": "image/jpeg" } });
+      },
+      transformImage: async () => {
+        transformCount += 1;
+        return new Response("transformed", {
           headers: { "Content-Type": "image/webp", ETag: 'W/"transformed-etag"' },
-        }),
+        });
+      },
     };
     const etag = (await handleImageOptimization(new Request(url), handlers)).headers.get("ETag")!;
     const response = await handleImageOptimization(
@@ -21360,6 +21408,126 @@ describe("handleImageOptimization", () => {
     expect(response.body).toBeNull();
     expect(response.headers.get("ETag")).toBe(etag);
     expect(response.headers.get("Content-Length")).toBeNull();
+    expect(fetchCount).toBe(1);
+    expect(transformCount).toBe(1);
+  });
+
+  it("serves transformed cache hits without redispatching source or transform", async () => {
+    const { handleImageOptimization } =
+      await import("../packages/vinext/src/server/image-optimization.js");
+    const url = "http://localhost/_next/image?url=%2Fcached.jpg&w=640&q=75";
+    let fetchCount = 0;
+    let transformCount = 0;
+    const handlers = {
+      fetchAsset: async () => {
+        fetchCount += 1;
+        return new Response(jpegBytes, { headers: { "Cache-Control": "max-age=60" } });
+      },
+      transformImage: async () => {
+        transformCount += 1;
+        return new Response("cached-transform", {
+          headers: { "Content-Type": "image/webp" },
+        });
+      },
+    };
+
+    const first = await handleImageOptimization(new Request(url), handlers);
+    const second = await handleImageOptimization(new Request(url), handlers);
+    expect(first.headers.get("X-Nextjs-Cache")).toBe("MISS");
+    expect(second.headers.get("X-Nextjs-Cache")).toBe("HIT");
+    expect(await second.text()).toBe("cached-transform");
+    expect(fetchCount).toBe(1);
+    expect(transformCount).toBe(1);
+  });
+
+  it("separates cache entries by transform parameters, formats, config, and runtime owner", async () => {
+    const { handleImageOptimization } =
+      await import("../packages/vinext/src/server/image-optimization.js");
+    let fetchCount = 0;
+    const ownerA = {};
+    const ownerB = {};
+    const handlers = (owner: object) => ({
+      cacheOwner: owner,
+      fetchAsset: async () => {
+        fetchCount += 1;
+        return new Response(jpegBytes);
+      },
+      transformImage: async (_body: ReadableStream, options: { format: string }) =>
+        new Response(options.format || "source", {
+          headers: { "Content-Type": options.format || "image/jpeg" },
+        }),
+    });
+    const request = (width: number, quality: number, accept: string) =>
+      new Request(`http://localhost/_next/image?url=%2Fkeyed.jpg&w=${width}&q=${quality}`, {
+        headers: { Accept: accept },
+      });
+    const config = {
+      formats: ["image/avif", "image/webp"] as Array<"image/avif" | "image/webp">,
+      qualities: [75, 90],
+    };
+
+    await handleImageOptimization(
+      request(640, 75, "image/webp"),
+      handlers(ownerA),
+      undefined,
+      config,
+    );
+    await handleImageOptimization(
+      request(750, 75, "image/webp"),
+      handlers(ownerA),
+      undefined,
+      config,
+    );
+    await handleImageOptimization(
+      request(640, 90, "image/webp"),
+      handlers(ownerA),
+      undefined,
+      config,
+    );
+    await handleImageOptimization(
+      request(640, 75, "image/avif"),
+      handlers(ownerA),
+      undefined,
+      config,
+    );
+    await handleImageOptimization(request(640, 75, "image/webp"), handlers(ownerA), undefined, {
+      ...config,
+      contentDispositionType: "inline",
+    });
+    await handleImageOptimization(
+      request(640, 75, "image/webp"),
+      handlers(ownerB),
+      undefined,
+      config,
+    );
+    expect(fetchCount).toBe(6);
+  });
+
+  it("serves stale image responses and regenerates through runtime ownership", async () => {
+    const { handleImageOptimization } =
+      await import("../packages/vinext/src/server/image-optimization.js");
+    const url = "http://localhost/_next/image?url=%2Fstale.jpg&w=640&q=75";
+    let fetchCount = 0;
+    const background: Promise<unknown>[] = [];
+    const handlers = {
+      cacheOwner: {},
+      fetchAsset: async () => {
+        fetchCount += 1;
+        return new Response(jpegBytes, { headers: { "Cache-Control": "max-age=0" } });
+      },
+      waitUntil(promise: Promise<unknown>) {
+        background.push(promise);
+      },
+    };
+    const config = { minimumCacheTTL: 0 };
+
+    const first = await handleImageOptimization(new Request(url), handlers, undefined, config);
+    const stale = await handleImageOptimization(new Request(url), handlers, undefined, config);
+    expect(first.headers.get("X-Nextjs-Cache")).toBe("MISS");
+    expect(stale.headers.get("X-Nextjs-Cache")).toBe("STALE");
+    expect(background).toHaveLength(1);
+    await background[0];
+    expect(fetchCount).toBe(2);
   });
 
   it("falls back to original on transform error", async () => {
@@ -21469,6 +21637,62 @@ describe("handleImageOptimization", () => {
     expect(response.headers.get("Cache-Control")).toBe("public, max-age=315360000, immutable");
   });
 
+  it("preserves immutable caching when a static imported image bypasses transforms", async () => {
+    const { handleImageOptimization } =
+      await import("../packages/vinext/src/server/image-optimization.js");
+    const response = await handleImageOptimization(
+      new Request(
+        "http://localhost/_next/image?url=%2F_next%2Fstatic%2Fimmutable%2Fmedia%2Flogo.bmp&w=640&q=75",
+      ),
+      {
+        fetchAsset: async () => new Response(new Uint8Array([0x42, 0x4d, 0x00, 0x00])),
+      },
+    );
+    expect(response.headers.get("Cache-Control")).toBe("public, max-age=315360000, immutable");
+  });
+
+  it("does not classify mutable public /static/media files as immutable", async () => {
+    const { handleImageOptimization } =
+      await import("../packages/vinext/src/server/image-optimization.js");
+    const response = await handleImageOptimization(
+      new Request("http://localhost/_next/image?url=%2Fstatic%2Fmedia%2Fmutable.png&w=640&q=75"),
+      {
+        fetchAsset: async () =>
+          new Response(jpegBytes, { headers: { "Cache-Control": "public, max-age=60" } }),
+      },
+    );
+    expect(response.headers.get("Cache-Control")).toBe("public, max-age=14400, must-revalidate");
+  });
+
+  it("coalesces concurrent non-cacheable responses without sharing a consumed body", async () => {
+    const { handleImageOptimization } =
+      await import("../packages/vinext/src/server/image-optimization.js");
+    let releaseFetch!: () => void;
+    const fetchGate = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+    let fetchCount = 0;
+    const handlers = {
+      cacheOwner: {},
+      async fetchAsset() {
+        fetchCount++;
+        await fetchGate;
+        return new Response("not an image");
+      },
+    };
+    const requestUrl = "http://localhost/_next/image?url=%2Fmissing.jpg&w=640&q=75";
+    const firstPromise = handleImageOptimization(new Request(requestUrl), handlers);
+    const secondPromise = handleImageOptimization(new Request(requestUrl), handlers);
+    releaseFetch();
+
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
+    expect(fetchCount).toBe(1);
+    expect(first.status).toBe(400);
+    expect(second.status).toBe(400);
+    expect(await first.text()).toBe("The requested resource isn't a valid image.");
+    expect(await second.text()).toBe("The requested resource isn't a valid image.");
+  });
+
   it("returns 400 for backslash open redirect (/\\evil.com)", async () => {
     const { handleImageOptimization } =
       await import("../packages/vinext/src/server/image-optimization.js");
@@ -21558,7 +21782,7 @@ describe("handleImageOptimization", () => {
       "script-src 'none'; frame-src 'none'; sandbox;",
     );
     expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
-    expect(response.headers.get("Content-Disposition")).toBe('inline; filename="img.jpg"');
+    expect(response.headers.get("Content-Disposition")).toBe('attachment; filename="img.jpg"');
   });
 
   it("sets Content-Security-Policy header on transformed responses", async () => {
@@ -21586,7 +21810,7 @@ describe("handleImageOptimization", () => {
       "script-src 'none'; frame-src 'none'; sandbox;",
     );
     expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
-    expect(response.headers.get("Content-Disposition")).toBe('inline; filename="img.webp"');
+    expect(response.headers.get("Content-Disposition")).toBe('attachment; filename="img.webp"');
   });
 
   it("overrides unsafe Content-Type from transform handler", async () => {
@@ -21722,7 +21946,7 @@ describe("handleImageOptimization", () => {
       "script-src 'none'; frame-src 'none'; sandbox;",
     );
     expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
-    expect(response.headers.get("Content-Disposition")).toBe('inline; filename="logo.svg"');
+    expect(response.headers.get("Content-Disposition")).toBe('attachment; filename="logo.svg"');
   });
 
   it("applies custom contentDispositionType", async () => {
@@ -21743,7 +21967,7 @@ describe("handleImageOptimization", () => {
     expect(response.headers.get("Content-Disposition")).toBe('attachment; filename="img.jpg"');
   });
 
-  it("defaults Content-Disposition to inline when contentDispositionType is invalid", async () => {
+  it("defaults Content-Disposition to attachment when contentDispositionType is invalid", async () => {
     const { handleImageOptimization } =
       await import("../packages/vinext/src/server/image-optimization.js");
     const request = new Request("http://localhost/_next/image?url=%2Fimg.jpg&w=640&q=75");
@@ -21758,7 +21982,7 @@ describe("handleImageOptimization", () => {
       contentDispositionType: "bogus" as "inline",
     });
     expect(response.status).toBe(200);
-    expect(response.headers.get("Content-Disposition")).toBe('inline; filename="img.jpg"');
+    expect(response.headers.get("Content-Disposition")).toBe('attachment; filename="img.jpg"');
   });
 
   it("sanitizes source-derived Content-Disposition filenames", async () => {
@@ -21771,7 +21995,7 @@ describe("handleImageOptimization", () => {
       fetchAsset: async () => new Response(jpegBytes),
     });
     const disposition = response.headers.get("Content-Disposition");
-    expect(disposition).toBe('inline; filename="file\\";bad__X-Evil: yes.jpg"');
+    expect(disposition).toBe('attachment; filename="file\\";bad__X-Evil: yes.jpg"');
     expect(disposition).not.toMatch(/[\r\n]/);
   });
 
@@ -21810,7 +22034,7 @@ describe("handleImageOptimization", () => {
     expect(response.headers.get("Content-Security-Policy")).toBe(
       "script-src 'none'; frame-src 'none'; sandbox;",
     );
-    expect(response.headers.get("Content-Disposition")).toBe('inline; filename="img.jpg"');
+    expect(response.headers.get("Content-Disposition")).toBe('attachment; filename="img.jpg"');
   });
 });
 

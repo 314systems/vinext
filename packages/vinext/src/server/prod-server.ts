@@ -1354,6 +1354,7 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
   // stat() calls — all lookups are pure in-memory Map.get(). Precompressed
   // .br/.gz/.zst variants (generated at build time) are detected automatically.
   const staticCache = await StaticFileCache.create(clientDir);
+  const imageCacheOwner = {};
 
   const dispatchAppRequest = async (request: Request): Promise<Response> => {
     const response = await rscHandler(request);
@@ -1486,6 +1487,7 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
         },
         appImageAllowedWidths,
         imageConfig,
+        { owner: imageCacheOwner },
       );
       await sendWebResponse(response, req, res, false);
       return;
@@ -1672,6 +1674,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         maximumResponseBody: vinextConfig.images.maximumResponseBody,
         minimumCacheTTL: vinextConfig.images.minimumCacheTTL,
         qualities: vinextConfig.images.qualities,
+        formats: vinextConfig.images.formats,
         contentDispositionType: vinextConfig.images.contentDispositionType,
         contentSecurityPolicy: vinextConfig.images.contentSecurityPolicy,
       }
@@ -1689,6 +1692,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
 
   // Build the static file metadata cache at startup (same as App Router).
   const staticCache = await StaticFileCache.create(clientDir);
+  const imageCacheOwner = {};
 
   const dispatchPagesRequest = async (request: Request): Promise<Response> => {
     const originalUrl = new URL(request.url);
@@ -1868,6 +1872,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         },
         allowedImageWidths,
         pagesImageConfig,
+        { owner: imageCacheOwner },
       );
       await sendWebResponse(response, req, res, false);
       return;
