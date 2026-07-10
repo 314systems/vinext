@@ -403,7 +403,6 @@ function rewriteInlineCssStylesheetLinks(
 /** Match the `<head ...>` opening tag in a tick-buffered batch. */
 const HEAD_OPEN_RE = /<head\b[^>]*>/;
 
-const HEAD_CLOSE_TAG = "</head>";
 const RAW_TEXT_ELEMENTS = new Set([
   "iframe",
   "noembed",
@@ -416,6 +415,9 @@ const RAW_TEXT_ELEMENTS = new Set([
   "xmp",
 ]);
 const RAW_TAG_WINDOW_LENGTH = 16;
+const CLOSING_TOKEN_LOOKAHEAD_LIMIT = 4096;
+
+type ClosingTokenMatch = { kind: "match"; length: number } | { kind: "none" } | { kind: "partial" };
 
 type HeadScannerState =
   | "bogus-comment"
@@ -440,6 +442,63 @@ function endsWithDelimitedTag(window: string, prefix: string): string | null {
   return window.endsWith(prefix + delimiter) ? delimiter : null;
 }
 
+function matchClosingEndTag(
+  input: string,
+  index: number,
+  tagName: string,
+  final: boolean,
+): ClosingTokenMatch {
+  const prefix = "</" + tagName;
+  const candidate = input.slice(index, index + prefix.length).toLowerCase();
+  if (candidate.length < prefix.length) {
+    return !final && prefix.startsWith(candidate) ? { kind: "partial" } : { kind: "none" };
+  }
+  if (candidate !== prefix) return { kind: "none" };
+
+  let cursor = index + prefix.length;
+  if (cursor >= input.length) return final ? { kind: "none" } : { kind: "partial" };
+  if (!isHtmlTagDelimiter(input[cursor])) return { kind: "none" };
+
+  let quote: '"' | "'" | null = null;
+  for (; cursor < input.length; cursor++) {
+    const character = input[cursor];
+    if (quote) {
+      if (character === quote) quote = null;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === ">") {
+      return { kind: "match", length: cursor - index + 1 };
+    }
+    if (cursor - index >= CLOSING_TOKEN_LOOKAHEAD_LIMIT) return { kind: "none" };
+  }
+
+  return final ? { kind: "none" } : { kind: "partial" };
+}
+
+function matchClosingTagSequence(
+  input: string,
+  index: number,
+  tagNames: readonly string[],
+  final: boolean,
+): ClosingTokenMatch {
+  let cursor = index;
+  for (let tagIndex = 0; tagIndex < tagNames.length; tagIndex++) {
+    const result = matchClosingEndTag(input, cursor, tagNames[tagIndex], final);
+    if (result.kind !== "match") return result;
+    cursor += result.length;
+    if (tagIndex + 1 < tagNames.length) {
+      while (/[\t\n\f\r ]/.test(input[cursor] ?? "")) {
+        cursor++;
+        if (cursor - index >= CLOSING_TOKEN_LOOKAHEAD_LIMIT) return { kind: "none" };
+      }
+      if (cursor >= input.length) return final ? { kind: "none" } : { kind: "partial" };
+    }
+  }
+  return { kind: "match", length: cursor - index };
+}
+
 /**
  * Incrementally locate a real closing token outside inert HTML contexts.
  *
@@ -462,36 +521,37 @@ class HtmlClosingTokenScanner {
   #state: HeadScannerState = "data";
   #tagIsEnd = false;
   #tagName = "";
-  readonly #target: string;
+  readonly #targetTags: readonly string[];
   #templateDepth = 0;
 
-  constructor(target: string) {
-    this.#target = target.toLowerCase();
+  constructor(targetTags: readonly string[]) {
+    this.#targetTags = targetTags.map((tag) => tag.toLowerCase());
   }
 
-  scan(input: string, final: boolean): { consumed: number; tokenIndex: number } {
+  scan(
+    input: string,
+    final: boolean,
+  ): { consumed: number; tokenIndex: number; tokenLength: number } {
     for (let index = 0; index < input.length; index++) {
       let character = input[index];
 
       if (this.#state === "data") {
         if (character !== "<") {
           const nextTag = input.indexOf("<", index + 1);
-          if (nextTag === -1) return { consumed: input.length, tokenIndex: -1 };
+          if (nextTag === -1) {
+            return { consumed: input.length, tokenIndex: -1, tokenLength: 0 };
+          }
           index = nextTag;
           character = "<";
         }
 
         if (this.#templateDepth === 0) {
-          const candidate = input.slice(index, index + this.#target.length).toLowerCase();
-          if (candidate === this.#target) {
-            return { consumed: index, tokenIndex: index };
+          const match = matchClosingTagSequence(input, index, this.#targetTags, final);
+          if (match.kind === "match") {
+            return { consumed: index, tokenIndex: index, tokenLength: match.length };
           }
-          if (
-            !final &&
-            candidate.length < this.#target.length &&
-            this.#target.startsWith(candidate)
-          ) {
-            return { consumed: index, tokenIndex: -1 };
+          if (match.kind === "partial") {
+            return { consumed: index, tokenIndex: -1, tokenLength: 0 };
           }
         }
 
@@ -597,7 +657,7 @@ class HtmlClosingTokenScanner {
       }
     }
 
-    return { consumed: input.length, tokenIndex: -1 };
+    return { consumed: input.length, tokenIndex: -1, tokenLength: 0 };
   }
 
   #finishTag(): void {
@@ -751,8 +811,8 @@ export function createTickBufferedTransform(
   let pendingHtml = "";
   let pendingHeadClose = "";
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
-  const documentCloseScanner = new HtmlClosingTokenScanner(DOCUMENT_CLOSE_SUFFIX);
-  const headCloseScanner = new HtmlClosingTokenScanner(HEAD_CLOSE_TAG);
+  const documentCloseScanner = new HtmlClosingTokenScanner(["body", "html"]);
+  const headCloseScanner = new HtmlClosingTokenScanner(["head"]);
   // Computed once at transform creation: every flush is a hot path, so we
   // avoid re-running Object.keys() on the manifest per chunk. Gates both the
   // split-link boundary buffering and the inline-css link rewrite below.
@@ -771,10 +831,7 @@ export function createTickBufferedTransform(
     const scan = documentCloseScanner.scan(chunk, final);
     if (scan.tokenIndex !== -1) {
       suffixStripped = true;
-      return (
-        chunk.slice(0, scan.tokenIndex) +
-        chunk.slice(scan.tokenIndex + DOCUMENT_CLOSE_SUFFIX.length)
-      );
+      return chunk.slice(0, scan.tokenIndex) + chunk.slice(scan.tokenIndex + scan.tokenLength);
     }
     pendingDocumentClose = chunk.slice(scan.consumed);
     return chunk.slice(0, scan.consumed);

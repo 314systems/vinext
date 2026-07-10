@@ -532,6 +532,30 @@ describe("createTickBufferedTransform pre-head splice", () => {
     expect(out).toContain('<title>x</title><meta data-end-of-head="true"></head>');
   });
 
+  it.each([
+    ["uppercase", "</HEAD>"],
+    ["whitespace", "</head >"],
+    ["end-tag attributes", '</head data-marker=">">'],
+  ])("recognizes a browser-valid %s closing head tag", async (_label, closeTag) => {
+    const out = await runTransform(
+      [`<html><head><title>x</title>${closeTag}<body></body></html>`],
+      {
+        injectHTML: '<meta data-end-of-head="true">',
+      },
+    );
+
+    expect(out).toContain(`<title>x</title><meta data-end-of-head="true">${closeTag}`);
+  });
+
+  it("recognizes a browser-valid closing head tag split inside its attributes", async () => {
+    const out = await runDelayedTransform(
+      ["<html><head><title>x</title></HE", 'AD data-marker=">', '"><body></body></html>'],
+      { injectHTML: '<meta data-end-of-head="true">' },
+    );
+
+    expect(out).toContain('<title>x</title><meta data-end-of-head="true"></HEAD data-marker=">">');
+  });
+
   it("continues streaming safe head content before later input arrives", async () => {
     const transform = createTickBufferedTransform(
       createNoopRscEmbedTransform(),
@@ -651,6 +675,26 @@ describe("createTickBufferedTransform pre-head splice", () => {
       expect(out.slice(0, -suffix.length)).not.toContain(suffix);
       // Trailing scripts land before the suffix, not after it.
       expect(out).toContain('<script id="trailing-rsc">rsc()</script></body></html>');
+    });
+
+    it.each([
+      ["uppercase", "</BODY></HTML>"],
+      ["whitespace", "</body >\n</html >"],
+      ["end-tag attributes", '</body data-marker=">"></html data-marker=">">'],
+    ])("moves a browser-valid %s document suffix", async (_label, suffix) => {
+      const rsc = {
+        flush: () => "",
+        finalize: async () => '<script id="trailing-rsc">rsc()</script>',
+        getRawBuffer: async () => new ArrayBuffer(0),
+      };
+      const transform = createTickBufferedTransform(rsc);
+      const out = await new Response(
+        createTextStream([`<html><head></head><body>content${suffix}`]).pipeThrough(transform),
+      ).text();
+
+      expect(out).not.toContain(suffix);
+      expect(out).toContain('content<script id="trailing-rsc">rsc()</script></body></html>');
+      expect(out.endsWith("</body></html>")).toBe(true);
     });
 
     it("ensures the suffix is at the end even when injectHTML fallback fires", async () => {
