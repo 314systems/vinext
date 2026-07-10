@@ -59,7 +59,6 @@ import { ssrAppRouterInstance } from "./app-ssr-router-instance.js";
 // @ts-expect-error — resolved by the vinext build plugin in SSR environments.
 import pagesClientAssets from "virtual:vinext-pages-client-assets";
 import { setPagesClientAssets, type PagesClientAssets } from "./pages-client-assets.js";
-import { getAppPageStaticGenerationErrorMessage } from "./app-static-generation.js";
 
 setPagesClientAssets(pagesClientAssets as PagesClientAssets);
 
@@ -415,9 +414,10 @@ export async function handleSsr(
         if (incomingNavigationContext.searchParamsAccessMode === "force-static") return;
         if (incomingNavigationContext.searchParamsAccessMode === "error") {
           // Deliberate defense-in-depth divergence from Next.js's CSR bailout:
-          // dynamic="error" rejects query-dependent SSR so it cannot enter
-          // pathname-keyed ISR HTML before the client takes over.
-          throw new Error(getAppPageStaticGenerationErrorMessage());
+          // record access here, then reject after the stream drains so a
+          // Suspense boundary cannot swallow the static-generation failure.
+          didAccessSearchParams = true;
+          return;
         }
         didAccessSearchParams = true;
       },

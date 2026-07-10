@@ -84,6 +84,8 @@ import type {
 } from "./app-layout-param-observation.js";
 import { getStaticLayoutObservationSkipRejection } from "./app-layout-param-observation.js";
 import { peekDynamicUsage } from "vinext/shims/headers";
+import { readStreamAsText } from "../utils/text-stream.js";
+import { getAppPageStaticGenerationErrorMessage } from "./app-static-generation.js";
 
 type AppPageBoundaryOnError = (
   error: unknown,
@@ -1110,7 +1112,24 @@ export async function renderAppPageLifecycle(
   });
 
   let dynamicUsageCheckComplete = false;
-  if (shouldCompleteDynamicUsageBeforeResponse && !dynamicUsedDuringRender) {
+  if (options.isDynamicError) {
+    const completedHtml = await readStreamAsText(safeHtmlStream);
+    const searchParamsAccessed = await (htmlRender.searchParamsAccessed ?? false);
+    dynamicUsedDuringRender =
+      searchParamsAccessed || dynamicUsedBeforeContextCleanup || options.consumeDynamicUsage();
+    dynamicUsedDuringHtmlRender = dynamicUsedDuringRender;
+    dynamicUsageCheckComplete = true;
+    if (dynamicUsedDuringRender) {
+      throw new Error(getAppPageStaticGenerationErrorMessage());
+    }
+    safeHtmlStream = new Response(completedHtml).body!;
+  }
+
+  if (
+    shouldCompleteDynamicUsageBeforeResponse &&
+    !dynamicUsageCheckComplete &&
+    !dynamicUsedDuringRender
+  ) {
     // A CDN must decide from the response headers whether to cache the body,
     // unlike the origin cache which can wait for the stream to drain before
     // committing it. Inspect CDN-managed candidates within strict time/size
