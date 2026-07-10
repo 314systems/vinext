@@ -52,9 +52,10 @@ describe("App Router production responses with a CDN-managed cache", () => {
 
   beforeAll(async () => {
     let ioRequests = 0;
-    ioServer = http.createServer((_request, response) => {
+    ioServer = http.createServer((request, response) => {
       ioRequests += 1;
-      setTimeout(() => response.end(`io-${ioRequests}`), 75);
+      const delay = new URL(request.url ?? "/", "http://localhost").searchParams.get("delay");
+      setTimeout(() => response.end(`io-${ioRequests}`), Number(delay) || 75);
     });
     await new Promise<void>((resolve, reject) => {
       ioServer.once("error", reject);
@@ -166,5 +167,65 @@ describe("App Router production responses with a CDN-managed cache", () => {
     expect(edge.originRequests).toBe(2);
     expect(first.headers.get("cdn-cache-control")).toBeNull();
     expect(first.headers.get("cache-control")).toMatch(/no-store/);
+  });
+
+  it("edge-caches revalidate=false HTML and RSC responses", async () => {
+    const htmlEdge = createWorkersLikeEdge(handler);
+    const firstHtml = await htmlEdge.fetch(new Request("https://example.com/revalidate-false"));
+    expect(await firstHtml.text()).toContain("io-");
+    expect(firstHtml.headers.get("cdn-cache-control")).toMatch(/public, max-age=31536000/);
+    await htmlEdge.fetch(new Request("https://example.com/revalidate-false"));
+    expect(htmlEdge.originRequests).toBe(1);
+
+    const rscEdge = createWorkersLikeEdge(handler);
+    const rscRequest = () =>
+      new Request("https://example.com/revalidate-false.rsc", {
+        headers: { accept: "text/x-component", rsc: "1" },
+      });
+    const firstRsc = await rscEdge.fetch(rscRequest());
+    expect(await firstRsc.text()).toContain("io-");
+    expect(firstRsc.headers.get("cdn-cache-control")).toMatch(/public, max-age=31536000/);
+    await rscEdge.fetch(rscRequest());
+    expect(rscEdge.originRequests).toBe(1);
+  });
+
+  it("returns a streaming no-store response when verification exceeds its deadline", async () => {
+    const startedAt = performance.now();
+    const response = await handler(
+      new Request("https://example.com/slow", {
+        headers: { cookie: "session=slow-user" },
+      }),
+      {},
+    );
+    const responseCreatedAfter = performance.now() - startedAt;
+
+    expect(responseCreatedAfter).toBeLessThan(500);
+    expect(response.headers.get("cdn-cache-control")).toBeNull();
+    expect(response.headers.get("cache-control")).toMatch(/no-store/);
+    expect(await response.text()).toContain("slow-user");
+  });
+
+  it("returns and can cancel a never-settling response", async () => {
+    const startedAt = performance.now();
+    const response = await Promise.race([
+      handler(new Request("https://example.com/never"), {}),
+      new Promise<never>((_resolve, reject) =>
+        setTimeout(() => reject(new Error("handler did not return")), 1000),
+      ),
+    ]);
+    const responseCreatedAfter = performance.now() - startedAt;
+
+    expect(responseCreatedAfter).toBeLessThan(500);
+    expect(response.headers.get("cdn-cache-control")).toBeNull();
+    expect(response.headers.get("cache-control")).toMatch(/no-store/);
+    await response.body?.cancel();
+  });
+
+  it("fails closed instead of buffering an oversized cache candidate", async () => {
+    const response = await handler(new Request("https://example.com/large"), {});
+
+    expect(response.headers.get("cdn-cache-control")).toBeNull();
+    expect(response.headers.get("cache-control")).toMatch(/no-store/);
+    await response.body?.cancel();
   });
 });

@@ -20,8 +20,8 @@ import {
   type AppPageSpecialError,
   type LayoutClassificationOptions,
 } from "./app-page-execution.js";
+import { verifyCdnCacheCandidateStream } from "./app-page-cdn-verification.js";
 import { probeAppPageBeforeRender } from "./app-page-probe.js";
-import { readStreamAsText } from "../utils/text-stream.js";
 import {
   buildAppPageHtmlResponse,
   buildAppPageRscResponse,
@@ -765,11 +765,18 @@ export async function renderAppPageLifecycle(
     !options.isDraftMode &&
     !options.isForceDynamic &&
     !shouldBypassRscCacheForSkipTransport;
-  const shouldCompleteDynamicUsageBeforeResponse =
+  const isCdnManagedRuntime =
     options.isProduction &&
     options.isPrerender !== true &&
-    shouldCaptureRscForCacheMetadata &&
     !getCdnCacheAdapter().ownsBackgroundRevalidation;
+  const shouldCompleteDynamicUsageBeforeResponse =
+    isCdnManagedRuntime &&
+    options.isProgressiveActionRender !== true &&
+    (revalidateSeconds === null || revalidateSeconds > 0) &&
+    !options.isDraftMode &&
+    !options.isForceDynamic &&
+    !shouldBypassRscCacheForSkipTransport;
+  const shouldCaptureRscBytes = shouldCaptureRscForCacheMetadata && !isCdnManagedRuntime;
   const createBufferedRscStream = (close: boolean): ReadableStream<Uint8Array> =>
     new ReadableStream<Uint8Array>({
       start(controller) {
@@ -784,10 +791,10 @@ export async function renderAppPageLifecycle(
   const rscCapture = pprFallbackShellRsc
     ? {
         ssrStream: createBufferedRscStream(false),
-        ...(shouldCaptureRscForCacheMetadata ? { sideStream: createBufferedRscStream(true) } : {}),
+        ...(shouldCaptureRscBytes ? { sideStream: createBufferedRscStream(true) } : {}),
       }
-    : teeAppPageRscStreamForCapture(rscStream, shouldCaptureRscForCacheMetadata);
-  const rscForResponse = rscCapture.ssrStream;
+    : teeAppPageRscStreamForCapture(rscStream, shouldCaptureRscBytes);
+  let rscForResponse = rscCapture.ssrStream;
 
   // When the fused tee (#981) is active, the sideStream carries both the embed
   // transform AND the raw RSC byte accumulation. For RSC requests, we consume
@@ -802,9 +809,13 @@ export async function renderAppPageLifecycle(
   if (options.isRscRequest) {
     let requestCacheLifeForPrerender: AppPageRequestCacheLife | null = null;
     let dynamicUsageCheckComplete = false;
-    if (shouldWaitForAllReady || shouldCompleteDynamicUsageBeforeResponse) {
+    if (shouldWaitForAllReady) {
       await settleCapturedRscRenderForCacheMetadata(capturedRscDataRef.value);
-      dynamicUsageCheckComplete = shouldCompleteDynamicUsageBeforeResponse;
+    }
+    if (shouldCompleteDynamicUsageBeforeResponse) {
+      const verification = await verifyCdnCacheCandidateStream(rscForResponse);
+      rscForResponse = verification.stream;
+      dynamicUsageCheckComplete = verification.complete;
     }
     if (shouldReadRequestCacheLifeForPrerender) {
       requestCacheLifeForPrerender = readRequestCacheLifeForPrerender(options);
@@ -913,13 +924,15 @@ export async function renderAppPageLifecycle(
       mountedSlotsHeader: options.mountedSlotsHeader,
       omitPendingDynamicCacheState: options.omitPendingDynamicCacheState,
       renderMode: options.renderMode,
-      preserveClientResponseHeaders: rscResponsePolicy.cacheState !== "MISS",
+      preserveClientResponseHeaders:
+        !isCdnManagedRuntime && rscResponsePolicy.cacheState !== "MISS",
       expireSeconds,
       revalidateSeconds: resolveAppPageCacheWriteRevalidateSeconds({
         isDynamicError: options.isDynamicError,
         isForceStatic: options.isForceStatic,
         revalidateSeconds,
       }),
+      skipCacheWrite: isCdnManagedRuntime,
       waitUntil(promise) {
         options.waitUntil?.(promise);
       },
@@ -1095,14 +1108,17 @@ export async function renderAppPageLifecycle(
   if (shouldCompleteDynamicUsageBeforeResponse && !dynamicUsedDuringRender) {
     // A CDN must decide from the response headers whether to cache the body,
     // unlike the origin cache which can wait for the stream to drain before
-    // committing it. Buffer only CDN-managed cache candidates so late request
-    // APIs can still demote them; known-dynamic and origin-managed responses
-    // keep their normal streaming path.
-    const bufferedHtml = await readStreamAsText(safeHtmlStream);
-    safeHtmlStream = new Response(bufferedHtml).body!;
-    dynamicUsedDuringRender = dynamicUsedBeforeContextCleanup || options.consumeDynamicUsage();
-    dynamicUsedDuringHtmlRender = dynamicUsedDuringRender;
-    dynamicUsageCheckComplete = true;
+    // committing it. Inspect CDN-managed candidates within strict time/size
+    // bounds so late request APIs can still demote quick responses. Candidates
+    // that exceed either bound resume streaming as no-store; known-dynamic and
+    // origin-managed responses keep their normal streaming path.
+    const verification = await verifyCdnCacheCandidateStream(safeHtmlStream);
+    safeHtmlStream = verification.stream;
+    if (verification.complete) {
+      dynamicUsedDuringRender = dynamicUsedBeforeContextCleanup || options.consumeDynamicUsage();
+      dynamicUsedDuringHtmlRender = dynamicUsedDuringRender;
+      dynamicUsageCheckComplete = true;
+    }
   }
 
   const htmlResponsePolicy = resolveAppPageHtmlResponsePolicy({
@@ -1220,6 +1236,7 @@ export async function renderAppPageLifecycle(
         isForceStatic: options.isForceStatic,
         revalidateSeconds,
       }),
+      skipCacheWrite: isCdnManagedRuntime,
       waitUntil(cachePromise) {
         options.waitUntil?.(cachePromise);
       },

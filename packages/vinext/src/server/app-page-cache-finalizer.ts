@@ -54,6 +54,7 @@ type FinalizeAppPageHtmlCacheResponseOptions = {
   preserveClientResponseHeaders?: boolean;
   expireSeconds?: number;
   revalidateSeconds: number | null;
+  skipCacheWrite?: boolean;
   waitUntil?: (promise: Promise<void>) => void;
 };
 
@@ -77,6 +78,7 @@ type ScheduleAppPageRscCacheWriteOptions = {
   preserveClientResponseHeaders?: boolean;
   expireSeconds?: number;
   revalidateSeconds: number | null;
+  skipCacheWrite?: boolean;
   waitUntil?: (promise: Promise<void>) => void;
 };
 
@@ -131,6 +133,21 @@ export function finalizeAppPageHtmlCacheResponse(
 ): Response {
   if (!response.body) {
     return response;
+  }
+
+  if (options.skipCacheWrite) {
+    const clientHeaders = new Headers(response.headers);
+    if (options.preserveClientResponseHeaders !== true) {
+      applyPendingDynamicCdnHeaders(clientHeaders, options.getPageTags(), {
+        dynamicUsageCheckComplete: options.dynamicUsageCheckComplete,
+        omitCacheState: options.omitPendingDynamicCacheState === true,
+      });
+    }
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: clientHeaders,
+    });
   }
 
   const [streamForClient, streamForCache] = response.body.tee();
@@ -233,8 +250,8 @@ export function finalizeAppPageRscCacheResponse(
   response: Response,
   options: ScheduleAppPageRscCacheWriteOptions,
 ): Response {
-  const didSchedule = scheduleAppPageRscCacheWrite(options);
-  if (!didSchedule) {
+  const didSchedule = options.skipCacheWrite ? false : scheduleAppPageRscCacheWrite(options);
+  if (!didSchedule && !options.skipCacheWrite) {
     return response;
   }
 
