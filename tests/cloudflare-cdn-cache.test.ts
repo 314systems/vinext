@@ -1,8 +1,8 @@
 /**
  * CloudflareCdnCacheAdapter tests.
  *
- * Covers the edge-managed adapter backed by the Workers Cache (ctx.cache):
- *  - get null / set no-op / ownsBackgroundRevalidation false
+ * Covers the two-stage adapter backed by the data cache + Workers Cache:
+ *  - get/set delegate admission artifacts to the data cache
  *  - buildResponseHeaders emits a cacheable Cache-Control + Cache-Tag
  *  - revalidateTag purges via ctx.cache.purge({ tags })
  *  - getCdnCacheAdapter() only selects the Cloudflare adapter when it is
@@ -15,12 +15,19 @@ import {
   setCdnCacheAdapter,
   DefaultCdnCacheAdapter,
 } from "../packages/vinext/src/shims/cdn-cache.js";
+import {
+  MemoryCacheHandler,
+  setDataCacheHandler,
+  type CacheHandler,
+} from "../packages/vinext/src/shims/cache-handler.js";
+import { buildPagesCacheValue } from "../packages/vinext/src/server/isr-cache.js";
 import { runWithExecutionContext } from "../packages/vinext/src/shims/request-context.js";
 
 const CDN_KEY = Symbol.for("vinext.cdnCacheAdapter");
 
 function resetActiveAdapter(): void {
   delete (globalThis as Record<PropertyKey, unknown>)[CDN_KEY];
+  setDataCacheHandler(new MemoryCacheHandler());
 }
 
 beforeEach(resetActiveAdapter);
@@ -31,17 +38,23 @@ afterEach(resetActiveAdapter);
 describe("CloudflareCdnCacheAdapter", () => {
   const adapter = new CloudflareCdnCacheAdapter();
 
-  it("does not own background revalidation (the edge re-requests origin)", () => {
-    expect(adapter.pageCacheMode).toBe("edge");
-    expect(adapter.ownsBackgroundRevalidation).toBe(false);
+  it("uses two-stage admission and regenerates its origin admission artifact", () => {
+    expect(adapter.pageCacheMode).toBe("hybrid");
+    expect(adapter.ownsBackgroundRevalidation).toBe(true);
   });
 
-  it("get returns null so the origin always renders fresh", async () => {
-    expect(await adapter.get()).toBeNull();
-  });
+  it("delegates get and set to the active data cache for admission", async () => {
+    const get = vi.fn(async () => null);
+    const set = vi.fn(async () => {});
+    const dataCache: CacheHandler = { get, set, async revalidateTag() {} };
+    setDataCacheHandler(dataCache);
 
-  it("set is a no-op (platform caches the response, not an origin store)", async () => {
-    await expect(adapter.set("k", null)).resolves.toBeUndefined();
+    const value = buildPagesCacheValue("<p>cached</p>", {});
+    await adapter.set("k", value, { tags: ["page"] });
+    await adapter.get("k", { kind: "PAGES" });
+
+    expect(set).toHaveBeenCalledWith("k", value, { tags: ["page"] });
+    expect(get).toHaveBeenCalledWith("k", { kind: "PAGES" });
   });
 
   it("carries SWR on CDN-Cache-Control (public + max-age) and revalidates the browser", () => {

@@ -20,7 +20,6 @@ import {
   type AppPageSpecialError,
   type LayoutClassificationOptions,
 } from "./app-page-execution.js";
-import { completeCdnCacheCandidateStream } from "./app-page-cdn-verification.js";
 import { probeAppPageBeforeRender } from "./app-page-probe.js";
 import {
   buildAppPageHtmlResponse,
@@ -758,14 +757,19 @@ export async function renderAppPageLifecycle(
   const shouldWaitForAllReady =
     options.isPrerender === true && options.isSpeculativePrerender !== true;
   const shouldReadRequestCacheLifeForPrerender = options.isPrerender === true;
+  const cdnCacheAdapter = getCdnCacheAdapter();
+  const needsOriginAdmissionForEdge =
+    options.isProduction &&
+    options.isPrerender !== true &&
+    cdnCacheAdapter.pageCacheMode === "hybrid";
   const shouldCaptureRscForCacheMetadata =
     options.isProgressiveActionRender !== true &&
     (options.isProduction || options.isPrerender === true) &&
-    (revalidateSeconds === null || (revalidateSeconds > 0 && revalidateSeconds !== Infinity)) &&
+    (revalidateSeconds === null ||
+      (revalidateSeconds > 0 && (revalidateSeconds !== Infinity || needsOriginAdmissionForEdge))) &&
     !options.isDraftMode &&
     !options.isForceDynamic &&
     !shouldBypassRscCacheForSkipTransport;
-  const cdnCacheAdapter = getCdnCacheAdapter();
   const usesResponseEdgeCache =
     options.isProduction &&
     options.isPrerender !== true &&
@@ -774,13 +778,6 @@ export async function renderAppPageLifecycle(
     options.isProduction &&
     options.isPrerender !== true &&
     cdnCacheAdapter.pageCacheMode === "edge";
-  const shouldCompleteDynamicUsageBeforeResponse =
-    usesResponseEdgeCache &&
-    options.isProgressiveActionRender !== true &&
-    (revalidateSeconds === null || revalidateSeconds > 0) &&
-    !options.isDraftMode &&
-    !options.isForceDynamic &&
-    !shouldBypassRscCacheForSkipTransport;
   const shouldCaptureRscBytes = shouldCaptureRscForCacheMetadata && !skipOriginCacheWrite;
   const createBufferedRscStream = (close: boolean): ReadableStream<Uint8Array> =>
     new ReadableStream<Uint8Array>({
@@ -799,7 +796,7 @@ export async function renderAppPageLifecycle(
         ...(shouldCaptureRscBytes ? { sideStream: createBufferedRscStream(true) } : {}),
       }
     : teeAppPageRscStreamForCapture(rscStream, shouldCaptureRscBytes);
-  let rscForResponse = rscCapture.ssrStream;
+  const rscForResponse = rscCapture.ssrStream;
 
   // When the fused tee (#981) is active, the sideStream carries both the embed
   // transform AND the raw RSC byte accumulation. For RSC requests, we consume
@@ -813,13 +810,8 @@ export async function renderAppPageLifecycle(
 
   if (options.isRscRequest) {
     let requestCacheLifeForPrerender: AppPageRequestCacheLife | null = null;
-    let dynamicUsageCheckComplete = false;
     if (shouldWaitForAllReady) {
       await settleCapturedRscRenderForCacheMetadata(capturedRscDataRef.value);
-    }
-    if (shouldCompleteDynamicUsageBeforeResponse && !(options.peekDynamicUsage?.() ?? false)) {
-      rscForResponse = await completeCdnCacheCandidateStream(rscForResponse);
-      dynamicUsageCheckComplete = true;
     }
     if (shouldReadRequestCacheLifeForPrerender) {
       requestCacheLifeForPrerender = readRequestCacheLifeForPrerender(options);
@@ -914,7 +906,6 @@ export async function renderAppPageLifecycle(
         });
       },
       dynamicUsedDuringBuild,
-      dynamicUsageCheckComplete,
       getPageTags() {
         return options.getPageTags();
       },
@@ -1101,31 +1092,12 @@ export async function renderAppPageLifecycle(
   // Clearing the context synchronously here would race those executions, causing
   // headers()/cookies() to see a null context on warm (module-cached) requests.
   // See: https://github.com/cloudflare/vinext/issues/660
-  let safeHtmlStream = deferUntilStreamConsumed(htmlStream, () => {
+  const safeHtmlStream = deferUntilStreamConsumed(htmlStream, () => {
     dynamicUsedBeforeContextCleanup =
       dynamicUsedBeforeContextCleanup || options.consumeDynamicUsage();
     dynamicUsedDuringHtmlRender = dynamicUsedBeforeContextCleanup;
     options.clearRequestContext();
   });
-
-  let dynamicUsageCheckComplete = false;
-  if (
-    shouldCompleteDynamicUsageBeforeResponse &&
-    !dynamicUsedDuringRender &&
-    !options.scriptNonce &&
-    !htmlRender.shellErrorRecovered
-  ) {
-    // A CDN must decide from the response headers whether to cache the body,
-    // unlike the origin cache which can wait for the stream to drain before
-    // committing it. Inspect CDN-managed candidates to completion so late
-    // request APIs can still demote the response deterministically.
-    // Responses already known to be private (dynamic, nonce-bearing, or
-    // recovered errors) and origin-managed responses keep streaming normally.
-    safeHtmlStream = await completeCdnCacheCandidateStream(safeHtmlStream);
-    dynamicUsedDuringRender = dynamicUsedBeforeContextCleanup || options.consumeDynamicUsage();
-    dynamicUsedDuringHtmlRender = dynamicUsedDuringRender;
-    dynamicUsageCheckComplete = true;
-  }
 
   const htmlResponsePolicy = resolveAppPageHtmlResponsePolicy({
     dynamicUsedDuringRender,
@@ -1197,7 +1169,6 @@ export async function renderAppPageLifecycle(
       capturedRscDataPromise: capturedRscDataRef.value,
       cleanPathname: options.cleanPathname,
       consumeDynamicUsage: options.consumeDynamicUsage,
-      dynamicUsageCheckComplete,
       consumeRenderObservationState: options.consumeRenderObservationState,
       createHtmlRenderObservation(input) {
         return createAppPageRenderObservation({

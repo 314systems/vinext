@@ -860,7 +860,7 @@ describe("app page render lifecycle", () => {
     );
   });
 
-  it("retains origin writes for a hybrid edge adapter that does not own revalidation", async () => {
+  it("streams a hybrid cache miss privately while admitting it to the origin cache", async () => {
     const hybrid = new HybridCdnCacheAdapter();
     setCdnCacheAdapter(hybrid);
     const common = createCommonOptions();
@@ -874,7 +874,7 @@ describe("app page render lifecycle", () => {
       });
 
       expect(response.headers.get("cache-control")).toBe("no-store");
-      expect(response.headers.get("cdn-cache-control")).toBe("s-maxage=30, stale-while-revalidate");
+      expect(response.headers.get("cdn-cache-control")).toBeNull();
       await expect(response.text()).resolves.toBe("<html>page</html>");
 
       expect(common.waitUntilPromises).toHaveLength(1);
@@ -888,6 +888,42 @@ describe("app page render lifecycle", () => {
         tags: ["_N_T_/posts/post"],
       });
     } finally {
+      setCdnCacheAdapter(new DefaultCdnCacheAdapter());
+    }
+  });
+
+  it("keeps a failed hybrid stream private and does not admit a partial artifact", async () => {
+    const hybrid = new HybridCdnCacheAdapter();
+    setCdnCacheAdapter(hybrid);
+    const common = createCommonOptions();
+    const failure = new Error("stream failed during admission");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      const response = await renderAppPageLifecycle({
+        ...common.options,
+        isProduction: true,
+        isrSet: persistIsrEntry,
+        loadSsrHandler: async () => ({
+          async handleSsr() {
+            return new ReadableStream<Uint8Array>({
+              pull(controller) {
+                controller.error(failure);
+              },
+            });
+          },
+        }),
+        revalidateSeconds: 30,
+      });
+
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("cdn-cache-control")).toBeNull();
+      await expect(response.text()).rejects.toBe(failure);
+      await Promise.all(common.waitUntilPromises);
+      expect(hybrid.writes).toHaveLength(0);
+      expect(consoleError).toHaveBeenCalledWith("[vinext] ISR cache write error:", failure);
+    } finally {
+      consoleError.mockRestore();
       setCdnCacheAdapter(new DefaultCdnCacheAdapter());
     }
   });

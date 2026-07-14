@@ -133,22 +133,22 @@ describe("App Router production responses with a CDN-managed cache", () => {
     expect(first.headers.get("cache-control")).toMatch(/no-store/);
   });
 
-  it("still lets the edge cache a deferred response that remains static", async () => {
+  it("admits a deferred static response before promoting it to the edge", async () => {
     const edge = createWorkersLikeEdge(handler);
 
     const first = await edge.fetch(new Request("https://example.com/static"));
     expect(await first.text()).toContain("io-");
-    expect(first.headers.get("cdn-cache-control")).toMatch(/public, max-age=60/);
+    expect(first.headers.get("cdn-cache-control")).toBeNull();
+    expect(first.headers.get("cache-control")).toMatch(/no-store/);
 
     const second = await edge.fetch(new Request("https://example.com/static"));
     expect(await second.text()).toContain("io-");
-    expect(edge.originRequests).toBe(1);
+    expect(second.headers.get("cdn-cache-control")).toMatch(/public, max-age=60/);
+    await edge.fetch(new Request("https://example.com/static"));
+    expect(edge.originRequests).toBe(2);
   });
 
-  it("edge-caches slow static HTML and RSC responses after deterministic completion", async () => {
-    // Next.js static generation fully materializes the response before cache
-    // metadata is committed; elapsed render time must not change cacheability.
-    // https://github.com/vercel/next.js/blob/ee6e79b1792a4d401ddf2480f40a83549fe8e722/packages/next/src/server/app-render/app-render.tsx#L2514-L2521
+  it("admits slow static HTML and RSC responses without elapsed-time cutoffs", async () => {
     const rscEdge = createWorkersLikeEdge(handler);
     const rscRequest = () =>
       new Request("https://example.com/slow-static.rsc", {
@@ -158,16 +158,20 @@ describe("App Router production responses with a CDN-managed cache", () => {
     const firstRsc = await rscEdge.fetch(rscRequest());
     expect(performance.now() - rscStartedAt).toBeGreaterThanOrEqual(500);
     expect(await firstRsc.text()).toContain("io-");
-    expect(firstRsc.headers.get("cdn-cache-control")).toMatch(/public, max-age=60/);
+    expect(firstRsc.headers.get("cdn-cache-control")).toBeNull();
+    const admittedRsc = await rscEdge.fetch(rscRequest());
+    expect(admittedRsc.headers.get("cdn-cache-control")).toMatch(/public, max-age=60/);
     await rscEdge.fetch(rscRequest());
-    expect(rscEdge.originRequests).toBe(1);
+    expect(rscEdge.originRequests).toBe(2);
 
     const htmlEdge = createWorkersLikeEdge(handler);
     const firstHtml = await htmlEdge.fetch(new Request("https://example.com/slow-static"));
     expect(await firstHtml.text()).toContain("io-");
-    expect(firstHtml.headers.get("cdn-cache-control")).toMatch(/public, max-age=60/);
+    expect(firstHtml.headers.get("cdn-cache-control")).toBeNull();
+    const admittedHtml = await htmlEdge.fetch(new Request("https://example.com/slow-static"));
+    expect(admittedHtml.headers.get("cdn-cache-control")).toMatch(/public, max-age=60/);
     await htmlEdge.fetch(new Request("https://example.com/slow-static"));
-    expect(htmlEdge.originRequests).toBe(1);
+    expect(htmlEdge.originRequests).toBe(2);
   });
 
   it("does not share a deferred personalized RSC response", async () => {
@@ -194,13 +198,15 @@ describe("App Router production responses with a CDN-managed cache", () => {
     expect(first.headers.get("cache-control")).toMatch(/no-store/);
   });
 
-  it("edge-caches revalidate=false HTML and RSC responses", async () => {
+  it("admits revalidate=false HTML and RSC responses before edge caching", async () => {
     const htmlEdge = createWorkersLikeEdge(handler);
     const firstHtml = await htmlEdge.fetch(new Request("https://example.com/revalidate-false"));
     expect(await firstHtml.text()).toContain("io-");
-    expect(firstHtml.headers.get("cdn-cache-control")).toMatch(/public, max-age=31536000/);
+    expect(firstHtml.headers.get("cdn-cache-control")).toBeNull();
+    const admittedHtml = await htmlEdge.fetch(new Request("https://example.com/revalidate-false"));
+    expect(admittedHtml.headers.get("cdn-cache-control")).toMatch(/public, max-age=60/);
     await htmlEdge.fetch(new Request("https://example.com/revalidate-false"));
-    expect(htmlEdge.originRequests).toBe(1);
+    expect(htmlEdge.originRequests).toBe(2);
 
     const rscEdge = createWorkersLikeEdge(handler);
     const rscRequest = () =>
@@ -209,22 +215,26 @@ describe("App Router production responses with a CDN-managed cache", () => {
       });
     const firstRsc = await rscEdge.fetch(rscRequest());
     expect(await firstRsc.text()).toContain("io-");
-    expect(firstRsc.headers.get("cdn-cache-control")).toMatch(/public, max-age=31536000/);
+    // The HTML admission writes the paired RSC artifact, so this request can
+    // promote it directly to the edge without another private render.
+    expect(firstRsc.headers.get("cdn-cache-control")).toMatch(/public, max-age=60/);
     await rscEdge.fetch(rscRequest());
     expect(rscEdge.originRequests).toBe(1);
   });
 
-  it("waits for late dynamic usage before returning no-store", async () => {
-    const startedAt = performance.now();
-    const response = await handler(
-      new Request("https://example.com/slow", {
-        headers: { cookie: "session=slow-user" },
-      }),
-      {},
-    );
-    const responseCreatedAfter = performance.now() - startedAt;
+  it("streams before late dynamic usage and keeps the fresh response private", async () => {
+    const response = await Promise.race([
+      handler(
+        new Request("https://example.com/slow", {
+          headers: { cookie: "session=slow-user" },
+        }),
+        {},
+      ),
+      new Promise<never>((_resolve, reject) =>
+        setTimeout(() => reject(new Error("handler waited for the deferred render")), 500),
+      ),
+    ]);
 
-    expect(responseCreatedAfter).toBeGreaterThanOrEqual(500);
     expect(response.headers.get("cdn-cache-control")).toBeNull();
     expect(response.headers.get("cache-control")).toMatch(/no-store/);
     expect(await response.text()).toContain("slow-user");
@@ -246,13 +256,15 @@ describe("App Router production responses with a CDN-managed cache", () => {
     await response.body?.cancel();
   });
 
-  it("edge-caches a static response larger than the former verifier limit", async () => {
+  it("admits a large static response without a payload-size cutoff", async () => {
     const edge = createWorkersLikeEdge(handler);
     const first = await edge.fetch(new Request("https://example.com/large"));
 
-    expect(first.headers.get("cdn-cache-control")).toMatch(/public, max-age=60/);
+    expect(first.headers.get("cdn-cache-control")).toBeNull();
     expect((await first.text()).length).toBeGreaterThan(1024 * 1024);
+    const admitted = await edge.fetch(new Request("https://example.com/large"));
+    expect(admitted.headers.get("cdn-cache-control")).toMatch(/public, max-age=60/);
     await edge.fetch(new Request("https://example.com/large"));
-    expect(edge.originRequests).toBe(1);
+    expect(edge.originRequests).toBe(2);
   });
 });
