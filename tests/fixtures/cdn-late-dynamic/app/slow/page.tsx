@@ -4,7 +4,7 @@ import { cookies } from "next/headers";
 export const revalidate = 60;
 
 async function SlowContent() {
-  await fetch(`${process.env.TEST_CDN_LATE_DYNAMIC_IO_URL}?delay=750`, {
+  await fetch(`${process.env.TEST_CDN_LATE_DYNAMIC_IO_URL}?delay=750&kind=dynamic`, {
     next: { revalidate: 60 },
   });
   const session = (await cookies()).get("session")?.value ?? "anonymous";

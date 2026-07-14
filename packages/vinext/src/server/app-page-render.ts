@@ -20,7 +20,7 @@ import {
   type AppPageSpecialError,
   type LayoutClassificationOptions,
 } from "./app-page-execution.js";
-import { verifyCdnCacheCandidateStream } from "./app-page-cdn-verification.js";
+import { completeCdnCacheCandidateStream } from "./app-page-cdn-verification.js";
 import { probeAppPageBeforeRender } from "./app-page-probe.js";
 import {
   buildAppPageHtmlResponse,
@@ -817,10 +817,9 @@ export async function renderAppPageLifecycle(
     if (shouldWaitForAllReady) {
       await settleCapturedRscRenderForCacheMetadata(capturedRscDataRef.value);
     }
-    if (shouldCompleteDynamicUsageBeforeResponse) {
-      const verification = await verifyCdnCacheCandidateStream(rscForResponse);
-      rscForResponse = verification.stream;
-      dynamicUsageCheckComplete = verification.complete;
+    if (shouldCompleteDynamicUsageBeforeResponse && !(options.peekDynamicUsage?.() ?? false)) {
+      rscForResponse = await completeCdnCacheCandidateStream(rscForResponse);
+      dynamicUsageCheckComplete = true;
     }
     if (shouldReadRequestCacheLifeForPrerender) {
       requestCacheLifeForPrerender = readRequestCacheLifeForPrerender(options);
@@ -1118,18 +1117,14 @@ export async function renderAppPageLifecycle(
   ) {
     // A CDN must decide from the response headers whether to cache the body,
     // unlike the origin cache which can wait for the stream to drain before
-    // committing it. Inspect CDN-managed candidates within strict time/size
-    // bounds so late request APIs can still demote quick responses. Candidates
-    // that exceed either bound resume streaming as no-store. Responses already
-    // known to be private (dynamic, nonce-bearing, or recovered errors) and
-    // origin-managed responses keep their normal streaming path.
-    const verification = await verifyCdnCacheCandidateStream(safeHtmlStream);
-    safeHtmlStream = verification.stream;
-    if (verification.complete) {
-      dynamicUsedDuringRender = dynamicUsedBeforeContextCleanup || options.consumeDynamicUsage();
-      dynamicUsedDuringHtmlRender = dynamicUsedDuringRender;
-      dynamicUsageCheckComplete = true;
-    }
+    // committing it. Inspect CDN-managed candidates to completion so late
+    // request APIs can still demote the response deterministically.
+    // Responses already known to be private (dynamic, nonce-bearing, or
+    // recovered errors) and origin-managed responses keep streaming normally.
+    safeHtmlStream = await completeCdnCacheCandidateStream(safeHtmlStream);
+    dynamicUsedDuringRender = dynamicUsedBeforeContextCleanup || options.consumeDynamicUsage();
+    dynamicUsedDuringHtmlRender = dynamicUsedDuringRender;
+    dynamicUsageCheckComplete = true;
   }
 
   const htmlResponsePolicy = resolveAppPageHtmlResponsePolicy({

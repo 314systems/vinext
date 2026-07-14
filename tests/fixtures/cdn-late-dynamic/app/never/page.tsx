@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 
-export const revalidate = 60;
+export const dynamic = "force-dynamic";
 
 async function NeverSettles() {
   await new Promise<never>(() => {});
