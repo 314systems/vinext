@@ -1110,12 +1110,18 @@ export async function renderAppPageLifecycle(
   });
 
   let dynamicUsageCheckComplete = false;
-  if (shouldCompleteDynamicUsageBeforeResponse && !dynamicUsedDuringRender) {
+  if (
+    shouldCompleteDynamicUsageBeforeResponse &&
+    !dynamicUsedDuringRender &&
+    !options.scriptNonce &&
+    !htmlRender.shellErrorRecovered
+  ) {
     // A CDN must decide from the response headers whether to cache the body,
     // unlike the origin cache which can wait for the stream to drain before
     // committing it. Inspect CDN-managed candidates within strict time/size
     // bounds so late request APIs can still demote quick responses. Candidates
-    // that exceed either bound resume streaming as no-store; known-dynamic and
+    // that exceed either bound resume streaming as no-store. Responses already
+    // known to be private (dynamic, nonce-bearing, or recovered errors) and
     // origin-managed responses keep their normal streaming path.
     const verification = await verifyCdnCacheCandidateStream(safeHtmlStream);
     safeHtmlStream = verification.stream;

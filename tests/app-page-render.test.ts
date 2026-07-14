@@ -361,8 +361,9 @@ describe("SSR shell error recovery", () => {
   it("returns an uncached 500 response for a recovered dynamic shell error", async () => {
     setCdnCacheAdapter(new CloudflareCdnCacheAdapter());
     const common = createCommonOptions();
+    const releaseHtml = createDeferred();
     try {
-      const response = await renderAppPageLifecycle({
+      const responsePromise = renderAppPageLifecycle({
         ...common.options,
         isProduction: true,
         middlewareContext: {
@@ -378,7 +379,14 @@ describe("SSR shell error recovery", () => {
         loadSsrHandler: async () => ({
           async handleSsr() {
             return {
-              htmlStream: createStream(['<html id="__next_error__"></html>']),
+              htmlStream: new ReadableStream<Uint8Array>({
+                async pull(controller) {
+                  controller.enqueue(new TextEncoder().encode('<html id="__next_error__">'));
+                  await releaseHtml.promise;
+                  controller.enqueue(new TextEncoder().encode("</html>"));
+                  controller.close();
+                },
+              }),
               metadataReady: Promise.resolve(),
               capturedRscData: null,
               shellErrorRecovered: true,
@@ -386,6 +394,16 @@ describe("SSR shell error recovery", () => {
           },
         }),
       });
+
+      const timeout = Symbol("timeout");
+      const responseBeforeRelease = await Promise.race([
+        responsePromise,
+        new Promise<typeof timeout>((resolve) => setTimeout(() => resolve(timeout), 50)),
+      ]);
+      releaseHtml.resolve();
+      const response = await responsePromise;
+
+      expect(responseBeforeRelease).not.toBe(timeout);
 
       expect(response.status).toBe(500);
       expect(response.headers.get("cache-control")).toBe(
@@ -397,6 +415,7 @@ describe("SSR shell error recovery", () => {
       await expect(response.text()).resolves.toContain("__next_error__");
       expect(common.isrSet).not.toHaveBeenCalled();
     } finally {
+      releaseHtml.resolve();
       setCdnCacheAdapter(new DefaultCdnCacheAdapter());
     }
   });
@@ -1296,21 +1315,50 @@ describe("app page render lifecycle", () => {
     expect(common.isrSet).not.toHaveBeenCalled();
   });
 
-  it("disables HTML ISR caching when the response carries a script nonce", async () => {
+  it("keeps nonce-bearing no-store HTML responses streaming", async () => {
+    setCdnCacheAdapter(new CloudflareCdnCacheAdapter());
     const common = createCommonOptions();
+    const releaseHtml = createDeferred();
 
-    const response = await renderAppPageLifecycle({
-      ...common.options,
-      isProduction: true,
-      revalidateSeconds: 30,
-      scriptNonce: "vinext-test-nonce",
-    });
+    try {
+      const responsePromise = renderAppPageLifecycle({
+        ...common.options,
+        isProduction: true,
+        loadSsrHandler: async () => ({
+          async handleSsr() {
+            return new ReadableStream<Uint8Array>({
+              async pull(controller) {
+                controller.enqueue(new TextEncoder().encode("<html>part1"));
+                await releaseHtml.promise;
+                controller.enqueue(new TextEncoder().encode("part2</html>"));
+                controller.close();
+              },
+            });
+          },
+        }),
+        revalidateSeconds: 30,
+        scriptNonce: "vinext-test-nonce",
+      });
 
-    expect(response.headers.get("cache-control")).toBe("no-store, must-revalidate");
-    expect(response.headers.get("x-vinext-cache")).toBeNull();
-    await expect(response.text()).resolves.toBe("<html>page</html>");
-    expect(common.waitUntilPromises).toHaveLength(0);
-    expect(common.isrSet).not.toHaveBeenCalled();
+      const timeout = Symbol("timeout");
+      const responseBeforeRelease = await Promise.race([
+        responsePromise,
+        new Promise<typeof timeout>((resolve) => setTimeout(() => resolve(timeout), 50)),
+      ]);
+      releaseHtml.resolve();
+      const response = await responsePromise;
+
+      expect(responseBeforeRelease).not.toBe(timeout);
+
+      expect(response.headers.get("cache-control")).toBe("no-store, must-revalidate");
+      expect(response.headers.get("x-vinext-cache")).toBeNull();
+      await expect(response.text()).resolves.toBe("<html>part1part2</html>");
+      expect(common.waitUntilPromises).toHaveLength(0);
+      expect(common.isrSet).not.toHaveBeenCalled();
+    } finally {
+      releaseHtml.resolve();
+      setCdnCacheAdapter(new DefaultCdnCacheAdapter());
+    }
   });
 
   it("emits the dynamic stale time header on RSC responses during dynamic renders", async () => {
