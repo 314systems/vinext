@@ -76,6 +76,7 @@ type NavigateEvent = {
 };
 
 const HAS_PAGES_ROUTER = process.env.__VINEXT_HAS_PAGES_ROUTER !== "false";
+const HAS_CLIENT_REWRITES = process.env.__VINEXT_HAS_CLIENT_REWRITES !== "false";
 
 export type LinkProps<_RouteInferType = unknown> = {
   href: string | UrlObject;
@@ -147,6 +148,13 @@ export function useLinkStatus(): LinkStatusContextValue {
   return useContext(LinkStatusContext);
 }
 
+let linkPrefetchNavigationEpoch = 0;
+
+function notifyLinkNavigationStartAndCancelPrefetchSetup(): void {
+  linkPrefetchNavigationEpoch += 1;
+  notifyLinkNavigationStart();
+}
+
 // Register the link-status reset hook on the navigation runtime as soon as this
 // module evaluates on the client. `navigateClientSide` calls it at the start of
 // every App Router navigation (including router.push and shallow routing), so a
@@ -155,7 +163,7 @@ export function useLinkStatus(): LinkStatusContextValue {
 // it can be unit-tested without rendering a <Link>.
 if (typeof window !== "undefined") {
   registerNavigationRuntimeFunctions({
-    notifyLinkNavigationStart,
+    notifyLinkNavigationStart: notifyLinkNavigationStartAndCancelPrefetchSetup,
   });
 }
 
@@ -424,6 +432,7 @@ function prefetchUrl(
   locale?: string | false,
 ): void {
   if (typeof window === "undefined") return;
+  const navigationEpoch = linkPrefetchNavigationEpoch;
 
   const prefetchHref = getLinkPrefetchHref({
     href,
@@ -469,15 +478,21 @@ function prefetchUrl(
             APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
           },
           headersModule,
-          { resolveHybridClientRewriteHref, resolveHybridClientRouteOwner },
+          hybridRouteOwner,
         ] = await Promise.all([
           import("./navigation.js"),
           import("../server/app-elements.js"),
           import("../server/app-rsc-cache-busting.js"),
           import("../server/app-rsc-render-mode.js"),
           import("../server/headers.js"),
-          import("./internal/hybrid-client-route-owner.js"),
+          HAS_PAGES_ROUTER || HAS_CLIENT_REWRITES
+            ? import("./internal/hybrid-client-route-owner.js")
+            : null,
         ]);
+        // A pointer-intent prefetch and its click navigation can start in the
+        // same event turn. If navigation won the module-loading race, do not
+        // begin a second request after it consumes an equivalent cached route.
+        if (navigationEpoch !== linkPrefetchNavigationEpoch) return;
         const {
           getPrefetchInterceptionContext,
           getPrefetchCache,
@@ -503,11 +518,15 @@ function prefetchUrl(
         // stream is never consumed (the click path now hard-navigates to
         // Pages) and would also race the request the browser will issue on
         // the actual navigation.
-        const hybridOwner = resolveHybridClientRouteOwner(prefetchHref, __basePath);
+        const hybridOwner = HAS_PAGES_ROUTER
+          ? hybridRouteOwner!.resolveHybridClientRouteOwner(prefetchHref, __basePath)
+          : null;
         if (hybridOwner === "pages" || hybridOwner === "document") {
           return;
         }
-        const rewrittenPrefetchHref = resolveHybridClientRewriteHref(fullHref, __basePath);
+        const rewrittenPrefetchHref = HAS_CLIENT_REWRITES
+          ? hybridRouteOwner!.resolveHybridClientRewriteHref(fullHref, __basePath)
+          : null;
         const prefetchPolicyHref = rewrittenPrefetchHref ?? prefetchHref;
         const autoPrefetch =
           mode === "auto"

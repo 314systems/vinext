@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
+  getPagesRouteParams,
+  matchesPagesStaticPath,
   renderPagesIsrHtml,
   resolvePagesPageData,
   type ResolvePagesPageDataOptions,
@@ -248,6 +250,45 @@ describe("pages page data", () => {
     );
 
     expect(result).toEqual({ kind: "notFound" });
+  });
+
+  // Ported from Next.js: test/e2e/prerender.test.ts
+  // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/prerender.test.ts
+  it("matches encoded data request paths against string getStaticPaths entries", async () => {
+    const result = await resolvePagesPageData(
+      createOptions({
+        isDataReq: true,
+        pageModule: {
+          async getStaticPaths() {
+            return {
+              fallback: false,
+              paths: ["/posts/[second]"],
+            };
+          },
+          async getStaticProps({ params }) {
+            return { props: { slug: params?.slug } };
+          },
+        },
+        params: { slug: "[second]" },
+        query: { slug: "[second]" },
+        route: { isDynamic: true },
+        routeUrl: "/posts/%5Bsecond%5D",
+      }),
+    );
+
+    expect(result).toMatchObject({
+      kind: "render",
+      pageProps: { slug: "[second]" },
+    });
+
+    expect(
+      matchesPagesStaticPath(
+        "/docs/a/b",
+        { slug: "a/b" },
+        getPagesRouteParams("/docs/[slug]"),
+        "/docs/a%2Fb",
+      ),
+    ).toBe(false);
   });
 
   it("renders unlisted fallback false paths in preview mode without caching them", async () => {
@@ -1799,6 +1840,30 @@ describe("pages page data", () => {
     expect(result.response.headers.get("x-nextjs-deployment-id")).toBe("test-deploy-abc");
     const body = (await result.response.json()) as { pageProps: Record<string, unknown> };
     expect(body.pageProps.__N_REDIRECT).toBe("/new-page");
+  });
+
+  it("rejects dangerous redirect schemes before emitting a data envelope", async () => {
+    const result = await resolvePagesPageData(
+      createOptions({
+        isDataReq: true,
+        deploymentId: "test-deploy-abc",
+        pageModule: {
+          async getServerSideProps() {
+            return {
+              redirect: { destination: "javascript:globalThis.compromised=true", permanent: false },
+            };
+          },
+        },
+      }),
+    );
+
+    expect(result.kind).toBe("response");
+    if (result.kind !== "response") throw new Error("expected response");
+    expect(result.response.status).toBe(500);
+    expect(result.response.headers.get("location")).toBeNull();
+    expect(result.response.headers.get("cache-control")).toContain("no-store");
+    expect(result.response.headers.get("x-nextjs-deployment-id")).toBe("test-deploy-abc");
+    expect(await result.response.text()).not.toContain("javascript:");
   });
 
   it("omits x-nextjs-deployment-id on redirect/notFound data responses when deploymentId is not set", async () => {

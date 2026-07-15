@@ -20,7 +20,17 @@ import {
   VINEXT_PRERENDER_SECRET_HEADER,
 } from "../utils/protocol-headers.js";
 import { buildRequestHeadersFromMiddlewareResponse } from "../utils/middleware-request-headers.js";
-import { parseCookieHeader } from "../utils/parse-cookie.js";
+import { analyzeRegexSafety } from "../utils/regex-safety.js";
+import { requestContextFromRequest, type RequestContext } from "./request-context.js";
+import { isExternalUrl } from "../utils/external-url.js";
+
+export {
+  normalizeHost,
+  parseCookies,
+  requestContextFromRequest,
+  type RequestContext,
+} from "./request-context.js";
+export { isExternalUrl } from "../utils/external-url.js";
 
 /**
  * Cache for compiled regex patterns in matchConfigPattern.
@@ -265,115 +275,16 @@ function stripHopByHopRequestHeaders(headers: Headers): void {
 /**
  * Detect regex patterns vulnerable to catastrophic backtracking (ReDoS).
  *
- * Uses a lightweight heuristic: scans the pattern string for nested quantifiers
- * (a quantifier applied to a group that itself contains a quantifier). This
- * catches the most common pathological patterns like `(a+)+`, `(.*)*`,
- * `([^/]+)+`, `(a|a+)+` without needing a full regex parser.
+ * Uses the same deterministic structural analysis as middleware matcher
+ * validation. Nested bounded repetition is accepted only when its repeated
+ * language has fixed width and unambiguous branches; a fixed outer count can
+ * otherwise still cause polynomially catastrophic backtracking on long near
+ * misses.
  *
  * Returns true if the pattern appears safe, false if it's potentially dangerous.
  */
-export function isSafeRegex(pattern: string): boolean {
-  // Track parenthesis nesting depth and whether we've seen a quantifier
-  // at each depth level.
-  const quantifierAtDepth: boolean[] = [];
-  let depth = 0;
-  let i = 0;
-
-  while (i < pattern.length) {
-    const ch = pattern[i];
-
-    // Skip escaped characters
-    if (ch === "\\") {
-      i += 2;
-      continue;
-    }
-
-    // Skip character classes [...] — quantifiers inside them are literal
-    if (ch === "[") {
-      i++;
-      while (i < pattern.length && pattern[i] !== "]") {
-        if (pattern[i] === "\\") i++; // skip escaped char in class
-        i++;
-      }
-      i++; // skip closing ]
-      continue;
-    }
-
-    if (ch === "(") {
-      depth++;
-      // Initialize: no quantifier seen yet at this new depth
-      if (quantifierAtDepth.length <= depth) {
-        quantifierAtDepth.push(false);
-      } else {
-        quantifierAtDepth[depth] = false;
-      }
-      i++;
-      continue;
-    }
-
-    if (ch === ")") {
-      const hadQuantifier = depth > 0 && quantifierAtDepth[depth];
-      if (depth > 0) depth--;
-
-      // Look ahead for a quantifier on this group: +, *, {n,m}
-      // Note: '?' after ')' means "zero or one" which does NOT cause catastrophic
-      // backtracking — it only allows 2 paths (match/skip), not exponential.
-      // Only unbounded repetition (+, *, {n,}) on a group with inner quantifiers is dangerous.
-      const next = pattern[i + 1];
-      if (next === "+" || next === "*" || next === "{") {
-        if (hadQuantifier) {
-          // Nested quantifier detected: quantifier on a group that contains a quantifier
-          return false;
-        }
-        // Mark the enclosing depth as having a quantifier
-        if (depth >= 0 && depth < quantifierAtDepth.length) {
-          quantifierAtDepth[depth] = true;
-        }
-      }
-      i++;
-      continue;
-    }
-
-    // Detect quantifiers: +, *, ?, {n,m}
-    // '?' is a quantifier (optional) unless it follows another quantifier (+, *, ?, })
-    // in which case it's a non-greedy modifier.
-    if (ch === "+" || ch === "*") {
-      if (depth > 0) {
-        quantifierAtDepth[depth] = true;
-      }
-      i++;
-      continue;
-    }
-
-    if (ch === "?") {
-      // '?' after +, *, ?, or } is a non-greedy modifier, not a quantifier
-      const prev = i > 0 ? pattern[i - 1] : "";
-      if (prev !== "+" && prev !== "*" && prev !== "?" && prev !== "}") {
-        if (depth > 0) {
-          quantifierAtDepth[depth] = true;
-        }
-      }
-      i++;
-      continue;
-    }
-
-    if (ch === "{") {
-      // Check if this is a quantifier {n}, {n,}, {n,m}
-      let j = i + 1;
-      while (j < pattern.length && /[\d,]/.test(pattern[j])) j++;
-      if (j < pattern.length && pattern[j] === "}" && j > i + 1) {
-        if (depth > 0) {
-          quantifierAtDepth[depth] = true;
-        }
-        i = j + 1;
-        continue;
-      }
-    }
-
-    i++;
-  }
-
-  return true;
+export function isSafeRegex(pattern: string, flags?: string): boolean {
+  return analyzeRegexSafety(pattern, { ignoreCase: flags?.includes("i") }) === null;
 }
 
 /**
@@ -383,11 +294,11 @@ export function isSafeRegex(pattern: string): boolean {
  * Logs a warning when a pattern is rejected so developers can fix their config.
  */
 export function safeRegExp(pattern: string, flags?: string): RegExp | null {
-  if (!isSafeRegex(pattern)) {
+  if (!isSafeRegex(pattern, flags)) {
     console.warn(
       `[vinext] Rejecting potentially unsafe regex pattern (ReDoS risk): ${pattern}\n` +
-        `  Patterns with nested quantifiers (e.g. (a+)+) can cause catastrophic backtracking.\n` +
-        `  Simplify the pattern to avoid nested repetition.`,
+        `  Nested or ambiguous repetition can cause catastrophic backtracking.\n` +
+        `  Simplify the pattern to make repeated matches fixed and unambiguous.`,
     );
     return null;
   }
@@ -472,17 +383,6 @@ export function escapeHeaderSource(source: string): string {
 }
 
 /**
- * Request context needed for evaluating has/missing conditions.
- * Callers extract the relevant parts from the incoming Request.
- */
-export type RequestContext = {
-  readonly headers: Headers;
-  readonly cookies: Record<string, string>;
-  readonly query: URLSearchParams;
-  readonly host: string;
-};
-
-/**
  * basePath gating state passed alongside the pathname to every matcher.
  *
  * Rewrites/redirects/headers run with default `basePath: true` semantics in
@@ -523,44 +423,6 @@ const _BASEPATH_DEFAULT: BasePathMatchState = { basePath: "", hadBasePath: true 
 function shouldEvaluateRule(ruleBasePath: false | undefined, state: BasePathMatchState): boolean {
   if (!state.basePath) return true;
   return ruleBasePath === false ? !state.hadBasePath : state.hadBasePath;
-}
-
-/**
- * Parse a Cookie header string into a key-value record.
- */
-export function parseCookies(cookieHeader: string | null): Record<string, string> {
-  return parseCookieHeader(cookieHeader);
-}
-
-/**
- * Build a RequestContext from a Web Request object.
- *
- * `cookies` and `query` are lazy memoized getters: they are consumed only by
- * `has`/`missing` condition evaluation (`checkHasConditions` /
- * `matchesRuleConditions`), and most apps configure no such conditions. The
- * cookie split and `searchParams` access are therefore deferred until first
- * read and computed at most once. Mirrors `headersContextFromRequest` in
- * `shims/headers.ts`.
- */
-export function requestContextFromRequest(request: Request): RequestContext {
-  const url = new URL(request.url);
-  let cookies: Record<string, string> | undefined;
-  let query: URLSearchParams | undefined;
-  return {
-    headers: request.headers,
-    get cookies() {
-      return (cookies ??= parseCookies(request.headers.get("cookie")));
-    },
-    get query() {
-      return (query ??= url.searchParams);
-    },
-    host: normalizeHost(request.headers.get("host"), url.hostname),
-  };
-}
-
-export function normalizeHost(hostHeader: string | null, fallbackHostname: string): string {
-  const host = hostHeader ?? fallbackHostname;
-  return host.split(":", 1)[0].toLowerCase();
 }
 
 /**
@@ -619,7 +481,9 @@ function _matchConditionValue(
   actualValue: string,
   expectedValue: string | undefined,
 ): Record<string, string> | null {
-  if (expectedValue === undefined) return _emptyParams();
+  // Next.js treats an omitted or empty condition value as a presence check.
+  // Its matchHas helper also requires the actual value to be non-empty.
+  if (!expectedValue) return actualValue ? _emptyParams() : null;
 
   const re = _cachedConditionRegex(expectedValue);
   if (re) {
@@ -658,9 +522,15 @@ function matchSingleCondition(
       return _matchConditionValue(cookieValue, condition.value);
     }
     case "query": {
-      const queryValue = ctx.query.get(condition.key);
-      if (queryValue === null) return null;
-      return _matchConditionValue(queryValue, condition.value);
+      const queryValues = ctx.query.getAll(condition.key);
+      if (queryValues.length === 0) return null;
+      // Next.js checks presence against the parsed value before selecting the
+      // last array element for a value regex. A duplicate key is represented
+      // as a truthy array even when its final value is empty.
+      if (!condition.value && queryValues.length > 1) return _emptyParams();
+      // Node parses duplicate query keys as an array and Next.js matchHas
+      // explicitly tests its final value (`value.slice(-1)[0]`).
+      return _matchConditionValue(queryValues[queryValues.length - 1], condition.value);
     }
     case "host": {
       if (condition.value !== undefined) return _matchConditionValue(ctx.host, condition.value);
@@ -1321,10 +1191,6 @@ export function sanitizeDestination(dest: string): string {
  * Detects any URL scheme (http:, https:, data:, javascript:, blob:, etc.)
  * per RFC 3986, plus protocol-relative URLs (//).
  */
-export function isExternalUrl(url: string): boolean {
-  return /^[a-z][a-z0-9+.-]*:/i.test(url) || url.startsWith("//");
-}
-
 /**
  * Merge the original request's query params into a config-redirect
  * destination, preserving them on the resulting `Location`.

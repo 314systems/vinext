@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -4877,6 +4878,169 @@ describe("next/server shim", () => {
     expect(ranAfterConnection).toBe(false);
   });
 
+  it("connection probes do not suspend sibling request work", async () => {
+    const { runWithConnectionProbe } = await import("../packages/vinext/src/shims/headers.js");
+    const { connection } = await import("../packages/vinext/src/shims/server.js");
+    const { createRequestContext, runWithRequestContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
+
+    await runWithRequestContext(createRequestContext(), async () => {
+      let markProbeStarted = () => {};
+      let releaseProbe = () => {};
+      const probeStarted = new Promise<void>((resolve) => {
+        markProbeStarted = resolve;
+      });
+      const holdProbe = new Promise<void>((resolve) => {
+        releaseProbe = resolve;
+      });
+      const probeResult = runWithConnectionProbe(async () => {
+        markProbeStarted();
+        await holdProbe;
+        return "completed";
+      });
+
+      await probeStarted;
+      const siblingResult = await Promise.race([
+        connection().then(() => "completed" as const),
+        new Promise<"suspended">((resolve) => setImmediate(() => resolve("suspended"))),
+      ]);
+      releaseProbe();
+
+      expect(siblingResult).toBe("completed");
+      await expect(probeResult).resolves.toEqual({ completed: true, result: "completed" });
+    });
+  });
+
+  it("connection probes release async work that outlives the probe scope", async () => {
+    const { consumeDynamicUsage, runWithConnectionProbe } =
+      await import("../packages/vinext/src/shims/headers.js");
+    const { connection } = await import("../packages/vinext/src/shims/server.js");
+    const { createRequestContext, runWithRequestContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
+
+    await runWithRequestContext(createRequestContext(), async () => {
+      let releaseLateWork = () => {};
+      const lateWorkGate = new Promise<void>((resolve) => {
+        releaseLateWork = resolve;
+      });
+      let lateConnection!: Promise<void>;
+
+      await expect(
+        runWithConnectionProbe(() => {
+          lateConnection = lateWorkGate.then(() => connection());
+          return "completed";
+        }),
+      ).resolves.toEqual({ completed: true, result: "completed" });
+
+      releaseLateWork();
+      const lateResult = await Promise.race([
+        lateConnection.then(() => "completed" as const),
+        new Promise<"suspended">((resolve) => setImmediate(() => resolve("suspended"))),
+      ]);
+
+      expect(lateResult).toBe("completed");
+      expect(consumeDynamicUsage()).toBe(true);
+    });
+  });
+
+  it("connection probes propagate invalid dynamic usage from late work", async () => {
+    const { cacheContextStorage } = await import("../packages/vinext/src/shims/cache-runtime.js");
+    const { consumeInvalidDynamicUsageError, runWithConnectionProbe } =
+      await import("../packages/vinext/src/shims/headers.js");
+    const { connection } = await import("../packages/vinext/src/shims/server.js");
+    const { createRequestContext, runWithRequestContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
+
+    await runWithRequestContext(createRequestContext(), async () => {
+      let releaseLateWork = () => {};
+      const lateWorkGate = new Promise<void>((resolve) => {
+        releaseLateWork = resolve;
+      });
+      let lateConnection!: Promise<void>;
+
+      await expect(
+        runWithConnectionProbe(() => {
+          lateConnection = lateWorkGate.then(() =>
+            cacheContextStorage.run(
+              {
+                tags: [],
+                lifeConfigs: [],
+                variant: "default",
+                hasExplicitRevalidate: false,
+                hasExplicitExpire: false,
+                dynamicNestedCacheError: undefined,
+              },
+              async () => {
+                try {
+                  await connection();
+                } catch {
+                  // Invalid request API usage must survive user try/catch.
+                }
+              },
+            ),
+          );
+          return "completed";
+        }),
+      ).resolves.toEqual({ completed: true, result: "completed" });
+
+      releaseLateWork();
+      await lateConnection;
+      expect(consumeInvalidDynamicUsageError()).toMatchObject({
+        message: expect.stringContaining('cannot be called inside "use cache"'),
+      });
+    });
+  });
+
+  it("nested connection probes release late inner work after the outer probe completes", async () => {
+    const { runWithConnectionProbe } = await import("../packages/vinext/src/shims/headers.js");
+    const { connection } = await import("../packages/vinext/src/shims/server.js");
+    const { createRequestContext, runWithRequestContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
+
+    await runWithRequestContext(createRequestContext(), async () => {
+      let releaseLateWork = () => {};
+      const lateWorkGate = new Promise<void>((resolve) => {
+        releaseLateWork = resolve;
+      });
+      let lateConnection!: Promise<void>;
+
+      await expect(
+        runWithConnectionProbe(async () => {
+          await expect(
+            runWithConnectionProbe(() => {
+              lateConnection = lateWorkGate.then(() => connection());
+              return "inner";
+            }),
+          ).resolves.toEqual({ completed: true, result: "inner" });
+          return "outer";
+        }),
+      ).resolves.toEqual({ completed: true, result: "outer" });
+
+      releaseLateWork();
+      const lateResult = await Promise.race([
+        lateConnection.then(() => "completed" as const),
+        new Promise<"suspended">((resolve) => setImmediate(() => resolve("suspended"))),
+      ]);
+
+      expect(lateResult).toBe("completed");
+    });
+  });
+
+  it("connection probes preserve dynamic usage on the parent request", async () => {
+    const { consumeDynamicUsage, runWithConnectionProbe } =
+      await import("../packages/vinext/src/shims/headers.js");
+    const { connection } = await import("../packages/vinext/src/shims/server.js");
+    const { createRequestContext, runWithRequestContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
+
+    await runWithRequestContext(createRequestContext(), async () => {
+      await expect(runWithConnectionProbe(() => connection())).resolves.toEqual({
+        completed: false,
+      });
+      expect(consumeDynamicUsage()).toBe(true);
+    });
+  });
+
   it("URLPattern is exported and available in Node 20+", async () => {
     const { URLPattern } = await import("../packages/vinext/src/shims/server.js");
     // Node 22+ has URLPattern globally; if available, test it works
@@ -6997,6 +7161,72 @@ describe("replyToCacheKey deterministic hashing", () => {
   });
 });
 
+describe("buildUseCacheKey logical handler keys", () => {
+  // Dynamic imports match this file's convention: shims are loaded inside each
+  // test to exercise per-test module state/loading boundaries.
+  it("builds keys from the function scope and serialized arguments", async () => {
+    const { buildUseCacheKey } = await import("../packages/vinext/src/shims/cache-runtime.js");
+    expect(buildUseCacheKey("mod#Comp", undefined)).toBe("use-cache:mod#Comp");
+    expect(buildUseCacheKey("mod#Comp", "dep-v1", '["a"]')).toBe(
+      'use-cache:build:dep-v1:mod#Comp:["a"]',
+    );
+  });
+
+  it("preserves long arguments verbatim for the selected cache handler", async () => {
+    const { buildUseCacheKey } = await import("../packages/vinext/src/shims/cache-runtime.js");
+    const longArgs = JSON.stringify([{ slug: "a".repeat(600) }]);
+    const key = buildUseCacheKey("mod#CachedRoute", "deploy-usecache-v1", longArgs);
+
+    expect(key).toBe(`use-cache:build:deploy-usecache-v1:mod#CachedRoute:${longArgs}`);
+    expect(key).not.toContain(":__hash:");
+  });
+});
+
+describe('"use cache" runtime — handler resilience', () => {
+  it("falls through to fresh execution when handler.get throws, preserving the function's notFound digest", async () => {
+    const { registerCachedFunction } =
+      await import("../packages/vinext/src/shims/cache-runtime.js");
+    const { setCacheHandler, getCacheHandler, MemoryCacheHandler } =
+      await import("../packages/vinext/src/shims/cache.js");
+
+    // A cache backend failure must NOT surface as the render result — it must
+    // fall through so the function runs and its own thrown control-flow signal
+    // (e.g. notFound()'s digest) reaches the boundary classifier as a 404.
+    class GetThrowingHandler extends MemoryCacheHandler {
+      async get(_key?: string, _ctx?: Record<string, unknown>): Promise<never> {
+        throw new Error("cache backend unavailable");
+      }
+    }
+
+    const original = getCacheHandler();
+    setCacheHandler(new GetThrowingHandler());
+    // The get-failure path logs a diagnostic; silence it for this expected case.
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      let calls = 0;
+      const cached = registerCachedFunction(async () => {
+        calls++;
+        return { ok: true };
+      }, "test:get-throws");
+      expect(await cached()).toEqual({ ok: true });
+      expect(calls).toBe(1);
+
+      const notFoundError = Object.assign(new Error("NEXT_HTTP_ERROR_FALLBACK;404"), {
+        digest: "NEXT_HTTP_ERROR_FALLBACK;404",
+      });
+      const cachedNotFound = registerCachedFunction(async () => {
+        throw notFoundError;
+      }, "test:get-throws-notfound");
+      await expect(cachedNotFound()).rejects.toMatchObject({
+        digest: "NEXT_HTTP_ERROR_FALLBACK;404",
+      });
+    } finally {
+      errorSpy.mockRestore();
+      setCacheHandler(original);
+    }
+  });
+});
+
 describe("middleware runner", () => {
   it("findMiddlewareFile finds middleware.ts at project root", async () => {
     const { findMiddlewareFile } = await import("../packages/vinext/src/server/middleware.js");
@@ -7408,6 +7638,59 @@ describe("middleware/proxy export validation", () => {
 // matchPattern / matchesMiddleware unit tests
 
 describe("middleware matcher patterns", () => {
+  it("matches Next.js 16.2.7 path-to-regexp tokens and compiled regexes", async () => {
+    const { compileMiddlewareMatcherPattern } =
+      await import("../packages/vinext/src/server/middleware-matcher-pattern.js");
+    const { parseMiddlewarePath } =
+      await import("../packages/vinext/src/server/middleware-path-to-regexp.js");
+    type Token = ReturnType<typeof parseMiddlewarePath>[number];
+    const nextPathToRegexp = createRequire(import.meta.url)(
+      "next/dist/compiled/path-to-regexp",
+    ) as {
+      parse(source: string): Token[];
+      tokensToRegexp(tokens: Token[]): RegExp;
+    };
+    const patterns = [
+      "/foo\\:bar",
+      "/(foo.*|bar)/:path*",
+      "/foo/:id(a\\)b)?",
+      "/:id((?:foo|bar)-\\d+)?",
+      "/docs/:lang(en|fr)*",
+      "/cdn/:path*(api|static)",
+      "/foo-:path*",
+      "/foo{/:id}?",
+      "/files/:name{.:ext}?",
+      "/foo{-:bar}+",
+      "/x/:id(a+(?:b)a+)",
+      "/archive/:date(\\d{4}(?:-\\d{2}){2})",
+    ];
+
+    for (const pattern of patterns) {
+      const nextTokens = nextPathToRegexp.parse(pattern);
+      expect(parseMiddlewarePath(pattern), pattern).toEqual(nextTokens);
+
+      let nextRegexp: RegExp;
+      try {
+        nextRegexp = nextPathToRegexp.tokensToRegexp(nextTokens);
+      } catch {
+        nextRegexp = nextPathToRegexp.tokensToRegexp(
+          nextTokens.map((token) =>
+            typeof token === "object" &&
+            (token.modifier === "*" || token.modifier === "+") &&
+            token.prefix === "" &&
+            token.suffix === ""
+              ? { ...token, prefix: "/" }
+              : token,
+          ),
+        );
+      }
+
+      const compiled = compileMiddlewareMatcherPattern(pattern);
+      expect(compiled.regexp?.source, pattern).toBe(nextRegexp.source);
+      expect(compiled.regexp?.flags, pattern).toBe(nextRegexp.flags);
+    }
+  });
+
   it("matchPattern: exact path match", async () => {
     const { matchPattern } = await import("../packages/vinext/src/server/middleware.js");
     expect(matchPattern("/about", "/about")).toBe(true);
@@ -7444,6 +7727,150 @@ describe("middleware matcher patterns", () => {
     expect(matchPattern("/de/about", "/:locale(en|es|fr)?/about")).toBe(false);
   });
 
+  it("matchPattern: accepts bounded nested repetition", async () => {
+    const { matchPattern } = await import("../packages/vinext/src/server/middleware.js");
+    // Mirrors Next.js/path-to-regexp: finite repetition inside a finite group
+    // is not an unbounded backtracking risk.
+    const matcher = "/archive/:date(\\d{4}(?:-\\d{2}){2})";
+    expect(matchPattern("/archive/2024-07-10", matcher)).toBe(true);
+    expect(matchPattern("/archive/2024-7-10", matcher)).toBe(false);
+    expect(matchPattern("/archive/2024-07-10-11", matcher)).toBe(false);
+  });
+
+  it("rejects prefix-ambiguous alternatives under repetition", async () => {
+    const { compileMiddlewareMatcherPattern } =
+      await import("../packages/vinext/src/server/middleware-matcher-pattern.js");
+
+    for (const matcher of [
+      "/:path((?:a|aa)+)",
+      "/:path((?:aa|a)*)",
+      "/:path((?:[a]|aa){1,})",
+      "/:path((?:a|aa){2})",
+      "/:path((?:a|A)+)",
+      "/:path((?:é|É)+)",
+    ]) {
+      expect(compileMiddlewareMatcherPattern(matcher), matcher).toMatchObject({
+        kind: "unsafe",
+        error: expect.stringContaining("ambiguous alternatives"),
+      });
+    }
+
+    expect(compileMiddlewareMatcherPattern("/:path((?:foo|bar)+)").regexp).toBeInstanceOf(RegExp);
+    expect(compileMiddlewareMatcherPattern("/:path((?:ab|ac)+)").regexp).toBeInstanceOf(RegExp);
+    expect(compileMiddlewareMatcherPattern("/:path((?:ab|ac){10})").regexp).toBeInstanceOf(RegExp);
+    // Non-Unicode ECMAScript ignore-case canonicalization deliberately does
+    // not fold a non-ASCII character to ASCII.
+    expect(compileMiddlewareMatcherPattern("/:path((?:k|K)+)").regexp).toBeInstanceOf(RegExp);
+  });
+
+  it("handles fixed-width nested repeats and simple class intersections", async () => {
+    const { compileMiddlewareMatcherPattern } =
+      await import("../packages/vinext/src/server/middleware-matcher-pattern.js");
+
+    for (const matcher of ["/codes/:value((?:[A-Z]{2})+)", "/mixed/:value((?:[a-z]|[0-9])+)"]) {
+      expect(compileMiddlewareMatcherPattern(matcher).regexp, matcher).toBeInstanceOf(RegExp);
+    }
+
+    for (const matcher of [
+      "/shorthand/:value((?:\\d|[a-z])+)",
+      "/bracket-shorthand/:value((?:[\\d]|[a-z])+)",
+      "/space-or-word/:value((?:\\s|[a-z])+)",
+      "/digit-or-not/:value((?:\\d|\\D)+)",
+      "/two-repeats/:value((?:a+)(?:a+))",
+      "/wrapped-two-repeats/:value((?:a+(?:))(?:a+(?:)))",
+      "/exact-one-two-repeats/:value((?:a+){1}(?:a+){1,1})",
+      "/disjoint-repeats/:value((?:a+)(?:b+)(?:a+))",
+      "/wrapped-disjoint-repeats/:value((?:a+(?:))(?:b+(?:))(?:a+(?:)))",
+      "/exact-one-disjoint-repeats/:value((?:(?:a+){1}){1,1}(?:b+){1}(?:(?:a+){1,1}){1})",
+    ]) {
+      expect(compileMiddlewareMatcherPattern(matcher).regexp, matcher).toBeInstanceOf(RegExp);
+    }
+
+    for (const matcher of [
+      "/:path((?:[a-z]|[A-Z])+)",
+      "/:path((?:[a-f]|[d-z])+)",
+      "/:path((?:[a-z]|m)+)",
+      "/:path((?:\\w|[a-z])+)",
+      "/:path((?:[\\w]|[A-Z])+)",
+      "/:path((?:\\D|[a-z])+)",
+    ]) {
+      expect(compileMiddlewareMatcherPattern(matcher), matcher).toMatchObject({
+        kind: "unsafe",
+        error: expect.stringContaining("ambiguous alternatives"),
+      });
+    }
+  });
+
+  it("rejects bounded sequence-level ambiguity within the analysis budget", async () => {
+    const { compileMiddlewareMatcherPattern } =
+      await import("../packages/vinext/src/server/middleware-matcher-pattern.js");
+    const expandingChoices = `/:path(${"(?:a|aa)".repeat(26)})`;
+
+    for (const count of [3, 6, 7, 8, 9, 10]) {
+      const adjacentRepetitions = `/:path(${"(?:a+)".repeat(count)})`;
+      expect(
+        compileMiddlewareMatcherPattern(adjacentRepetitions),
+        `${count} repeats`,
+      ).toMatchObject({
+        kind: "unsafe",
+        error: expect.stringContaining("overlapping sequential repetition"),
+      });
+    }
+    for (const count of [3, 6, 7, 8]) {
+      const wrappedRepetitions = `/:path(${"(?:a+(?:))".repeat(count)})`;
+      expect(
+        compileMiddlewareMatcherPattern(wrappedRepetitions),
+        `${count} wrapped repeats`,
+      ).toMatchObject({
+        kind: "unsafe",
+        error: expect.stringContaining("overlapping sequential repetition"),
+      });
+    }
+    for (const wrapper of ["(?:a+){1}", "(?:a+){1,1}", "(?:a+){1}?", "(?:(?:a+){1}){1,1}"]) {
+      const exactOneRepetitions = `/:path(${wrapper.repeat(6)})`;
+      expect(compileMiddlewareMatcherPattern(exactOneRepetitions), wrapper).toMatchObject({
+        kind: "unsafe",
+        error: expect.stringContaining("overlapping sequential repetition"),
+      });
+    }
+    expect(compileMiddlewareMatcherPattern(expandingChoices)).toMatchObject({
+      kind: "unsafe",
+      error: expect.stringContaining("ambiguous sequence expansion"),
+    });
+  });
+
+  // Ported from Next.js path-to-regexp matcher semantics:
+  // packages/next/src/lib/try-to-parse-path.ts
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/lib/try-to-parse-path.ts
+  it("matchPattern: unnamed regex groups compose with named params", async () => {
+    const { matchPattern } = await import("../packages/vinext/src/server/middleware.js");
+    const pattern = "/(admin|dashboard)/:path*";
+
+    expect(matchPattern("/admin", pattern)).toBe(true);
+    expect(matchPattern("/admin/secrets", pattern)).toBe(true);
+    expect(matchPattern("/dashboard/users/active", pattern)).toBe(true);
+    expect(matchPattern("/public", pattern)).toBe(false);
+  });
+
+  // path-to-regexp applies a modifier after a constraint to the entire
+  // slash-prefixed param and permits repeated constraint-matching segments.
+  it("matchPattern: constrained params repeat across path segments", async () => {
+    const { matchPattern } = await import("../packages/vinext/src/server/middleware.js");
+
+    const zeroOrMore = "/docs/:lang(en|fr)*";
+    expect(matchPattern("/docs", zeroOrMore)).toBe(true);
+    expect(matchPattern("/docs/en", zeroOrMore)).toBe(true);
+    expect(matchPattern("/docs/en/fr", zeroOrMore)).toBe(true);
+    expect(matchPattern("/docs/de", zeroOrMore)).toBe(false);
+    expect(matchPattern("/docs/en/de", zeroOrMore)).toBe(false);
+
+    const oneOrMore = "/docs/:lang(en|fr)+";
+    expect(matchPattern("/docs", oneOrMore)).toBe(false);
+    expect(matchPattern("/docs/en", oneOrMore)).toBe(true);
+    expect(matchPattern("/docs/en/fr", oneOrMore)).toBe(true);
+    expect(matchPattern("/docs/de", oneOrMore)).toBe(false);
+  });
+
   it("matchPattern: wildcard (:path*) matches zero or more segments", async () => {
     const { matchPattern } = await import("../packages/vinext/src/server/middleware.js");
     expect(matchPattern("/dashboard", "/dashboard/:path*")).toBe(true);
@@ -7452,19 +7879,46 @@ describe("middleware matcher patterns", () => {
     expect(matchPattern("/other", "/dashboard/:path*")).toBe(false);
   });
 
-  it("matchPattern: :param*(constraint) and :param+(constraint)", async () => {
+  it("matchPattern: a group after :param* is a separate suffix token", async () => {
     const { matchPattern } = await import("../packages/vinext/src/server/middleware.js");
-    // /:path*(api|static) — optional segment constrained to api or static
-    expect(matchPattern("/cdn", "/cdn/:path*(api|static)")).toBe(true);
-    expect(matchPattern("/cdn/api", "/cdn/:path*(api|static)")).toBe(true);
-    expect(matchPattern("/cdn/static", "/cdn/:path*(api|static)")).toBe(true);
+    // path-to-regexp parses this as a repeated `path` param followed by an
+    // unnamed `(api|static)` suffix. A constrained repeat is written with the
+    // modifier after the group: `:path(api|static)*`.
+    expect(matchPattern("/cdn", "/cdn/:path*(api|static)")).toBe(false);
+    expect(matchPattern("/cdnapi", "/cdn/:path*(api|static)")).toBe(true);
+    expect(matchPattern("/cdn/fooapi", "/cdn/:path*(api|static)")).toBe(true);
+    expect(matchPattern("/cdn/api", "/cdn/:path*(api|static)")).toBe(false);
     expect(matchPattern("/cdn/other", "/cdn/:path*(api|static)")).toBe(false);
 
-    // /:path+(api|static) — required segment constrained
+    // `+` requires the path token, so the adjacent zero-segment form differs.
     expect(matchPattern("/cdn", "/cdn/:path+(api|static)")).toBe(false);
-    expect(matchPattern("/cdn/api", "/cdn/:path+(api|static)")).toBe(true);
-    expect(matchPattern("/cdn/static", "/cdn/:path+(api|static)")).toBe(true);
+    expect(matchPattern("/cdnapi", "/cdn/:path+(api|static)")).toBe(false);
+    expect(matchPattern("/cdn/fooapi", "/cdn/:path+(api|static)")).toBe(true);
+    expect(matchPattern("/cdn/api", "/cdn/:path+(api|static)")).toBe(false);
     expect(matchPattern("/cdn/other", "/cdn/:path+(api|static)")).toBe(false);
+  });
+
+  it("matchPattern: preserves escaped and nested path-to-regexp syntax", async () => {
+    const { matchPattern } = await import("../packages/vinext/src/server/middleware.js");
+
+    expect(matchPattern("/foo:bar", "/foo\\:bar")).toBe(true);
+    expect(matchPattern("/foo/bar", "/foo\\:bar")).toBe(false);
+
+    const mixed = "/(foo.*|bar)/:path*";
+    expect(matchPattern("/foo-value/child", mixed)).toBe(true);
+    expect(matchPattern("/bar", mixed)).toBe(true);
+    expect(matchPattern("/baz/child", mixed)).toBe(false);
+
+    const escapedClose = "/foo/:id(a\\)b)?";
+    expect(matchPattern("/foo", escapedClose)).toBe(true);
+    expect(matchPattern("/foo/a)b", escapedClose)).toBe(true);
+    expect(matchPattern("/foo/ab", escapedClose)).toBe(false);
+
+    const nested = "/:id((?:foo|bar)-\\d+)?";
+    expect(matchPattern("/", nested)).toBe(true);
+    expect(matchPattern("/foo-123", nested)).toBe(true);
+    expect(matchPattern("/bar-9", nested)).toBe(true);
+    expect(matchPattern("/baz-9", nested)).toBe(false);
   });
 
   it("matchPattern: one-or-more (:path+) requires at least one segment", async () => {
@@ -7652,14 +8106,14 @@ describe("middleware matcher patterns", () => {
     ).toBe(false);
   });
 
-  it("matchesMiddleware: rejects a single object matcher config", async () => {
+  it("matchesMiddleware: fails closed for a single object matcher config", async () => {
     const { matchesMiddleware } = await import("../packages/vinext/src/server/middleware.js");
     const matcher: any = {
       source: "/dashboard",
       has: [{ type: "header", key: "x-user-tier", value: "pro" }],
     };
 
-    expect(matchesMiddleware("/dashboard", matcher)).toBe(false);
+    expect(matchesMiddleware("/dashboard", matcher)).toBe(true);
     expect(
       matchesMiddleware(
         "/dashboard",
@@ -7668,15 +8122,15 @@ describe("middleware matcher patterns", () => {
           headers: { "x-user-tier": "pro" },
         }),
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
-  it("matchesMiddleware: rejects object matchers with unsupported fields", async () => {
+  it("matchesMiddleware: fails closed for object matchers with unsupported fields", async () => {
     const { matchesMiddleware } = await import("../packages/vinext/src/server/middleware.js");
     const matcher: any = [{ source: "/does-not-match", regexp: "^/dashboard(?:/.*)?$" }];
 
-    expect(matchesMiddleware("/dashboard/settings", matcher)).toBe(false);
-    expect(matchesMiddleware("/about", matcher)).toBe(false);
+    expect(matchesMiddleware("/dashboard/settings", matcher)).toBe(true);
+    expect(matchesMiddleware("/about", matcher)).toBe(true);
   });
 
   it("matchesMiddleware: matches default-locale and locale-prefixed paths unless locale is false", async () => {
@@ -7715,17 +8169,17 @@ describe("middleware matcher patterns", () => {
 
   it("matchPattern: fails closed for pathological ReDoS patterns", async () => {
     const { matchPattern } = await import("../packages/vinext/src/server/middleware.js");
-    // Pathological pattern: (a+)+ causes catastrophic backtracking
+    // Pathological constraint: (?:a+)+ causes catastrophic backtracking.
     // matchPattern must avoid evaluating it and run middleware instead of
     // silently bypassing a potentially security-sensitive request guard.
     // lgtm[js/redos] — deliberate pathological regex to test safeRegExp guard
-    expect(matchPattern("/aaaaaaaaaaaaaaaaaaaac", "(a+)+b")).toBe(true);
+    expect(matchPattern("/aaaaaaaaaaaaaaaaaaaac", "/:path((?:a+)+)")).toBe(true);
   });
 
-  it("matchPattern: does not run globally for malformed regex syntax", async () => {
+  it("matchPattern: fails closed for malformed matcher syntax", async () => {
     const { matchPattern } = await import("../packages/vinext/src/server/middleware.js");
 
-    expect(matchPattern("/public", "/admin(")).toBe(false);
+    expect(matchPattern("/public", "/admin(")).toBe(true);
     expect(matchPattern("/admin(", "/admin(")).toBe(true);
   });
 });
@@ -10741,6 +11195,14 @@ describe("isSafeRegex", () => {
     expect(isSafeRegex("(\\d{2,4})")).toBe(true);
   });
 
+  it("accepts only fixed-width nested bounded repetition", async () => {
+    const { isSafeRegex } = await import("../packages/vinext/src/config/config-matchers.js");
+    expect(isSafeRegex("\\d{4}(?:-\\d{2}){2}")).toBe(true);
+    expect(isSafeRegex("(?:a{2}){3}")).toBe(true);
+    expect(isSafeRegex("(?:a{1,2}){3}")).toBe(false);
+    expect(isSafeRegex("(?:a{1,2}){2,4}")).toBe(false);
+  });
+
   it("rejects nested quantifiers: (a+)+", async () => {
     const { isSafeRegex } = await import("../packages/vinext/src/config/config-matchers.js");
     expect(isSafeRegex("(a+)+")).toBe(false);
@@ -10771,11 +11233,20 @@ describe("isSafeRegex", () => {
     expect(isSafeRegex("(a+){2,}")).toBe(false);
   });
 
+  it("rejects bounded outer repetition around an unbounded inner atom", async () => {
+    const { isSafeRegex } = await import("../packages/vinext/src/config/config-matchers.js");
+    expect(isSafeRegex("(a+){2}")).toBe(false);
+    expect(isSafeRegex("(a+){2,4}")).toBe(false);
+    expect(isSafeRegex("(a+){10}")).toBe(false);
+  });
+
   it("accepts quantifier on group without inner quantifier", async () => {
     const { isSafeRegex } = await import("../packages/vinext/src/config/config-matchers.js");
     // (ab)+ is fine — no inner quantifier
     expect(isSafeRegex("(ab)+")).toBe(true);
     expect(isSafeRegex("(foo|bar)*")).toBe(true);
+    expect(isSafeRegex("(?:(?!\\.)[^/])+?")).toBe(true);
+    expect(isSafeRegex("[^/]+.*")).toBe(true);
   });
 
   it("treats escaped characters as safe", async () => {
@@ -10837,6 +11308,12 @@ describe("safeRegExp", () => {
     // lgtm[js/redos] — deliberate pathological regex to test safeRegExp guard
     const re = safeRegExp("(a+)+b");
     expect(re).toBeNull();
+  });
+
+  it("uses the final ignore-case semantics for ambiguous alternatives", async () => {
+    const { safeRegExp } = await import("../packages/vinext/src/config/config-matchers.js");
+    expect(safeRegExp("(?:a|A)+", "i")).toBeNull();
+    expect(safeRegExp("(?:ab|ac)+", "i")).toBeInstanceOf(RegExp);
   });
 
   it("returns null for invalid regex syntax", async () => {
@@ -11359,6 +11836,64 @@ describe("checkHasConditions", () => {
     expect(
       checkHasConditions([{ type: "query", key: "page", value: "^settings$" }], undefined, ctx),
     ).toBe(false);
+  });
+
+  // Ported from Next.js matchHas, which uses `value.slice(-1)[0]` when the
+  // parsed query contains duplicate keys.
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/shared/lib/router/utils/prepare-destination.ts
+  it("uses the last duplicate query value for has and missing", async () => {
+    const { checkHasConditions } = await import("../packages/vinext/src/config/config-matchers.js");
+    const ctx = {
+      ...makeCtx(),
+      query: new URLSearchParams("role=guest&role=admin&blocked=1&blocked=0"),
+    };
+
+    expect(
+      checkHasConditions([{ type: "query", key: "role", value: "admin" }], undefined, ctx),
+    ).toBe(true);
+    expect(
+      checkHasConditions([{ type: "query", key: "role", value: "guest" }], undefined, ctx),
+    ).toBe(false);
+    expect(
+      checkHasConditions(undefined, [{ type: "query", key: "blocked", value: "1" }], ctx),
+    ).toBe(true);
+    expect(
+      checkHasConditions(undefined, [{ type: "query", key: "blocked", value: "0" }], ctx),
+    ).toBe(false);
+  });
+
+  it('treats value: "" as presence-only for every condition type', async () => {
+    const { checkHasConditions } = await import("../packages/vinext/src/config/config-matchers.js");
+    const ctx = makeCtx({
+      headers: { "x-present": "yes" },
+      cookies: { session: "active" },
+      query: { preview: "enabled" },
+      host: "example.com",
+    });
+    const present = [
+      { type: "header" as const, key: "x-present", value: "" },
+      { type: "cookie" as const, key: "session", value: "" },
+      { type: "query" as const, key: "preview", value: "" },
+      { type: "host" as const, key: "", value: "" },
+    ];
+
+    expect(checkHasConditions(present, undefined, ctx)).toBe(true);
+    for (const condition of present) {
+      expect(checkHasConditions(undefined, [condition], ctx), condition.type).toBe(false);
+    }
+
+    expect(
+      checkHasConditions([{ type: "query", key: "empty", value: "" }], undefined, {
+        ...ctx,
+        query: new URLSearchParams("empty="),
+      }),
+    ).toBe(false);
+    expect(
+      checkHasConditions([{ type: "query", key: "present", value: "" }], undefined, {
+        ...ctx,
+        query: new URLSearchParams("present=yes&present="),
+      }),
+    ).toBe(true);
   });
 
   // -- host conditions --
@@ -14317,6 +14852,56 @@ describe("next/compat/router shim", () => {
     }
   });
 
+  it("removes basePath and locale from the client Pages navigation pathname", async () => {
+    // Next.js derives PathnameContext from the locale-free router.asPath:
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/shared/lib/router/adapters.tsx
+    const previousWindow = (globalThis as any).window;
+    const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
+    process.env.__NEXT_ROUTER_BASEPATH = "/app";
+    (globalThis as any).window = {
+      location: {
+        pathname: "/app/nl/dynamic/known",
+        search: "?utm=token",
+        hash: "",
+        href: "http://localhost/app/nl/dynamic/known?utm=token",
+        hostname: "localhost",
+        origin: "http://localhost",
+      },
+      history: { state: null, replaceState: vi.fn() },
+      addEventListener: vi.fn(),
+      __NEXT_DATA__: {
+        page: "/dynamic/[slug]",
+        query: { slug: "known" },
+        gsp: true,
+        isFallback: false,
+        __vinext: {
+          routeUrl: "/dynamic/known",
+        },
+      },
+      __VINEXT_LOCALE__: "nl",
+      __VINEXT_LOCALES__: ["en", "fr", "nl"],
+      __VINEXT_DEFAULT_LOCALE__: "en",
+      __VINEXT_PAGE_LOADERS__: {
+        "/dynamic/[slug]": async () => ({ default: () => null }),
+      },
+    };
+
+    try {
+      vi.resetModules();
+      const { getPagesNavigationContext } = await import("../packages/vinext/src/shims/router.js");
+      const context = getPagesNavigationContext();
+      expect(context?.pathname).toBe("/dynamic/known");
+      expect(context?.params).toBeNull();
+      expect(context?.searchParams.toString()).toBe("");
+    } finally {
+      vi.resetModules();
+      if (previousBasePath === undefined) delete process.env.__NEXT_ROUTER_BASEPATH;
+      else process.env.__NEXT_ROUTER_BASEPATH = previousBasePath;
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    }
+  });
+
   it("server Pages navigation context prefers the resolved URL over stale query params", async () => {
     const { getPagesNavigationContext, setSSRContext } =
       await import("../packages/vinext/src/shims/router.js");
@@ -15028,6 +15613,49 @@ describe("Pages Router concurrent navigation", () => {
 
     return { win, pushState, replaceState, render };
   }
+
+  it("uses serialized GSP query with the live asPath until Pages Router readiness", async () => {
+    const previousWindow = (globalThis as any).window;
+    const { win } = createNavWindow();
+    Object.assign(win.location, {
+      pathname: "/isr-query-hydration",
+      search: "?utm=token",
+      href: "http://localhost/isr-query-hydration?utm=token",
+    });
+    (win as any).__NEXT_DATA__ = {
+      page: "/isr-query-hydration",
+      query: {},
+      gsp: true,
+      isFallback: false,
+      props: { pageProps: {} },
+      __vinext: {
+        pageModuleUrl: "/@fs/pages/isr-query-hydration.js",
+        routeUrl: "/isr-query-hydration",
+      },
+    };
+    (globalThis as any).window = win;
+
+    try {
+      vi.resetModules();
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      expect(routerModule.default.isReady).toBe(false);
+      expect(routerModule.default.query).toEqual({});
+      expect(routerModule.default.asPath).toBe("/isr-query-hydration?utm=token");
+
+      expect(routerModule._markPagesRouterReady()).toBe(true);
+      (win as any).__NEXT_HYDRATED = true;
+      expect(routerModule.default.isReady).toBe(true);
+      expect(routerModule.default.query).toEqual({ utm: "token" });
+      expect(routerModule.default.asPath).toBe("/isr-query-hydration?utm=token");
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+    }
+  });
 
   it("exposes locale-free asPath for a localized browser URL", async () => {
     // Ported from Next.js: test/e2e/i18n-support-catchall/i18n-support-catchall.test.ts
@@ -18029,6 +18657,57 @@ describe("Pages Router concurrent navigation", () => {
         (globalThis as any).window = previousWindow;
       }
       vi.resetModules();
+    }
+  });
+});
+
+describe("notify-suppressed history writes", () => {
+  it("preserves native errors from URL-changing history writes", async () => {
+    const previousWindow = (globalThis as any).window;
+    const securityError = new DOMException(
+      "A history state object with URL 'https://example.com/' cannot be created in a " +
+        "document with origin 'https://example.com' and URL 'https://user:pass@example.com/'.",
+      "SecurityError",
+    );
+    const pushState = vi.fn(() => {
+      throw securityError;
+    });
+    const replaceState = vi.fn(() => {
+      throw securityError;
+    });
+    const win = {
+      location: {
+        pathname: "/",
+        search: "",
+        hash: "",
+        href: "https://example.com/",
+        hostname: "example.com",
+      },
+      history: { state: null, pushState: pushState as any, replaceState: replaceState as any },
+      addEventListener: vi.fn(),
+    };
+    (globalThis as any).window = win;
+    try {
+      vi.resetModules();
+      const { pushHistoryStateWithoutNotify, replaceHistoryStateWithoutNotify } =
+        await import("../packages/vinext/src/shims/navigation.js");
+
+      expect(() => replaceHistoryStateWithoutNotify({ __vinext_historyIndex: 0 }, "", "/")).toThrow(
+        securityError,
+      );
+      expect(() =>
+        pushHistoryStateWithoutNotify({ __vinext_historyIndex: 1 }, "", "/next"),
+      ).toThrow(securityError);
+
+      expect(replaceState).toHaveBeenCalledTimes(1);
+      expect(pushState).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
     }
   });
 });
