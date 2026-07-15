@@ -24,9 +24,9 @@ import {
 import { getRequestExecutionContext } from "vinext/shims/request-context";
 import { createRequestContext, runWithRequestContext } from "vinext/shims/unified-request-context";
 import {
-  createCollectedFetchTagsReader,
   ensureFetchPatch,
   type FetchCacheMode,
+  getCollectedFetchTags,
   peekDynamicFetchObservations,
   runWithFetchDedupe,
   setCurrentFetchCacheMode,
@@ -572,7 +572,6 @@ export async function dispatchAppPage<TRoute extends AppPageDispatchRoute>(
 async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
   options: DispatchAppPageOptions<TRoute>,
 ): Promise<Response> {
-  const readCollectedFetchTags = createCollectedFetchTagsReader();
   const route = options.route;
   const dynamicConfig = options.dynamicConfig;
   const currentRevalidateSeconds = options.revalidateSeconds;
@@ -1043,7 +1042,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     getFontStyles: options.getFontStyles,
     getNavigationContext: options.getNavigationContext,
     getPageTags() {
-      return buildAppPageTags(options.cleanPathname, readCollectedFetchTags(), route.routeSegments);
+      return buildAppPageTags(options.cleanPathname, getCollectedFetchTags(), route.routeSegments);
     },
     getRequestCacheLife() {
       return _consumeRequestScopedCacheLife();

@@ -678,19 +678,6 @@ export function getCollectedFetchTags(): string[] {
 }
 
 /**
- * Capture a reader for the current request's tag store.
- *
- * Cache finalizers may run from a platform `waitUntil()` continuation after
- * the request's AsyncLocalStorage scope is no longer active. Holding the state
- * object lets those continuations read tags discovered while a lazy RSC stream
- * was consumed without consulting whichever ALS scope happens to be current.
- */
-export function createCollectedFetchTagsReader(): () => string[] {
-  const state = _getState();
-  return () => [...state.currentRequestTags];
-}
-
-/**
  * Append cache tags to the current request's collected tags.
  *
  * Mirrors Next.js's `propagateCacheLifeAndTagsToRevalidateStore`: tags declared

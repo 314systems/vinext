@@ -10,6 +10,7 @@
 
 import { describe, it, expect, beforeEach, vi } from "vite-plus/test";
 import { KVCacheHandler } from "../packages/cloudflare/src/cache/kv-data-adapter.runtime.js";
+import { createKvKeySpace } from "../packages/cloudflare/src/cache/kv-key.js";
 import {
   revalidatePath,
   revalidateTag,
@@ -223,6 +224,15 @@ describe("KVCacheHandler", () => {
       expect(await freshHandler.get("tagged-with-long-tag")).not.toBeNull();
       expect(kv.get).toHaveBeenCalledWith(tagKey);
     });
+
+    it("keeps literal keys with the internal hash marker disjoint from hashed keys", () => {
+      const keySpace = createKvKeySpace(undefined);
+      const oversizedTagKey = keySpace.tagKey("é".repeat(256));
+      const literalTag = oversizedTagKey.slice("__tag:".length);
+
+      expect(literalTag).toMatch(/^__hash:[0-9a-f]{16}$/);
+      expect(keySpace.tagKey(literalTag)).not.toBe(oversizedTagKey);
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -305,13 +315,13 @@ describe("KVCacheHandler", () => {
             status: 200,
           },
           {
-            tags: [123, "", "valid", "valid", "bad\ntag", "bad:tag"],
+            tags: [123, "", "valid", "valid", "post:valid", "bad\ntag", "bad\\tag"],
           },
         ),
       );
 
       await expect(handler.get("mixed-tags")).resolves.toEqual(
-        expect.objectContaining({ tags: ["valid"] }),
+        expect.objectContaining({ tags: ["valid", "post:valid"] }),
       );
     });
 
@@ -633,6 +643,35 @@ describe("KVCacheHandler", () => {
   });
 
   describe("tag invalidation", () => {
+    it("round-trips and invalidates colon-delimited tags", async () => {
+      // Next.js accepts printable string tags (including `:`), and uses
+      // colon-delimited tags in its own App Router fixtures.
+      // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/ppr-root-param-rsc-fallback/app/%5Btenant%5D/samples/page.tsx
+      await handler.set(
+        "colon-tagged",
+        {
+          kind: "PAGES",
+          html: "<html></html>",
+          pageData: {},
+          headers: undefined,
+          status: 200,
+        },
+        {
+          revalidate: 60,
+          tags: ["post:hello"],
+        },
+      );
+
+      await expect(handler.get("colon-tagged")).resolves.toEqual(
+        expect.objectContaining({ tags: ["post:hello"] }),
+      );
+
+      await handler.revalidateTag("post:hello");
+
+      expect(store.get("__tag:post:hello")).toMatch(/^\d+$/);
+      await expect(handler.get("colon-tagged")).resolves.toBeNull();
+    });
+
     it("revalidateTag persists slash-based path invalidation markers", async () => {
       await handler.revalidateTag(["/revalidate-tag-test", "_N_T_/revalidate-tag-test"]);
 
@@ -713,15 +752,16 @@ describe("KVCacheHandler", () => {
 
       const result = await handler.get("fetch-entry", {
         kind: "FETCH",
-        softTags: ["_N_T_/posts/hello", "_N_T_/posts/hello", "bad:tag", ""],
+        softTags: ["_N_T_/posts/hello", "_N_T_/posts/hello", "post:hello", "bad\\tag", ""],
       });
 
       expect(result).not.toBeNull();
       expect(kv.get).toHaveBeenCalledWith("cache:fetch-entry");
       expect(kv.get).toHaveBeenCalledWith("__tag:_N_T_/posts/hello");
-      expect(kv.get).not.toHaveBeenCalledWith("__tag:bad:tag");
+      expect(kv.get).toHaveBeenCalledWith("__tag:post:hello");
+      expect(kv.get).not.toHaveBeenCalledWith("__tag:bad\\tag");
       expect(kv.get).not.toHaveBeenCalledWith("__tag:");
-      expect(kv.get).toHaveBeenCalledTimes(2);
+      expect(kv.get).toHaveBeenCalledTimes(3);
     });
   });
 

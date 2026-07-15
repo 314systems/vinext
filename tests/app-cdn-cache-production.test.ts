@@ -163,7 +163,7 @@ describe("App Router production responses with a CDN-managed cache", () => {
     expect(firstRsc.headers.get("cdn-cache-control")).toBeNull();
     const admittedRsc = await rscEdge.fetch(rscRequest());
     expect(admittedRsc.headers.get("cdn-cache-control")).toMatch(/public, max-age=60/);
-    expect(admittedRsc.headers.get("cache-tag")).toContain("slow-static");
+    expect(admittedRsc.headers.get("cache-tag")).toContain("post:slow-static");
     await rscEdge.fetch(rscRequest());
     expect(rscEdge.originRequests).toBe(2);
 

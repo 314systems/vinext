@@ -111,18 +111,15 @@ const MAX_TAG_LENGTH = 256;
 /** Matches a valid base64 string (standard alphabet with optional padding). */
 const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
 
-/**
- * Validate a cache tag. Returns null if invalid.
- * Note: `:` is rejected because TAG_PREFIX and ENTRY_PREFIX use `:` as a
- * separator — allowing `:` in user tags could cause ambiguous key lookups.
- */
+/** Validate a cache tag. Returns null if invalid. */
 function validateTag(tag: string): string | null {
   if (typeof tag !== "string" || tag.length === 0 || tag.length > MAX_TAG_LENGTH) return null;
-  // Block control characters and reserved separators used in our own key format.
+  // Block control characters and backslashes. Colons are valid tag content:
+  // tag keys are built from the entire logical tag and never parsed by separator.
   // Slash is allowed because revalidatePath() relies on pathname tags like
   // "/posts/hello" and "_N_T_/posts/hello".
   // oxlint-disable-next-line no-control-regex -- intentional: reject control chars in tags
-  if (/[\x00-\x1f\\:]/.test(tag)) return null;
+  if (/[\x00-\x1f\\]/.test(tag)) return null;
   return tag;
 }
 
