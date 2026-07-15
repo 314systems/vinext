@@ -43,6 +43,7 @@ vi.stubGlobal("fetch", fetchMock);
 const {
   withFetchCache,
   runWithFetchCache,
+  createCollectedFetchTagsReader,
   getCollectedFetchTags,
   setCurrentFetchCacheMode,
   setCurrentForceDynamicFetchDefault,
@@ -1904,6 +1905,24 @@ describe("fetch cache shim", () => {
     expect(tags2).toEqual(["request-2"]);
 
     // Re-install for afterEach
+    cleanup = withFetchCache();
+  });
+
+  it("keeps a captured tag reader bound to its request after the ALS scope exits", async () => {
+    cleanup?.();
+    cleanup = null;
+
+    const readTags = await runWithFetchCache(async () => {
+      const readCurrentRequestTags = createCollectedFetchTagsReader();
+      await fetch("https://api.example.com/rsc-stream", {
+        next: { revalidate: 60, tags: ["rsc-stream-tag"] },
+      });
+      return readCurrentRequestTags;
+    });
+
+    expect(getCollectedFetchTags()).toEqual([]);
+    expect(readTags()).toEqual(["rsc-stream-tag"]);
+
     cleanup = withFetchCache();
   });
 

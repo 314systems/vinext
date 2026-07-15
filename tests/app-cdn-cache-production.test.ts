@@ -149,6 +149,8 @@ describe("App Router production responses with a CDN-managed cache", () => {
   });
 
   it("admits slow static HTML and RSC responses without elapsed-time cutoffs", async () => {
+    // Ported from Next.js' tagged RSC revalidation coverage:
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/revalidatetag-rsc/revalidatetag-rsc.test.ts
     const rscEdge = createWorkersLikeEdge(handler);
     const rscRequest = () =>
       new Request("https://example.com/slow-static.rsc", {
@@ -161,6 +163,7 @@ describe("App Router production responses with a CDN-managed cache", () => {
     expect(firstRsc.headers.get("cdn-cache-control")).toBeNull();
     const admittedRsc = await rscEdge.fetch(rscRequest());
     expect(admittedRsc.headers.get("cdn-cache-control")).toMatch(/public, max-age=60/);
+    expect(admittedRsc.headers.get("cache-tag")).toContain("slow-static");
     await rscEdge.fetch(rscRequest());
     expect(rscEdge.originRequests).toBe(2);
 

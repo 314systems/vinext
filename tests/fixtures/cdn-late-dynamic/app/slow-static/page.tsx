@@ -4,7 +4,7 @@ export const revalidate = 60;
 
 async function SlowStaticContent() {
   const response = await fetch(`${process.env.TEST_CDN_LATE_DYNAMIC_IO_URL}?delay=750`, {
-    next: { revalidate: 60 },
+    next: { revalidate: 60, tags: ["slow-static"] },
   });
   return <p id="value">{await response.text()}</p>;
 }
