@@ -24,6 +24,7 @@ type BuildRouteHandlerCachedResponseOptions = {
   expireSeconds?: number;
   isHead: boolean;
   revalidateSeconds: number;
+  tags?: readonly string[];
 };
 
 type FinalizeRouteHandlerResponseOptions = {
@@ -90,8 +91,8 @@ export function buildRouteHandlerCachedResponse(
   }
   setCacheStateHeaders(headers, options.cacheState);
   // HIT/STALE served from the origin store: route the cache header through the
-  // CDN adapter (default: identical single Cache-Control). Edge adapters never
-  // reach this path because their get() returns null.
+  // CDN adapter (default: identical single Cache-Control). Hybrid adapters use
+  // this path to promote an admitted artifact to the response edge cache.
   const { cacheControl } = decideIsr({
     cacheState: options.cacheState,
     kind: "app-route",
@@ -99,7 +100,11 @@ export function buildRouteHandlerCachedResponse(
     expireSeconds: options.expireSeconds,
     cacheControlMeta: options.cacheControl,
   });
-  applyCdnResponseHeaders(headers, { cacheControl });
+  applyCdnResponseHeaders(headers, {
+    cacheControl,
+    cacheState: options.cacheState,
+    tags: options.tags,
+  });
 
   return new Response(options.isHead ? null : cachedValue.body, {
     status: cachedValue.status,

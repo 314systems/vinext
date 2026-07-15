@@ -70,6 +70,9 @@ const NO_STORE = "no-store";
  */
 const BROWSER_REVALIDATE = "public, max-age=0, must-revalidate";
 
+/** A stale origin artifact must be rechecked at the origin before edge reuse. */
+const STALE_EDGE_REVALIDATE = "public, max-age=0, must-revalidate";
+
 /**
  * A concrete stale window (1 year) substituted for a value-less
  * `stale-while-revalidate`. The framework emits a bare `stale-while-revalidate`
@@ -183,7 +186,10 @@ export class CloudflareCdnCacheAdapter implements CdnCacheAdapter {
     // is told to revalidate every reuse so it never serves a stale stored copy.
     const headers: CdnResponseHeaders = {
       "Cache-Control": BROWSER_REVALIDATE,
-      "CDN-Cache-Control": toEdgeCacheControl(input.cacheControl),
+      "CDN-Cache-Control":
+        input.cacheState === "STALE"
+          ? STALE_EDGE_REVALIDATE
+          : toEdgeCacheControl(input.cacheControl),
     };
 
     if (input.tags && input.tags.length > 0) {

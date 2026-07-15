@@ -91,6 +91,20 @@ describe("CloudflareCdnCacheAdapter", () => {
     expect(headers["CDN-Cache-Control"]).toBe("public, max-age=60");
   });
 
+  it("forces stale origin artifacts to revalidate at the edge", () => {
+    const headers = adapter.buildResponseHeaders({
+      cacheControl: "s-maxage=60, stale-while-revalidate=540",
+      cacheState: "STALE",
+      tags: ["_N_T_/blog", "posts"],
+    });
+
+    expect(headers).toEqual({
+      "Cache-Control": "public, max-age=0, must-revalidate",
+      "CDN-Cache-Control": "public, max-age=0, must-revalidate",
+      "Cache-Tag": "_N_T_/blog,posts",
+    });
+  });
+
   it("skips tags containing the comma separator or that are too long", () => {
     const headers = adapter.buildResponseHeaders({
       cacheControl: "s-maxage=60",

@@ -208,6 +208,27 @@ describe("KVCacheHandler", () => {
       expect(kv.delete).toHaveBeenCalledWith("cache:bad-tags");
     });
 
+    it("does not expose malformed persisted tags to response header builders", async () => {
+      store.set(
+        "cache:mixed-tags",
+        validEntry(
+          {
+            kind: "PAGES",
+            html: "<html></html>",
+            pageData: {},
+            status: 200,
+          },
+          {
+            tags: [123, "", "valid", "valid", "bad\ntag", "bad:tag"],
+          },
+        ),
+      );
+
+      await expect(handler.get("mixed-tags")).resolves.toEqual(
+        expect.objectContaining({ tags: ["valid"] }),
+      );
+    });
+
     it("rejects entry with invalid revalidateAt type", async () => {
       store.set(
         "cache:bad-reval",
@@ -441,6 +462,11 @@ describe("KVCacheHandler", () => {
         "_N_T_/revalidate-tag-test",
         "test-data",
       ]);
+      await expect(handler.get("rt-path-tags")).resolves.toEqual(
+        expect.objectContaining({
+          tags: ["/revalidate-tag-test", "_N_T_/revalidate-tag-test", "test-data"],
+        }),
+      );
     });
 
     it("serves stale within expire and returns a hard miss beyond expire", async () => {
@@ -467,6 +493,31 @@ describe("KVCacheHandler", () => {
       vi.setSystemTime(4_500);
       await expect(handler.get("expire-test")).resolves.toBeNull();
       expect(kv.delete).toHaveBeenCalledWith("cache:expire-test");
+    });
+
+    it("round-trips infinite cache-control metadata", async () => {
+      // Ported from Next.js:
+      // test/e2e/app-dir/use-cache-infinity-profile/use-cache-infinity-profile.test.ts
+      // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/use-cache-infinity-profile/use-cache-infinity-profile.test.ts
+      await handler.set(
+        "infinite-cache-life",
+        {
+          kind: "APP_PAGE",
+          html: "<html>cached forever</html>",
+          rscData: undefined,
+          headers: undefined,
+          postponed: undefined,
+          status: 200,
+        },
+        { cacheControl: { revalidate: Infinity, expire: Infinity } },
+      );
+
+      const result = await handler.get("infinite-cache-life");
+      expect(result?.cacheControl).toEqual({ revalidate: Infinity, expire: Infinity });
+      expect(result?.cacheState).toBeUndefined();
+      expect(result?.value).toEqual(
+        expect.objectContaining({ kind: "APP_PAGE", html: "<html>cached forever</html>" }),
+      );
     });
 
     it("serves stale when a shorter read-time revalidate has elapsed", async () => {

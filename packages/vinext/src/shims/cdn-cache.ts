@@ -63,6 +63,8 @@ export type CdnCacheableHeaderInput = {
    * framework to complete the dynamic check before response headers are sent.
    */
   pendingDynamicCheck?: boolean;
+  /** Origin artifact state, when headers are being built from a cache read. */
+  cacheState?: "HIT" | "STALE";
   /**
    * The cache tags associated with this page/route, already canonicalised
    * (e.g. via `encodeCacheTag`). Edge adapters use these to emit a tag header
