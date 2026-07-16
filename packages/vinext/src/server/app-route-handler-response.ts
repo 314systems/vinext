@@ -117,14 +117,17 @@ export function applyRouteHandlerRevalidateHeader(
   revalidateSeconds: number,
   expireSeconds?: number,
   tags?: readonly string[],
+  pendingDynamicCheck = false,
 ): void {
-  // Fresh (MISS) response: route through the CDN adapter so edge adapters emit
-  // CDN-Cache-Control + Cache-Tag while the default emits a single Cache-Control.
+  // Fresh (MISS) response: route through the CDN adapter. An edge adapter keeps
+  // a streaming candidate private while its cache clone drains; otherwise it
+  // emits CDN-Cache-Control + Cache-Tag and the default emits Cache-Control.
   // Uses buildAppRouteMissIsrCacheControl so the revalidate=0→NEVER and
   // Infinity→STATIC gates apply, and expireSeconds is used as the direct route
   // config ceiling (not a per-entry metadata fallback).
   applyCdnResponseHeaders(response.headers, {
     cacheControl: buildAppRouteMissIsrCacheControl(revalidateSeconds, expireSeconds),
+    pendingDynamicCheck,
     tags,
   });
 }
