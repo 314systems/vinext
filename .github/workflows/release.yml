@@ -37,6 +37,7 @@ jobs:
       # changesets/action to push the Version PR branch, tags, and releases.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          token: ${{ secrets.GH_ACCESS_TOKEN }}
           fetch-depth: 0 # full history + tags for the guard and contributor list
 
       - uses: ./.github/actions/setup
@@ -53,7 +54,7 @@ jobs:
           title: "chore: version packages"
           commit: "chore: version packages"
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           NPM_CONFIG_PROVENANCE: "true"
           NPM_CONFIG_REGISTRY: https://registry.npmjs.org
@@ -62,5 +63,5 @@ jobs:
         if: steps.changesets.outputs.published == 'true'
         run: node scripts/promote-github-prereleases.mts
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}
           PUBLISHED_PACKAGES: ${{ steps.changesets.outputs.published-packages }}
