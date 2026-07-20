@@ -54,7 +54,61 @@ type Options = {
   browserEnvironmentName: string;
 };
 
-const SERVER_FUNCTION_DIRECTIVE_MARKER = "/* __vite_rsc_server_function_directives__ */";
+const SERVER_FUNCTION_DIRECTIVE_MARKER = "/* __vinext_server_function_directives__ */";
+
+type ServerReferenceMetadata = RscPluginManager["serverReferenceMetaMap"][string];
+
+function mergeServerReferenceMetadata(
+  manager: RscPluginManager,
+  id: string,
+  referenceKey: string,
+  exportNames: Iterable<string>,
+): void {
+  const existing = manager.serverReferenceMetaMap[id];
+  manager.serverReferenceMetaMap[id] = {
+    importId: existing?.importId ?? id,
+    referenceKey: existing?.referenceKey ?? referenceKey,
+    exportNames: [...new Set([...(existing?.exportNames ?? []), ...exportNames])],
+  };
+}
+
+function removeOwnedServerReferenceMetadata(
+  manager: RscPluginManager,
+  ownedReferences: Map<string, ServerReferenceMetadata>,
+  id: string,
+): void {
+  const owned = ownedReferences.get(id);
+  if (!owned) return;
+  ownedReferences.delete(id);
+
+  const existing = manager.serverReferenceMetaMap[id];
+  if (!existing) return;
+
+  const ownedExportNames = new Set(owned.exportNames);
+  const exportNames = existing.exportNames.filter((name) => !ownedExportNames.has(name));
+  if (exportNames.length === 0) {
+    delete manager.serverReferenceMetaMap[id];
+  } else {
+    manager.serverReferenceMetaMap[id] = { ...existing, exportNames };
+  }
+}
+
+function setOwnedServerReferenceMetadata(
+  manager: RscPluginManager,
+  ownedReferences: Map<string, ServerReferenceMetadata>,
+  id: string,
+  referenceKey: string,
+  exportNames: Iterable<string>,
+): void {
+  removeOwnedServerReferenceMetadata(manager, ownedReferences, id);
+  const metadata = {
+    importId: id,
+    referenceKey,
+    exportNames: [...new Set(exportNames)],
+  };
+  ownedReferences.set(id, metadata);
+  mergeServerReferenceMetadata(manager, id, referenceKey, metadata.exportNames);
+}
 
 function resolvePluginRscModule(projectRoot: string, specifier: string): string {
   try {
@@ -197,7 +251,7 @@ export async function createServerFunctionDirectivePlugins(options: Options): Pr
     "@vitejs/plugin-rsc/transforms",
   );
   const rscRuntime = pathToFileURL(
-    resolvePluginRscModule(options.projectRoot, "@vitejs/plugin-rsc/react/rsc"),
+    resolvePluginRscModule(options.projectRoot, "@vitejs/plugin-rsc/react/rsc/server"),
   ).href;
   const browserRuntime = pathToFileURL(
     resolvePluginRscModule(options.projectRoot, "@vitejs/plugin-rsc/react/browser"),
@@ -214,6 +268,8 @@ export async function createServerFunctionDirectivePlugins(options: Options): Pr
   const transforms: RscTransforms = await import(pathToFileURL(transformsPath).href);
   const { getPluginApi } = rscModule;
   let manager: RscPluginManager | undefined;
+  const ownedReferences = new Map<string, ServerReferenceMetadata>();
+  const serverReferenceOwnership = new Map<string, boolean>();
 
   const transformPlugin: Plugin = {
     name: "vinext:server-function-directives",
@@ -232,12 +288,15 @@ export async function createServerFunctionDirectivePlugins(options: Options): Pr
             (!definition.filter || definition.filter(id)),
         );
         const isServer = this.environment.name === options.serverEnvironmentName;
-        if (active.length === 0) {
-          if (isServer && manager) delete manager.serverReferenceMetaMap[id];
-          return;
-        }
         if (!manager) {
           throw new Error("vinext: failed to access @vitejs/plugin-rsc through getPluginApi().");
+        }
+        if (active.length === 0) {
+          if (isServer) {
+            serverReferenceOwnership.set(id, false);
+            removeOwnedServerReferenceMetadata(manager, ownedReferences, id);
+          }
+          return;
         }
 
         let ast = await parseProgram(code);
@@ -288,11 +347,15 @@ export async function createServerFunctionDirectivePlugins(options: Options): Pr
               `$$ReactClient.createServerReference(${JSON.stringify(`${normalizedId}#${name}`)},$$ReactClient.callServer,undefined,${this.environment.mode === "dev" ? "$$ReactClient.findSourceMapURL" : "undefined"},${JSON.stringify(name)})`,
           });
           if (!result?.output.hasChanged()) return;
-          manager.serverReferenceMetaMap[id] = {
-            importId: id,
-            referenceKey: normalizedId,
-            exportNames: result.exportNames,
-          };
+          if (serverReferenceOwnership.get(id) !== false) {
+            setOwnedServerReferenceMetadata(
+              manager,
+              ownedReferences,
+              id,
+              normalizedId,
+              result.exportNames,
+            );
+          }
           result.output.prepend(
             `${SERVER_FUNCTION_DIRECTIVE_MARKER}\nimport * as $$ReactClient from ${JSON.stringify(this.environment.name === options.browserEnvironmentName ? browserRuntime : ssrRuntime)};\n`,
           );
@@ -404,16 +467,12 @@ export async function createServerFunctionDirectivePlugins(options: Options): Pr
           ast = await parseProgram(code);
         }
 
-        if (!useServerBoundary) {
-          if (exportNames.size === 0) {
-            delete manager.serverReferenceMetaMap[id];
-          } else {
-            manager.serverReferenceMetaMap[id] = {
-              importId: id,
-              referenceKey: normalizedId,
-              exportNames: [...exportNames],
-            };
-          }
+        if (!useServerBoundary && exportNames.size > 0) {
+          serverReferenceOwnership.set(id, true);
+          setOwnedServerReferenceMetadata(manager, ownedReferences, id, normalizedId, exportNames);
+        } else if (isServer) {
+          serverReferenceOwnership.set(id, false);
+          removeOwnedServerReferenceMetadata(manager, ownedReferences, id);
         }
 
         const imports = [
@@ -429,5 +488,17 @@ export async function createServerFunctionDirectivePlugins(options: Options): Pr
     },
   };
 
-  return [transformPlugin];
+  const metadataPlugin: Plugin = {
+    name: "vinext:server-function-directive-metadata",
+    transform: {
+      handler(_code, id) {
+        if (!manager) return;
+        const owned = ownedReferences.get(id);
+        if (!owned) return;
+        mergeServerReferenceMetadata(manager, id, owned.referenceKey, owned.exportNames);
+      },
+    },
+  };
+
+  return [transformPlugin, metadataPlugin];
 }

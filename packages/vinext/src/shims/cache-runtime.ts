@@ -170,7 +170,8 @@ type RscModule = {
   renderToReadableStream: (data: unknown, options?: object) => ReadableStream<Uint8Array>;
   createFromReadableStream: <T>(
     stream: ReadableStream<Uint8Array>,
-    options?: { serverReferences?: "resolve" | "preserve" },
+    options?: object,
+    extraOptions?: { preserveServerReferences?: boolean },
   ) => Promise<T>;
   encodeReply: (v: unknown[], options?: unknown) => Promise<string | FormData>;
   createTemporaryReferenceSet: () => unknown;
@@ -555,9 +556,11 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
           // RSC-serialized entry: base64 → bytes → stream → deserialize
           const bytes = base64ToUint8(existing.value.data.body);
           const stream = uint8ToStream(bytes);
-          const result = await rsc.createFromReadableStream<TResult>(stream, {
-            serverReferences: "preserve",
-          });
+          const result = await rsc.createFromReadableStream<TResult>(
+            stream,
+            {},
+            { preserveServerReferences: true },
+          );
           recordRequestScopedCacheControl(existing.cacheControl);
           return result;
         }
