@@ -34,7 +34,7 @@ export type ServerFunctionDirectiveContext = {
   meta?: ExportMeta;
 };
 
-export type ServerFunctionDirective = {
+type ServerFunctionDirective = {
   directive: string | RegExp;
   test?: (code: string) => boolean;
   filter?: (id: string) => boolean;
