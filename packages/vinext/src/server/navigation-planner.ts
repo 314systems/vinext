@@ -283,7 +283,7 @@ type VisitedResponseCacheCandidateDecision =
 type NavigationReuseCandidateAvailability = { status: "available" } | { status: "unavailable" };
 type OptimisticRouteShellCandidateAvailability =
   | { status: "available" }
-  | { status: "unavailable"; reason: "disabledByNavigationOptions" | "routeManifestMissing" };
+  | { status: "unavailable"; reason: "routeManifestMissing" };
 
 export type NavigationReuseFacts = {
   bypassNavigationCache: boolean;
@@ -294,12 +294,7 @@ export type NavigationReuseFacts = {
   visitedResponse: NavigationReuseCandidateAvailability;
 };
 
-type FreshFetchReason =
-  | "cacheBypassed"
-  | "cacheMiss"
-  | "disabledByNavigationOptions"
-  | "refresh"
-  | "routeManifestMissing";
+type FreshFetchReason = "cacheBypassed" | "cacheMiss" | "refresh" | "routeManifestMissing";
 
 export type NavigationReuseDecision =
   | { kind: "reuseVisitedResponse"; trace: NavigationTrace }

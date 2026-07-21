@@ -29,13 +29,13 @@ import {
   deletePrefetchResponseSnapshot,
   DYNAMIC_NAVIGATION_CACHE_TTL,
   PREFETCH_CACHE_TTL,
-  applyAppRouterScrollFallback,
   getClientNavigationRenderContext,
   getBfcacheIdMapContext,
   getMountedSlotsHeader,
   getPrefetchCache,
   hasPrefetchCacheEntryForNavigation,
   invalidatePrefetchCache,
+  navigateClientSide,
   preloadHybridClientRouteOwner,
   seedPrefetchResponseSnapshot,
   decodeRedirectError,
@@ -60,7 +60,6 @@ import {
   getNavigationRuntime,
   registerNavigationRuntimeBootstrap,
   registerNavigationRuntimeFunctions,
-  type NavigationRuntimeClientNavigate,
   type NavigationRuntimeNavigate,
   type NavigationRuntimeNavigateOptions,
   type NavigationRuntimeVisibleCommitMode,
@@ -70,9 +69,7 @@ import { retryScrollTo, scrollToHashTargetOnNextFrame } from "vinext/shims/hash-
 import { AppRouterScrollCommitProvider } from "vinext/shims/app-router-scroll";
 import {
   beginAppRouterScrollIntent,
-  clearAppRouterScrollIntent,
   consumeAppRouterScrollIntent,
-  getPendingAppRouterScrollIntent,
   type AppRouterScrollIntent,
 } from "vinext/shims/app-router-scroll-state";
 import { installWindowNext, setWindowNextInternalSourcePage } from "../client/window-next.js";
@@ -90,10 +87,7 @@ import {
   type NavigationPayloadOutcome,
   type PendingBrowserRouterState,
 } from "./app-browser-navigation-controller.js";
-import {
-  AppBrowserMpaNavigationScheduler,
-  hasPendingAppRouterPageRedirect,
-} from "./app-browser-mpa-navigation.js";
+import { AppBrowserMpaNavigationScheduler } from "./app-browser-mpa-navigation.js";
 import {
   resolveManifestNavigationInterceptionContext,
   resolveMiddlewareRewriteNavigationInterceptionContext,
@@ -164,7 +158,6 @@ import {
 import {
   clearAppNavigationFailureTarget,
   installAppNavigationFailureListeners,
-  stageAppNavigationFailureTarget,
 } from "../client/app-nav-failure-handler.js";
 import { createClientReuseManifestHeaderFromVisibleAppState } from "./app-browser-client-reuse-manifest.js";
 import {
@@ -1784,6 +1777,7 @@ function bootstrapHydration(
                 targetHref: url.href,
               })
             : null;
+        const forceAuthoritativeFlightRequest = options?.forceAuthoritativeFlightRequest === true;
         const shouldBypassNavigationCache =
           earlyIntentDecision?.kind === "flightNavigation" &&
           earlyIntentDecision.bypassNavigationCache;
@@ -1797,7 +1791,7 @@ function bootstrapHydration(
           mountedSlotsHeader,
         });
         const createNavigationRscRequestUrl = (href: string) =>
-          options?.disableOptimisticRouteShell
+          forceAuthoritativeFlightRequest
             ? createAuthoritativeRscRequestUrl(href, requestHeaders)
             : createRscRequestUrl(href, requestHeaders);
         const rscUrl = await createNavigationRscRequestUrl(url.pathname + url.search);
@@ -1853,9 +1847,8 @@ function bootstrapHydration(
         const reuseDecision = navigationPlanner.classifyNavigationReuse({
           bypassNavigationCache: shouldBypassNavigationCache,
           navigationKind,
-          optimisticRouteShell: options?.disableOptimisticRouteShell
-            ? { reason: "disabledByNavigationOptions", status: "unavailable" }
-            : routeManifest === null
+          optimisticRouteShell:
+            routeManifest === null
               ? { reason: "routeManifestMissing", status: "unavailable" }
               : { status: "available" },
           prefetch: hasPrefetchCandidate ? { status: "available" } : { status: "unavailable" },
@@ -1959,6 +1952,32 @@ function bootstrapHydration(
         let navResponseExpiresAt: number | undefined;
         let navResponseCacheUrl: string | null = null;
         let navResponseClassificationUrl: string | null | undefined;
+        let navigationResponsePromise: Promise<Response> | null = null;
+        const fetchNavigationResponse = (): Promise<Response> => {
+          if (navigationResponsePromise !== null) return navigationResponsePromise;
+
+          // Produce the client reuse manifest only when a real request is
+          // required. `prefetch={false}` starts that request before resolving an
+          // optimistic shell so the shell cannot delay the authoritative Flight
+          // request that the navigation is required to issue.
+          if (navigationKind === "navigate") {
+            const clientReuseManifestHeader =
+              createClientReuseManifestHeaderFromVisibleAppState(navigationInitiationState);
+            if (clientReuseManifestHeader !== null) {
+              requestHeaders.set(VINEXT_CLIENT_REUSE_MANIFEST_HEADER, clientReuseManifestHeader);
+            }
+          }
+          navigationResponsePromise = fetch(rscUrl, {
+            headers: requestHeaders,
+            credentials: "include",
+            signal: navigationAbortController.signal,
+          });
+          // The same promise is awaited below after the optimistic shell is
+          // staged. Attach a rejection observer now so a fast network failure
+          // cannot become temporarily unhandled while shell learning suspends.
+          void navigationResponsePromise.catch(() => {});
+          return navigationResponsePromise;
+        };
         let fallbackReuseDecision = reuseDecision;
         if (reuseDecision.kind === "consumePrefetch") {
           const prefetchedResponse = await consumePrefetchResponseForNavigation(
@@ -1997,9 +2016,8 @@ function bootstrapHydration(
             fallbackReuseDecision = navigationPlanner.classifyNavigationReuse({
               bypassNavigationCache: shouldBypassNavigationCache,
               navigationKind,
-              optimisticRouteShell: options?.disableOptimisticRouteShell
-                ? { reason: "disabledByNavigationOptions", status: "unavailable" }
-                : routeManifest === null
+              optimisticRouteShell:
+                routeManifest === null
                   ? { reason: "routeManifestMissing", status: "unavailable" }
                   : { status: "available" },
               prefetch: { status: "unavailable" },
@@ -2007,6 +2025,14 @@ function bootstrapHydration(
               visitedResponse: { status: "unavailable" },
             });
           }
+        }
+
+        if (
+          !navResponse &&
+          forceAuthoritativeFlightRequest &&
+          fallbackReuseDecision.kind === "attemptOptimisticRouteShell"
+        ) {
+          void fetchNavigationResponse();
         }
 
         // The optimistic shell is intentionally not gated by
@@ -2074,22 +2100,7 @@ function bootstrapHydration(
         }
 
         if (!navResponse) {
-          // Produce the client reuse manifest only now that prefetch/optimistic
-          // paths did not satisfy the navigation and a real request is required.
-          // Computed from the nav-start router state so it matches the snapshot
-          // the request would have carried if produced earlier.
-          if (navigationKind === "navigate") {
-            const clientReuseManifestHeader =
-              createClientReuseManifestHeaderFromVisibleAppState(navigationInitiationState);
-            if (clientReuseManifestHeader !== null) {
-              requestHeaders.set(VINEXT_CLIENT_REUSE_MANIFEST_HEADER, clientReuseManifestHeader);
-            }
-          }
-          navResponse = await fetch(rscUrl, {
-            headers: requestHeaders,
-            credentials: "include",
-            signal: navigationAbortController.signal,
-          });
+          navResponse = await fetchNavigationResponse();
         }
 
         if (!browserNavigationController.isCurrentNavigation(navId)) return;
@@ -2347,91 +2358,6 @@ function bootstrapHydration(
       // settlePendingBrowserRouterState is idempotent via the settled flag.
       browserNavigationController.finalizeNavigation(navId, pendingRouterState);
       discardedServerActionRefreshScheduler.markNavigationSettled();
-    }
-  };
-
-  const navigateClientSide: NavigationRuntimeClientNavigate = async function navigateClientSide(
-    href,
-    historyUpdateMode,
-    scroll,
-    programmaticTransition = false,
-    visibleCommitMode = "transition",
-    options,
-  ): Promise<void> {
-    // Link owns external/hybrid route filtering before calling this runtime
-    // entrypoint. Keep navigation-start side effects aligned with the shim path.
-    getNavigationRuntime()?.functions.notifyLinkNavigationStart?.();
-    stageAppNavigationFailureTarget(href);
-    notifyAppRouterTransitionStart(href, historyUpdateMode);
-
-    if (historyUpdateMode === "push") {
-      saveScrollPosition();
-    }
-
-    const earlyIntent = navigationPlanner.classifyEarlyNavigationIntent({
-      basePath: __basePath,
-      currentHref: window.location.href,
-      mode: historyUpdateMode,
-      scroll,
-      targetHref: href,
-    });
-    if (earlyIntent.kind === "sameDocumentScroll") {
-      clearAppRouterScrollIntent();
-      historyController.commitHashOnlyNavigation(href, earlyIntent.mode, earlyIntent.scroll);
-      clearAppNavigationFailureTarget(href);
-      commitClientNavigationState();
-      if (earlyIntent.scroll) {
-        scrollToHashTargetOnNextFrame(earlyIntent.hash);
-      }
-      return;
-    }
-
-    if (hasPendingAppRouterPageRedirect(document)) {
-      const mpaNavigate = getNavigationRuntime()?.functions.navigateExternal;
-      if (mpaNavigate) {
-        await mpaNavigate(href, historyUpdateMode);
-        return;
-      }
-
-      window.location[historyUpdateMode === "replace" ? "replace" : "assign"](href);
-      await new Promise<void>(() => {});
-      return;
-    }
-
-    const hashIndex = href.indexOf("#");
-    const hash = hashIndex === -1 ? "" : href.slice(hashIndex);
-    const scrollIntent = scroll ? beginAppRouterScrollIntent(hash || null) : null;
-    if (!scroll) {
-      clearAppRouterScrollIntent();
-    }
-
-    try {
-      await navigateRsc(
-        href,
-        0,
-        "navigate",
-        historyUpdateMode,
-        undefined,
-        programmaticTransition,
-        undefined,
-        scrollIntent,
-        visibleCommitMode,
-        options,
-      );
-    } catch (error) {
-      if (scrollIntent) {
-        consumeAppRouterScrollIntent(scrollIntent);
-      }
-      throw error;
-    }
-
-    if (scrollIntent) {
-      queueMicrotask(() => {
-        const pendingIntent = getPendingAppRouterScrollIntent();
-        if (pendingIntent === null || pendingIntent.id !== scrollIntent.id) return;
-        const fallbackIntent = consumeAppRouterScrollIntent(scrollIntent);
-        if (fallbackIntent) applyAppRouterScrollFallback(fallbackIntent);
-      });
     }
   };
 

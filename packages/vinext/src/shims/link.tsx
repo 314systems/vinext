@@ -1525,7 +1525,7 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
           scroll,
           true,
           "transition",
-          prefetchProp === false ? { disableOptimisticRouteShell: true } : undefined,
+          prefetchProp === false ? { forceAuthoritativeFlightRequest: true } : undefined,
         ).finally(() => {
           if (mountedRef.current) setPending(false);
           if (setter) clearLinkForCurrentNavigation(setter);

@@ -26,11 +26,11 @@ export type NavigationRuntimeVisibleCommitMode = "transition" | "synchronous";
 
 export type NavigationRuntimeNavigateOptions = {
   /**
-   * Link navigations with `prefetch={false}` still perform an authoritative
-   * Flight request in Next.js. They should not be satisfied solely by an
-   * optimistic route shell.
+   * Link navigations with `prefetch={false}` perform an authoritative Flight
+   * request in Next.js. This bypasses response reuse without disabling the
+   * optimistic route shell shown while that request is pending.
    */
-  disableOptimisticRouteShell?: boolean;
+  forceAuthoritativeFlightRequest?: boolean;
 };
 
 export type NavigationRuntimeClientNavigate = (
