@@ -33,7 +33,7 @@ export type NavigationRuntimeNavigateOptions = {
   forceAuthoritativeFlightRequest?: boolean;
 };
 
-export type NavigationRuntimeClientNavigate = (
+type NavigationRuntimeClientNavigate = (
   href: string,
   historyUpdateMode: NavigationRuntimeHistoryUpdateMode,
   scroll: boolean,
