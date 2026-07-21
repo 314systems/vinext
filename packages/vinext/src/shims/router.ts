@@ -2270,9 +2270,6 @@ async function navigateClientData(
       scheduleHardNavigationAndThrow(softRedirect, "Navigation redirected externally");
     }
 
-    window.history.replaceState(window.history.state ?? {}, "", redirectedUrl);
-    routerRuntimeState.lastPathnameAndSearch = window.location.pathname + window.location.search;
-    routerRuntimeState.lastHash = window.location.hash;
     await navigateClientHtml(
       redirectedUrl,
       redirectedUrl,
@@ -2365,7 +2362,6 @@ async function navigateClientHtml(
   options: NavigateClientOptions = {},
 ): Promise<void> {
   let browserUrl = url;
-  let pendingRedirectHistoryUrl: string | null = fetchUrl === url ? null : url;
   const root = window.__VINEXT_ROOT__;
   if (!root) {
     // No React root yet — fall back to hard navigation
@@ -2393,7 +2389,6 @@ async function navigateClientHtml(
     const redirectedUrl = resolveSameOriginRedirectedUrl(res.url);
     if (redirectedUrl) {
       browserUrl = redirectedUrl;
-      pendingRedirectHistoryUrl = redirectedUrl;
     }
   }
 
@@ -2512,11 +2507,6 @@ async function navigateClientHtml(
   // has passed assertStillCurrent(). The post-render await below waits for the
   // stable Pages Router commit boundary before routeChangeComplete, matching
   // Next.js's client Root callback without remounting the page tree.
-  if (pendingRedirectHistoryUrl) {
-    window.history.replaceState(window.history.state ?? {}, "", pendingRedirectHistoryUrl);
-    routerRuntimeState.lastPathnameAndSearch = window.location.pathname + window.location.search;
-    routerRuntimeState.lastHash = window.location.hash;
-  }
   options.commitNavigation?.(browserUrl);
   window.__NEXT_DATA__ = nextData;
   applyVinextLocaleGlobals(window, nextData);
@@ -2596,10 +2586,6 @@ async function navigateClient(
         if (!redirectedUrl) {
           scheduleHardNavigationAndThrow(configRedirect, "Navigation redirected externally");
         }
-        window.history.replaceState(window.history.state ?? {}, "", redirectedUrl);
-        routerRuntimeState.lastPathnameAndSearch =
-          window.location.pathname + window.location.search;
-        routerRuntimeState.lastHash = window.location.hash;
         browserUrl = redirectedUrl;
         htmlFetchUrl = redirectedUrl;
       }
@@ -2677,10 +2663,6 @@ async function navigateClient(
         if (!redirectedUrl) {
           scheduleHardNavigationAndThrow(redirectLocation, "Navigation redirected externally");
         }
-        window.history.replaceState(window.history.state ?? {}, "", redirectedUrl);
-        routerRuntimeState.lastPathnameAndSearch =
-          window.location.pathname + window.location.search;
-        routerRuntimeState.lastHash = window.location.hash;
         browserUrl = redirectedUrl;
         htmlFetchUrl = redirectedUrl;
       } else if (middlewareEffect) {
@@ -3741,7 +3723,7 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
       return browserUrl;
     })();
     const result = await runNavigateClient(
-      browserUrl,
+      fullBrowserUrl,
       fullBrowserUrl,
       getPagesHtmlFetchUrl(stateRouteUrl, effectiveLocale),
       {

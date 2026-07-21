@@ -17701,6 +17701,68 @@ describe("Pages Router concurrent navigation", () => {
     }
   });
 
+  it("keeps the hash in routeChangeError when a popstate is superseded", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const originalCustomEvent = globalThis.CustomEvent;
+    const listeners = new Map<string, (event: any) => void>();
+    const { win } = createNavWindow();
+    const popstateFetch = createDeferred<Response>();
+
+    win.addEventListener = vi.fn((type: string, handler: (event: any) => void) => {
+      listeners.set(type, handler);
+    });
+    (globalThis as any).window = win;
+    (globalThis as any).CustomEvent = class CustomEventMock {
+      constructor(public type: string) {}
+    } as any;
+    globalThis.fetch = vi.fn(() => popstateFetch.promise);
+
+    try {
+      vi.resetModules();
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      const Router = routerModule.default;
+      const { installPagesRouterRuntime } =
+        await import("../packages/vinext/src/shims/pages-router-runtime.js");
+      installPagesRouterRuntime();
+
+      const popstateHandler = listeners.get("popstate");
+      expect(popstateHandler).toBeDefined();
+      const errors: Array<{ error: unknown; url: string }> = [];
+      const onRouteChangeError = (...args: unknown[]) => {
+        const [error, url] = args;
+        errors.push({ error, url: url as string });
+      };
+      Router.events.on("routeChangeError", onRouteChangeError);
+
+      win.location.pathname = "/target";
+      win.location.hash = "#anchor";
+      win.location.href = "http://localhost/target#anchor";
+      popstateHandler!({
+        state: { __N: true, url: "/target", as: "/target", options: {}, key: "target" },
+      });
+      await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+
+      await Router.push("/other", undefined, { shallow: true });
+      popstateFetch.resolve(new Response("cancelled"));
+      await Promise.resolve();
+
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.url).toBe("/target#anchor");
+      expect(errors[0]?.error).toMatchObject({ cancelled: true });
+      Router.events.off("routeChangeError", onRouteChangeError);
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+      globalThis.fetch = originalFetch;
+      (globalThis as any).CustomEvent = originalCustomEvent;
+    }
+  });
+
   // When beforePopState cancels a popstate the app stays on the previous
   // history entry, so the internal current-key tracker must keep pointing at
   // that entry — otherwise later scroll bookkeeping saves the outgoing
@@ -18151,7 +18213,7 @@ describe("Pages Router concurrent navigation", () => {
   it("handles Pages Router middleware internal redirects as client-side redirects", async () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
-    const { win, replaceState, render } = createNavWindow();
+    const { win, pushState, replaceState, render } = createNavWindow();
     const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     Object.assign(win.location, { origin: "http://localhost" });
     Object.assign(win, {
@@ -18201,7 +18263,13 @@ describe("Pages Router concurrent navigation", () => {
         }),
       );
       expect(fetch).toHaveBeenNthCalledWith(2, "/new-home", expect.any(Object));
-      expect(replaceState).toHaveBeenLastCalledWith({}, "", "/new-home");
+      expect(replaceState.mock.calls.filter((call) => call.length >= 3)).toEqual([]);
+      expect(pushState).toHaveBeenCalledTimes(1);
+      expect(pushState).toHaveBeenCalledWith(
+        expect.objectContaining({ __N: true }),
+        "",
+        "/new-home",
+      );
       expect(win.location.pathname).toBe("/new-home");
       expect(render).toHaveBeenCalled();
     } finally {
@@ -18461,7 +18529,7 @@ describe("Pages Router concurrent navigation", () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
     const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
-    const { win, replaceState, render } = createNavWindow();
+    const { win, pushState, replaceState, render } = createNavWindow();
     const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     Object.assign(win.location, {
       origin: "http://localhost",
@@ -18512,7 +18580,13 @@ describe("Pages Router concurrent navigation", () => {
       );
       expect(fetch).toHaveBeenNthCalledWith(2, "/docs/new-home", expect.any(Object));
       expect(fetch).not.toHaveBeenCalledWith("/docs/docs/new-home", expect.any(Object));
-      expect(replaceState).toHaveBeenLastCalledWith({}, "", "/docs/new-home");
+      expect(replaceState.mock.calls.filter((call) => call.length >= 3)).toEqual([]);
+      expect(pushState).toHaveBeenCalledTimes(1);
+      expect(pushState).toHaveBeenCalledWith(
+        expect.objectContaining({ __N: true }),
+        "",
+        "/docs/new-home",
+      );
       expect(win.location.href).toBe("http://localhost/docs/new-home");
       expect(render).toHaveBeenCalled();
     } finally {
@@ -20162,7 +20236,7 @@ describe("Pages Router _next/data client navigation", () => {
 
     const dynamicLoader = vi.fn(async () => makePageModule("dynamic"));
     const destinationLoader = vi.fn(async () => makePageModule("destination"));
-    const { win, replaceState } = createDataNavWindow({
+    const { win, pushState, replaceState } = createDataNavWindow({
       loaders: {
         "/": vi.fn(async () => makePageModule("home")),
         "/[id]": dynamicLoader,
@@ -20189,7 +20263,13 @@ describe("Pages Router _next/data client navigation", () => {
       expect(fetchMock).not.toHaveBeenCalled();
       expect(dynamicLoader).not.toHaveBeenCalled();
       expect(destinationLoader).toHaveBeenCalledTimes(1);
-      expect(replaceState).toHaveBeenCalledWith(expect.anything(), "", "/somewhere/else");
+      expect(replaceState.mock.calls.filter((call) => call.length >= 3)).toEqual([]);
+      expect(pushState).toHaveBeenCalledTimes(1);
+      expect(pushState).toHaveBeenCalledWith(
+        expect.objectContaining({ __N: true }),
+        "",
+        "/somewhere/else",
+      );
       expect(win.__NEXT_DATA__).toMatchObject({
         page: "/somewhere/else",
         props: { pageProps: {} },
