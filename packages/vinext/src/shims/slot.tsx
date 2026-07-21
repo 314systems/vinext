@@ -321,6 +321,13 @@ function BfcacheActivitySlotBoundary({
   );
 }
 
+export function getNonCacheComponentsSegmentKey(
+  id: string,
+  activeStateKey: string,
+): string | undefined {
+  return AppElementsWire.parseElementKey(id)?.kind === "page" ? activeStateKey : undefined;
+}
+
 function BfcacheSlotBoundary({ content, id }: { content: React.ReactNode; id: string }) {
   const SegmentContext = BfcacheSegmentIdContext;
   const elements = React.useContext(ElementsContext);
@@ -333,19 +340,18 @@ function BfcacheSlotBoundary({ content, id }: { content: React.ReactNode; id: st
     return <SegmentContext.Provider value={id}>{content}</SegmentContext.Provider>;
   }
 
-  // Without cacheComponents there is no Activity retention, so this boundary must
-  // reconcile in place exactly like the baseline router. The segment stateKey
-  // tracks the pathname (see createBfcacheSegmentIdentity), so keying the active
-  // entry by it would remount every slot whose identity moves with the URL —
-  // shared layouts and interception source slots included — discarding client
-  // state that survives a normal navigation. Reset for genuinely fresh entries is
-  // driven by userland bfcacheId keying, not by remounting the slot subtree, so
-  // the active entry renders unkeyed here.
-  // NOTE: This diverges from Next.js, which keys the active child by stateKey
-  // even without cacheComponents; vinext defers fresh-entry reset to userland
-  // bfcacheId keying. See use-router-bfcache-id fixture.
+  // Without cacheComponents there is no Activity retention. Keep shared layouts
+  // and parallel-slot owners unkeyed so their client state survives navigation,
+  // but key leaf pages by their state identity. Next.js keys each active segment
+  // entry; the page-only key gives us its required fresh-page remount semantics
+  // without remounting shared vinext segment owners whose identities move with
+  // the visible URL.
   if (!isCacheComponentsEnabled()) {
-    return <SegmentContext.Provider value={id}>{content}</SegmentContext.Provider>;
+    return (
+      <SegmentContext.Provider key={getNonCacheComponentsSegmentKey(id, activeStateKey)} value={id}>
+        {content}
+      </SegmentContext.Provider>
+    );
   }
 
   return (
