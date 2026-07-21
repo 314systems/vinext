@@ -120,6 +120,7 @@ function createHandler(overrides: Partial<TestHandlerOptions> = {}) {
               route,
             }
           : null),
+    matchRequestRoute: overrides.matchRequestRoute,
     runMiddleware:
       overrides.runMiddleware ??
       (overrides.middlewareModule
@@ -920,9 +921,9 @@ describe("createAppRscHandler", () => {
       },
       dispatchMatchedPage,
       matchRoute(pathname: string) {
-        return pathname === "/product/sticks & stones"
+        return pathname === "/product/sticks%20%26%20stones"
           ? {
-              params: { id: "sticks & stones" },
+              params: { id: "sticks%20%26%20stones" },
               route: productRoute,
             }
           : null;
@@ -946,8 +947,8 @@ describe("createAppRscHandler", () => {
       expect(response.status).toBe(200);
       expect(dispatchMatchedPage).toHaveBeenCalledWith(
         expect.objectContaining({
-          cleanPathname: "/product/sticks & stones",
-          params: { id: "sticks & stones" },
+          cleanPathname: "/product/sticks%20%26%20stones",
+          params: { id: "sticks%20%26%20stones" },
           staticParamsValidationParams: undefined,
         }),
       );
@@ -1089,6 +1090,39 @@ describe("createAppRscHandler", () => {
     expect(dispatchMatchedPage).not.toHaveBeenCalled();
   });
 
+  it("does not match config redirects through percent-encoded literal aliases", async () => {
+    const dispatchMatchedPage = vi.fn(async () => new Response("page", { status: 200 }));
+    const handler = createHandler({
+      configHeaders: [],
+      configRedirects: [{ source: "/old-about", destination: "/about", permanent: false }],
+      dispatchMatchedPage,
+    });
+
+    const response = await handler(new Request("https://example.test/docs/%6Fld-about"), null);
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get("location")).toBeNull();
+    expect(dispatchMatchedPage).not.toHaveBeenCalled();
+  });
+
+  it("preserves raw encoding when substituting repeated config redirect captures", async () => {
+    const handler = createHandler({
+      configHeaders: [],
+      configRedirects: [
+        {
+          source: "/legacy/:id",
+          destination: "/target/:id/:id",
+          permanent: false,
+        },
+      ],
+    });
+
+    const response = await handler(new Request("https://example.test/docs/legacy/a%252Fb"), null);
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe("/docs/target/a%252Fb/a%252Fb");
+  });
+
   it("does not prepend basePath to opt-out redirects outside basePath", async () => {
     const handler = createHandler({
       configHeaders: [],
@@ -1118,6 +1152,15 @@ describe("createAppRscHandler", () => {
 
     expect(response.status).toBe(308);
     expect(response.headers.get("location")).toBe("/outside/");
+  });
+
+  it("preserves raw encoded spelling when normalizing trailing slashes", async () => {
+    const handler = createHandler({ configHeaders: [], trailingSlash: true });
+
+    const response = await handler(new Request("https://example.test/docs/%61bout"), null);
+
+    expect(response.status).toBe(308);
+    expect(response.headers.get("location")).toBe("/docs/%61bout/");
   });
 
   it("keeps the real status for config redirects on Pages data requests", async () => {
@@ -1229,6 +1272,91 @@ describe("createAppRscHandler", () => {
       destination: "2",
       same: "new",
     });
+  });
+
+  it("preserves the encoded request pathname for direct interception matching", async () => {
+    let pageOptions: Parameters<HandlerOptions["dispatchMatchedPage"]>[0] | undefined;
+    const handler = createHandler({
+      configHeaders: [],
+      dispatchMatchedPage: async (options) => {
+        pageOptions = options;
+        return new Response("page");
+      },
+      matchRequestRoute(pathname: string) {
+        return pathname === "/about/%2561"
+          ? {
+              params: {},
+              route: createPageRoute({ pattern: "/about/:id", isDynamic: true }),
+            }
+          : null;
+      },
+    });
+
+    await handler(new Request("https://example.test/docs/about/%2561"), null);
+
+    expect(pageOptions?.interceptionPathname).toBe("/about/%2561");
+  });
+
+  it("uses the normalized rewrite destination for interception matching", async () => {
+    let pageOptions: Parameters<HandlerOptions["dispatchMatchedPage"]>[0] | undefined;
+    const handler = createHandler({
+      configHeaders: [],
+      dispatchMatchedPage: async (options) => {
+        pageOptions = options;
+        return new Response("page");
+      },
+      middlewareModule: {
+        default: () =>
+          new Response(null, {
+            headers: {
+              "x-middleware-rewrite": "https://example.test/docs/about/%2561",
+            },
+          }),
+      },
+      matchRoute(pathname: string) {
+        return pathname === "/about/%2561"
+          ? {
+              params: {},
+              route: createPageRoute({ pattern: "/about/:id", isDynamic: true }),
+            }
+          : null;
+      },
+    });
+
+    await handler(new Request("https://example.test/docs/source"), null);
+
+    expect(pageOptions?.interceptionPathname).toBe("/about/%2561");
+  });
+
+  it("treats an explicit middleware rewrite as authoritative after normalization", async () => {
+    const dispatchMatchedPage = vi.fn(async () => new Response("admin"));
+    const requestRouteMatch = vi.fn(() => null);
+    const rewrittenRoute = createPageRoute({ pattern: "/admin", routeSegments: ["admin"] });
+    const handler = createHandler({
+      configHeaders: [],
+      dispatchMatchedPage,
+      matchRequestRoute: requestRouteMatch,
+      matchRoute(pathname: string) {
+        return pathname === "/admin" ? { params: {}, route: rewrittenRoute } : null;
+      },
+      middlewareModule: {
+        default: (request: NextRequest) =>
+          new Response(null, {
+            headers: {
+              "x-middleware-rewrite": new URL("/docs/admin", request.url).toString(),
+            },
+          }),
+      },
+    });
+
+    const response = await handler(new Request("https://example.test/docs/%61dmin"), null);
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("admin");
+    expect(requestRouteMatch).not.toHaveBeenCalled();
+    expect(dispatchMatchedPage).toHaveBeenCalledWith(
+      expect.objectContaining({ cleanPathname: "/admin", route: rewrittenRoute }),
+    );
   });
 
   it("evaluates config rewrite conditions against middleware rewrite queries", async () => {
@@ -1999,6 +2127,24 @@ describe("createAppRscHandler", () => {
     );
   });
 
+  it("does not match config rewrites through percent-encoded literal aliases", async () => {
+    const dispatchMatchedPage = vi.fn(async () => new Response("page", { status: 200 }));
+    const handler = createHandler({
+      configHeaders: [],
+      configRewrites: {
+        beforeFiles: [{ source: "/alias", destination: "/about" }],
+        afterFiles: [],
+        fallback: [],
+      },
+      dispatchMatchedPage,
+    });
+
+    const response = await handler(new Request("https://example.test/docs/%61lias"), null);
+
+    expect(response.status).toBe(404);
+    expect(dispatchMatchedPage).not.toHaveBeenCalled();
+  });
+
   it("propagates rewritten query parameters to App pages", async () => {
     const setNavigationContext = vi.fn();
     let pageOptions: Parameters<HandlerOptions["dispatchMatchedPage"]>[0] | undefined;
@@ -2367,6 +2513,60 @@ describe("createAppRscHandler", () => {
         pagesDataRequest: expect.any(Request),
       }),
     );
+  });
+
+  it("exposes middleware rewrites from Pages data requests to App routes", async () => {
+    // Ported from Next.js: test/e2e/app-dir/app/index.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/app/index.test.ts
+    // "rewrites should support rewrites on client-side navigation from pages to app with existing pages path"
+    const clearRequestContext = vi.fn();
+    const dispatchMatchedPage = vi.fn(async () => new Response("app"));
+    const renderPagesFallback = vi.fn(async () => new Response("pages"));
+    const handler = createHandler({
+      clearRequestContext,
+      configHeaders: [],
+      dispatchMatchedPage,
+      matchRoute: (pathname: string) =>
+        pathname === "/about"
+          ? {
+              params: {},
+              route: createPageRoute({ pattern: "/about", routeSegments: ["about"] }),
+            }
+          : null,
+      middlewareModule: {
+        default: (request: NextRequest) => {
+          if (request.nextUrl.pathname === "/exists-but-not-routed") {
+            return new Response(null, {
+              headers: {
+                "set-cookie": "probe=1; Path=/",
+                "x-test-header": "middleware",
+                "x-middleware-rewrite": new URL("/about", request.url).toString(),
+              },
+            });
+          }
+          return undefined;
+        },
+      },
+      renderPagesFallback,
+    });
+
+    const response = await handler(
+      new Request("https://example.test/docs/_next/data/build-id/exists-but-not-routed.json", {
+        headers: { "x-nextjs-data": "1" },
+      }),
+      null,
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("application/json");
+    expect(response.headers.get("x-nextjs-rewrite")).toBe("/about");
+    expect(response.headers.get("x-test-header")).toBe("middleware");
+    expect(response.headers.get("set-cookie")).toBe("probe=1; Path=/");
+    expect(response.headers.get("x-middleware-rewrite")).toBeNull();
+    expect(await response.text()).toBe("{}");
+    expect(dispatchMatchedPage).not.toHaveBeenCalled();
+    expect(renderPagesFallback).not.toHaveBeenCalled();
+    expect(clearRequestContext).toHaveBeenCalled();
   });
 
   it.each([

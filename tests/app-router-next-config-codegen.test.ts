@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createServer } from "vite";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { generateRscEntry } from "../packages/vinext/src/entries/app-rsc-entry.js";
 import { generateSsrEntry } from "../packages/vinext/src/entries/app-ssr-entry.js";
 import vinext from "../packages/vinext/src/index.js";
@@ -173,6 +173,10 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
 
     expect(appOnlyCode).toContain("export const __hasPagesDir = false;");
     expect(hybridCode).toContain("export const __hasPagesDir = true;");
+    expect(hybridCode).toContain("export { __i18nConfig };");
+    expect(hybridCode).toContain(
+      "export const authorizeOnDemandRevalidate = __isOnDemandRevalidateRequest;",
+    );
   });
 
   it("re-exports Pages API handling from the hybrid SSR entry", () => {
