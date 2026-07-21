@@ -86,7 +86,6 @@ import {
   type PendingBrowserRouterState,
 } from "./app-browser-navigation-controller.js";
 import { AppBrowserMpaNavigationScheduler } from "./app-browser-mpa-navigation.js";
-import { isExternalHistoryState } from "./app-history-state.js";
 import {
   resolveManifestNavigationInterceptionContext,
   resolveMiddlewareRewriteNavigationInterceptionContext,
@@ -133,7 +132,6 @@ import {
 } from "./app-visited-response-cache.js";
 import {
   createPopstateRestoreHandler,
-  restoreExternalPopstateSnapshot,
   restoreSynchronousPopstateScrollPosition,
 } from "./app-browser-popstate.js";
 import {
@@ -2382,21 +2380,6 @@ function bootstrapHydration(
       commitClientNavigationState();
       restorePopstateScrollPosition(event.state);
       return;
-    }
-    if (isExternalHistoryState(event.state)) {
-      if (
-        restoreExternalPopstateSnapshot(
-          {
-            notifyAppRouterTransitionStart: (targetHref) =>
-              notifyAppRouterTransitionStart(targetHref, "traverse"),
-            restoreHistoryStateSnapshot,
-            restorePopstateScrollPosition,
-          },
-          href,
-          event.state,
-        )
-      )
-        return;
     }
     const snapshotNavigationId = browserNavigationController.beginNavigation();
     if (

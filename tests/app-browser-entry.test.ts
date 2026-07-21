@@ -34,7 +34,6 @@ import {
 import { createAppBrowserNavigationController } from "../packages/vinext/src/server/app-browser-navigation-controller.js";
 import {
   createPopstateRestoreHandler,
-  restoreExternalPopstateSnapshot,
   restoreSynchronousPopstateScrollPosition,
 } from "../packages/vinext/src/server/app-browser-popstate.js";
 import {
@@ -7093,42 +7092,6 @@ describe("app browser entry bfcacheId helpers", () => {
 });
 
 describe("createPopstateRestoreHandler", () => {
-  it("notifies once only when an external snapshot restores synchronously", () => {
-    const state = { __vinext_externalHistory: true };
-    const notifyAppRouterTransitionStart = vi.fn();
-    const restorePopstateScrollPosition = vi.fn();
-
-    expect(
-      restoreExternalPopstateSnapshot(
-        {
-          notifyAppRouterTransitionStart,
-          restoreHistoryStateSnapshot: () => false,
-          restorePopstateScrollPosition,
-        },
-        "https://example.com/shallow",
-        state,
-      ),
-    ).toBe(false);
-    expect(notifyAppRouterTransitionStart).not.toHaveBeenCalled();
-    expect(restorePopstateScrollPosition).not.toHaveBeenCalled();
-
-    expect(
-      restoreExternalPopstateSnapshot(
-        {
-          notifyAppRouterTransitionStart,
-          restoreHistoryStateSnapshot: () => true,
-          restorePopstateScrollPosition,
-        },
-        "https://example.com/shallow",
-        state,
-      ),
-    ).toBe(true);
-    expect(notifyAppRouterTransitionStart).toHaveBeenCalledOnce();
-    expect(notifyAppRouterTransitionStart).toHaveBeenCalledWith("https://example.com/shallow");
-    expect(restorePopstateScrollPosition).toHaveBeenCalledOnce();
-    expect(restorePopstateScrollPosition).toHaveBeenCalledWith(state);
-  });
-
   it("guards synchronous popstate scroll retry to the active navigation", () => {
     const scrollState = { __vinext_scrollY: 10 };
     let activeNavigationId = 3;
