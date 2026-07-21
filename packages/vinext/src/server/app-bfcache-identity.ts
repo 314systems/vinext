@@ -104,6 +104,46 @@ function createActiveSlotIdentity(
   return `${id}@${interception.targetRouteId}`;
 }
 
+function getInterceptedPageMatchedUrl(
+  parsed: Extract<BfcacheSegmentElementKey, { kind: "page" }>,
+  metadata: ParsedAppElementsMetadata | null,
+): string | null {
+  const interception = metadata?.metadata.interception;
+  if (interception === null || interception === undefined) return null;
+
+  for (const [routeId, matchedUrl] of [
+    [interception.sourceRouteId, interception.sourceMatchedUrl],
+    [interception.targetRouteId, interception.targetMatchedUrl],
+  ] as const) {
+    const route = AppElementsWire.parseElementKey(routeId);
+    if (route?.kind === "route" && route.path === parsed.path) {
+      return matchedUrl;
+    }
+  }
+
+  return null;
+}
+
+function getInterceptedTreePathname(
+  treePath: string,
+  metadata: ParsedAppElementsMetadata | null,
+): string | null {
+  const interception = metadata?.metadata.interception;
+  if (interception === null || interception === undefined) return null;
+
+  const slot = AppElementsWire.parseElementKey(interception.slotId);
+  if (slot?.kind !== "slot") return interception.sourceMatchedUrl;
+
+  const treeSegments = splitPathSegments(treePath);
+  const ownerSegments = splitPathSegments(slot.treePath);
+  const isTargetSlotDescendant =
+    treeSegments.length > ownerSegments.length &&
+    ownerSegments.every((segment, index) => treeSegments[index] === segment) &&
+    treeSegments[ownerSegments.length] === `@${slot.name}`;
+
+  return isTargetSlotDescendant ? interception.targetMatchedUrl : interception.sourceMatchedUrl;
+}
+
 /**
  * Derive BFCache identity from AppElements wire keys. Keep wire-key parsing
  * contained here until vinext has a route-manifest authority equivalent to
@@ -118,7 +158,15 @@ function createBfcacheSegmentIdentity(
   },
 ): string | null {
   if (parsed.kind === "page") {
-    return `${id}@${options.pathname}`;
+    // The browser-visible pathname is the interception target, but the page
+    // outside the intercepted slot is still the proven source route. Key that
+    // retained page by its matched source URL so opening, refreshing, or
+    // traversing an intercepted modal does not remount its client state. If a
+    // payload ever carries the target as a page element, use the target proof
+    // for the same reason. Ordinary pages continue to use the concrete visible
+    // pathname, which resets state between dynamic siblings.
+    const interceptedMatchedUrl = getInterceptedPageMatchedUrl(parsed, options.metadata);
+    return `${id}@${interceptedMatchedUrl ?? options.pathname}`;
   }
 
   if (parsed.kind === "slot") {
@@ -128,7 +176,8 @@ function createBfcacheSegmentIdentity(
   }
 
   if (parsed.kind === "layout" || parsed.kind === "template") {
-    return `${id}@${getTreePathIdentityPrefix(options.pathname, parsed.treePath)}`;
+    const pathname = getInterceptedTreePathname(parsed.treePath, options.metadata);
+    return `${id}@${getTreePathIdentityPrefix(pathname ?? options.pathname, parsed.treePath)}`;
   }
 
   return null;

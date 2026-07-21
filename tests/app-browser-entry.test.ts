@@ -6366,6 +6366,122 @@ describe("app browser entry bfcacheId helpers", () => {
     expect(pageOneKeys[dynamicPageId]).not.toBe(pageTwoKeys[dynamicPageId]);
   });
 
+  it("keys an intercepted source page by its proven source match", () => {
+    const feedLayoutId = AppElementsWire.encodeLayoutId("/feed");
+    const feedPageId = AppElementsWire.encodePageId("/feed", null);
+    const modalSlotId = AppElementsWire.encodeSlotId("modal", "/feed");
+    const modalSlotBinding = {
+      ownerLayoutId: feedLayoutId,
+      slotId: modalSlotId,
+      state: "active",
+    } satisfies AppElementsSlotBinding;
+    const sourceElements = createResolvedElements(
+      "route:/feed",
+      "/",
+      null,
+      {
+        [feedPageId]: React.createElement("main", null),
+        [modalSlotId]: React.createElement("aside", null),
+      },
+      [rootLayoutId, feedLayoutId],
+      [modalSlotBinding],
+    );
+    const interceptedElements = createResolvedElements(
+      "route:/feed",
+      "/",
+      "/feed",
+      {
+        [feedPageId]: React.createElement("main", null),
+        [modalSlotId]: React.createElement("aside", null),
+      },
+      [rootLayoutId, feedLayoutId],
+      [modalSlotBinding],
+      createInterceptionProof("/feed", "/photos/42", modalSlotId),
+    );
+
+    const sourceKeys = createBfcacheSegmentStateKeyMap({
+      elements: sourceElements,
+      // Search is intentionally absent: the navigation snapshot passes the
+      // URL pathname separately from search params, so search-only changes do
+      // not participate in segment identity.
+      pathname: "/feed",
+    });
+    const interceptedKeys = createBfcacheSegmentStateKeyMap({
+      elements: interceptedElements,
+      pathname: "/photos/42",
+    });
+
+    expect(sourceKeys[feedPageId]).toBe(`${feedPageId}@/feed`);
+    expect(interceptedKeys[feedPageId]).toBe(sourceKeys[feedPageId]);
+    expect(interceptedKeys[modalSlotId]).toBe(`${modalSlotId}@route:/photos/42`);
+
+    const opened = createNextBfcacheIdMap({
+      current: {
+        [rootLayoutId]: "0",
+        [feedLayoutId]: "_b_1_",
+        [feedPageId]: "_b_2_",
+      },
+      currentElements: sourceElements,
+      currentPathname: "/feed",
+      elements: interceptedElements,
+      nextPathname: "/photos/42",
+    });
+    expect(opened[feedLayoutId]).toBe("_b_1_");
+    expect(opened[feedPageId]).toBe("_b_2_");
+    expect(opened[modalSlotId]).toMatch(/^_b_\d+_$/);
+  });
+
+  it("preserves source page identity while chained interception targets change", () => {
+    const feedLayoutId = AppElementsWire.encodeLayoutId("/feed");
+    const feedPageId = AppElementsWire.encodePageId("/feed", null);
+    const modalSlotId = AppElementsWire.encodeSlotId("modal", "/feed");
+    const modalPhotoLayoutId = AppElementsWire.encodeLayoutId("/feed/@modal/photos/[id]");
+    const modalSlotBinding = {
+      ownerLayoutId: feedLayoutId,
+      slotId: modalSlotId,
+      state: "active",
+    } satisfies AppElementsSlotBinding;
+    const createInterceptedElements = (target: string) =>
+      createResolvedElements(
+        "route:/feed",
+        "/",
+        "/feed",
+        {
+          [feedPageId]: React.createElement("main", null),
+          [modalSlotId]: React.createElement("aside", null),
+          [modalPhotoLayoutId]: React.createElement("div", null),
+        },
+        [rootLayoutId, feedLayoutId, modalPhotoLayoutId],
+        [modalSlotBinding],
+        createInterceptionProof("/feed", target, modalSlotId),
+      );
+    const photo42Elements = createInterceptedElements("/photos/42");
+    const photo43Elements = createInterceptedElements("/photos/43");
+    const current = {
+      [rootLayoutId]: "0",
+      [feedLayoutId]: "_b_4_",
+      [feedPageId]: "_b_5_",
+      [modalSlotId]: "_b_6_",
+      [modalPhotoLayoutId]: "_b_7_",
+    };
+
+    const next = createNextBfcacheIdMap({
+      current,
+      currentElements: photo42Elements,
+      currentPathname: "/photos/42",
+      elements: photo43Elements,
+      nextPathname: "/photos/43",
+    });
+
+    expect(next[rootLayoutId]).toBe("0");
+    expect(next[feedLayoutId]).toBe("_b_4_");
+    expect(next[feedPageId]).toBe("_b_5_");
+    expect(next[modalSlotId]).toMatch(/^_b_\d+_$/);
+    expect(next[modalSlotId]).not.toBe("_b_6_");
+    expect(next[modalPhotoLayoutId]).toMatch(/^_b_\d+_$/);
+    expect(next[modalPhotoLayoutId]).not.toBe("_b_7_");
+  });
+
   it("preserves encoded path delimiters when deriving segment state keys", () => {
     const pageId = AppElementsWire.encodePageId("/files/[...slug]", null);
     const encodedKeys = createBfcacheSegmentStateKeyMap({
