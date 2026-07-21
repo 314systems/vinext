@@ -201,6 +201,9 @@ export class AppBrowserHistoryController {
     state: AppRouterState;
   }): void {
     const historyIndex = this.allocateNavigationHistoryTraversalIndex(options.historyUpdateMode);
+    // The caller already committed the shallow URL. Keep this metadata rewrite
+    // state-only so credential-bearing document URLs cannot make replaceState
+    // reject an otherwise valid snapshot write with SecurityError (#2614).
     this.#replaceHistoryState(
       markExternalHistoryState(
         createHistoryStateWithNavigationMetadata(options.historyState, {
@@ -210,7 +213,6 @@ export class AppBrowserHistoryController {
           traversalIndex: historyIndex,
         }),
       ),
-      this.#readCurrentHref(),
     );
     this.commitHistoryTraversalIndex(historyIndex);
     this.rememberHistoryStateSnapshot(options.state);
