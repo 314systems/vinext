@@ -1346,6 +1346,7 @@ export async function resolvePagesPageData(
                 pageProps: freshPageProps,
                 props: freshRenderProps,
                 params: options.params,
+                nextDataQuery: options.nextDataQuery,
                 renderIsrPassToStringAsync: options.renderIsrPassToStringAsync,
                 routePattern: options.routePattern,
                 safeJsonStringify: options.safeJsonStringify,

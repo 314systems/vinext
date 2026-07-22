@@ -45,6 +45,13 @@ export function middleware(request: NextRequest) {
     return NextResponse.rewrite(new URL("/static-gsp", request.url));
   }
 
+  if (url.pathname === "/mw-rewrite-static-gsp-query") {
+    const target = request.nextUrl.clone();
+    target.pathname = "/static-gsp";
+    target.searchParams.set("from", "middleware");
+    return NextResponse.rewrite(target);
+  }
+
   // Ported from Next.js: test/e2e/middleware-general/app/middleware.js
   // Missing Pages chunks still reach middleware, which may rewrite the 404.
   if (url.pathname.includes("/_next/static/chunks/pages/_app-non-existent.js")) {

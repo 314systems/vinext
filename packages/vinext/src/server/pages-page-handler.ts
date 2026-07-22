@@ -69,7 +69,11 @@ import {
   NEXTJS_DEPLOYMENT_ID_HEADER,
   VINEXT_CACHE_HEADER,
 } from "./headers.js";
-import { buildMissIsrCacheControl, ISR_NEVER_CACHE_CONTROL } from "./isr-decision.js";
+import {
+  buildMissIsrCacheControl,
+  ISR_NEVER_CACHE_CONTROL,
+  ISR_NO_STORE_CACHE_CONTROL,
+} from "./isr-decision.js";
 import { encodeCacheTag } from "../utils/encode-cache-tag.js";
 import { setCacheStateHeaders } from "./cache-headers.js";
 import {
@@ -582,9 +586,10 @@ export function createPagesPageHandler(
     const hasMiddlewareRewrite = options?.hasMiddlewareRewrite === true;
     const renderRouteUrl =
       isStaticPropsRender && !hasMiddlewareRewrite ? routeUrl.split("?")[0] : routeUrl;
-    const routerAsPathSource = isStaticPropsRender
-      ? renderRouteUrl
-      : (renderAsPath ?? renderRouteUrl);
+    const routerAsPathSource =
+      isStaticPropsRender && !hasMiddlewareRewrite
+        ? renderRouteUrl
+        : (renderAsPath ?? renderRouteUrl);
     const routerAsPath = i18nConfig
       ? extractLocaleFromUrl(routerAsPathSource, i18nConfig, locale).url
       : routerAsPathSource;
@@ -953,7 +958,9 @@ export function createPagesPageHandler(
               init.headers[k] = Array.isArray(v) ? v.join(", ") : String(v);
             }
           }
-          if (gsspRes) {
+          if (rewriteCacheState.bypassCdnCache) {
+            init.headers["Cache-Control"] = ISR_NO_STORE_CACHE_CONTROL;
+          } else if (gsspRes) {
             // Default Cache-Control for gSSP-driven _next/data responses —
             // skip when gSSP already set one via res.setHeader. Fixes #1461.
             let hasUserCacheControl = false;

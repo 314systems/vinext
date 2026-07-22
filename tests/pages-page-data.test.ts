@@ -264,6 +264,49 @@ describe("pages page data", () => {
     }
   });
 
+  it("preserves middleware rewrite query state in stale ISR regeneration HTML", async () => {
+    const isrSet = vi.fn(async () => {});
+    let regenerationPromise: Promise<void> | undefined;
+    const result = await resolvePagesPageData(
+      createOptions({
+        isrCachePathname: "/posts/post?plant=rose",
+        nextDataQuery: { plant: "rose", slug: "post" },
+        isrGet: vi.fn().mockResolvedValue({
+          isStale: true,
+          value: {
+            cacheControl: { revalidate: 60 },
+            value: {
+              kind: "PAGES",
+              html: '<div id="__next">stale</div><script>window.__NEXT_DATA__ = {}</script>',
+              pageData: { pageProps: { stale: true } },
+            },
+          },
+        }),
+        isrSet,
+        pageModule: {
+          getStaticProps() {
+            return { props: { fresh: true }, revalidate: 60 };
+          },
+        },
+        triggerBackgroundRegeneration: vi.fn((_key, callback) => {
+          regenerationPromise = callback();
+        }),
+      }),
+    );
+
+    expect(result).toMatchObject({ kind: "response" });
+    await regenerationPromise;
+    expect(isrSet).toHaveBeenCalledWith(
+      "pages:/posts/post?plant=rose",
+      expect.objectContaining({
+        html: expect.stringContaining('"query":{"plant":"rose","slug":"post"}'),
+      }),
+      60,
+      undefined,
+      300,
+    );
+  });
+
   it("persists fallback data under an isolated middleware rewrite query key", async () => {
     const isrSet = vi.fn(async () => {});
     await resolvePagesPageData(

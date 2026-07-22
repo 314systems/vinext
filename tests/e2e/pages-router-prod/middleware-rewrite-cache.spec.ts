@@ -24,6 +24,28 @@ test.describe("Pages middleware rewrite cache parity", () => {
     expect(await dataResponse.json()).toMatchObject({
       pageProps: { message: "Hello from static GSP" },
     });
-    expect(dataResponse.headers()["cache-control"]).toBeUndefined();
+    expect(dataResponse.headers()["cache-control"]).toContain("s-maxage=");
+  });
+
+  test("query-varying static GSP rewrites stay private and preserve source router state", async ({
+    page,
+    request,
+  }) => {
+    const dataResponse = await request.get(
+      `${BASE}/_next/data/test-build-id/mw-rewrite-static-gsp-query.json?variant=one`,
+    );
+    expect(dataResponse.status()).toBe(200);
+    expect(dataResponse.headers()["cache-control"]).toBe("no-store, must-revalidate");
+    expect(await dataResponse.json()).toMatchObject({
+      pageProps: { message: "Hello from static GSP" },
+    });
+
+    await page.goto(`${BASE}/mw-rewrite-static-gsp-query?variant=one`);
+    await expect(page.getByTestId("as-path")).toHaveText(
+      "/mw-rewrite-static-gsp-query?variant=one",
+    );
+    await expect(page.getByTestId("query")).toHaveText(
+      JSON.stringify({ variant: "one", from: "middleware" }),
+    );
   });
 });

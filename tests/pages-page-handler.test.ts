@@ -445,6 +445,29 @@ describe("createPagesPageHandler — _next/data", () => {
       pageProps: { previewData: { draft: true } },
     });
   });
+
+  it("keeps query-varying middleware rewrite SSG data misses private", async () => {
+    const routeModule = makePageModule({
+      getStaticProps: async () => ({ props: { message: "rewritten" }, revalidate: 60 }),
+    });
+    const handler = createPagesPageHandler(
+      makeOpts({ pageRoutes: [makeRoute("/static-gsp", routeModule)] }),
+    );
+    const dataUrl = "/_next/data/test-build-id/source.json";
+
+    const response = await handler(
+      makeRequest(dataUrl),
+      "/static-gsp?variant=middleware",
+      null,
+      null,
+      { isDataReq: true, hasMiddlewareRewrite: true, originalUrl: dataUrl },
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store, must-revalidate");
+    expect(response.headers.get("cdn-cache-control")).toBeNull();
+    expect(await response.json()).toMatchObject({ pageProps: { message: "rewritten" } });
+  });
 });
 
 describe("createPagesPageHandler — preview responses", () => {
@@ -901,6 +924,64 @@ describe("createPagesPageHandler — SSR context", () => {
       | undefined;
     expect(ctx?.asPath).toBe("/about?hello=world");
   });
+
+  it.each([
+    {
+      label: "plain source URL",
+      i18nConfig: null,
+      requestUrl: "/source/?browser=one",
+      rewrittenUrl: "/posts/first?from=middleware",
+      expectedAsPath: "/source/?browser=one",
+    },
+    {
+      label: "locale-prefixed trailing-slash source URL",
+      i18nConfig: { locales: ["en", "fr"], defaultLocale: "en" },
+      requestUrl: "/en/source/?browser=one",
+      rewrittenUrl: "/en/posts/first?from=middleware",
+      expectedAsPath: "/source/?browser=one",
+    },
+  ])(
+    "preserves the $label as asPath for a static middleware rewrite",
+    async ({ i18nConfig, requestUrl, rewrittenUrl, expectedAsPath }) => {
+      const setSSRContext = vi.fn();
+      const route = makeRoute(
+        "/posts/:id",
+        makePageModule({
+          getStaticProps: async () => ({ props: { message: "rewritten" } }),
+        }),
+      );
+      const handler = createPagesPageHandler(
+        makeOpts({
+          pageRoutes: [route],
+          i18nConfig,
+          setSSRContext,
+          vinextConfig: {
+            basePath: "",
+            assetPrefix: "",
+            trailingSlash: true,
+            disableOptimizedLoading: true,
+          },
+          matchRoute: (url) =>
+            url.split("?")[0] === "/posts/first" ? { route, params: { id: "first" } } : null,
+        }),
+      );
+
+      await handler(makeRequest(requestUrl), rewrittenUrl, null, null, {
+        asPath: requestUrl,
+        hasMiddlewareRewrite: true,
+        originalUrl: requestUrl,
+      });
+
+      const ctx = setSSRContext.mock.calls.find((call) => call[0] !== null)?.[0] as
+        | { pathname?: string; query?: Record<string, unknown>; asPath?: string }
+        | undefined;
+      expect(ctx).toMatchObject({
+        pathname: "/posts/[id]",
+        query: { from: "middleware", id: "first" },
+        asPath: expectedAsPath,
+      });
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
