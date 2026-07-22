@@ -33,6 +33,8 @@ describe("App route NEXT_RUNTIME production parity", () => {
     });
     await fs.mkdir(path.join(root, "app", "edge-layout"), { recursive: true });
     await fs.mkdir(path.join(root, "app", "fake-edge"), { recursive: true });
+    await fs.mkdir(path.join(root, "app", "slot-only-edge", "@panel"), { recursive: true });
+    await fs.mkdir(path.join(root, "app", "primary-node", "@panel"), { recursive: true });
     await fs.writeFile(
       path.join(root, "app", "shared", "root-runtime.ts"),
       `export const rootRuntime = process.env.NEXT_RUNTIME`,
@@ -132,6 +134,39 @@ describe("App route NEXT_RUNTIME production parity", () => {
         export default function Page() { return <div id="runtime">{process.env.NEXT_RUNTIME}</div> }
       `,
     );
+    await fs.writeFile(
+      path.join(root, "app", "slot-only-edge", "layout.tsx"),
+      `export default function Layout({ children, panel }) { return <section>{children}{panel}</section> }`,
+    );
+    await fs.writeFile(
+      path.join(root, "app", "slot-only-edge", "page.tsx"),
+      `export default function Page() { return <div id="slot-only-primary-runtime">{process.env.NEXT_RUNTIME}</div> }`,
+    );
+    await fs.writeFile(
+      path.join(root, "app", "slot-only-edge", "@panel", "page.tsx"),
+      `
+        export const runtime = "edge"
+        export default function Panel() { return <div id="slot-only-panel-runtime">{process.env.NEXT_RUNTIME}</div> }
+      `,
+    );
+    await fs.writeFile(
+      path.join(root, "app", "primary-node", "layout.tsx"),
+      `export default function Layout({ children, panel }) { return <section>{children}{panel}</section> }`,
+    );
+    await fs.writeFile(
+      path.join(root, "app", "primary-node", "page.tsx"),
+      `
+        export const runtime = "nodejs"
+        export default function Page() { return <div id="primary-node-runtime">{process.env.NEXT_RUNTIME}</div> }
+      `,
+    );
+    await fs.writeFile(
+      path.join(root, "app", "primary-node", "@panel", "page.tsx"),
+      `
+        export const runtime = "edge"
+        export default function Panel() { return <div id="primary-node-panel-runtime">{process.env.NEXT_RUNTIME}</div> }
+      `,
+    );
 
     const rscOutDir = path.join(root, "dist", "server");
     clientOutDir = path.join(root, "dist", "client");
@@ -199,6 +234,24 @@ describe("App route NEXT_RUNTIME production parity", () => {
     const response = await handler(new Request("http://localhost/edge-layout"));
     expect(response).toBeInstanceOf(Response);
     expect(await (response as Response).text()).toBe("nodejs");
+  });
+
+  it("uses a slot-only edge runtime for the whole matched route graph", async () => {
+    const response = await handler(new Request("http://localhost/slot-only-edge"));
+    expect(response).toBeInstanceOf(Response);
+    const html = await (response as Response).text();
+    expect(html).toContain('id="slot-only-primary-runtime">edge');
+    expect(html).toContain('id="slot-only-panel-runtime">edge');
+    expect(html).toContain('id="root-runtime">edge');
+  });
+
+  it("keeps a primary node runtime authoritative over an edge slot", async () => {
+    const response = await handler(new Request("http://localhost/primary-node"));
+    expect(response).toBeInstanceOf(Response);
+    const html = await (response as Response).text();
+    expect(html).toContain('id="primary-node-runtime">nodejs');
+    expect(html).toContain('id="primary-node-panel-runtime">nodejs');
+    expect(html).toContain('id="root-runtime">nodejs');
   });
 
   it("uses a distinct root layout module graph for edge routes", async () => {

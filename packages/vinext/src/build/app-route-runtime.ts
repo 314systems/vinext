@@ -23,10 +23,24 @@ export function resolveAppRouteBuildRuntime(route: AppRoute): AppRouteRuntime {
     return readSegmentRuntime(route.routePath) ?? "nodejs";
   }
 
-  let runtime: AppRouteRuntime = "nodejs";
+  let primaryRuntime: AppRouteRuntime | null = null;
   for (const filePath of [...route.layouts, route.pagePath]) {
     if (!filePath) continue;
-    runtime = readSegmentRuntime(filePath) ?? runtime;
+    primaryRuntime = readSegmentRuntime(filePath) ?? primaryRuntime;
   }
-  return runtime;
+  if (primaryRuntime) return primaryRuntime;
+
+  // Match resolveAppPageSegmentConfig: primary branch config is authoritative.
+  // Slot-only config is considered in active branch order, from the slot
+  // layout through nested config layouts to its active page/default module.
+  for (const slot of route.parallelSlots) {
+    const activePagePath = slot.pagePath ?? slot.defaultPath;
+    for (const filePath of [slot.layoutPath, ...(slot.configLayoutPaths ?? []), activePagePath]) {
+      if (!filePath) continue;
+      const runtime = readSegmentRuntime(filePath);
+      if (runtime) return runtime;
+    }
+  }
+
+  return "nodejs";
 }

@@ -55,6 +55,27 @@ function route(overrides: Partial<AppRoute>): AppRoute {
   };
 }
 
+function parallelSlot(
+  overrides: Partial<AppRoute["parallelSlots"][number]>,
+): AppRoute["parallelSlots"][number] {
+  return {
+    key: "slot-key",
+    name: "panel",
+    ownerDir: "/app/@panel",
+    ownerTreePath: "root",
+    hasPage: true,
+    pagePath: null,
+    defaultPath: null,
+    layoutPath: null,
+    loadingPath: null,
+    errorPath: null,
+    interceptingRoutes: [],
+    layoutIndex: 0,
+    routeSegments: [],
+    ...overrides,
+  };
+}
+
 describe("App route build runtime", () => {
   it("extracts static runtime exports without matching comments or strings", async () => {
     const { paths } = await createRouteFiles({
@@ -85,6 +106,50 @@ describe("App route build runtime", () => {
     expect(
       resolveAppRouteBuildRuntime(
         route({ layouts: [paths["layout.tsx"]], routePath: paths["route.ts"] }),
+      ),
+    ).toBe("nodejs");
+  });
+
+  it("uses an active parallel-slot runtime when the primary branch has none", async () => {
+    const { paths } = await createRouteFiles({
+      "layout.tsx": `export default function Layout({ children }) { return children }`,
+      "page.tsx": `export default function Page() { return null }`,
+      "@panel/layout.tsx": `export default function Layout({ children }) { return children }`,
+      "@panel/nested/layout.tsx": `export const runtime = "edge"`,
+      "@panel/nested/page.tsx": `export default function Page() { return null }`,
+    });
+
+    expect(
+      resolveAppRouteBuildRuntime(
+        route({
+          layouts: [paths["layout.tsx"]],
+          pagePath: paths["page.tsx"],
+          parallelSlots: [
+            parallelSlot({
+              layoutPath: paths["@panel/layout.tsx"],
+              configLayoutPaths: [paths["@panel/nested/layout.tsx"]],
+              pagePath: paths["@panel/nested/page.tsx"],
+            }),
+          ],
+        }),
+      ),
+    ).toBe("edge");
+  });
+
+  it("keeps an explicit primary runtime authoritative over parallel slots", async () => {
+    const { paths } = await createRouteFiles({
+      "layout.tsx": `export default function Layout({ children }) { return children }`,
+      "page.tsx": `export const runtime = "nodejs"`,
+      "@panel/page.tsx": `export const runtime = "edge"`,
+    });
+
+    expect(
+      resolveAppRouteBuildRuntime(
+        route({
+          layouts: [paths["layout.tsx"]],
+          pagePath: paths["page.tsx"],
+          parallelSlots: [parallelSlot({ pagePath: paths["@panel/page.tsx"] })],
+        }),
       ),
     ).toBe("nodejs");
   });
