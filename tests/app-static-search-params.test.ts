@@ -30,6 +30,17 @@ describe("App Router static useSearchParams", () => {
       JSON.stringify({ name: "vinext-search-params", private: true, type: "module" }, null, 2),
     );
     await writeFile(
+      path.join(fixtureRoot, "next.config.ts"),
+      `export default {
+  async rewrites() {
+    return [{
+      source: "/rewritten-dynamic-search-params",
+      destination: "/dynamic-search-params?value=rewritten-value",
+    }];
+  },
+};`,
+    );
+    await writeFile(
       path.join(fixtureRoot, "app", "layout.tsx"),
       `export default function Layout({ children }) {
   return <html><body>{children}</body></html>;
@@ -75,6 +86,17 @@ export default async function Page({ searchParams }) {
     <p id="server-value">{value}</p>
     <Suspense fallback={<p>search params suspense</p>}><SearchParams /></Suspense>
   </>;
+}`,
+    );
+    await writeFile(
+      path.join(fixtureRoot, "app", "no-store-search-params", "page.tsx"),
+      `import { Suspense } from "react";
+import { unstable_noStore } from "next/cache";
+import SearchParams from "../search-params";
+
+export default function Page() {
+  unstable_noStore();
+  return <Suspense fallback={<p>search params suspense</p>}><SearchParams /></Suspense>;
 }`,
     );
     await fs.symlink(
@@ -140,6 +162,28 @@ export default async function Page({ searchParams }) {
       expect(dynamicHtml).toMatch(/<p id="value">(?:<!-- -->)?dynamic-value<\/p>/);
       expect(dynamicHtml).not.toContain("<p>search params suspense</p>");
       expect(dynamicHtml).not.toContain("BAILOUT_TO_CLIENT_SIDE_RENDERING");
+      expect(dynamicHtml).not.toContain('"useLocationSearchParams":true');
+
+      const noStoreResponse = await fetch(
+        `http://127.0.0.1:${port}/no-store-search-params?value=no-store-value`,
+      );
+      expect(noStoreResponse.status).toBe(200);
+      const noStoreHtml = await noStoreResponse.text();
+      expect(noStoreHtml).toMatch(/<p id="value">(?:<!-- -->)?no-store-value<\/p>/);
+      expect(noStoreHtml).not.toContain("<p>search params suspense</p>");
+      expect(noStoreHtml).not.toContain("BAILOUT_TO_CLIENT_SIDE_RENDERING");
+      expect(noStoreHtml).not.toContain('"useLocationSearchParams":true');
+
+      const rewrittenResponse = await fetch(
+        `http://127.0.0.1:${port}/rewritten-dynamic-search-params`,
+      );
+      expect(rewrittenResponse.status).toBe(200);
+      const rewrittenHtml = await rewrittenResponse.text();
+      expect(rewrittenHtml).toMatch(/<p id="server-value">(?:<!-- -->)?rewritten-value<\/p>/);
+      expect(rewrittenHtml).toMatch(/<p id="value">(?:<!-- -->)?rewritten-value<\/p>/);
+      expect(rewrittenHtml).toContain('"searchParams":[["value","rewritten-value"]]');
+      expect(rewrittenHtml).not.toContain('"useLocationSearchParams":true');
+      expect(rewrittenHtml).not.toContain("BAILOUT_TO_CLIENT_SIDE_RENDERING");
     } finally {
       server.close();
     }

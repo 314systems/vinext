@@ -1698,6 +1698,15 @@ describe("app page dispatch", () => {
         requestApis: [],
       }),
     ).toBe(false);
+    expect(
+      shouldUseStaticGenerationNavigationSemantics(
+        {
+          dynamicFetches: [],
+          requestApis: [],
+        },
+        true,
+      ),
+    ).toBe(false);
   });
 
   it("finalizes RSC observations before deciding search params bailout semantics", async () => {

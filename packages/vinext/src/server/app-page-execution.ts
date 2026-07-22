@@ -645,6 +645,20 @@ export async function readAppPageBinaryStream(
   return buffer.buffer;
 }
 
+export async function drainAppPageBinaryStream(stream: ReadableStream<Uint8Array>): Promise<void> {
+  const reader = stream.getReader();
+  try {
+    for (;;) {
+      const { done } = await reader.read();
+      if (done) {
+        return;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 export async function bufferAppPageBinaryStream(
   stream: ReadableStream<Uint8Array>,
 ): Promise<ReadableStream<Uint8Array>> {

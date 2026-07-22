@@ -3,6 +3,7 @@ import {
   buildAppPageFontLinkHeader,
   buildAppPageSpecialErrorResponse,
   bufferAppPageBinaryStream,
+  drainAppPageBinaryStream,
   probeAppPageComponent,
   probeAppPageLayouts,
   resolveAppPageSpecialError,
@@ -294,6 +295,23 @@ describe("app page execution helpers", () => {
 
     expect(pullCount).toBe(3);
     await expect(readStreamAsText(replay)).resolves.toBe("firstsecond");
+    expect(pullCount).toBe(3);
+  });
+
+  it("drains a binary stream to EOF without producing a retained copy", async () => {
+    let pullCount = 0;
+    const source = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pullCount += 1;
+        if (pullCount < 3) {
+          controller.enqueue(new Uint8Array(1024));
+        } else {
+          controller.close();
+        }
+      },
+    });
+
+    await expect(drainAppPageBinaryStream(source)).resolves.toBeUndefined();
     expect(pullCount).toBe(3);
   });
 

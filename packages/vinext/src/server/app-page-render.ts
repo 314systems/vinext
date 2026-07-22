@@ -15,6 +15,7 @@ import {
 } from "./app-page-cache-finalizer.js";
 import {
   buildAppPageFontLinkHeader,
+  drainAppPageBinaryStream,
   readAppPageBinaryStream,
   resolveAppPageSpecialError,
   teeAppPageRscStreamForCapture,
@@ -626,10 +627,12 @@ function wrapRscResponseForDevErrorReporting(
 
 export function shouldUseStaticGenerationNavigationSemantics(
   observation: AppPageRenderObservationState | undefined,
+  dynamicUsageDetected = false,
 ): boolean {
   return (
-    observation === undefined ||
-    (observation.dynamicFetches.length === 0 && observation.requestApis.length === 0)
+    !dynamicUsageDetected &&
+    (observation === undefined ||
+      (observation.dynamicFetches.length === 0 && observation.requestApis.length === 0))
   );
 }
 
@@ -837,8 +840,11 @@ export async function renderAppPageLifecycle(
     shouldCaptureRscForCacheMetadata
   ) {
     const [observationStream, embedStream] = rscSideStream.tee();
-    const observationResult = readAppPageBinaryStream(observationStream).then(() =>
-      shouldUseStaticGenerationNavigationSemantics(options.peekRenderObservationState?.()),
+    const observationResult = drainAppPageBinaryStream(observationStream).then(() =>
+      shouldUseStaticGenerationNavigationSemantics(
+        options.peekRenderObservationState?.(),
+        options.peekDynamicUsage?.() ?? peekDynamicUsage(),
+      ),
     );
     staticGenerationNavigationDecision =
       createStaticGenerationNavigationDecision(observationResult);
@@ -1036,7 +1042,10 @@ export async function renderAppPageLifecycle(
           ? options.isPrerender === true
             ? true
             : (staticGenerationNavigationDecision ??
-              shouldUseStaticGenerationNavigationSemantics(options.peekRenderObservationState?.()))
+              shouldUseStaticGenerationNavigationSemantics(
+                options.peekRenderObservationState?.(),
+                options.peekDynamicUsage?.() ?? peekDynamicUsage(),
+              ))
           : false,
         fallbackToErrorDocumentOnShellError:
           options.isPrerender === true && options.isSpeculativePrerender === true

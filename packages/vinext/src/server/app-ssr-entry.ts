@@ -320,7 +320,9 @@ function buildHeadInjectionHtml(
     pathname: navContext.pathname,
     searchParams: [...navContext.searchParams.entries()],
     ...(navContext.didSearchParamsBailout === true ||
-    (typeof navContext.isStaticGeneration === "object" && navContext.isForceStatic !== true)
+    (typeof navContext.isStaticGeneration === "object" &&
+      navContext.isStaticGeneration.peek() !== false &&
+      navContext.isForceStatic !== true)
       ? { useLocationSearchParams: true }
       : {}),
   };
