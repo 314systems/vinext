@@ -17728,10 +17728,10 @@ describe("Pages Router concurrent navigation", () => {
 
       const popstateHandler = listeners.get("popstate");
       expect(popstateHandler).toBeDefined();
-      const errors: Array<{ error: unknown; url: string }> = [];
+      const errors: Array<{ error: unknown; url: string; options: { shallow: boolean } }> = [];
       const onRouteChangeError = (...args: unknown[]) => {
-        const [error, url] = args;
-        errors.push({ error, url: url as string });
+        const [error, url, options] = args;
+        errors.push({ error, url: url as string, options: options as { shallow: boolean } });
       };
       Router.events.on("routeChangeError", onRouteChangeError);
 
@@ -17750,6 +17750,10 @@ describe("Pages Router concurrent navigation", () => {
       expect(errors).toHaveLength(1);
       expect(errors[0]?.url).toBe("/target#anchor");
       expect(errors[0]?.error).toMatchObject({ cancelled: true });
+      // Next.js reports the superseding navigation's route props, not the
+      // cancelled popstate transition's options.
+      // https://github.com/vercel/next.js/blob/canary/packages/next/src/shared/lib/router/router.ts
+      expect(errors[0]?.options).toEqual({ shallow: true });
       Router.events.off("routeChangeError", onRouteChangeError);
     } finally {
       vi.resetModules();
@@ -18567,6 +18571,19 @@ describe("Pages Router concurrent navigation", () => {
       vi.resetModules();
       const routerModule = await import("../packages/vinext/src/shims/router.js");
       const Router = routerModule.default;
+      const events: Array<[string, string]> = [];
+      const onRouteChangeStart = (url: unknown) => {
+        events.push(["start", String(url)]);
+      };
+      const onBeforeHistoryChange = (url: unknown) => {
+        events.push(["before", String(url)]);
+      };
+      const onRouteChangeComplete = (url: unknown) => {
+        events.push(["complete", String(url)]);
+      };
+      Router.events.on("routeChangeStart", onRouteChangeStart);
+      Router.events.on("beforeHistoryChange", onBeforeHistoryChange);
+      Router.events.on("routeChangeComplete", onRouteChangeComplete);
 
       const result = await Router.push("/old-home");
 
@@ -18589,6 +18606,18 @@ describe("Pages Router concurrent navigation", () => {
       );
       expect(win.location.href).toBe("http://localhost/docs/new-home");
       expect(render).toHaveBeenCalled();
+      // Next.js recursively re-enters change() for an internal redirect, so
+      // listeners receive a second start for the resolved destination.
+      // https://github.com/vercel/next.js/blob/canary/packages/next/src/shared/lib/router/router.ts
+      expect(events).toEqual([
+        ["start", "/docs/old-home"],
+        ["start", "/docs/new-home"],
+        ["before", "/docs/new-home"],
+        ["complete", "/docs/new-home"],
+      ]);
+      Router.events.off("routeChangeStart", onRouteChangeStart);
+      Router.events.off("beforeHistoryChange", onBeforeHistoryChange);
+      Router.events.off("routeChangeComplete", onRouteChangeComplete);
     } finally {
       vi.resetModules();
       if (previousBasePath === undefined) {

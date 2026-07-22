@@ -431,7 +431,6 @@ type PagesRouterRuntimeState = {
   navigationId: number;
   activeAbortController: AbortController | null;
   activeNavigationEventUrl: string | null;
-  activeNavigationEventOptions: { shallow: boolean } | null;
   cancellationEventEmittedControllers: WeakSet<AbortController>;
   cancelPendingRenderCommit: (() => void) | null;
   beforePopStateCb?: BeforePopStateCallback;
@@ -462,7 +461,6 @@ function createPagesRouterRuntimeState(): PagesRouterRuntimeState {
     navigationId: 0,
     activeAbortController: null,
     activeNavigationEventUrl: null,
-    activeNavigationEventOptions: null,
     cancellationEventEmittedControllers: new WeakSet(),
     cancelPendingRenderCommit: null,
     lastPathnameAndSearch:
@@ -1503,11 +1501,10 @@ function cancelPreviousRenderCommit(): void {
   routerRuntimeState.cancelPendingRenderCommit = null;
 }
 
-function cancelActiveNavigation(options: { deferAbort?: boolean } = {}): void {
+function cancelActiveNavigation(options: { deferAbort?: boolean; shallow: boolean }): void {
   const cancelledEventUrl = routerRuntimeState.activeNavigationEventUrl;
-  const cancelledEventOptions = routerRuntimeState.activeNavigationEventOptions;
   const controller = routerRuntimeState.activeAbortController;
-  if (!controller || !cancelledEventUrl || !cancelledEventOptions) return;
+  if (!controller || !cancelledEventUrl) return;
 
   if (options.deferAbort) queueMicrotask(() => controller.abort());
   else controller.abort();
@@ -1515,15 +1512,11 @@ function cancelActiveNavigation(options: { deferAbort?: boolean } = {}): void {
   routerRuntimeState.navigationId += 1;
   routerRuntimeState.activeAbortController = null;
   routerRuntimeState.activeNavigationEventUrl = null;
-  routerRuntimeState.activeNavigationEventOptions = null;
 
   routerRuntimeState.cancellationEventEmittedControllers.add(controller);
-  routerEvents.emit(
-    "routeChangeError",
-    new NavigationCancelledError(),
-    cancelledEventUrl,
-    cancelledEventOptions,
-  );
+  routerEvents.emit("routeChangeError", new NavigationCancelledError(), cancelledEventUrl, {
+    shallow: options.shallow,
+  });
 }
 
 function scheduleHardNavigationAndThrow(url: string, message: string): never {
@@ -1538,7 +1531,6 @@ function scheduleHardNavigationAndThrow(url: string, message: string): never {
 type NavigateClientOptions = {
   allowNotFoundResponse?: boolean;
   commitNavigation?: (browserUrl: string) => void;
-  eventOptions?: { shallow: boolean };
   locale?: string;
   isHydrationQueryUpdate?: boolean;
   /**
@@ -2554,7 +2546,6 @@ async function navigateClient(
   const controller = new AbortController();
   routerRuntimeState.activeAbortController = controller;
   routerRuntimeState.activeNavigationEventUrl = url;
-  routerRuntimeState.activeNavigationEventOptions = options.eventOptions ?? { shallow: false };
 
   const navId = ++routerRuntimeState.navigationId;
   let middlewareDataCacheEvictHref: string | null = null;
@@ -2735,7 +2726,6 @@ async function navigateClient(
     if (navId === routerRuntimeState.navigationId) {
       routerRuntimeState.activeAbortController = null;
       routerRuntimeState.activeNavigationEventUrl = null;
-      routerRuntimeState.activeNavigationEventOptions = null;
     }
     if (middlewareDataCacheEvictHref !== null) {
       evictPagesDataCache(middlewareDataCacheEvictHref);
@@ -3155,14 +3145,12 @@ async function performNavigation(
   const navigateOptions: NavigateClientOptions = errorRouteHtmlFetchUrl
     ? {
         allowNotFoundResponse: true,
-        eventOptions: { shallow },
         locale: navigationLocale,
         mode,
         scroll: scrollTarget,
         isHydrationQueryUpdate: options?._h === 1,
       }
     : {
-        eventOptions: { shallow },
         locale: navigationLocale,
         mode,
         scroll: scrollTarget,
@@ -3219,7 +3207,7 @@ async function performNavigation(
   // didn't — so the hash-only shortcut MUST NOT skip the fetch. Mirrors
   // Next.js where `onlyAHashChange` runs only after the route is unchanged.
   if (options?._h !== 1 && interpolatedRoute === resolved && isHashOnlyChange(full)) {
-    cancelActiveNavigation();
+    cancelActiveNavigation({ shallow });
     // Snapshot the outgoing entry's scroll before updateHistory mints a new
     // key, so a later back-popstate restores the position the user had
     // reached here rather than {x: 0, y: 0}. Upstream snapshots inside
@@ -3260,7 +3248,7 @@ async function performNavigation(
   const hasAppRouteMarker =
     appPathEntry !== undefined && "__appRouter" in appPathEntry && appPathEntry.__appRouter;
   if (hasAppRouteMarker) {
-    cancelActiveNavigation();
+    cancelActiveNavigation({ shallow });
     if (mode === "push") window.location.assign(full);
     else window.location.replace(full);
     return new Promise<boolean>(() => {});
@@ -3279,7 +3267,7 @@ async function performNavigation(
         )
       : resolveDirectHybridClientRouteOwner(resolved, __basePath);
   if (["app", "document"].includes(hybridOwner ?? "")) {
-    cancelActiveNavigation();
+    cancelActiveNavigation({ shallow });
     if (mode === "push") window.location.assign(full);
     else window.location.replace(full);
     return new Promise<boolean>(() => {});
@@ -3287,7 +3275,7 @@ async function performNavigation(
 
   if (mode === "push") saveScrollPosition();
   const isQueryUpdating = options?._h === 1;
-  cancelActiveNavigation({ deferAbort: true });
+  cancelActiveNavigation({ deferAbort: true, shallow });
   if (!isQueryUpdating) {
     routerEvents.emit("routeChangeStart", full, { shallow });
   }
@@ -3301,6 +3289,11 @@ async function performNavigation(
         ...navigateOptions,
         commitNavigation(browserUrl) {
           completedBrowserUrl = browserUrl;
+          // Next.js re-enters change() for a soft redirect, which announces
+          // the resolved destination before its history commit.
+          if (!isQueryUpdating && browserUrl !== full) {
+            routerEvents.emit("routeChangeStart", browserUrl, { shallow });
+          }
           routerEvents.emit("beforeHistoryChange", browserUrl, { shallow });
           updateHistory(mode, browserUrl, navState);
         },
@@ -3657,7 +3650,7 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
   };
 
   if (isHashOnly) {
-    cancelActiveNavigation();
+    cancelActiveNavigation({ shallow: false });
     adoptPopState();
     // Hash-only back/forward — no page fetch needed.
     //
@@ -3685,7 +3678,7 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
   const effectiveLocale = typeof stateLocale === "string" ? stateLocale : window.__VINEXT_LOCALE__;
 
   const fullBrowserUrl = browserUrl + window.location.hash;
-  cancelActiveNavigation();
+  cancelActiveNavigation({ shallow: false });
   routerEvents.emit("routeChangeStart", fullBrowserUrl, { shallow: false });
   void (async () => {
     // When manual scroll restoration is enabled we drive the position from the
@@ -3728,7 +3721,6 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
       getPagesHtmlFetchUrl(stateRouteUrl, effectiveLocale),
       {
         scroll: scrollTarget,
-        eventOptions: { shallow: false },
         commitNavigation() {
           routerEvents.emit("beforeHistoryChange", fullBrowserUrl, { shallow: false });
           adoptPopState();
