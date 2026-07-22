@@ -32,6 +32,7 @@ import {
   bypassedPagesIsrSet,
   getPagesMiddlewareRewriteCacheState,
 } from "./pages-middleware-rewrite-cache.js";
+import { buildInitialPagesRouterQuery } from "./pages-request-pipeline.js";
 import { buildPagesReadinessNextData } from "./pages-readiness.js";
 import type { PagesI18nRenderContext } from "./pages-page-response.js";
 import type { RenderPageEnhancers } from "./pages-document-initial-props.js";
@@ -319,6 +320,7 @@ export type CreatePagesPageHandlerOptions = {
 type RenderPageOptions = {
   isDataReq?: boolean;
   hasMiddlewareRewrite?: boolean;
+  rewriteQueryKeys?: string[];
   statusCode?: number;
   asPath?: string;
   originalUrl?: string;
@@ -656,6 +658,12 @@ export function createPagesPageHandler(
           : undefined;
         const errorResponseCachePathname = options?.__notFoundCachePathname ?? isrCachePathname;
         const query = mergeRouteParamsIntoQuery(parseQuery(renderRouteUrl), params);
+        const resolvedQuery = mergeRouteParamsIntoQuery(parseQuery(routeUrl), params);
+        const initialQuery = buildInitialPagesRouterQuery(
+          resolvedQuery,
+          params,
+          options?.rewriteQueryKeys,
+        );
 
         // Model Pages Router readiness for `next/navigation` compat hooks. The
         // serialized `__NEXT_DATA__` flags (gssp/gsp/gip/appGip/autoExport) plus
@@ -702,6 +710,7 @@ export function createPagesPageHandler(
             setSSRContext({
               pathname: routePattern,
               query,
+              initialQuery,
               asPath: routerAsPath,
               navigationIsReady,
               locale,
@@ -857,7 +866,7 @@ export function createPagesPageHandler(
           router,
           params,
           query,
-          nextDataQuery: query,
+          nextDataQuery: initialQuery,
           bypassCdnCache,
           bypassOriginCache,
           asPath: routerAsPath,
@@ -1090,6 +1099,7 @@ export function createPagesPageHandler(
           pageProps,
           props: renderProps,
           params,
+          initialQuery,
           query,
           bypassCdnCache,
           bypassOriginCache,

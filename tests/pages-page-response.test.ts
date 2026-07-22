@@ -261,6 +261,27 @@ describe("pages page response", () => {
     expect(common.renderDocumentToString).toHaveBeenCalledTimes(1);
   });
 
+  // Ported from Next.js: test/e2e/middleware-rewrites/test/index.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/middleware-rewrites/test/index.test.ts
+  it("serializes rewrite-added query state into __NEXT_DATA__", async () => {
+    const common = createCommonOptions();
+    const response = await renderPagesPageResponse({
+      ...common.options,
+      initialQuery: { slug: "post", rewriteSlug: "post-2" },
+      query: { slug: "post", ignoredRequestSearch: "value" },
+    });
+
+    const html = await response.text();
+    const nextDataMatch = html.match(
+      /<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/,
+    );
+    expect(nextDataMatch).not.toBeNull();
+    expect(JSON.parse(nextDataMatch![1]!).query).toEqual({
+      slug: "post",
+      rewriteSlug: "post-2",
+    });
+  });
+
   it("preserves array-valued non-set-cookie headers from gSSP responses", async () => {
     const common = createCommonOptions();
 

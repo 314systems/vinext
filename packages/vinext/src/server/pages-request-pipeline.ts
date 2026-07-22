@@ -35,7 +35,7 @@ import { applyConfigHeadersToHeaderRecord } from "./config-headers.js";
 import type { HeaderRecord } from "./request-pipeline.js";
 import { mergeHeaders } from "./worker-utils.js";
 import { normalizeDefaultLocalePathname, stripI18nLocaleForApiRoute } from "./pages-i18n.js";
-import { mergeRewriteQuery } from "../utils/query.js";
+import { mergeRewriteQuery, mergeRouteParamsIntoQuery, setQueryValue } from "../utils/query.js";
 import { addBasePathToPathname, hasBasePath } from "../utils/base-path.js";
 import { patternToNextFormat } from "../routing/route-validation.js";
 import { isOnDemandRevalidateRequest, PRERENDER_REVALIDATE_HEADER } from "./isr-cache.js";
@@ -44,6 +44,7 @@ import { isOnDemandRevalidateRequest, PRERENDER_REVALIDATE_HEADER } from "./isr-
 export type PagesRenderOptions = {
   isDataReq?: boolean;
   hasMiddlewareRewrite?: boolean;
+  rewriteQueryKeys?: string[];
   renderErrorPageOnMiss?: boolean;
   originalUrl?: string;
 };
@@ -339,6 +340,20 @@ export async function runPagesRequest(
   let resolvedUrl = originalResolvedUrl;
   let resolvedPathnameIsRequestPathname = true;
   let middlewareRewriteFired = false;
+  const rewriteQueryKeys = new Set<string>();
+  const recordRewriteQueryKeys = (rewriteUrl: string, inheritedUrl?: string): void => {
+    const rewriteParams = new URL(rewriteUrl, url).searchParams;
+    const inheritedParams = inheritedUrl ? new URL(inheritedUrl, url).searchParams : null;
+    for (const key of rewriteParams.keys()) {
+      if (
+        inheritedParams?.has(key) &&
+        JSON.stringify(inheritedParams.getAll(key)) === JSON.stringify(rewriteParams.getAll(key))
+      ) {
+        continue;
+      }
+      rewriteQueryKeys.add(key);
+    }
+  };
   const middlewareHeaders: HeaderRecord = {};
   let middlewareStatus: number | undefined;
   const serveFilesystemRoute = async (
@@ -432,7 +447,9 @@ export async function runPagesRequest(
     }
 
     if (result.rewriteUrl) {
+      const previousResolvedUrl = resolvedUrl;
       resolvedUrl = result.rewriteUrl;
+      recordRewriteQueryKeys(resolvedUrl, previousResolvedUrl);
       resolvedPathnameIsRequestPathname = false;
       middlewareRewriteFired = true;
     }
@@ -551,7 +568,9 @@ export async function runPagesRequest(
         // Bare proxy — no middleware-header merge (see Step 8 asymmetry note).
         return { type: "response", response: await proxyExternal(request, rewritten) };
       }
+      const previousResolvedUrl = resolvedUrl;
       resolvedUrl = mergeRewriteQuery(resolvedUrl, rewritten);
+      recordRewriteQueryKeys(resolvedUrl, previousResolvedUrl);
       resolvedPathname = pathnameForResolvedUrl(resolvedUrl);
       resolvedPathnameIsRequestPathname = false;
       configRewriteFired = true;
@@ -633,7 +652,9 @@ export async function runPagesRequest(
           // Bare proxy — no middleware-header merge (see Step 8 asymmetry note).
           return { type: "response", response: await proxyExternal(request, rewritten) };
         }
+        const previousResolvedUrl = resolvedUrl;
         resolvedUrl = mergeRewriteQuery(resolvedUrl, rewritten);
+        recordRewriteQueryKeys(resolvedUrl, previousResolvedUrl);
         resolvedPathname = pathnameForResolvedUrl(resolvedUrl);
         resolvedPathnameIsRequestPathname = false;
         configRewriteFired = true;
@@ -687,7 +708,9 @@ export async function runPagesRequest(
             response: await proxyExternal(request, fallbackRewrite),
           };
         }
+        const previousResolvedUrl = resolvedUrl;
         resolvedUrl = mergeRewriteQuery(resolvedUrl, fallbackRewrite);
+        recordRewriteQueryKeys(resolvedUrl, previousResolvedUrl);
         resolvedPathname = pathnameForResolvedUrl(resolvedUrl);
         resolvedPathnameIsRequestPathname = false;
         configRewriteFired = true;
@@ -714,6 +737,7 @@ export async function runPagesRequest(
       return {
         ...(isDataReq ? { isDataReq: true } : {}),
         ...(middlewareRewriteFired ? { hasMiddlewareRewrite: true } : {}),
+        ...(rewriteQueryKeys.size > 0 ? { rewriteQueryKeys: [...rewriteQueryKeys] } : {}),
         ...extra,
       };
     };
@@ -753,7 +777,9 @@ export async function runPagesRequest(
             response: await proxyExternal(request, fallbackRewrite),
           };
         }
+        const previousResolvedUrl = resolvedUrl;
         resolvedUrl = mergeRewriteQuery(resolvedUrl, fallbackRewrite);
+        recordRewriteQueryKeys(resolvedUrl, previousResolvedUrl);
         resolvedPathname = pathnameForResolvedUrl(resolvedUrl);
         resolvedPathnameIsRequestPathname = false;
         configRewriteFired = true;
@@ -839,7 +865,9 @@ export async function runPagesRequest(
         // Bare proxy — no middleware-header merge (see Step 8 asymmetry note).
         return { type: "response", response: await proxyExternal(request, fallbackRewrite) };
       }
+      const previousResolvedUrl = resolvedUrl;
       resolvedUrl = mergeRewriteQuery(resolvedUrl, fallbackRewrite);
+      recordRewriteQueryKeys(resolvedUrl, previousResolvedUrl);
       resolvedPathname = pathnameForResolvedUrl(resolvedUrl);
       resolvedPathnameIsRequestPathname = false;
       configRewriteFired = true;
@@ -864,6 +892,7 @@ export async function runPagesRequest(
         ? {
             ...(isDataReq ? { isDataReq: true } : {}),
             ...(middlewareRewriteFired ? { hasMiddlewareRewrite: true } : {}),
+            ...(rewriteQueryKeys.size > 0 ? { rewriteQueryKeys: [...rewriteQueryKeys] } : {}),
           }
         : undefined,
     stagedHeaders: middlewareHeaders,
@@ -871,4 +900,19 @@ export async function runPagesRequest(
     middlewareStatus,
     isDataReq,
   };
+}
+
+export function buildInitialPagesRouterQuery(
+  resolvedQuery: Record<string, string | string[]>,
+  params: Record<string, string | string[]>,
+  rewriteQueryKeys: readonly string[] = [],
+): Record<string, string | string[]> {
+  const initialQuery: Record<string, string | string[]> = {};
+  for (const key of rewriteQueryKeys) {
+    const value = resolvedQuery[key];
+    if (typeof value === "string" || Array.isArray(value)) {
+      setQueryValue(initialQuery, key, Array.isArray(value) ? [...value] : value);
+    }
+  }
+  return mergeRouteParamsIntoQuery(initialQuery, params);
 }

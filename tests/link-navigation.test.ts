@@ -2725,6 +2725,42 @@ describe("Link prefetch scheduling", () => {
     }
   });
 
+  // Ported from Next.js: test/e2e/middleware-general/test/index.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/middleware-general/test/index.test.ts
+  it("keeps direct middleware-matched gSSP Link prefetches chunk-only", async () => {
+    const observer = stubIntersectionObserver();
+    const shallowLoader = vi.fn(async () => ({ default: null }));
+    const result = await renderIsolatedLink({
+      appNavigation: false,
+      href: "/sha?hello=world",
+      nodeEnv: "production",
+      windowOverrides: {
+        __NEXT_DATA__: {
+          buildId: "build-id",
+          __vinext: { hasMiddleware: true },
+        },
+        __VINEXT_MIDDLEWARE_MATCHER__: ["/sha"],
+        __VINEXT_PAGE_LOADERS__: { "/sha": shallowLoader },
+        __VINEXT_PAGE_PATTERNS__: ["/sha"],
+        __VINEXT_PAGES_SSG_PATTERNS__: [],
+        __VINEXT_PAGES_SSP_PATTERNS__: ["/sha"],
+      },
+    });
+
+    try {
+      observer.dispatchIntersectingEntry(result.anchor, true);
+      await flushPrefetchTasks();
+      result.capturedAnchorProps.onMouseEnter?.({ currentTarget: result.anchor });
+      await flushPrefetchTasks();
+
+      expect(shallowLoader).toHaveBeenCalled();
+      expect(result.fetch).not.toHaveBeenCalled();
+      expect(result.pagePrefetchLinks).toEqual([]);
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
   it("prefetches implicit dynamic Pages Router links through a concrete route URL", async () => {
     const observer = stubIntersectionObserver();
     const dynamicLoader = vi.fn(async () => ({ default: null }));

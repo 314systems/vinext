@@ -5544,6 +5544,7 @@ export const loadServerActionClient = ${
                         hasMiddlewareRewrite,
                       )
                     : undefined,
+                  pipelineResult.renderOptions?.rewriteQueryKeys,
                 );
               }
             } catch (e) {

@@ -822,7 +822,17 @@ function prefetchUrl(
             fullRouteHref === fullHref
               ? dataTarget.middlewareDataHref
               : (getPagesMiddlewareDataHref(fullHref, __basePath) ?? undefined);
-          prefetchPagesData({ ...dataTarget, middlewareDataHref });
+          // A direct gSSP Link prefetch only warms the page chunk. Probing
+          // middleware here would execute the server page before a click and
+          // makes shallow Links issue observable data requests. Keep the
+          // middleware probe for SSG routes and explicit href/as masks, where
+          // it is needed to resolve/cache the destination ahead of navigation.
+          const shouldProbeMiddleware =
+            dataTarget.dataKind === "static" || fullRouteHref !== fullHref;
+          prefetchPagesData({
+            ...dataTarget,
+            middlewareDataHref: shouldProbeMiddleware ? middlewareDataHref : undefined,
+          });
         } else {
           // The target is not a Pages Router route — mark it on the Pages
           // Router `components` map if it matches an App Router route in the

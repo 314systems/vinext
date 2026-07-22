@@ -15983,6 +15983,75 @@ describe("Pages Router router helpers", () => {
     }
   });
 
+  // Ported from Next.js: test/e2e/middleware-general/test/index.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/middleware-general/test/index.test.ts
+  it("does not restore stale rewrite search state after shallow navigation", async () => {
+    const React = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { useRouter: useCompatRouter } =
+      await import("../packages/vinext/src/shims/compat-router.js");
+    const routerModule = await import("../packages/vinext/src/shims/router.js");
+
+    const previousWindow = (globalThis as any).window;
+    const win = {
+      location: {
+        pathname: "/sha",
+        search: "?hello=goodbye",
+        hash: "",
+        href: "http://localhost/sha?hello=goodbye",
+        hostname: "localhost",
+        assign: vi.fn(),
+        replace: vi.fn(),
+        reload: vi.fn(),
+      },
+      history: {
+        state: null,
+        pushState: vi.fn((_state: unknown, _title: string, url: string) => {
+          const nextUrl = new URL(url, win.location.href);
+          win.location.pathname = nextUrl.pathname;
+          win.location.search = nextUrl.search;
+          win.location.hash = nextUrl.hash;
+          win.location.href = nextUrl.href;
+        }),
+        replaceState: vi.fn(),
+        back: vi.fn(),
+      },
+      dispatchEvent: vi.fn(),
+      scrollTo: vi.fn(),
+      scrollX: 0,
+      scrollY: 0,
+      __NEXT_DATA__: {
+        page: "/shallow",
+        query: { hello: "goodbye" },
+        isFallback: false,
+      },
+      __VINEXT_LOCALE__: undefined,
+      __VINEXT_LOCALES__: undefined,
+      __VINEXT_DEFAULT_LOCALE__: undefined,
+    };
+    (globalThis as any).window = win;
+
+    try {
+      await routerModule.default.push("/sha?hello=world", undefined, { shallow: true });
+
+      let captured: unknown = "NOT_SET";
+      function Probe() {
+        captured = useCompatRouter();
+        return React.createElement("div", null, "probe");
+      }
+      renderToStaticMarkup(routerModule.wrapWithRouterContext(React.createElement(Probe)));
+
+      expect((captured as any).query).toEqual({ hello: "world" });
+      expect(win.__NEXT_DATA__.query).toEqual({ hello: "goodbye" });
+    } finally {
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+    }
+  });
+
   it("exposes beforePopState on both the Router singleton and wrapped router context", async () => {
     const React = await import("react");
     const { renderToStaticMarkup } = await import("react-dom/server");
@@ -18190,7 +18259,7 @@ describe("Pages Router concurrent navigation", () => {
 
     const fetch = vi.fn(async (url: RequestInfo | URL) => {
       const href = getFetchHref(url);
-      if (href === "/_next/data/build-1/old-home.json") {
+      if (href === "/_next/data/build-1/en/old-home.json") {
         return new Response("{}", {
           headers: { "x-nextjs-redirect": "/new-home" },
           status: 200,
@@ -18213,13 +18282,17 @@ describe("Pages Router concurrent navigation", () => {
       expect(result).toBe(true);
       expect(fetch).toHaveBeenNthCalledWith(
         1,
-        "/_next/data/build-1/old-home.json",
+        "/_next/data/build-1/en/old-home.json",
         expect.objectContaining({
           headers: expect.objectContaining({ "x-nextjs-data": "1" }),
         }),
       );
       expect(fetch).toHaveBeenNthCalledWith(2, "/new-home", expect.any(Object));
-      expect(replaceState).toHaveBeenLastCalledWith({}, "", "/new-home");
+      expect(replaceState).toHaveBeenLastCalledWith(
+        expect.objectContaining({ __N: true, url: "/new-home", as: "/new-home" }),
+        "",
+        "/new-home",
+      );
       expect(win.location.pathname).toBe("/new-home");
       expect(render).toHaveBeenCalled();
     } finally {
@@ -18533,7 +18606,15 @@ describe("Pages Router concurrent navigation", () => {
       );
       expect(fetch).toHaveBeenNthCalledWith(2, "/docs/new-home", expect.any(Object));
       expect(fetch).not.toHaveBeenCalledWith("/docs/docs/new-home", expect.any(Object));
-      expect(replaceState).toHaveBeenLastCalledWith({}, "", "/docs/new-home");
+      expect(replaceState).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          __N: true,
+          url: "/new-home",
+          as: "/new-home",
+        }),
+        "",
+        "/docs/new-home",
+      );
       expect(win.location.href).toBe("http://localhost/docs/new-home");
       expect(render).toHaveBeenCalled();
     } finally {
@@ -20525,6 +20606,199 @@ describe("Pages Router _next/data client navigation", () => {
     }
   });
 
+  // Ported from Next.js: test/e2e/middleware-rewrites/test/index.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/middleware-rewrites/test/index.test.ts
+  it("does not reuse an x-middleware-skip rewrite probe as page data", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const loaderAbout = vi.fn(async () => makePageModule("about"));
+    const { win, buildId } = createDataNavWindow({
+      loaders: { "/": vi.fn(async () => makePageModule("home")), "/about": loaderAbout },
+      ssgPatterns: ["/about"],
+      sspPatterns: [],
+    });
+    (win.__NEXT_DATA__ as any).__vinext = { hasMiddleware: true };
+    (win as any).__VINEXT_MIDDLEWARE_MATCHER__ = ["/rewrite-me-to-about"];
+    (globalThis as any).window = win;
+    vi.resetModules();
+
+    const fetchMock = vi.fn(async (url: RequestInfo | URL) => {
+      const href = getDataFetchHref(url);
+      if (href === `/_next/data/${buildId}/rewrite-me-to-about.json?override=internal`) {
+        return new Response("{}", {
+          headers: {
+            "content-type": "application/json",
+            "x-middleware-skip": "1",
+            "x-nextjs-rewrite": "/about?override=internal",
+          },
+        });
+      }
+      if (href === `/_next/data/${buildId}/about.json?override=internal`) {
+        return new Response(JSON.stringify({ pageProps: { title: "About Page" } }), {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${href}`);
+    });
+    globalThis.fetch = fetchMock as any;
+
+    try {
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      const result = await routerModule.default.push("/rewrite-me-to-about?override=internal");
+
+      expect(result).toBe(true);
+      expect(fetchMock.mock.calls.map(([url]) => getDataFetchHref(url))).toEqual([
+        `/_next/data/${buildId}/rewrite-me-to-about.json?override=internal`,
+        `/_next/data/${buildId}/about.json?override=internal`,
+      ]);
+      expect(loaderAbout).toHaveBeenCalledOnce();
+      expect(win.__NEXT_DATA__).toMatchObject({
+        page: "/about",
+        query: { override: "internal" },
+        props: { pageProps: { title: "About Page" } },
+      });
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+      vi.resetModules();
+    }
+  });
+
+  // Ported from Next.js: test/e2e/middleware-rewrites/test/index.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/middleware-rewrites/test/index.test.ts
+  it("renders destination pages with pending router state before committing history", async () => {
+    const previousWindow = (globalThis as any).window;
+    const previousDocument = (globalThis as any).document;
+    const originalFetch = globalThis.fetch;
+    const { renderToStaticMarkup } = await import("react-dom/server");
+
+    const observed: Array<{
+      asPath: string;
+      pathname: string;
+      query: Record<string, string | string[] | undefined>;
+      locationPathname: string;
+    }> = [];
+    let useRouter: typeof import("../packages/vinext/src/shims/router.js").useRouter;
+    const AboutPage = () => {
+      const router = useRouter();
+      observed.push({
+        asPath: router.asPath,
+        pathname: router.pathname,
+        query: { ...router.query },
+        locationPathname: window.location.pathname,
+      });
+      return "about";
+    };
+    const loaderAbout = vi.fn(async () => ({ default: AboutPage }));
+    const { win, render, pushState } = createDataNavWindow({
+      loaders: { "/": vi.fn(async () => makePageModule("home")), "/about": loaderAbout },
+      sspPatterns: ["/about"],
+    });
+    render.mockImplementation((element: unknown) => {
+      renderToStaticMarkup(element as any);
+      commitRenderedPagesRouterElement(element);
+    });
+    (globalThis as any).window = win;
+    (globalThis as any).document = { documentElement: {} };
+    vi.resetModules();
+
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ pageProps: {} }), {
+          headers: { "content-type": "application/json" },
+        }),
+    ) as any;
+
+    try {
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      useRouter = routerModule.useRouter;
+
+      const result = await routerModule.default.push("/about?hello=world", undefined, {
+        scroll: false,
+      });
+
+      expect(result).toBe(true);
+      expect(loaderAbout).toHaveBeenCalledOnce();
+      expect(observed).toEqual([
+        {
+          asPath: "/about?hello=world",
+          pathname: "/about",
+          query: { hello: "world" },
+          locationPathname: "/",
+        },
+      ]);
+      expect(pushState).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          __N: true,
+          as: "/about?hello=world",
+          url: "/about?hello=world",
+        }),
+        "",
+        "/about?hello=world",
+      );
+      expect(win.location.pathname).toBe("/about");
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      if (previousDocument === undefined) delete (globalThis as any).document;
+      else (globalThis as any).document = previousDocument;
+      globalThis.fetch = originalFetch;
+      vi.resetModules();
+    }
+  });
+
+  // Ported from Next.js: test/e2e/middleware-general/test/index.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/middleware-general/test/index.test.ts
+  it("locale-qualifies middleware probes before the rewrite target is known", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+
+    const shallowLoader = vi.fn(async () => makePageModule("shallow"));
+    const { win, buildId } = createDataNavWindow({
+      loaders: { "/shallow": shallowLoader },
+      sspPatterns: ["/shallow"],
+    });
+    Object.assign(win.__NEXT_DATA__ as any, {
+      __vinext: { hasMiddleware: true },
+      locale: "en",
+      locales: ["en", "fr"],
+      defaultLocale: "en",
+    });
+    (win as any).__VINEXT_MIDDLEWARE_MATCHER__ = ["/sha"];
+    (win as any).__VINEXT_LOCALES__ = ["en", "fr"];
+    (win as any).__VINEXT_CLIENT_REWRITES__ = {
+      beforeFiles: [{ source: "/sha", destination: "/shallow" }],
+      afterFiles: [],
+      fallback: [],
+    };
+    (globalThis as any).window = win;
+    vi.resetModules();
+
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async () =>
+        Promise.resolve(
+          new Response(JSON.stringify({ pageProps: {} }), {
+            headers: { "x-nextjs-rewrite": "/shallow" },
+          }),
+        ),
+    );
+    globalThis.fetch = fetchMock as any;
+
+    try {
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      await routerModule.default.push("/sha?hello=goodbye");
+
+      expect(fetchMock.mock.calls[0]?.[0]).toBe(`/_next/data/${buildId}/en/sha.json?hello=goodbye`);
+      expect(shallowLoader).toHaveBeenCalledOnce();
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+      vi.resetModules();
+    }
+  });
+
   it("matches middleware probes for path parameters, locale=false entries, and regex fallbacks", async () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
@@ -20567,9 +20841,9 @@ describe("Pages Router _next/data client navigation", () => {
       await Router.push("/regex");
 
       expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
-        `/_next/data/${buildId}/api/hello/world.json`,
+        `/_next/data/${buildId}/en/api/hello/world.json`,
         `/_next/data/${buildId}/en/localized.json`,
-        `/_next/data/${buildId}/regex.json`,
+        `/_next/data/${buildId}/en/regex.json`,
       ]);
       expect(loaderApiPath).toHaveBeenCalledTimes(1);
       expect(loaderLocalized).toHaveBeenCalledTimes(1);

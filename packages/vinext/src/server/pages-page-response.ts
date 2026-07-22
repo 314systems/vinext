@@ -197,6 +197,7 @@ type RenderPagesPageResponseOptions = {
   pageProps: Record<string, unknown>;
   props?: Record<string, unknown>;
   params: Record<string, unknown>;
+  initialQuery?: Record<string, unknown>;
   query?: Record<string, unknown>;
   bypassCdnCache?: boolean;
   /** Skip shared origin ISR writes for request-specific rewrite state. */
@@ -270,6 +271,7 @@ export function buildPagesNextDataScript(
     | "pageProps"
     | "props"
     | "params"
+    | "initialQuery"
     | "query"
     | "routePattern"
     | "safeJsonStringify"
@@ -285,7 +287,8 @@ export function buildPagesNextDataScript(
     // Next.js fallback:true shells intentionally omit the matched route
     // params. The live slug is published by the hydration query update after
     // the fallback data request resolves.
-    query: options.isFallback === true ? {} : (options.query ?? options.params),
+    query:
+      options.isFallback === true ? {} : (options.initialQuery ?? options.query ?? options.params),
     buildId: options.buildId,
     isFallback: options.isFallback === true,
   };
@@ -503,6 +506,7 @@ export async function renderPagesPageResponse(
     pageProps: options.pageProps,
     props: renderProps,
     params: options.params,
+    initialQuery: options.initialQuery,
     query: options.query,
     routePattern: options.routePattern,
     safeJsonStringify: options.safeJsonStringify,

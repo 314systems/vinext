@@ -88,6 +88,7 @@ import {
 } from "./pages-preview.js";
 import { isBotUserAgent } from "../utils/html-limited-bots.js";
 import type { PagesMiddlewareRewriteCacheState } from "./pages-middleware-rewrite-cache.js";
+import { buildInitialPagesRouterQuery } from "./pages-request-pipeline.js";
 
 /**
  * Render a React element to a string using renderToReadableStream.
@@ -698,6 +699,7 @@ export function createSSRHandler(
     isDataReq: boolean = false,
     originalUrl: string = url,
     middlewareRewriteCacheState?: PagesMiddlewareRewriteCacheState,
+    rewriteQueryKeys: string[] = [],
   ): Promise<void> => {
     const _reqStart = now();
     let _compileEnd: number | undefined;
@@ -822,6 +824,7 @@ export function createSSRHandler(
       ? params
       : null;
     let query = mergeRouteParamsIntoQuery(parseQuery(url), params);
+    const initialQuery = buildInitialPagesRouterQuery(query, params, rewriteQueryKeys);
     // Wrap the entire request in a single unified AsyncLocalStorage scope.
     const requestContext = createRequestContext();
     const closeRequest = () => void closeAfterResponse(requestContext);
@@ -923,6 +926,7 @@ export function createSSRHandler(
           routerShim.setSSRContext({
             pathname: patternToNextFormat(route.pattern),
             query,
+            initialQuery,
             asPath: requestAsPath,
             navigationIsReady,
             nextData: pagesNextData,
@@ -1059,6 +1063,7 @@ export function createSSRHandler(
               routerShim.setSSRContext({
                 pathname: patternToNextFormat(route.pattern),
                 query: {},
+                initialQuery: {},
                 asPath: patternToNextFormat(route.pattern),
                 navigationIsReady: false,
                 locale: locale ?? currentDefaultLocale,
@@ -1591,7 +1596,7 @@ export function createSSRHandler(
           {
             props: renderProps,
             page: patternToNextFormat(route.pattern),
-            query: isFallbackRender ? {} : query,
+            query: isFallbackRender ? {} : initialQuery,
             buildId: process.env.__VINEXT_BUILD_ID,
             isFallback: isFallbackRender,
             locale: locale ?? currentDefaultLocale,

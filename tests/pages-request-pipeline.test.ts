@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vite-plus/test";
 import {
+  buildInitialPagesRouterQuery,
   runPagesRequest,
   wrapMiddlewareWithBasePath,
   type PagesPipelineDeps,
@@ -44,6 +45,25 @@ function makeRenderPage(status = 200, body = "ok") {
       new Response(body, { status }),
   );
 }
+
+describe("buildInitialPagesRouterQuery", () => {
+  // Ported from Next.js: test/e2e/middleware-rewrites/test/index.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/middleware-rewrites/test/index.test.ts
+  it("preserves query state introduced by a config rewrite", () => {
+    expect(buildInitialPagesRouterQuery({ rewriteSlug: "post-2" }, {}, ["rewriteSlug"])).toEqual({
+      rewriteSlug: "post-2",
+    });
+  });
+
+  it("keeps route params authoritative over rewrite query values", () => {
+    expect(
+      buildInitialPagesRouterQuery({ slug: "rewrite", rewriteSlug: "post-2" }, { slug: "route" }, [
+        "slug",
+        "rewriteSlug",
+      ]),
+    ).toEqual({ slug: "route", rewriteSlug: "post-2" });
+  });
+});
 
 describe("on-demand revalidation middleware bypass", () => {
   it("uses the runtime adapter's authoritative credential verifier", async () => {
@@ -1487,7 +1507,7 @@ describe("afterFiles rewrites", () => {
     expect(renderPage).toHaveBeenCalledWith(
       expect.any(Request),
       "/ssg?slug=first",
-      { isDataReq: true },
+      { isDataReq: true, rewriteQueryKeys: ["slug"] },
       expect.any(Headers),
     );
     expect(result.response.headers.get(MIDDLEWARE_SKIP_HEADER)).toBeNull();
