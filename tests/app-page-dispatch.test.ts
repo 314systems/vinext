@@ -6,6 +6,7 @@ import {
   AppElementsWire,
 } from "../packages/vinext/src/server/app-elements.js";
 import { dispatchAppPage } from "../packages/vinext/src/server/app-page-dispatch.js";
+import { drainAppPageBinaryStream } from "../packages/vinext/src/server/app-page-execution.js";
 import { shouldUseStaticGenerationNavigationSemantics } from "../packages/vinext/src/server/app-page-render.js";
 import { createClientReuseManifestHeaderFromVisibleAppState } from "../packages/vinext/src/server/app-browser-client-reuse-manifest.js";
 import type { AppLayoutParamAccessTracker } from "../packages/vinext/src/server/app-layout-param-observation.js";
@@ -1632,7 +1633,14 @@ describe("app page dispatch", () => {
               new TextEncoder().encode("fallback-flight").buffer,
             );
           }
-          void captureOptions?.sideStream?.cancel().catch(() => {});
+          if (captureOptions?.sideStream) {
+            await drainAppPageBinaryStream(captureOptions.sideStream);
+          }
+          try {
+            readStaticGenerationNavigationContext(navigationContext);
+          } catch (pendingDecision) {
+            await pendingDecision;
+          }
           return createStream([
             navigationContext?.isStaticGeneration !== false &&
             navigationContext?.isForceStatic !== true
@@ -1722,13 +1730,16 @@ describe("app page dispatch", () => {
           expect(navigationContext?.isStaticGeneration).toEqual(
             expect.objectContaining({ peek: expect.any(Function), read: expect.any(Function) }),
           );
+          const sideConsumption = captureOptions?.sideStream
+            ? drainAppPageBinaryStream(captureOptions.sideStream)
+            : Promise.resolve();
           try {
             readStaticGenerationNavigationContext(navigationContext);
           } catch (pendingDecision) {
             await pendingDecision;
             readStaticGenerationNavigationContext(navigationContext);
           }
-          void captureOptions?.sideStream?.cancel().catch(() => {});
+          await sideConsumption;
           return createStream(["<html>dynamic content</html>"]);
         },
       }),

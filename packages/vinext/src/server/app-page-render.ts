@@ -15,7 +15,7 @@ import {
 } from "./app-page-cache-finalizer.js";
 import {
   buildAppPageFontLinkHeader,
-  drainAppPageBinaryStream,
+  observeAppPageBinaryStreamCompletion,
   readAppPageBinaryStream,
   resolveAppPageSpecialError,
   teeAppPageRscStreamForCapture,
@@ -839,8 +839,8 @@ export async function renderAppPageLifecycle(
     options.isPrerender !== true &&
     shouldCaptureRscForCacheMetadata
   ) {
-    const [observationStream, embedStream] = rscSideStream.tee();
-    const observationResult = drainAppPageBinaryStream(observationStream).then(() =>
+    const observedSideStream = observeAppPageBinaryStreamCompletion(rscSideStream);
+    const observationResult = observedSideStream.completion.then(() =>
       shouldUseStaticGenerationNavigationSemantics(
         options.peekRenderObservationState?.(),
         options.peekDynamicUsage?.() ?? peekDynamicUsage(),
@@ -848,7 +848,7 @@ export async function renderAppPageLifecycle(
     );
     staticGenerationNavigationDecision =
       createStaticGenerationNavigationDecision(observationResult);
-    rscSideStream = embedStream;
+    rscSideStream = observedSideStream.stream;
   }
 
   if (options.isRscRequest) {

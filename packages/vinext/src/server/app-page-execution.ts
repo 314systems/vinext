@@ -659,6 +659,70 @@ export async function drainAppPageBinaryStream(stream: ReadableStream<Uint8Array
   }
 }
 
+/**
+ * Observe EOF without adding an eager reader. The returned stream pulls exactly
+ * once from the source for each downstream pull, so completion can drive
+ * render-finalization decisions without defeating tee backpressure.
+ */
+export function observeAppPageBinaryStreamCompletion(stream: ReadableStream<Uint8Array>): {
+  completion: Promise<void>;
+  stream: ReadableStream<Uint8Array>;
+} {
+  const reader = stream.getReader();
+  let resolveCompletion!: () => void;
+  let rejectCompletion!: (reason?: unknown) => void;
+  let settled = false;
+  const completion = new Promise<void>((resolve, reject) => {
+    resolveCompletion = resolve;
+    rejectCompletion = reject;
+  });
+
+  const complete = (): void => {
+    if (settled) return;
+    settled = true;
+    reader.releaseLock();
+    resolveCompletion();
+  };
+  const fail = (error: unknown): void => {
+    if (settled) return;
+    settled = true;
+    reader.releaseLock();
+    rejectCompletion(error);
+  };
+
+  return {
+    completion,
+    stream: new ReadableStream<Uint8Array>(
+      {
+        async pull(controller) {
+          try {
+            const result = await reader.read();
+            if (result.done) {
+              complete();
+              controller.close();
+              return;
+            }
+            controller.enqueue(result.value);
+          } catch (error) {
+            fail(error);
+            controller.error(error);
+          }
+        },
+        async cancel(reason) {
+          try {
+            await reader.cancel(reason);
+            fail(reason ?? new Error("App page binary stream was cancelled"));
+          } catch (error) {
+            fail(error);
+            throw error;
+          }
+        },
+      },
+      { highWaterMark: 0 },
+    ),
+  };
+}
+
 export async function bufferAppPageBinaryStream(
   stream: ReadableStream<Uint8Array>,
 ): Promise<ReadableStream<Uint8Array>> {
