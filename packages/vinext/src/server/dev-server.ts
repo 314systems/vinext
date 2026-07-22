@@ -64,7 +64,10 @@ import {
 } from "./pages-page-data.js";
 import { sanitizeDestination } from "../config/config-matchers.js";
 import { createPagesDevAssetUrl, createPagesDevModuleUrl } from "./pages-dev-module-url.js";
-import { createPagesDevHydrationScript } from "./pages-dev-hydration.js";
+import {
+  createPagesDevHydrationScript,
+  type PagesDevHydrationOptions,
+} from "./pages-dev-hydration.js";
 import { getManifestFilesForModule } from "./pages-asset-tags.js";
 import { isSerializableProps } from "./pages-serializable-props.js";
 import { isDangerousScheme } from "vinext/shims/url-safety";
@@ -660,6 +663,7 @@ export function createSSRHandler(
   reactStrictMode = false,
   /** Next.js `expireTime`, used when formatting terminal GSP responses. */
   expireTime = PAGES_CACHE_ONE_YEAR_SECONDS,
+  clientRewrites?: PagesDevHydrationOptions["clientRewrites"],
 ) {
   const matcher = fileMatcher ?? createValidFileMatcher();
 
@@ -1586,6 +1590,7 @@ export function createSSRHandler(
 
         const hydrationScript = createPagesDevHydrationScript({
           appModuleSource,
+          clientRewrites,
           pageModuleSource,
           reactStrictMode: reactStrictMode === true,
           replaceFallbackRoute: true,

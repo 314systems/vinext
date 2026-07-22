@@ -5519,6 +5519,7 @@ export const loadServerActionClient = ${
                       nextConfig?.htmlLimitedBots,
                       nextConfig?.reactStrictMode === true,
                       nextConfig?.expireTime,
+                      nextConfig?.rewrites,
                     ),
                   };
                 }
