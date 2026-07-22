@@ -284,6 +284,12 @@ describe("Link App Router prefetch mode", () => {
       __VINEXT_LINK_PREFETCH_ROUTES__: [
         { canPrefetchLoadingShell: false, patternParts: ["about"], isDynamic: false },
         { canPrefetchLoadingShell: true, patternParts: ["blog", ":slug"], isDynamic: true },
+        {
+          canPrefetchLoadingShell: true,
+          hasGenerateStaticParams: true,
+          patternParts: ["posts", ":slug"],
+          isDynamic: true,
+        },
         { canPrefetchLoadingShell: true, patternParts: ["docs", ":slug+"], isDynamic: true },
         { canPrefetchLoadingShell: false, patternParts: ["products", ":id"], isDynamic: true },
         {
@@ -299,6 +305,9 @@ describe("Link App Router prefetch mode", () => {
     try {
       expect(canAutoPrefetchFullAppRoute("/about")).toBe(true);
       expect(canAutoPrefetchFullAppRoute("/blog/hello-world")).toBe(false);
+      // Generated dynamic paths start provisionally non-consumable until the
+      // server response supplies positive static-cache proof.
+      expect(canAutoPrefetchFullAppRoute("/posts/hello-world")).toBe(false);
       expect(canAutoPrefetchFullAppRoute("/docs/a/b")).toBe(false);
       expect(canAutoPrefetchFullAppRoute("/products/1")).toBe(true);
       expect(canAutoPrefetchFullAppRoute("/teams/vercel/dashboard")).toBe(false);
@@ -323,6 +332,12 @@ describe("Link App Router prefetch mode", () => {
       __VINEXT_LINK_PREFETCH_ROUTES__: [
         { canPrefetchLoadingShell: false, patternParts: ["about"], isDynamic: false },
         { canPrefetchLoadingShell: true, patternParts: ["blog", ":slug"], isDynamic: true },
+        {
+          canPrefetchLoadingShell: true,
+          hasGenerateStaticParams: true,
+          patternParts: ["posts", ":slug"],
+          isDynamic: true,
+        },
         { canPrefetchLoadingShell: false, patternParts: ["products", ":id"], isDynamic: true },
         { canPrefetchLoadingShell: false, patternParts: ["clothing", ":product"], isDynamic: true },
         {
@@ -338,21 +353,33 @@ describe("Link App Router prefetch mode", () => {
     try {
       expect(resolveAutoAppRoutePrefetch("/about")).toEqual({
         cacheForNavigation: true,
+        fetchFullPayload: true,
         prefetchShellFirst: true,
         shouldPrefetch: true,
       });
       expect(resolveAutoAppRoutePrefetch("/blog/hello-world")).toEqual({
         cacheForNavigation: false,
+        fetchFullPayload: false,
+        prefetchShellFirst: false,
+        shouldPrefetch: true,
+      });
+      expect(resolveAutoAppRoutePrefetch("/posts/hello-world")).toEqual({
+        cacheForNavigation: false,
+        fetchFullPayload: true,
+        navigationCacheResponsePolicy: "require-shared-cache",
         prefetchShellFirst: false,
         shouldPrefetch: true,
       });
       expect(resolveAutoAppRoutePrefetch("/settings")).toEqual({
         cacheForNavigation: true,
+        fetchFullPayload: true,
+        navigationCacheResponsePolicy: "reject-no-store",
         prefetchShellFirst: true,
         shouldPrefetch: true,
       });
       expect(resolveAutoAppRoutePrefetch("/products/1")).toEqual({
         cacheForNavigation: true,
+        fetchFullPayload: true,
         prefetchShellFirst: false,
         shouldPrefetch: true,
       });
@@ -361,16 +388,19 @@ describe("Link App Router prefetch mode", () => {
       // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/segment-cache/client-params/client-params.test.ts
       expect(resolveAutoAppRoutePrefetch("/clothing/1")).toEqual({
         cacheForNavigation: true,
+        fetchFullPayload: true,
         prefetchShellFirst: false,
         shouldPrefetch: true,
       });
       expect(resolveAutoAppRoutePrefetch("/teams/vercel/dashboard")).toEqual({
         cacheForNavigation: false,
+        fetchFullPayload: false,
         prefetchShellFirst: false,
         shouldPrefetch: true,
       });
       expect(resolveAutoAppRoutePrefetch("/missing")).toEqual({
         cacheForNavigation: false,
+        fetchFullPayload: false,
         prefetchShellFirst: false,
         shouldPrefetch: false,
       });

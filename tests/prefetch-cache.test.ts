@@ -564,6 +564,67 @@ describe("prefetch cache eviction", () => {
     expect(getPrefetchedUrls().has(rscUrl)).toBe(false);
   });
 
+  it("rejects no-store automatic full prefetches from navigation reuse", async () => {
+    const rscUrl = "/personalized-loading.rsc";
+    prefetchRscResponse(
+      rscUrl,
+      Promise.resolve(
+        new Response("cookie=before", {
+          headers: {
+            "cache-control": "no-store, must-revalidate",
+            "content-type": "text/x-component",
+          },
+        }),
+      ),
+      null,
+      null,
+      undefined,
+      { cacheForNavigation: true, navigationCacheResponsePolicy: "reject-no-store" },
+    );
+
+    const entry = getPrefetchCache().get(rscUrl);
+    await entry?.pending;
+    expect(entry?.cacheForNavigation).toBe(false);
+    expect(entry?.navigationCacheRejected).toBe(true);
+    await expect(consumePrefetchResponseForNavigation(rscUrl, null, null)).resolves.toBeNull();
+  });
+
+  it("admits generated dynamic paths only with positive shared-cache proof", async () => {
+    const staticUrl = "/posts/static.rsc";
+    const fallbackUrl = "/posts/fallback.rsc";
+    for (const [rscUrl, cacheControl] of [
+      [staticUrl, "s-maxage=31536000, stale-while-revalidate"],
+      [fallbackUrl, null],
+    ] as const) {
+      prefetchRscResponse(
+        rscUrl,
+        Promise.resolve(
+          new Response(rscUrl, {
+            headers: {
+              ...(cacheControl === null ? {} : { "cache-control": cacheControl }),
+              "content-type": "text/x-component",
+            },
+          }),
+        ),
+        null,
+        null,
+        undefined,
+        {
+          cacheForNavigation: false,
+          navigationCacheResponsePolicy: "require-shared-cache",
+        },
+      );
+      await getPrefetchCache().get(rscUrl)?.pending;
+    }
+
+    expect(getPrefetchCache().get(staticUrl)?.cacheForNavigation).toBe(true);
+    expect(getPrefetchCache().get(fallbackUrl)?.cacheForNavigation).toBe(false);
+    await expect(
+      consumePrefetchResponseForNavigation(staticUrl, null, null),
+    ).resolves.not.toBeNull();
+    await expect(consumePrefetchResponseForNavigation(fallbackUrl, null, null)).resolves.toBeNull();
+  });
+
   it("honors an explicit fallback stale window above the minimum for prefetched responses", async () => {
     const now = 1_000_000;
     vi.spyOn(Date, "now").mockReturnValue(now);

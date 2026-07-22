@@ -40,6 +40,7 @@ import {
 import { hasPendingAppRouterPageRedirect } from "../server/app-browser-mpa-navigation.js";
 import {
   VINEXT_DYNAMIC_STALE_TIME_HEADER,
+  VINEXT_CACHE_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_PARAMS_HEADER,
   VINEXT_RENDERED_PATH_AND_SEARCH_HEADER,
@@ -284,8 +285,11 @@ export type PrefetchOptions = {
 
 export type PrefetchCacheKind = "loading-shell" | "navigation" | "route-tree";
 
+type NavigationCacheResponsePolicy = "reject-no-store" | "require-shared-cache";
+
 export type PrefetchCacheEntry = {
   cacheForNavigation?: boolean;
+  navigationCacheRejected?: boolean;
   expiresAt?: number;
   invalidationTimer?: ReturnType<typeof setTimeout>;
   mountedSlotsHeader?: string | null;
@@ -983,6 +987,7 @@ export function prefetchRscResponse(
   behavior: {
     cacheForNavigation?: boolean;
     fallbackTtlMs?: number;
+    navigationCacheResponsePolicy?: NavigationCacheResponsePolicy;
     optimisticRouteShell?: boolean;
     prefetchKind?: PrefetchCacheKind;
     searchAgnosticShell?: boolean;
@@ -1014,6 +1019,12 @@ export function prefetchRscResponse(
   entry.pending = fetchPromise
     .then(async (response) => {
       if (response.ok) {
+        const responsePolicy = behavior.navigationCacheResponsePolicy;
+        if (responsePolicy !== undefined) {
+          const admitted = responseAllowsNavigationCache(response, responsePolicy);
+          entry.cacheForNavigation = admitted;
+          entry.navigationCacheRejected = !admitted;
+        }
         const snapshot = await snapshotRscResponse(response);
         if (cache.get(cacheKey) !== entry) return;
         const previousSize = getPrefetchCacheEntrySize(entry);
@@ -1049,6 +1060,27 @@ export function prefetchRscResponse(
   // entries inserted before it are candidates for removal.
   cache.set(cacheKey, entry);
   evictPrefetchCacheIfNeeded();
+}
+
+function responseAllowsNavigationCache(
+  response: Response,
+  policy: NavigationCacheResponsePolicy,
+): boolean {
+  const cacheControl = [
+    response.headers.get("cache-control"),
+    response.headers.get("cdn-cache-control"),
+  ]
+    .filter((value): value is string => value !== null)
+    .join(",");
+  const directives = cacheControl.split(",").map((directive) => directive.trim().toLowerCase());
+  if (directives.includes("no-store")) return false;
+  if (policy === "reject-no-store") return true;
+
+  if (directives.some((directive) => directive.startsWith("s-maxage="))) {
+    return true;
+  }
+  const cacheState = response.headers.get(VINEXT_CACHE_HEADER)?.toUpperCase();
+  return cacheState === "HIT" || cacheState === "STALE" || cacheState === "STATIC";
 }
 
 function addRenderedPathAndSearchPrefetchAlias(

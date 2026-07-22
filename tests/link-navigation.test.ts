@@ -59,6 +59,11 @@ const linkPrefetchRoutes = [
     isDynamic: false,
   },
   {
+    canPrefetchLoadingShell: true,
+    patternParts: ["personalized-loading"],
+    isDynamic: false,
+  },
+  {
     canPrefetchLoadingShell: false,
     patternParts: ["same-origin-intent-prefetch-target"],
     isDynamic: false,
@@ -1980,6 +1985,55 @@ describe("Link prefetch scheduling", () => {
       const entry = Array.from(getPrefetchCache().values())[0];
       expect(entry?.cacheForNavigation).toBe(true);
       expect(entry?.optimisticRouteShell).toBe(false);
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("does not reuse a no-store full prefetch for a fixed loading-boundary route", async () => {
+    const observer = stubIntersectionObserver();
+    const result = await renderIsolatedLink({
+      href: "/personalized-loading",
+      nodeEnv: "production",
+      props: { unstable_dynamicOnHover: true },
+    });
+
+    try {
+      // A fixed pathname is not proof of a static render. This models a route
+      // with loading.tsx that exports force-dynamic and reads a request cookie.
+      result.fetch.mockResolvedValueOnce(
+        new Response("prefetched-cookie=before", {
+          headers: { "cache-control": "no-store, must-revalidate" },
+        }),
+      );
+      observer.dispatchIntersectingEntry(result.anchor);
+      await waitForFetchCalls(result.fetch, 1);
+
+      const { consumePrefetchResponseForNavigation, getPrefetchCache } =
+        await import("../packages/vinext/src/shims/navigation.js");
+      const entry = Array.from(getPrefetchCache().values())[0];
+      await entry?.pending;
+
+      expect(entry?.cacheForNavigation).toBe(false);
+      // After the cookie/request state changes, navigation cannot consume the
+      // old prefetched payload and therefore must issue a fresh RSC request.
+      const fetchCall = result.fetch.mock.calls[0];
+      const prefetchedUrl = fetchCall?.[0];
+      expect(typeof prefetchedUrl).toBe("string");
+      expect(
+        await consumePrefetchResponseForNavigation(prefetchedUrl as string, null, null),
+      ).toBeNull();
+
+      result.fetch.mockResolvedValueOnce(new Response("prefetched-cookie=after"));
+      result.capturedAnchorProps.onMouseEnter?.({
+        currentTarget: result.anchor,
+      } as CapturedIntentEvent);
+      await waitForFetchCalls(result.fetch, 2);
+      expect(result.fetch.mock.calls.length).toBeGreaterThanOrEqual(2);
+      const freshFetchInit = result.fetch.mock.calls.at(-1)?.[1] as RequestInit | undefined;
+      expect(
+        (freshFetchInit?.headers as Headers | undefined)?.get(VINEXT_RSC_RENDER_MODE_HEADER),
+      ).toBeNull();
     } finally {
       result.restoreNodeEnv();
     }
