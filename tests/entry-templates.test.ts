@@ -131,6 +131,7 @@ describe("App Router generated manifest construction", () => {
   it("isolates edge route modules with an edge runtime module graph", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-app-route-runtime-"));
     const rootLayout = path.join(root, "app/layout.tsx");
+    const rootNotFound = path.join(root, "app/not-found.tsx");
     const edgeLayout = path.join(root, "app/edge/layout.tsx");
     const sharedPage = path.join(root, "app/shared/page.tsx");
     fs.mkdirSync(path.dirname(edgeLayout), { recursive: true });
@@ -139,6 +140,7 @@ describe("App Router generated manifest construction", () => {
       rootLayout,
       `export default function Layout({ children }) { return children }`,
     );
+    fs.writeFileSync(rootNotFound, `export default function NotFound() { return null }`);
     fs.writeFileSync(
       edgeLayout,
       `export const runtime = "edge"; export { default } from "../layout"`,
@@ -152,14 +154,22 @@ describe("App Router generated manifest construction", () => {
     try {
       const manifest = buildAppRscManifestCode({
         routes: [
-          { ...base, pattern: "/node", pagePath: sharedPage, layouts: [rootLayout] },
+          {
+            ...base,
+            pattern: "/node",
+            pagePath: sharedPage,
+            layouts: [rootLayout],
+            notFoundPath: rootNotFound,
+            notFoundPaths: [rootNotFound],
+          },
           {
             ...base,
             pattern: "/edge",
             pagePath: sharedPage,
             layouts: [rootLayout, edgeLayout],
             layoutErrorPaths: [null, null],
-            notFoundPaths: [null, null],
+            notFoundPath: rootNotFound,
+            notFoundPaths: [rootNotFound, null],
             forbiddenPaths: [null, null],
             unauthorizedPaths: [null, null],
             layoutTreePositions: [0, 1],
@@ -173,6 +183,12 @@ describe("App Router generated manifest construction", () => {
       );
       expect(imports).toContain(
         `import(${JSON.stringify(`${edgeLayout}?__vinext_app_runtime=edge`)})`,
+      );
+      expect(imports).toContain(
+        `import(${JSON.stringify(`${rootLayout}?__vinext_app_runtime=edge`)})`,
+      );
+      expect(imports).toContain(
+        `import(${JSON.stringify(`${rootNotFound}?__vinext_app_runtime=edge`)})`,
       );
     } finally {
       fs.rmSync(root, { recursive: true, force: true });

@@ -51,7 +51,7 @@ function canLoadAsScriptModule(id: string): boolean {
   );
 }
 
-async function hasReactServerBoundaryDirective(id: string): Promise<boolean> {
+async function hasUseClientDirective(id: string): Promise<boolean> {
   const pathname = splitId(id).pathname;
   if (!path.isAbsolute(pathname) || pathname.startsWith("\0")) return false;
 
@@ -71,7 +71,7 @@ async function hasReactServerBoundaryDirective(id: string): Promise<boolean> {
       if (statement.type !== "ExpressionStatement" || typeof statement.directive !== "string") {
         break;
       }
-      if (statement.directive === "use client" || statement.directive === "use server") return true;
+      if (statement.directive === "use client") return true;
     }
   } catch {
     return false;
@@ -170,7 +170,7 @@ export function createAppRouteRuntimePlugin(): Plugin {
         !resolved ||
         resolved.external ||
         !canLoadAsScriptModule(resolved.id) ||
-        (await hasReactServerBoundaryDirective(resolved.id))
+        (await hasUseClientDirective(resolved.id))
       ) {
         return resolved;
       }

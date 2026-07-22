@@ -268,7 +268,7 @@ function buildRouteEntries(
     const runtimeImports: ImportAllocator = {
       ...imports,
       getLazyLoaderVar: (filePath) =>
-        canonicalRuntimePaths.has(filePath)
+        canonicalRuntimePaths.has(filePath) && routeRuntime !== "edge"
           ? imports.getEagerLoaderVar(filePath)
           : imports.getLazyLoaderVar(filePath, routeRuntime === "edge" ? "edge" : undefined),
     };
@@ -279,9 +279,9 @@ function buildRouteEntries(
     // siblings so static routes get an empty literal and stay lean.
     const staticSiblings = route.isDynamic ? computeAppRouteStaticSiblings(routes, route) : [];
     // Root layouts also have eager namespace imports for route-miss boundary
-    // rendering. Keep them in this positional loader array too so matched-route
-    // hydration has one uniform path; their dynamic import resolves from the
-    // module cache after the eager import rather than evaluating them twice.
+    // rendering. Node routes reuse that canonical graph. Edge routes load a
+    // distinct runtime-qualified graph so the root module and its transitive
+    // dependencies observe the matched route runtime.
     const layoutLoaders = lazyLoaderArray(route.layouts, runtimeImports);
     const templateLoaders = lazyLoaderArray(route.templates, runtimeImports);
     const loadingPaths = route.loadingPaths ?? [];

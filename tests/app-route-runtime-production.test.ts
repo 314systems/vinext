@@ -15,6 +15,7 @@ describe("App route NEXT_RUNTIME production parity", () => {
   let clientOutDir: string;
   let clientReferenceIds: string[];
   let serverReferenceIds: string[];
+  let edgeRootLayoutEvaluationCount: number;
 
   beforeAll(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-app-route-runtime-prod-"));
@@ -33,12 +34,17 @@ describe("App route NEXT_RUNTIME production parity", () => {
     await fs.mkdir(path.join(root, "app", "edge-layout"), { recursive: true });
     await fs.mkdir(path.join(root, "app", "fake-edge"), { recursive: true });
     await fs.writeFile(
+      path.join(root, "app", "shared", "root-runtime.ts"),
+      `export const rootRuntime = process.env.NEXT_RUNTIME`,
+    );
+    await fs.writeFile(
       path.join(root, "app", "layout.tsx"),
       `
+        import { rootRuntime } from "./shared/root-runtime"
         globalThis.__vinextRootLayoutEvaluations =
           (globalThis.__vinextRootLayoutEvaluations ?? 0) + 1
         export default function Layout({ children }) {
-          return <html><body><span id="root-layout-evaluations">{globalThis.__vinextRootLayoutEvaluations}</span>{children}</body></html>
+          return <html><body><span id="root-runtime">{rootRuntime}</span><span id="root-layout-evaluations">{globalThis.__vinextRootLayoutEvaluations}</span>{children}</body></html>
         }
       `,
     );
@@ -54,16 +60,22 @@ describe("App route NEXT_RUNTIME production parity", () => {
       path.join(root, "app", "shared", "actions.ts"),
       `
         "use server"
-        export async function sharedAction() { return "vinext-shared-runtime-action" }
+        import { actionDependencyRuntime } from "./action-runtime"
+        export async function sharedAction() { return actionDependencyRuntime }
       `,
+    );
+    await fs.writeFile(
+      path.join(root, "app", "shared", "action-runtime.ts"),
+      `export const actionDependencyRuntime = process.env.NEXT_RUNTIME`,
     );
     await fs.writeFile(
       path.join(root, "app", "shared", "page.tsx"),
       `
         import { SharedClient } from "./client"
         import { sharedAction } from "./actions"
-        export default function Page() {
-          return <><div id="runtime">{process.env.NEXT_RUNTIME}</div><SharedClient /><form action={sharedAction} /></>
+        export default async function Page() {
+          const actionRuntime = await sharedAction()
+          return <><div id="runtime">{process.env.NEXT_RUNTIME}</div><div id="action-runtime">{actionRuntime}</div><SharedClient /><form action={sharedAction} /></>
         }
       `,
     );
@@ -159,11 +171,24 @@ describe("App route NEXT_RUNTIME production parity", () => {
   it("stamps shared modules with the matched route runtime", async () => {
     const nodeResponse = await handler(new Request("http://localhost/nodejs"));
     expect(nodeResponse).toBeInstanceOf(Response);
-    expect(await (nodeResponse as Response).text()).toContain('id="runtime">nodejs');
+    const nodeHtml = await (nodeResponse as Response).text();
+    expect(nodeHtml).toContain('id="runtime">nodejs');
+    expect(nodeHtml).toContain('id="root-runtime">nodejs');
+    expect(nodeHtml).toContain('id="action-runtime">nodejs');
 
+    const beforeEdgeRequest = Number(
+      (globalThis as { __vinextRootLayoutEvaluations?: number }).__vinextRootLayoutEvaluations ?? 0,
+    );
     const edgeResponse = await handler(new Request("http://localhost/edge"));
     expect(edgeResponse).toBeInstanceOf(Response);
-    expect(await (edgeResponse as Response).text()).toContain('id="runtime">edge');
+    const edgeHtml = await (edgeResponse as Response).text();
+    expect(edgeHtml).toContain('id="runtime">edge');
+    expect(edgeHtml).toContain('id="root-runtime">edge');
+    expect(edgeHtml).toContain('id="action-runtime">edge');
+    edgeRootLayoutEvaluationCount = Number(
+      (globalThis as { __vinextRootLayoutEvaluations?: number }).__vinextRootLayoutEvaluations ?? 0,
+    );
+    expect(edgeRootLayoutEvaluationCount).toBe(beforeEdgeRequest + 1);
 
     const fakeEdgeResponse = await handler(new Request("http://localhost/fake-edge"));
     expect(fakeEdgeResponse).toBeInstanceOf(Response);
@@ -176,15 +201,14 @@ describe("App route NEXT_RUNTIME production parity", () => {
     expect(await (response as Response).text()).toBe("nodejs");
   });
 
-  it("evaluates the eager root layout only once for edge routes", async () => {
+  it("uses a distinct root layout module graph for edge routes", async () => {
     const beforeRequest = Number(
       (globalThis as { __vinextRootLayoutEvaluations?: number }).__vinextRootLayoutEvaluations ?? 0,
     );
+    expect(beforeRequest).toBe(edgeRootLayoutEvaluationCount);
     const response = await handler(new Request("http://localhost/edge"));
     expect(response).toBeInstanceOf(Response);
-    expect(await (response as Response).text()).toContain(
-      `id="root-layout-evaluations">${beforeRequest}`,
-    );
+    expect(await (response as Response).text()).toContain('id="root-runtime">edge');
     expect(
       Number(
         (globalThis as { __vinextRootLayoutEvaluations?: number }).__vinextRootLayoutEvaluations ??
@@ -224,11 +248,14 @@ describe("App route NEXT_RUNTIME production parity", () => {
     ).toHaveLength(1);
   });
 
-  it("emits one server reference for an action module shared across route runtimes", () => {
+  it("emits runtime-specific server references for an action shared across route runtimes", () => {
     const sharedServerReferences = serverReferenceIds.filter((id) =>
       id.includes("/app/shared/actions.ts"),
     );
-    expect(sharedServerReferences).toHaveLength(1);
-    expect(sharedServerReferences[0]).not.toContain("__vinext_app_runtime");
+    expect(sharedServerReferences).toHaveLength(2);
+    expect(sharedServerReferences.some((id) => !id.includes("__vinext_app_runtime"))).toBe(true);
+    expect(sharedServerReferences.some((id) => id.includes("__vinext_app_runtime=edge"))).toBe(
+      true,
+    );
   });
 });
