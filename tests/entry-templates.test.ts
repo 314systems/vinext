@@ -1250,6 +1250,20 @@ describe("App Router entry templates", () => {
     );
   });
 
+  it("maps canonical client action ids to the matched edge route runtime", () => {
+    const code = generateRscEntry("/tmp/test/app", minimalAppRoutes, null, [], null, "", false, {
+      serverActionRuntimeMap: { "canonical-reference": "edge-reference" },
+    });
+
+    expect(code).toContain(
+      'const __serverActionRuntimeMap = {"canonical-reference":"edge-reference"}',
+    );
+    expect(code).toContain(
+      "__resolveServerActionRuntimeId(\n            actionReferenceId,\n            __actionIsEdgeRuntime,",
+    );
+    expect(code).toContain("__serverActionRuntimeMap,\n            import.meta.env.DEV,");
+  });
+
   it("generateRscEntry omits server action imports when no server references were found", () => {
     const code = generateRscEntry("/tmp/test/app", minimalAppRoutes, null, [], null, "", false, {
       hasServerActions: false,

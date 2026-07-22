@@ -5,6 +5,7 @@ import { createServer, type Plugin } from "vite";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   createAppRouteRuntimePlugin,
+  createAppRouteRuntimeServerReferenceMap,
   withAppRouteRuntime,
 } from "../packages/vinext/src/plugins/app-route-runtime.js";
 
@@ -20,6 +21,26 @@ function transformOutput(result: unknown): { code: string; map: unknown } {
 }
 
 describe("App route runtime module graph", () => {
+  it("maps canonical server references to their edge-qualified counterparts", () => {
+    const canonicalId = "/app/actions.ts";
+    const edgeId = withAppRouteRuntime(canonicalId, "edge");
+
+    expect(
+      createAppRouteRuntimeServerReferenceMap({
+        [canonicalId]: {
+          exportNames: ["reportRuntime"],
+          importId: canonicalId,
+          referenceKey: "canonical-reference",
+        },
+        [edgeId]: {
+          exportNames: ["reportRuntime"],
+          importId: edgeId,
+          referenceKey: "edge-reference",
+        },
+      }),
+    ).toEqual({ "canonical-reference": "edge-reference" });
+  });
+
   it("propagates the edge runtime through server-side user imports", async () => {
     const plugin = createAppRouteRuntimePlugin();
     const resolve = vi.fn(async () => ({ id: "/app/shared.ts" }));

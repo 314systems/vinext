@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import MagicString from "magic-string";
 import path from "pathslash";
 import { parseAst, type Plugin } from "vite";
+import type { PluginApi } from "@vitejs/plugin-rsc";
 import type { AppRouteRuntime } from "../build/app-route-runtime.js";
 
 const APP_ROUTE_RUNTIME_QUERY = "__vinext_app_runtime";
@@ -38,6 +39,25 @@ function runtimeFromId(id: string): AppRouteRuntime | null {
 export function withAppRouteRuntime(id: string, runtime: AppRouteRuntime): string {
   const idWithoutRuntime = withoutAppRouteRuntime(id);
   return `${idWithoutRuntime}${idWithoutRuntime.includes("?") ? "&" : "?"}${APP_ROUTE_RUNTIME_QUERY}=${runtime}`;
+}
+
+type ServerReferenceMeta = PluginApi["manager"]["serverReferenceMetaMap"][string];
+
+export function createAppRouteRuntimeServerReferenceMap(
+  serverReferenceMetaMap: Record<string, ServerReferenceMeta>,
+): Record<string, string> {
+  const metas = Object.values(serverReferenceMetaMap);
+  const byImportId = new Map(metas.map((meta) => [meta.importId, meta]));
+  const runtimeMap: Record<string, string> = {};
+
+  for (const edgeMeta of metas) {
+    if (runtimeFromId(edgeMeta.importId) !== "edge") continue;
+    const canonicalMeta = byImportId.get(withoutAppRouteRuntime(edgeMeta.importId));
+    if (!canonicalMeta || canonicalMeta.referenceKey === edgeMeta.referenceKey) continue;
+    runtimeMap[canonicalMeta.referenceKey] = edgeMeta.referenceKey;
+  }
+
+  return runtimeMap;
 }
 
 function canLoadAsScriptModule(id: string): boolean {

@@ -8,13 +8,14 @@ import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import vinext from "../packages/vinext/src/index.js";
 
 type RscHandler = (request: Request) => Promise<Response | string | null | undefined>;
+type ServerReferenceCapture = { importId: string; referenceKey: string };
 
 describe("App route NEXT_RUNTIME production parity", () => {
   let root: string;
   let handler: RscHandler;
   let clientOutDir: string;
   let clientReferenceIds: string[];
-  let serverReferenceIds: string[];
+  let serverReferences: ServerReferenceCapture[];
   let edgeRootLayoutEvaluationCount: number;
 
   beforeAll(async () => {
@@ -54,8 +55,11 @@ describe("App route NEXT_RUNTIME production parity", () => {
       path.join(root, "app", "shared", "client.tsx"),
       `
         "use client"
+        import { sharedAction } from "./actions"
         export const sharedClientMarker = "vinext-shared-runtime-client"
-        export function SharedClient() { return <div>{sharedClientMarker}</div> }
+        export function SharedClient() {
+          return <form action={sharedAction}><div>{sharedClientMarker}</div></form>
+        }
       `,
     );
     await fs.writeFile(
@@ -63,7 +67,9 @@ describe("App route NEXT_RUNTIME production parity", () => {
       `
         "use server"
         import { actionDependencyRuntime } from "./action-runtime"
-        export async function sharedAction() { return actionDependencyRuntime }
+        export async function sharedAction(source = "form") {
+          return source + ":" + actionDependencyRuntime
+        }
       `,
     );
     await fs.writeFile(
@@ -76,7 +82,7 @@ describe("App route NEXT_RUNTIME production parity", () => {
         import { SharedClient } from "./client"
         import { sharedAction } from "./actions"
         export default async function Page() {
-          const actionRuntime = await sharedAction()
+          const actionRuntime = await sharedAction("render")
           return <><div id="runtime">{process.env.NEXT_RUNTIME}</div><div id="action-runtime">{actionRuntime}</div><SharedClient /><form action={sharedAction} /></>
         }
       `,
@@ -186,7 +192,9 @@ describe("App route NEXT_RUNTIME production parity", () => {
             if (this.environment?.name !== "rsc") return;
             const pluginApi = getPluginApi(this.environment.config);
             clientReferenceIds = Object.keys(pluginApi?.manager.clientReferenceMetaMap ?? {});
-            serverReferenceIds = Object.keys(pluginApi?.manager.serverReferenceMetaMap ?? {});
+            serverReferences = Object.values(pluginApi?.manager.serverReferenceMetaMap ?? {}).map(
+              ({ importId, referenceKey }) => ({ importId, referenceKey }),
+            );
           },
         },
       ],
@@ -209,7 +217,7 @@ describe("App route NEXT_RUNTIME production parity", () => {
     const nodeHtml = await (nodeResponse as Response).text();
     expect(nodeHtml).toContain('id="runtime">nodejs');
     expect(nodeHtml).toContain('id="root-runtime">nodejs');
-    expect(nodeHtml).toContain('id="action-runtime">nodejs');
+    expect(nodeHtml).toContain('id="action-runtime">render:nodejs');
 
     const beforeEdgeRequest = Number(
       (globalThis as { __vinextRootLayoutEvaluations?: number }).__vinextRootLayoutEvaluations ?? 0,
@@ -219,7 +227,7 @@ describe("App route NEXT_RUNTIME production parity", () => {
     const edgeHtml = await (edgeResponse as Response).text();
     expect(edgeHtml).toContain('id="runtime">edge');
     expect(edgeHtml).toContain('id="root-runtime">edge');
-    expect(edgeHtml).toContain('id="action-runtime">edge');
+    expect(edgeHtml).toContain('id="action-runtime">render:edge');
     edgeRootLayoutEvaluationCount = Number(
       (globalThis as { __vinextRootLayoutEvaluations?: number }).__vinextRootLayoutEvaluations ?? 0,
     );
@@ -302,13 +310,46 @@ describe("App route NEXT_RUNTIME production parity", () => {
   });
 
   it("emits runtime-specific server references for an action shared across route runtimes", () => {
-    const sharedServerReferences = serverReferenceIds.filter((id) =>
-      id.includes("/app/shared/actions.ts"),
+    const sharedServerReferences = serverReferences.filter(({ importId }) =>
+      importId.includes("/app/shared/actions.ts"),
     );
     expect(sharedServerReferences).toHaveLength(2);
-    expect(sharedServerReferences.some((id) => !id.includes("__vinext_app_runtime"))).toBe(true);
-    expect(sharedServerReferences.some((id) => id.includes("__vinext_app_runtime=edge"))).toBe(
-      true,
+    expect(
+      sharedServerReferences.some(({ importId }) => !importId.includes("__vinext_app_runtime")),
+    ).toBe(true);
+    expect(
+      sharedServerReferences.some(({ importId }) => importId.includes("__vinext_app_runtime=edge")),
+    ).toBe(true);
+  });
+
+  it("dispatches a client-imported shared action in the matched route runtime", async () => {
+    const canonicalAction = serverReferences.find(
+      ({ importId }) =>
+        importId.includes("/app/shared/actions.ts") && !importId.includes("__vinext_app_runtime"),
     );
+    expect(canonicalAction).toBeDefined();
+
+    for (const [route, runtime] of [
+      ["edge", "edge"],
+      ["nodejs", "nodejs"],
+    ] as const) {
+      const response = await handler(
+        new Request(`http://localhost/${route}.rsc`, {
+          method: "POST",
+          headers: {
+            Accept: "text/x-component",
+            "Content-Type": "text/plain",
+            Origin: "http://localhost",
+            RSC: "1",
+            "x-rsc-action": `${canonicalAction!.referenceKey}#sharedAction`,
+          },
+          body: JSON.stringify(["client-import"]),
+        }),
+      );
+      expect(response).toBeInstanceOf(Response);
+      const body = await (response as Response).text();
+      expect(body).toContain(`client-import:${runtime}`);
+      expect(body).not.toContain(`client-import:${runtime === "edge" ? "nodejs" : "edge"}`);
+    }
   });
 });
