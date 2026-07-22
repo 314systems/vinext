@@ -862,7 +862,17 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
       params: options.staticParamsValidationParams ?? options.params,
     });
     if (dynamicParamsResponse) {
-      return dynamicParamsResponse;
+      // A generated-param miss belongs to a matched App route, so render the
+      // route's not-found boundary just like a page-level notFound() signal.
+      // The plain response remains a defensive fallback if boundary rendering
+      // is unavailable, but the normal path must include Next.js's canonical
+      // not-found markup (and custom not-found.tsx when present).
+      const renderedNotFound = await options.renderHttpAccessFallbackPage(
+        404,
+        { matchedParams: options.params },
+        options.middlewareContext,
+      );
+      return renderedNotFound ?? dynamicParamsResponse;
     }
   }
 

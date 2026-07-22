@@ -2072,6 +2072,9 @@ describe("app page dispatch", () => {
   });
 
   it("returns not found for dynamicParams=false paths outside generated params", async () => {
+    const renderHttpAccessFallbackPage = vi.fn(
+      async () => new Response('<html><h1 class="next-error-h1">404</h1></html>', { status: 404 }),
+    );
     const { options } = createDispatchOptions({
       async buildPageElement() {
         throw new Error("unknown static params should not render the page");
@@ -2081,6 +2084,7 @@ describe("app page dispatch", () => {
       },
       route: createRoute({ isDynamic: true, params: ["slug"] }),
     });
+    options.renderHttpAccessFallbackPage = renderHttpAccessFallbackPage;
 
     const response = await dispatchAppPage({
       ...options,
@@ -2088,7 +2092,12 @@ describe("app page dispatch", () => {
     });
 
     expect(response.status).toBe(404);
-    await expect(response.text()).resolves.toBe("This page could not be found");
+    await expect(response.text()).resolves.toContain('class="next-error-h1"');
+    expect(renderHttpAccessFallbackPage).toHaveBeenCalledWith(
+      404,
+      { matchedParams: { slug: "hello" } },
+      options.middlewareContext,
+    );
   });
 
   it("rejects generated scalar params with different casing", async () => {
