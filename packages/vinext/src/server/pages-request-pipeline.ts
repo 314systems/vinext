@@ -341,16 +341,9 @@ export async function runPagesRequest(
   let resolvedPathnameIsRequestPathname = true;
   let middlewareRewriteFired = false;
   const rewriteQueryKeys = new Set<string>();
-  const recordRewriteQueryKeys = (rewriteUrl: string, inheritedUrl?: string): void => {
+  const recordRewriteQueryKeys = (rewriteUrl: string): void => {
     const rewriteParams = new URL(rewriteUrl, url).searchParams;
-    const inheritedParams = inheritedUrl ? new URL(inheritedUrl, url).searchParams : null;
     for (const key of rewriteParams.keys()) {
-      if (
-        inheritedParams?.has(key) &&
-        JSON.stringify(inheritedParams.getAll(key)) === JSON.stringify(rewriteParams.getAll(key))
-      ) {
-        continue;
-      }
       rewriteQueryKeys.add(key);
     }
   };
@@ -447,9 +440,8 @@ export async function runPagesRequest(
     }
 
     if (result.rewriteUrl) {
-      const previousResolvedUrl = resolvedUrl;
       resolvedUrl = result.rewriteUrl;
-      recordRewriteQueryKeys(resolvedUrl, previousResolvedUrl);
+      recordRewriteQueryKeys(resolvedUrl);
       resolvedPathnameIsRequestPathname = false;
       middlewareRewriteFired = true;
     }

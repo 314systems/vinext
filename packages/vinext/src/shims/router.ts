@@ -3660,10 +3660,11 @@ function PagesRouterProvider({ children }: { children: ReactNode }): ReactElemen
       if (cancelled) return;
 
       const becameReady = markPagesRouterReady();
-      if (becameReady) {
-        setState(getRouterSnapshot());
-        notifyNextNavigationPagesContext();
-      }
+      // A hydration `_h` replace can publish readiness before this passive
+      // effect installs its event listener. Always synchronize the provider's
+      // local snapshot on mount so that early update is not lost.
+      setState(getRouterSnapshot());
+      if (becameReady) notifyNextNavigationPagesContext();
     }, 0);
     return () => {
       cancelled = true;

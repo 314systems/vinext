@@ -974,6 +974,7 @@ export function createPagesPageHandler(
           // publishes the concrete URL after the fallback data request lands.
           applySSRContext({
             query: {},
+            initialQuery: {},
             asPath: routePattern,
             navigationIsReady: false,
             isFallback: true,

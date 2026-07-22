@@ -431,6 +431,7 @@ function prefetchUrl(
   priority: "low" | "high" = "low",
   pagesRouteHref?: string,
   locale?: string | false,
+  shallow = false,
 ): void {
   if (typeof window === "undefined") return;
   const navigationEpoch = linkPrefetchNavigationEpoch;
@@ -466,6 +467,7 @@ function prefetchUrl(
   }
 
   const runPrefetch = () => {
+    if (navigationEpoch !== linkPrefetchNavigationEpoch) return;
     void (async () => {
       if (hasAppNavigationRuntime()) {
         if (isBotUserAgent(window.navigator?.userAgent ?? "")) return;
@@ -822,13 +824,10 @@ function prefetchUrl(
             fullRouteHref === fullHref
               ? dataTarget.middlewareDataHref
               : (getPagesMiddlewareDataHref(fullHref, __basePath) ?? undefined);
-          // A direct gSSP Link prefetch only warms the page chunk. Probing
-          // middleware here would execute the server page before a click and
-          // makes shallow Links issue observable data requests. Keep the
-          // middleware probe for SSG routes and explicit href/as masks, where
-          // it is needed to resolve/cache the destination ahead of navigation.
           const shouldProbeMiddleware =
-            dataTarget.dataKind === "static" || fullRouteHref !== fullHref;
+            dataTarget.dataKind === "static" ||
+            fullRouteHref !== fullHref ||
+            (priority === "high" && !shallow);
           prefetchPagesData({
             ...dataTarget,
             middlewareDataHref: shouldProbeMiddleware ? middlewareDataHref : undefined,
@@ -856,6 +855,14 @@ function prefetchUrl(
       console.error("[vinext] RSC prefetch setup error:", error);
     });
   };
+
+  if (priority === "high" && HAS_PAGES_ROUTER && !hasAppNavigationRuntime()) {
+    // Pointer intent can be immediately followed by a click in the same
+    // interaction. Defer Pages setup so the click can cancel this redundant
+    // middleware probe before the real navigation request starts.
+    setTimeout(runPrefetch, 0);
+    return;
+  }
 
   if (priority === "high" || hasAppNavigationRuntime()) {
     runPrefetch();
@@ -913,6 +920,7 @@ type LinkPrefetchInstance = {
   pagesRouteHref?: string;
   queuedViewportPrefetch: boolean;
   routerMode: LinkPrefetchRouterMode;
+  shallow: boolean;
   viewportPrefetched: boolean;
 };
 
@@ -928,7 +936,14 @@ function drainVisibleAppPrefetchQueue(): void {
     if (!instance) return;
     instance.queuedViewportPrefetch = false;
     if (!instance.isVisible || instance.routerMode !== "app") continue;
-    prefetchUrl(instance.href, instance.mode, "low", instance.pagesRouteHref);
+    prefetchUrl(
+      instance.href,
+      instance.mode,
+      "low",
+      instance.pagesRouteHref,
+      instance.locale,
+      instance.shallow,
+    );
   }
 }
 
@@ -949,7 +964,14 @@ function setVisibleLinkPrefetch(instance: LinkPrefetchInstance, isVisible: boole
     if (instance.routerMode === "app") {
       scheduleVisibleAppPrefetch(instance);
     } else {
-      prefetchUrl(instance.href, instance.mode, "low", instance.pagesRouteHref, instance.locale);
+      prefetchUrl(
+        instance.href,
+        instance.mode,
+        "low",
+        instance.pagesRouteHref,
+        instance.locale,
+        instance.shallow,
+      );
     }
     instance.viewportPrefetched = true;
   } else {
@@ -1322,6 +1344,7 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
             }) ?? undefined),
       queuedViewportPrefetch: false,
       routerMode: getLinkPrefetchRouterMode(),
+      shallow,
       viewportPrefetched: false,
     };
     observedLinkPrefetches.set(node, instance);
@@ -1333,7 +1356,7 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
       visibleLinkPrefetches.delete(instance);
       instance.isVisible = false;
     };
-  }, [shouldViewportPrefetch, prefetchMode, normalizedHref, normalizedRouteHref, locale]);
+  }, [shouldViewportPrefetch, prefetchMode, normalizedHref, normalizedRouteHref, locale, shallow]);
 
   const prefetchOnIntent = useCallback(() => {
     if (
@@ -1360,6 +1383,7 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
       "high",
       normalizedRouteHref === normalizedHref ? undefined : normalizedRouteHref,
       locale,
+      shallow,
     );
   }, [
     prefetchProp,
@@ -1368,6 +1392,7 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
     normalizedHref,
     normalizedRouteHref,
     locale,
+    shallow,
     unstable_dynamicOnHover,
   ]);
 
@@ -1437,6 +1462,9 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
     e.preventDefault();
 
     const hasAppNavigationRuntime = Boolean(getNavigationRuntime()?.functions.navigate);
+    if (!hasAppNavigationRuntime) {
+      notifyLinkNavigationStartAndCancelPrefetchSetup();
+    }
     const pagesNavigateHref =
       HAS_PAGES_ROUTER && resolvedHref.startsWith("?")
         ? resolvePagesLinkNavigationHref(resolvedHref, locale)

@@ -46,8 +46,9 @@ test.describe("Pages middleware rewrite cache parity", () => {
     await expect(page.getByTestId("as-path")).toHaveText(
       "/mw-rewrite-static-gsp-query?variant=one",
     );
-    await expect(page.getByTestId("query")).toHaveText(
-      JSON.stringify({ variant: "one", from: "middleware" }),
-    );
+    expect(JSON.parse((await page.getByTestId("query").textContent()) ?? "null")).toEqual({
+      variant: "one",
+      from: "middleware",
+    });
   });
 });
