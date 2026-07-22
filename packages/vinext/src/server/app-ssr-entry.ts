@@ -36,6 +36,7 @@ import {
 import { renderBeforeInteractiveInlineScripts } from "./before-interactive-head.js";
 import {
   createNavigationRuntimeRscMetadataScript,
+  createNavigationRuntimeRscSearchParamsDecisionScript,
   createRscEmbedTransform,
   createTickBufferedTransform,
   waitAtLeastOneReactRenderTask,
@@ -317,9 +318,13 @@ function buildHeadInjectionHtml(
   dynamicStaleTimeSeconds?: number,
   scriptNonce?: string,
 ): string {
+  const searchParamsDecisionPending =
+    typeof navContext.isStaticGeneration === "object" &&
+    navContext.isStaticGeneration.peek() === undefined;
   const navPayload = {
     pathname: navContext.pathname,
     searchParams: [...navContext.searchParams.entries()],
+    ...(searchParamsDecisionPending ? { searchParamsDecisionPending: true } : {}),
     ...(navContext.didSearchParamsBailout === true ||
     (typeof navContext.isStaticGeneration === "object" &&
       navContext.isStaticGeneration.peek() === true &&
@@ -741,12 +746,27 @@ export async function handleSsr(
           await waitAtLeastOneReactRenderTask();
         }
 
-        // The head transform chooses whether hydration should read the visible
-        // location query or the serialized (rewrite-aware) query. RSC can mark
-        // the route dynamic after the initial shell suspends, so do not let the
-        // transform inject that choice until the drain-only observation branch
-        // has reached EOF and finalized the decision.
-        await settleStaticGenerationNavigationDecision(ssrNavigationContext);
+        const searchParamsDecisionPending =
+          typeof ssrNavigationContext.isStaticGeneration === "object" &&
+          ssrNavigationContext.isStaticGeneration.peek() === undefined;
+        // Do not await this decision before returning the response: a Suspense
+        // tail may keep the RSC observation stream open indefinitely. The head
+        // metadata installs a hydration-only gate, while this final insertion
+        // corrects the query source after RSC EOF without delaying shell HTML.
+        const finalizeSearchParamsDecision = searchParamsDecisionPending
+          ? async (): Promise<string> => {
+              await settleStaticGenerationNavigationDecision(ssrNavigationContext);
+              const useLocationSearchParams =
+                ssrNavigationContext.didSearchParamsBailout === true ||
+                (typeof ssrNavigationContext.isStaticGeneration === "object" &&
+                  ssrNavigationContext.isStaticGeneration.peek() === true &&
+                  ssrNavigationContext.isForceStatic !== true);
+              return createInlineScriptTag(
+                createNavigationRuntimeRscSearchParamsDecisionScript(useLocationSearchParams),
+                options?.scriptNonce,
+              );
+            }
+          : undefined;
 
         const finalStream = deferUntilStreamConsumed(
           htmlStream.pipeThrough(
@@ -758,6 +778,7 @@ export async function handleSsr(
               inlineCssFontStyles,
               inlineCssFontStyleFallbackHTML,
               options?.scriptNonce,
+              finalizeSearchParamsDecision,
             ),
           ),
           cleanup,

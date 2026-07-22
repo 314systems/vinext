@@ -46,6 +46,10 @@ describe("App Router static useSearchParams", () => {
         source: "/rewritten-revalidate-false",
         destination: "/revalidate-false-search-params",
       },
+      {
+        source: "/rewritten-open-tail",
+        destination: "/open-tail?value=open-tail-rewritten",
+      },
     ];
   },
 };`,
@@ -134,6 +138,63 @@ import SearchParams from "../search-params";
 
 export default function Page() {
   return <Suspense fallback={<p>search params suspense</p>}><SearchParams /></Suspense>;
+}`,
+    );
+    await writeFile(
+      path.join(fixtureRoot, "app", "stream-gate.ts"),
+      `const gateKey = Symbol.for("vinext.test.static-search-params-stream-gate");
+
+type Gate = { armed: boolean; promise: Promise<void>; release: () => void };
+
+function getGate(): Gate | undefined {
+  return Reflect.get(globalThis, gateKey) as Gate | undefined;
+}
+
+export function armStreamGate(): void {
+  let release!: () => void;
+  const promise = new Promise<void>((resolve) => { release = resolve; });
+  Reflect.set(globalThis, gateKey, { armed: true, promise, release } satisfies Gate);
+}
+
+export function releaseStreamGate(): void {
+  getGate()?.release();
+}
+
+export async function waitForStreamGate(): Promise<boolean> {
+  const gate = getGate();
+  if (!gate?.armed) return false;
+  await gate.promise;
+  gate.armed = false;
+  return true;
+}`,
+    );
+    await writeFile(
+      path.join(fixtureRoot, "app", "stream-gate", "route.ts"),
+      `import { armStreamGate, releaseStreamGate } from "../stream-gate";
+
+export async function POST(request: Request) {
+  const action = new URL(request.url).searchParams.get("action");
+  if (action === "arm") armStreamGate();
+  if (action === "release") releaseStreamGate();
+  return new Response("ok");
+}`,
+    );
+    await writeFile(
+      path.join(fixtureRoot, "app", "open-tail", "page.tsx"),
+      `export const revalidate = false;
+
+import { Suspense } from "react";
+import { unstable_noStore } from "next/cache";
+import SearchParams from "../search-params";
+import { waitForStreamGate } from "../stream-gate";
+
+async function OpenTail() {
+  if (await waitForStreamGate()) unstable_noStore();
+  return <SearchParams />;
+}
+
+export default function Page() {
+  return <Suspense fallback={<p>open tail suspense</p>}><OpenTail /></Suspense>;
 }`,
     );
     await fs.symlink(
@@ -242,6 +303,43 @@ export default function Page() {
       expect(evictedHtml).toContain("<p>search params suspense</p>");
       expect(evictedHtml).not.toMatch(/<p id="value">(?:<!-- -->)?evicted-value<\/p>/);
       expect(evictedHtml).toContain('"useLocationSearchParams":true');
+
+      await fetch(`http://127.0.0.1:${port}/stream-gate?action=arm`, { method: "POST" });
+      Reflect.deleteProperty(globalThis, Symbol.for("vinext.cacheHandler"));
+
+      const openTailResponse = await Promise.race([
+        fetch(`http://127.0.0.1:${port}/rewritten-open-tail?visible=location`),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("open-tail response headers did not stream")), 5_000),
+        ),
+      ]);
+      expect(openTailResponse.status).toBe(200);
+      const reader = openTailResponse.body?.getReader();
+      expect(reader).toBeTruthy();
+      const decoder = new TextDecoder();
+      let openTailHtml = "";
+      while (!openTailHtml.includes("<p>open tail suspense</p>")) {
+        const chunk = await Promise.race([
+          reader!.read(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("open-tail fallback did not stream")), 5_000),
+          ),
+        ]);
+        expect(chunk.done).toBe(false);
+        openTailHtml += decoder.decode(chunk.value, { stream: true });
+      }
+
+      await fetch(`http://127.0.0.1:${port}/stream-gate?action=release`, { method: "POST" });
+      for (;;) {
+        const chunk = await reader!.read();
+        if (chunk.done) break;
+        openTailHtml += decoder.decode(chunk.value, { stream: true });
+      }
+      openTailHtml += decoder.decode();
+      expect(openTailHtml).toContain('["value","open-tail-rewritten"]');
+      expect(openTailHtml).toContain('"searchParamsDecisionPending":true');
+      expect(openTailHtml).toContain("delete b.nav.useLocationSearchParams");
+      expect(openTailHtml).not.toContain('"useLocationSearchParams":true');
     } finally {
       server.close();
       Reflect.deleteProperty(globalThis, Symbol.for("vinext.cacheHandler"));

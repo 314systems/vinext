@@ -1353,6 +1353,9 @@ async function readInitialRscStream(): Promise<ReadableStream<Uint8Array> | null
     clearHardNavigationLoopGuard();
 
     if (runtimeRsc) {
+      if (runtimeRsc.nav?.searchParamsDecisionPending) {
+        await runtimeRsc.searchParamsDecision;
+      }
       applyRuntimeRscBootstrap(runtimeRsc);
       if (runtimeRsc.done) {
         registerNavigationRuntimeBootstrap({ rsc: undefined });
