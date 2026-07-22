@@ -38,6 +38,7 @@ import { isBotUserAgent } from "../utils/html-limited-bots.js";
 import { isUnknownRecord } from "../utils/record.js";
 import { isDangerousScheme } from "vinext/shims/url-safety";
 import { encodeCacheTag } from "../utils/encode-cache-tag.js";
+import { bypassedPagesIsrGet, bypassedPagesIsrSet } from "./pages-middleware-rewrite-cache.js";
 
 export type PagesRedirectResult = {
   destination: string;
@@ -316,6 +317,8 @@ export type ResolvePagesPageDataOptions = {
   query: Record<string, unknown>;
   nextDataQuery?: Record<string, unknown>;
   bypassCdnCache?: boolean;
+  /** Skip shared origin ISR reads and writes for request-specific rewrite state. */
+  bypassOriginCache?: boolean;
   asPath?: string;
   resolvedUrl?: string;
   route: Pick<Route, "isDynamic">;
@@ -1060,6 +1063,8 @@ export async function renderPagesIsrHtml(options: RenderPagesIsrHtmlOptions): Pr
 export async function resolvePagesPageData(
   options: ResolvePagesPageDataOptions,
 ): Promise<ResolvePagesPageDataResult> {
+  const requestIsrGet = options.bypassOriginCache ? bypassedPagesIsrGet : options.isrGet;
+  const requestIsrSet = options.bypassOriginCache ? bypassedPagesIsrSet : options.isrSet;
   // Next.js passes `params: null` (effectively) to gSSP/gSP context for
   // non-dynamic routes — see render.tsx's `...(pageIsDynamic ? { params } : undefined)`.
   // Internal bookkeeping (route param hydration, ISR HTML, getStaticPaths
@@ -1130,7 +1135,7 @@ export async function resolvePagesPageData(
     options.revalidateOnlyGenerated
   ) {
     const pathname = options.isrCachePathname ?? options.routeUrl.split("?")[0];
-    onDemandPreviousCacheEntry = await options.isrGet(options.isrCacheKey("pages", pathname));
+    onDemandPreviousCacheEntry = await requestIsrGet(options.isrCacheKey("pages", pathname));
     if (!onDemandPreviousCacheEntry) {
       return {
         kind: "response",
@@ -1177,7 +1182,7 @@ export async function resolvePagesPageData(
 
   if (isFallback) {
     const pathname = options.isrCachePathname ?? options.routeUrl.split("?")[0];
-    const cached = await options.isrGet(options.isrCacheKey("pages", pathname));
+    const cached = await requestIsrGet(options.isrCacheKey("pages", pathname));
     if (cached?.value.value?.kind !== "PAGES") {
       const appShortCircuit = await loadForegroundAppInitialRenderProps();
       if (appShortCircuit) return appShortCircuit;
@@ -1270,7 +1275,7 @@ export async function resolvePagesPageData(
     const cached =
       onDemandPreviousCacheEntry !== undefined
         ? onDemandPreviousCacheEntry
-        : await options.isrGet(cacheKey);
+        : await requestIsrGet(cacheKey);
     const cachedValue = cached?.value.value;
     const isLegacyCachedNotFound =
       cachedValue?.kind === "PAGES" &&
@@ -1311,7 +1316,7 @@ export async function resolvePagesPageData(
                 routeUrl: options.routeUrl,
                 sanitizeDestination: options.sanitizeDestination,
               });
-              await options.isrSet(
+              await requestIsrSet(
                 cacheKey,
                 {
                   kind: "REDIRECT",
@@ -1325,7 +1330,7 @@ export async function resolvePagesPageData(
             }
 
             if (freshResult.notFound) {
-              await options.isrSet(cacheKey, null, revalidateSeconds, undefined, expireSeconds);
+              await requestIsrSet(cacheKey, null, revalidateSeconds, undefined, expireSeconds);
               return;
             }
 
@@ -1353,7 +1358,7 @@ export async function resolvePagesPageData(
                 nextData: options.nextData,
                 vinext: options.vinext,
               });
-              await options.isrSet(
+              await requestIsrSet(
                 cacheKey,
                 buildPagesCacheValue(freshHtml, freshRenderProps, options.statusCode),
                 revalidateSeconds,
@@ -1366,7 +1371,7 @@ export async function resolvePagesPageData(
             // A cached redirect/not-found has no reusable HTML shell. Persist
             // the resolved props and let the next foreground request render
             // the canonical PAGES representation without re-running user code.
-            await options.isrSet(
+            await requestIsrSet(
               cacheKey,
               {
                 kind: "PAGES",
@@ -1598,7 +1603,7 @@ export async function resolvePagesPageData(
           routeUrl: options.routeUrl,
           sanitizeDestination: options.sanitizeDestination,
         });
-        await options.isrSet(
+        await requestIsrSet(
           cacheKey,
           {
             kind: "REDIRECT",
@@ -1620,7 +1625,7 @@ export async function resolvePagesPageData(
       const revalidateSeconds = resolvePagesRevalidateSeconds(result, options.routeUrl);
       const expireSeconds = resolvePagesExpireSeconds(result, options.expireSeconds);
       if (previewData === false) {
-        await options.isrSet(cacheKey, null, revalidateSeconds, undefined, expireSeconds);
+        await requestIsrSet(cacheKey, null, revalidateSeconds, undefined, expireSeconds);
       }
       const notFoundResult = buildPagesNotFoundResult(
         options,
@@ -1670,7 +1675,7 @@ export async function resolvePagesPageData(
 
     if (shouldPersistFallbackData && previewData === false) {
       const revalidateSeconds = isrRevalidateSeconds ?? false;
-      await options.isrSet(
+      await requestIsrSet(
         cacheKey,
         {
           kind: "PAGES",

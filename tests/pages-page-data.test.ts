@@ -160,7 +160,8 @@ describe("pages page data", () => {
     expect(html).toContain('"__vinext":{"hasMiddleware":true}');
   });
 
-  it("isolates middleware rewrite query variants in the ISR cache", async () => {
+  it("bypasses origin ISR reads for middleware rewrite query variants", async () => {
+    const getStaticProps = vi.fn(() => ({ props: { fresh: true }, revalidate: 60 }));
     const isrGet = vi.fn().mockResolvedValue({
       isStale: false,
       value: {
@@ -177,22 +178,19 @@ describe("pages page data", () => {
       createOptions({
         isrGet,
         pageModule: {
-          getStaticProps() {
-            return { props: { fresh: true }, revalidate: 60 };
-          },
+          getStaticProps,
         },
         query: { from: "middleware", slug: "post" },
         isrCachePathname: "/posts/post?from=middleware",
         bypassCdnCache: true,
+        bypassOriginCache: true,
         nextDataQuery: { from: "middleware", slug: "post" },
       }),
     );
 
-    expect(isrGet).toHaveBeenCalledWith("pages:/posts/post?from=middleware");
-    expect(result).toMatchObject({ kind: "response" });
-    if (result.kind === "response") {
-      expect(result.response.headers.get("Cache-Control")).toBe("no-store, must-revalidate");
-    }
+    expect(isrGet).not.toHaveBeenCalled();
+    expect(getStaticProps).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ kind: "render" });
   });
 
   it("reuses a query-invariant middleware rewrite ISR entry", async () => {
@@ -264,55 +262,49 @@ describe("pages page data", () => {
     }
   });
 
-  it("preserves middleware rewrite query state in stale ISR regeneration HTML", async () => {
+  it("does not read or regenerate legacy query-varying middleware rewrite entries", async () => {
     const isrSet = vi.fn(async () => {});
-    let regenerationPromise: Promise<void> | undefined;
+    const isrGet = vi.fn().mockResolvedValue({
+      isStale: true,
+      value: {
+        cacheControl: { revalidate: 60 },
+        value: {
+          kind: "PAGES",
+          html: '<div id="__next">stale</div><script>window.__NEXT_DATA__ = {}</script>',
+          pageData: { pageProps: { stale: true } },
+        },
+      },
+    });
+    const triggerBackgroundRegeneration = vi.fn();
     const result = await resolvePagesPageData(
       createOptions({
         isrCachePathname: "/posts/post?plant=rose",
         nextDataQuery: { plant: "rose", slug: "post" },
-        isrGet: vi.fn().mockResolvedValue({
-          isStale: true,
-          value: {
-            cacheControl: { revalidate: 60 },
-            value: {
-              kind: "PAGES",
-              html: '<div id="__next">stale</div><script>window.__NEXT_DATA__ = {}</script>',
-              pageData: { pageProps: { stale: true } },
-            },
-          },
-        }),
+        bypassOriginCache: true,
+        isrGet,
         isrSet,
         pageModule: {
           getStaticProps() {
             return { props: { fresh: true }, revalidate: 60 };
           },
         },
-        triggerBackgroundRegeneration: vi.fn((_key, callback) => {
-          regenerationPromise = callback();
-        }),
+        triggerBackgroundRegeneration,
       }),
     );
 
-    expect(result).toMatchObject({ kind: "response" });
-    await regenerationPromise;
-    expect(isrSet).toHaveBeenCalledWith(
-      "pages:/posts/post?plant=rose",
-      expect.objectContaining({
-        html: expect.stringContaining('"query":{"plant":"rose","slug":"post"}'),
-      }),
-      60,
-      undefined,
-      300,
-    );
+    expect(result).toMatchObject({ kind: "render" });
+    expect(isrGet).not.toHaveBeenCalled();
+    expect(triggerBackgroundRegeneration).not.toHaveBeenCalled();
+    expect(isrSet).not.toHaveBeenCalled();
   });
 
-  it("persists fallback data under an isolated middleware rewrite query key", async () => {
+  it("does not persist fallback data for a query-varying middleware rewrite", async () => {
     const isrSet = vi.fn(async () => {});
     await resolvePagesPageData(
       createOptions({
         isrCachePathname: "/posts/post?from=middleware",
         bypassCdnCache: true,
+        bypassOriginCache: true,
         isDataReq: true,
         isrSet,
         pageModule: {
@@ -328,13 +320,31 @@ describe("pages page data", () => {
       }),
     );
 
-    expect(isrSet).toHaveBeenCalledWith(
-      "pages:/posts/post?from=middleware",
-      expect.objectContaining({ generatedFromDataRequest: true }),
-      expect.any(Number),
-      undefined,
-      300,
-    );
+    expect(isrSet).not.toHaveBeenCalled();
+  });
+
+  it("does not persist redirect or notFound results for query-varying rewrites", async () => {
+    for (const result of [
+      { redirect: { destination: "/elsewhere", permanent: false }, revalidate: 60 },
+      { notFound: true, revalidate: 60 },
+    ]) {
+      const isrSet = vi.fn(async () => {});
+      await resolvePagesPageData(
+        createOptions({
+          bypassCdnCache: true,
+          bypassOriginCache: true,
+          isrCachePathname: "/posts/post?from=middleware",
+          isrSet,
+          pageModule: {
+            getStaticProps() {
+              return result;
+            },
+          },
+        }),
+      );
+
+      expect(isrSet).not.toHaveBeenCalled();
+    }
   });
 
   it("preserves custom app props in fallback shells", async () => {

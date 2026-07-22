@@ -15,6 +15,23 @@ import { notFoundStaticAssetResponse } from "./http-error-responses.js";
  * Keep this in sync with prod-server.ts.
  */
 const NO_BODY_RESPONSE_STATUSES = new Set([204, 205, 304]);
+const REPLACED_BODY_HEADERS = new Set([
+  "accept-ranges",
+  "content-digest",
+  "content-disposition",
+  "content-encoding",
+  "content-language",
+  "content-length",
+  "content-location",
+  "content-md5",
+  "content-range",
+  "digest",
+  "etag",
+  "last-modified",
+  "repr-digest",
+  "trailer",
+  "transfer-encoding",
+]);
 
 type ResponseWithVinextStreamingMetadata = Response & {
   __vinextStreamedHtmlResponse?: boolean;
@@ -44,6 +61,7 @@ export function finalizeMissingStaticAssetResponse(
   cancelResponseBody(response);
   const notFound = notFoundStaticAssetResponse();
   const headers = new Headers(response.headers);
+  for (const name of REPLACED_BODY_HEADERS) headers.delete(name);
   headers.set("Content-Type", notFound.headers.get("Content-Type")!);
   return new Response(notFound.body, { status: 404, headers });
 }

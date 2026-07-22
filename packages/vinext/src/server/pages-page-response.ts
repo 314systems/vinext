@@ -29,6 +29,7 @@ import { callDocumentGetInitialProps } from "./document-initial-head.js";
 import { appendAssetDeploymentIdQuery } from "../utils/deployment-id.js";
 import { isBotUserAgent } from "../utils/html-limited-bots.js";
 import { NEXTJS_CACHE_HEADER } from "./headers.js";
+import { bypassedPagesIsrSet } from "./pages-middleware-rewrite-cache.js";
 
 // ---------------------------------------------------------------------------
 // Bot / crawler detection for Pages Router edge-runtime SSR
@@ -198,6 +199,8 @@ type RenderPagesPageResponseOptions = {
   params: Record<string, unknown>;
   query?: Record<string, unknown>;
   bypassCdnCache?: boolean;
+  /** Skip shared origin ISR writes for request-specific rewrite state. */
+  bypassOriginCache?: boolean;
   renderDocumentToString: (element: ReactNode) => Promise<string>;
   renderToReadableStream: (element: ReactNode) => Promise<ReadableStream<Uint8Array>>;
   resetSSRHead?: (() => void) | undefined;
@@ -618,6 +621,7 @@ export async function renderPagesPageResponse(
   );
 
   let responseBodyStream = bodyStream;
+  const requestIsrSet = options.bypassOriginCache ? bypassedPagesIsrSet : options.isrSet;
   if (
     // Keep nonce-bearing pages out of ISR writes: rewritePagesCachedHtml()
     // later matches the cached __NEXT_DATA__ block via a bare <script> marker.
@@ -640,7 +644,7 @@ export async function renderPagesPageResponse(
       pageData: options.props ?? { pageProps: options.pageProps },
       revalidateSeconds: options.isrRevalidateSeconds,
       routePattern: options.routePattern,
-      setCache: options.isrSet,
+      setCache: requestIsrSet,
       shellPrefix,
       shellSuffix,
       status: finalStatus,

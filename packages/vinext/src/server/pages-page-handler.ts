@@ -27,7 +27,11 @@ import { resolvePagesPageData } from "./pages-page-data.js";
 import type { PagesPageModule } from "./pages-page-data.js";
 import { resolvePagesPageMethodResponse } from "./pages-page-method.js";
 import { renderPagesPageResponse } from "./pages-page-response.js";
-import { getPagesMiddlewareRewriteCacheState } from "./pages-middleware-rewrite-cache.js";
+import {
+  bypassedPagesIsrGet,
+  bypassedPagesIsrSet,
+  getPagesMiddlewareRewriteCacheState,
+} from "./pages-middleware-rewrite-cache.js";
 import { buildPagesReadinessNextData } from "./pages-readiness.js";
 import type { PagesI18nRenderContext } from "./pages-page-response.js";
 import type { RenderPageEnhancers } from "./pages-document-initial-props.js";
@@ -121,8 +125,20 @@ function applyPagesErrorCachePolicy(
   revalidateSeconds: number | false | undefined,
   expireSeconds: number | undefined,
   cacheTagPathname: string,
+  bypassSharedCache = false,
 ): Response {
   const headers = new Headers(response.headers);
+  if (bypassSharedCache) {
+    headers.set("Cache-Control", ISR_NO_STORE_CACHE_CONTROL);
+    headers.delete("CDN-Cache-Control");
+    headers.delete("Cloudflare-CDN-Cache-Control");
+    headers.delete("Cache-Tag");
+    return new Response(response.body, {
+      headers,
+      status: response.status,
+      statusText: response.statusText,
+    });
+  }
   const browserPolicy = headers.get("Cache-Control");
   const sharedPolicies = [
     headers.get("CDN-Cache-Control"),
@@ -315,6 +331,8 @@ type RenderPageOptions = {
   __notFoundExpireSeconds?: number;
   /** Source-page identity used for the outgoing notFound cache tag. */
   __notFoundCachePathname?: string;
+  /** Keep a request-private source render and its nested error page out of shared caches. */
+  __bypassRequestCache?: boolean;
   /** Internal recursion guard while a top-level on-demand request owns the batch. */
   __skipOnDemandCoalesce?: boolean;
   err?: unknown;
@@ -613,6 +631,12 @@ export function createPagesPageHandler(
           renderRouteUrl,
           hasMiddlewareRewrite,
         );
+        const bypassOriginCache =
+          rewriteCacheState.bypassOriginCache || options?.__bypassRequestCache === true;
+        const bypassCdnCache =
+          rewriteCacheState.bypassCdnCache || options?.__bypassRequestCache === true;
+        const requestIsrGet = bypassOriginCache ? bypassedPagesIsrGet : isrGet;
+        const requestIsrSet = bypassOriginCache ? bypassedPagesIsrSet : isrSet;
         const isrCachePathname =
           isStaticPropsRender &&
           (routePattern === "/404" || routePattern === "/500" || routePattern === "/_error")
@@ -809,8 +833,8 @@ export function createPagesPageHandler(
           fontLinkHeader,
           i18n: buildI18nRenderContext(i18nConfig, locale, currentDefaultLocale, domainLocales),
           isrCacheKey: pageIsrCacheKey,
-          isrGet,
-          isrSet,
+          isrGet: requestIsrGet,
+          isrSet: requestIsrSet,
           expireSeconds: vinextConfig.expireTime,
           isBuildTimePrerendering:
             typeof process !== "undefined" && process.env && process.env.VINEXT_PRERENDER === "1",
@@ -834,7 +858,8 @@ export function createPagesPageHandler(
           params,
           query,
           nextDataQuery: query,
-          bypassCdnCache: rewriteCacheState.bypassCdnCache,
+          bypassCdnCache,
+          bypassOriginCache,
           asPath: routerAsPath,
           resolvedUrl: pagesResolvedUrl,
           renderIsrPassToStringAsync,
@@ -879,6 +904,7 @@ export function createPagesPageHandler(
               __notFoundRevalidateSeconds: pageDataResult.revalidateSeconds,
               __notFoundExpireSeconds: pageDataResult.expireSeconds,
               __notFoundCachePathname: isrCachePathname,
+              __bypassRequestCache: bypassOriginCache || bypassCdnCache,
             });
           } else {
             notFoundResponse = buildDefaultPagesNotFoundResponse();
@@ -902,6 +928,7 @@ export function createPagesPageHandler(
               errorPageRevalidateSeconds,
               errorPageExpireSeconds,
               errorResponseCachePathname,
+              bypassCdnCache,
             );
           }
           return finalizePagesPreviewResponse(response, preview);
@@ -958,7 +985,7 @@ export function createPagesPageHandler(
               init.headers[k] = Array.isArray(v) ? v.join(", ") : String(v);
             }
           }
-          if (rewriteCacheState.bypassCdnCache) {
+          if (bypassCdnCache) {
             init.headers["Cache-Control"] = ISR_NO_STORE_CACHE_CONTROL;
           } else if (gsspRes) {
             // Default Cache-Control for gSSP-driven _next/data responses —
@@ -1057,14 +1084,15 @@ export function createPagesPageHandler(
           isrRevalidateSeconds,
           isOnDemandRevalidate,
           isStaticPropsRoute,
-          isrSet,
+          isrSet: requestIsrSet,
           i18n: buildI18nRenderContext(i18nConfig, locale, currentDefaultLocale, domainLocales),
           isFallback: isFallbackRender,
           pageProps,
           props: renderProps,
           params,
           query,
-          bypassCdnCache: rewriteCacheState.bypassCdnCache,
+          bypassCdnCache,
+          bypassOriginCache,
           renderDocumentToString(element) {
             return renderToStringAsync(element);
           },
@@ -1088,6 +1116,7 @@ export function createPagesPageHandler(
             errorPageRevalidateSeconds,
             errorPageExpireSeconds,
             errorResponseCachePathname,
+            bypassCdnCache,
           );
         }
         return finalizePagesPreviewResponse(pageResponse, preview);

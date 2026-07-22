@@ -198,11 +198,12 @@ describe("pages page response", () => {
     }
   });
 
-  it("stores query-varying rewrite ISR output but keeps the CDN response private", async () => {
+  it("does not store query-varying rewrite ISR output and keeps the response private", async () => {
     const common = createCommonOptions();
     const response = await renderPagesPageResponse({
       ...common.options,
       bypassCdnCache: true,
+      bypassOriginCache: true,
       isrCachePathname: "/rewritten?variant=one",
       isrRevalidateSeconds: 60,
       routeUrl: "/rewritten?variant=one",
@@ -211,13 +212,7 @@ describe("pages page response", () => {
     expect(response.headers.get("Cache-Control")).toBe("no-store, must-revalidate");
     await response.text();
     await settleMicrotasks();
-    expect(common.isrSet).toHaveBeenCalledWith(
-      "pages:/rewritten?variant=one",
-      expect.any(Object),
-      60,
-      undefined,
-      undefined,
-    );
+    expect(common.isrSet).not.toHaveBeenCalled();
   });
 
   it("renders the document shell, merges gSSP headers, and marks streamed HTML responses", async () => {
