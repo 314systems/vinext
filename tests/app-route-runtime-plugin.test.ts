@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   createAppRouteRuntimePlugin,
   createAppRouteRuntimeServerReferenceMap,
+  registerAppRouteRuntimeServerReferences,
   withAppRouteRuntime,
 } from "../packages/vinext/src/plugins/app-route-runtime.js";
 
@@ -39,6 +40,70 @@ describe("App route runtime module graph", () => {
         },
       }),
     ).toEqual({ "canonical-reference": "edge-reference" });
+  });
+
+  it("registers an edge loader for a client-only server reference used by an edge route", () => {
+    const canonicalId = "/app/actions.ts";
+    const edgeId = withAppRouteRuntime(canonicalId, "edge");
+    const metas = {
+      [canonicalId]: {
+        exportNames: ["reportRuntime"],
+        importId: canonicalId,
+        referenceKey: "canonical-reference",
+      },
+    };
+
+    registerAppRouteRuntimeServerReferences(metas, [canonicalId], (id) => id.slice(1));
+
+    expect(metas).toEqual({
+      [canonicalId]: {
+        exportNames: ["reportRuntime"],
+        importId: canonicalId,
+        referenceKey: "canonical-reference",
+      },
+      [edgeId]: {
+        exportNames: ["reportRuntime"],
+        importId: edgeId,
+        referenceKey: "099064567bb9",
+      },
+    });
+    expect(createAppRouteRuntimeServerReferenceMap(metas)).toEqual({
+      "canonical-reference": "099064567bb9",
+    });
+  });
+
+  it("discovers a server reference imported only through an edge client boundary", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-runtime-client-action-"));
+    const client = path.join(root, "client.tsx");
+    const action = path.join(root, "actions.ts");
+    await fs.writeFile(client, `"use client"\nimport { action } from "./actions"`);
+    await fs.writeFile(action, `"use server"\nexport async function action() {}`);
+    const onEdgeServerReference = vi.fn();
+    const plugin = createAppRouteRuntimePlugin({ onEdgeServerReference });
+    const resolve = vi.fn(async (source: string) => ({
+      id: source === "./client" ? client : action,
+    }));
+    const resolveId = hookHandler(plugin.resolveId!);
+
+    try {
+      await resolveId.call(
+        { environment: { name: "rsc" }, resolve } as unknown as ThisParameterType<typeof resolveId>,
+        "./client",
+        withAppRouteRuntime("/app/edge/page.tsx", "edge"),
+        { attributes: {}, isEntry: false },
+      );
+      await resolveId.call(
+        { environment: { name: "ssr" }, resolve } as unknown as ThisParameterType<typeof resolveId>,
+        "./actions",
+        client,
+        { attributes: {}, isEntry: false },
+      );
+
+      expect(onEdgeServerReference).toHaveBeenCalledOnce();
+      expect(onEdgeServerReference).toHaveBeenCalledWith(action);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("propagates the edge runtime through server-side user imports", async () => {

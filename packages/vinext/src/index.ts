@@ -163,6 +163,7 @@ import { createMiddlewareServerOnlyPlugin } from "./plugins/middleware-server-on
 import {
   createAppRouteRuntimePlugin,
   createAppRouteRuntimeServerReferenceMap,
+  registerAppRouteRuntimeServerReferences,
 } from "./plugins/app-route-runtime.js";
 import { validateMiddlewareModuleExports } from "./plugins/middleware-export-validation.js";
 import { createOptimizeImportsPlugin } from "./plugins/optimize-imports.js";
@@ -1589,6 +1590,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   let resolvedRscPath: string | null = null;
   let resolvedRscTransformsPath: string | null = null;
   let rscPluginModulePromise: Promise<typeof import("@vitejs/plugin-rsc")> | null = null;
+  const edgeServerReferenceImportIds = new Set<string>();
   // Prefer the user's project graph so vinext shares the app's Vite/plugin
   // instances. In source/workspace development, test fixtures may not declare
   // peer deps explicitly, so fall back to vinext's own install location.
@@ -1651,6 +1653,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     const { getPluginApi } = await rscPluginModulePromise;
     const pluginApi = getPluginApi(config);
     if (!pluginApi || pluginApi.manager.isScanBuild) return {};
+    registerAppRouteRuntimeServerReferences(
+      pluginApi.manager.serverReferenceMetaMap,
+      edgeServerReferenceImportIds,
+      (id) => pluginApi.manager.toRelativeId(id),
+    );
     return createAppRouteRuntimeServerReferenceMap(pluginApi.manager.serverReferenceMetaMap);
   }
 
@@ -1816,7 +1823,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   >();
 
   const plugins: PluginOption[] = [
-    createAppRouteRuntimePlugin(),
+    createAppRouteRuntimePlugin({
+      onEdgeServerReference(importId) {
+        edgeServerReferenceImportIds.add(importId);
+      },
+    }),
     // Resolve tsconfig paths/baseUrl aliases so real-world Next.js repos
     // that use @/*, #/*, or baseUrl imports work out of the box.
     // Vite 8+ supports this natively via resolve.tsconfigPaths.

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import MagicString from "magic-string";
 import path from "pathslash";
@@ -43,6 +44,44 @@ export function withAppRouteRuntime(id: string, runtime: AppRouteRuntime): strin
 
 type ServerReferenceMeta = PluginApi["manager"]["serverReferenceMetaMap"][string];
 
+type CreateAppRouteRuntimePluginOptions = {
+  onEdgeServerReference?: (importId: string) => void;
+};
+
+/**
+ * Register edge-qualified loaders before plugin-rsc generates its production
+ * server-reference module. Client boundaries stay canonical, so an action
+ * imported only by client code is otherwise absent from the edge graph.
+ */
+export function registerAppRouteRuntimeServerReferences(
+  serverReferenceMetaMap: Record<string, ServerReferenceMeta>,
+  edgeServerReferenceImportIds: Iterable<string>,
+  toRelativeId: (id: string) => string,
+): void {
+  const byImportId = new Map(
+    Object.values(serverReferenceMetaMap).map((meta) => [meta.importId, meta]),
+  );
+
+  for (const canonicalImportId of edgeServerReferenceImportIds) {
+    const canonicalMeta = byImportId.get(canonicalImportId);
+    if (!canonicalMeta) continue;
+
+    const edgeImportId = withAppRouteRuntime(canonicalMeta.importId, "edge");
+    if (serverReferenceMetaMap[edgeImportId]) continue;
+
+    serverReferenceMetaMap[edgeImportId] = {
+      ...canonicalMeta,
+      importId: edgeImportId,
+      // Matches @vitejs/plugin-rsc's production reference-key algorithm. The
+      // helper is internal there, so derive the key from its public manager id.
+      referenceKey: createHash("sha256")
+        .update(toRelativeId(edgeImportId))
+        .digest("hex")
+        .slice(0, 12),
+    };
+  }
+}
+
 export function createAppRouteRuntimeServerReferenceMap(
   serverReferenceMetaMap: Record<string, ServerReferenceMeta>,
 ): Record<string, string> {
@@ -71,7 +110,10 @@ function canLoadAsScriptModule(id: string): boolean {
   );
 }
 
-async function hasUseClientDirective(id: string): Promise<boolean> {
+async function hasModuleDirective(
+  id: string,
+  directive: "use client" | "use server",
+): Promise<boolean> {
   const pathname = splitId(id).pathname;
   if (!path.isAbsolute(pathname) || pathname.startsWith("\0")) return false;
 
@@ -91,12 +133,20 @@ async function hasUseClientDirective(id: string): Promise<boolean> {
       if (statement.type !== "ExpressionStatement" || typeof statement.directive !== "string") {
         break;
       }
-      if (statement.directive === "use client") return true;
+      if (statement.directive === directive) return true;
     }
   } catch {
     return false;
   }
   return false;
+}
+
+function hasUseClientDirective(id: string): Promise<boolean> {
+  return hasModuleDirective(id, "use client");
+}
+
+function hasUseServerDirective(id: string): Promise<boolean> {
+  return hasModuleDirective(id, "use server");
 }
 
 type AstNode = Record<string, unknown> & { end?: number; start?: number; type?: string };
@@ -165,7 +215,11 @@ function replaceNextRuntime(code: string, id: string, runtime: AppRouteRuntime) 
   };
 }
 
-export function createAppRouteRuntimePlugin(): Plugin {
+export function createAppRouteRuntimePlugin(
+  pluginOptions: CreateAppRouteRuntimePluginOptions = {},
+): Plugin {
+  const edgeClientModules = new Set<string>();
+
   return {
     name: "vinext:app-route-runtime",
     enforce: "pre",
@@ -180,20 +234,35 @@ export function createAppRouteRuntimePlugin(): Plugin {
 
       if (!importer || options?.isEntry) return null;
       const runtime = runtimeFromId(importer);
-      if (!runtime) return null;
+      const canonicalImporter = withoutAppRouteRuntime(importer);
+      const isEdgeClientImport = edgeClientModules.has(canonicalImporter);
+      if (!runtime && !isEdgeClientImport) return null;
 
       const resolved = await this.resolve(source, withoutAppRouteRuntime(importer), {
         ...options,
         skipSelf: true,
       });
-      if (
-        !resolved ||
-        resolved.external ||
-        !canLoadAsScriptModule(resolved.id) ||
-        (await hasUseClientDirective(resolved.id))
-      ) {
+      if (!resolved || resolved.external || !canLoadAsScriptModule(resolved.id)) {
         return resolved;
       }
+
+      const canonicalResolvedId = withoutAppRouteRuntime(resolved.id);
+      const isUseClientModule = await hasUseClientDirective(resolved.id);
+      // The RSC scan stops at a canonical client boundary. Remember that the
+      // boundary belongs to an edge route so the following SSR reference scan
+      // can carry that reachability through client imports to `use server`.
+      if (runtime === "edge" && isUseClientModule) {
+        edgeClientModules.add(canonicalResolvedId);
+      }
+      if (isEdgeClientImport) {
+        if (await hasUseServerDirective(resolved.id)) {
+          pluginOptions.onEdgeServerReference?.(canonicalResolvedId);
+        } else {
+          edgeClientModules.add(canonicalResolvedId);
+        }
+      }
+
+      if (!runtime || isUseClientModule) return resolved;
       return {
         ...resolved,
         id: withAppRouteRuntime(resolved.id, runtime),

@@ -80,10 +80,8 @@ describe("App route NEXT_RUNTIME production parity", () => {
       path.join(root, "app", "shared", "page.tsx"),
       `
         import { SharedClient } from "./client"
-        import { sharedAction } from "./actions"
         export default async function Page() {
-          const actionRuntime = await sharedAction("render")
-          return <><div id="runtime">{process.env.NEXT_RUNTIME}</div><div id="action-runtime">{actionRuntime}</div><SharedClient /><form action={sharedAction} /></>
+          return <><div id="runtime">{process.env.NEXT_RUNTIME}</div><SharedClient /></>
         }
       `,
     );
@@ -217,7 +215,6 @@ describe("App route NEXT_RUNTIME production parity", () => {
     const nodeHtml = await (nodeResponse as Response).text();
     expect(nodeHtml).toContain('id="runtime">nodejs');
     expect(nodeHtml).toContain('id="root-runtime">nodejs');
-    expect(nodeHtml).toContain('id="action-runtime">render:nodejs');
 
     const beforeEdgeRequest = Number(
       (globalThis as { __vinextRootLayoutEvaluations?: number }).__vinextRootLayoutEvaluations ?? 0,
@@ -227,7 +224,6 @@ describe("App route NEXT_RUNTIME production parity", () => {
     const edgeHtml = await (edgeResponse as Response).text();
     expect(edgeHtml).toContain('id="runtime">edge');
     expect(edgeHtml).toContain('id="root-runtime">edge');
-    expect(edgeHtml).toContain('id="action-runtime">render:edge');
     edgeRootLayoutEvaluationCount = Number(
       (globalThis as { __vinextRootLayoutEvaluations?: number }).__vinextRootLayoutEvaluations ?? 0,
     );
