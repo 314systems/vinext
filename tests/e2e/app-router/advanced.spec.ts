@@ -901,6 +901,68 @@ test.describe("Intercepting Routes", () => {
     await expectFeedSourceState(page);
     await expect(page.locator('[data-testid="photo-page"]')).not.toBeVisible();
   });
+
+  test("cache-miss traversal from an intercepted route uses the target history authority", async ({
+    page,
+  }) => {
+    const traversalRscPaths: string[] = [];
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (request.headers()["rsc"] === "1" && url.searchParams.has("_rsc")) {
+        traversalRscPaths.push(url.pathname);
+      }
+    });
+
+    await page.goto(`${BASE}/about`);
+    await waitForAppRouterHydration(page);
+    await page.evaluate(async () => {
+      const runtime = Reflect.get(window, Symbol.for("vinext.navigationRuntime"));
+      const navigate =
+        typeof runtime === "object" &&
+        runtime !== null &&
+        "functions" in runtime &&
+        typeof runtime.functions === "object" &&
+        runtime.functions !== null &&
+        "navigate" in runtime.functions &&
+        typeof runtime.functions.navigate === "function"
+          ? runtime.functions.navigate
+          : null;
+      if (navigate === null) throw new Error("Expected Vinext RSC navigation executor");
+      await navigate("/feed", 0, "navigate", "push", undefined, true);
+    });
+    await expect(page.locator('[data-testid="feed-page"]')).toBeVisible();
+
+    await page.click("#feed-photo-42-link");
+    await expect(page.locator('[data-testid="photo-modal"]')).toBeVisible();
+    await expect(page.locator('[data-testid="feed-page"]')).toBeVisible();
+
+    await page.evaluate(() => {
+      const runtime = Reflect.get(window, Symbol.for("vinext.navigationRuntime"));
+      const clearNavigationCaches =
+        typeof runtime === "object" &&
+        runtime !== null &&
+        "functions" in runtime &&
+        typeof runtime.functions === "object" &&
+        runtime.functions !== null &&
+        "clearNavigationCaches" in runtime.functions &&
+        typeof runtime.functions.clearNavigationCaches === "function"
+          ? runtime.functions.clearNavigationCaches
+          : null;
+      if (clearNavigationCaches === null) {
+        throw new Error("Expected Vinext navigation cache invalidation");
+      }
+      clearNavigationCaches();
+    });
+    traversalRscPaths.length = 0;
+
+    await page.evaluate(() => window.history.go(-2));
+    await page.waitForURL(`${BASE}/about`);
+
+    await expect(page.locator("#app-page")).toHaveText("About");
+    await expect(page.locator('[data-testid="feed-page"]')).not.toBeVisible();
+    await expect.poll(() => traversalRscPaths).toContain("/about");
+    expect(traversalRscPaths).not.toContain("/feed");
+  });
 });
 
 test.describe("Route Segment Config", () => {

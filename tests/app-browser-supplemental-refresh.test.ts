@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   createSupplementalRefreshCoordinator,
+  resolveNavigationSourcePageRefresh,
   resolvePersistedSourcePageRefresh,
   resolveSupplementalRefreshes,
   settleSuccessfulServerActionResult,
@@ -36,6 +37,18 @@ describe("server action supplemental refreshes", () => {
           previousNextUrl: null,
           slotBindings: [
             {
+              activeRouteId: "route:/nested-revalidate/modal",
+              ownerLayoutId: "layout:/",
+              slotId: "slot:children:/",
+              state: "active",
+            },
+            {
+              activeRouteId: "route:/",
+              ownerLayoutId: "layout:/",
+              slotId: "slot:dialog:/",
+              state: "active",
+            },
+            {
               activeRouteId: "route:/nested-revalidate",
               ownerLayoutId: "layout:/nested-revalidate",
               slotId: "slot:children:/nested-revalidate",
@@ -53,16 +66,81 @@ describe("server action supplemental refreshes", () => {
     ).toBe("/docs/nested-revalidate?view=current");
   });
 
-  it("does not replace a normal traversal target with an unrelated source page", () => {
+  it("does not replace a normal traversal target with the intercepted page being left", () => {
     expect(
-      resolvePersistedSourcePageRefresh({
+      resolveNavigationSourcePageRefresh({
         basePath: "",
-        refreshUrl: new URL("https://example.com/detail-page"),
+        navigationKind: "traverse",
+        refreshUrl: new URL("https://example.com/profile?target=new"),
+        requestPreviousNextUrl: null,
         state: {
+          interception: {
+            sourceMatchedUrl: "/feed",
+            sourceRouteId: "route:/feed",
+            slotId: "slot:modal:/",
+            targetMatchedUrl: "/feed/photo",
+            targetRouteId: "route:/feed/photo",
+          },
+          previousNextUrl: "/feed?source=old",
+          slotBindings: [
+            {
+              activeRouteId: "route:/feed",
+              ownerLayoutId: "layout:/",
+              slotId: "slot:children:/",
+              state: "active",
+            },
+            {
+              activeRouteId: "route:/feed/photo",
+              ownerLayoutId: "layout:/",
+              slotId: "slot:modal:/",
+              state: "active",
+            },
+          ],
+        },
+        targetHistoryBfcacheIds: {
+          "layout:/": "_b_4_",
+          "page:/profile": "_b_5_",
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("uses the target history source URL for an intercepted traversal", () => {
+    expect(
+      resolveNavigationSourcePageRefresh({
+        basePath: "",
+        navigationKind: "traverse",
+        refreshUrl: new URL("https://example.com/photo/target?modal=new"),
+        requestPreviousNextUrl: "/feed?source=target",
+        state: {
+          interception: {
+            sourceMatchedUrl: "/dashboard",
+            sourceRouteId: "route:/dashboard",
+            slotId: "slot:modal:/",
+            targetMatchedUrl: "/photo/old",
+            targetRouteId: "route:/photo/old",
+          },
+          previousNextUrl: "/dashboard?source=old",
+          slotBindings: [],
+        },
+        targetHistoryBfcacheIds: null,
+      }),
+    ).toBe("/feed?source=target");
+  });
+
+  it("uses target history page identity to recover a normal parallel-route source page", () => {
+    expect(
+      resolveNavigationSourcePageRefresh({
+        basePath: "",
+        navigationKind: "traverse",
+        refreshUrl: new URL("https://example.com/nested-revalidate/drawer"),
+        requestPreviousNextUrl: null,
+        state: {
+          interception: null,
           previousNextUrl: null,
           slotBindings: [
             {
-              activeRouteId: "route:/",
+              activeRouteId: "route:/nested-revalidate/drawer",
               ownerLayoutId: "layout:/",
               slotId: "slot:children:/",
               state: "active",
@@ -70,13 +148,28 @@ describe("server action supplemental refreshes", () => {
             {
               activeRouteId: "route:/",
               ownerLayoutId: "layout:/",
-              slotId: "slot:interception:/",
+              slotId: "slot:dialog:/",
+              state: "active",
+            },
+            {
+              activeRouteId: "route:/nested-revalidate",
+              ownerLayoutId: "layout:/nested-revalidate",
+              slotId: "slot:children:/nested-revalidate",
+              state: "active",
+            },
+            {
+              activeRouteId: "route:/nested-revalidate/modal",
+              ownerLayoutId: "layout:/nested-revalidate",
+              slotId: "slot:modal:/nested-revalidate",
               state: "active",
             },
           ],
         },
+        targetHistoryBfcacheIds: {
+          "page:/nested-revalidate/drawer": "_b_2_",
+        },
       }),
-    ).toBeNull();
+    ).toBe("/nested-revalidate");
   });
 
   it("merges multiple successful persisted slots", async () => {

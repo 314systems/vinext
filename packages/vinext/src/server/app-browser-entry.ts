@@ -99,6 +99,7 @@ import {
 } from "./app-browser-action-result.js";
 import {
   createSupplementalRefreshCoordinator,
+  resolveNavigationSourcePageRefresh,
   resolvePersistedSourcePageRefresh,
   resolveSupplementalRefreshes,
   settleSuccessfulServerActionResult,
@@ -127,6 +128,7 @@ import {
   createInitialBfcacheIdMap,
   isCacheRestorableAppPayloadMetadata,
   isCompleteAppPayloadMetadata,
+  readHistoryStateBfcacheIds,
   readHistoryStatePreviousNextUrl,
   resolveInterceptionContextFromPreviousNextUrl,
   type AppNavigationPayloadOrigin,
@@ -2030,10 +2032,18 @@ function bootstrapHydration(
             : [];
         const persistedSourcePageRefresh =
           navigationKind === "refresh" || navigationKind === "traverse"
-            ? resolvePersistedSourcePageRefresh({
+            ? resolveNavigationSourcePageRefresh({
                 basePath: __basePath,
+                navigationKind,
                 refreshUrl: url,
+                requestPreviousNextUrl,
                 state: navigationInitiationState,
+                targetHistoryBfcacheIds:
+                  navigationKind === "traverse"
+                    ? readHistoryStateBfcacheIds(
+                        activeTraversalIntent?.historyState ?? window.history.state,
+                      )
+                    : null,
               })
             : null;
         // Next.js refetches page segments for same-page search changes even

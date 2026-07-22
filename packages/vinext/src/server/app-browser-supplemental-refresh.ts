@@ -25,31 +25,92 @@ export function resolvePersistedSourcePageRefresh(options: {
   } else {
     const sourcePageBinding = options.state.slotBindings.find((binding) => {
       const parsedSlot = AppElementsWire.parseElementKey(binding.slotId);
-      return (
+      if (
         binding.state === "active" &&
         parsedSlot?.kind === "slot" &&
         parsedSlot.name === "children" &&
-        binding.activeRouteId !== undefined
-      );
+        binding.activeRouteId != null
+      ) {
+        const activeRoute = AppElementsWire.parseElementKey(binding.activeRouteId);
+        if (
+          activeRoute?.kind !== "route" ||
+          addBasePathToPathname(activeRoute.path, options.basePath) === options.refreshUrl.pathname
+        ) {
+          return false;
+        }
+        return options.state.slotBindings.some(
+          (candidate) =>
+            candidate.state === "active" &&
+            candidate.ownerLayoutId === binding.ownerLayoutId &&
+            candidate.slotId !== binding.slotId &&
+            candidate.activeRouteId != null &&
+            candidate.activeRouteId !== binding.activeRouteId,
+        );
+      }
+      return false;
     });
     const activeRoute = sourcePageBinding?.activeRouteId
       ? AppElementsWire.parseElementKey(sourcePageBinding.activeRouteId)
       : null;
     if (activeRoute?.kind !== "route") return null;
-    const hasPersistedNamedSlot = options.state.slotBindings.some(
-      (binding) =>
-        binding.state === "active" &&
-        binding.slotId !== sourcePageBinding?.slotId &&
-        binding.activeRouteId !== undefined &&
-        binding.activeRouteId !== sourcePageBinding?.activeRouteId,
-    );
-    if (!hasPersistedNamedSlot) return null;
     sourceUrl = new URL(
       addBasePathToPathname(activeRoute.path, options.basePath),
       options.refreshUrl,
     );
     sourceUrl.search = options.refreshUrl.search;
   }
+  if (
+    sourceUrl.pathname === options.refreshUrl.pathname &&
+    sourceUrl.search === options.refreshUrl.search
+  ) {
+    return null;
+  }
+  return `${sourceUrl.pathname}${sourceUrl.search}`;
+}
+
+export function resolveNavigationSourcePageRefresh(options: {
+  basePath: string;
+  navigationKind: "refresh" | "traverse";
+  refreshUrl: URL;
+  requestPreviousNextUrl: string | null;
+  state: Pick<AppRouterState, "interception" | "previousNextUrl" | "slotBindings">;
+  targetHistoryBfcacheIds: Readonly<Record<string, string>> | null;
+}): string | null {
+  if (options.navigationKind === "refresh") {
+    return resolvePersistedSourcePageRefresh(options);
+  }
+
+  // A traversal restores the target history entry, so only that entry can
+  // identify an intercepted source page. A non-intercepted parallel route may
+  // recover its owned children source below, but an intercepted router state
+  // being left must not influence a cache-miss response.
+  if (options.requestPreviousNextUrl === null) {
+    const sourcePageBinding = options.state.slotBindings.find((binding) => {
+      const parsedSlot = AppElementsWire.parseElementKey(binding.slotId);
+      if (
+        binding.state !== "active" ||
+        parsedSlot?.kind !== "slot" ||
+        parsedSlot.name !== "children" ||
+        binding.activeRouteId == null
+      ) {
+        return false;
+      }
+      const activeRoute = AppElementsWire.parseElementKey(binding.activeRouteId);
+      if (activeRoute?.kind !== "route") return false;
+      return Object.keys(options.targetHistoryBfcacheIds ?? {}).some((id) => {
+        const targetSegment = AppElementsWire.parseElementKey(id);
+        return targetSegment?.kind === "page" && targetSegment.path === activeRoute.path;
+      });
+    });
+    const mayRecoverNonInterceptedParallelSource =
+      options.state.previousNextUrl === null && options.state.interception === null;
+    if (sourcePageBinding === undefined && !mayRecoverNonInterceptedParallelSource) return null;
+    return resolvePersistedSourcePageRefresh({
+      ...options,
+      state: { previousNextUrl: null, slotBindings: options.state.slotBindings },
+    });
+  }
+  const sourceUrl = new URL(options.requestPreviousNextUrl, options.refreshUrl);
   if (
     sourceUrl.pathname === options.refreshUrl.pathname &&
     sourceUrl.search === options.refreshUrl.search
