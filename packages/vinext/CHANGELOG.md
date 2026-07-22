@@ -1,5 +1,30 @@
 # vinext
 
+## 1.0.0-beta.4
+
+### Bug Fixes
+
+#### App Router
+
+- resolve interception-only RSC targets (#2256)
+- preserve hash query navigation semantics (#2669)
+- reconcile streamed metadata icons (#2320)
+- align prefetch server protocol (#2318)
+
+#### Misc
+
+- **Cache:** preserve prerendered page cache tags (#709)
+- **Pages:** normalize decoded edge responses (#2668)
+- **Pages:** propagate Document script security props (#2044)
+
+### Performance
+
+- **App Router:** serialize streamed metadata once (#2675)
+
+### Contributors
+
+- @james-elicx
+
 ## 1.0.0-beta.3
 
 ### Features
