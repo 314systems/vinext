@@ -629,8 +629,7 @@ export function shouldUseStaticGenerationNavigationSemantics(
 ): boolean {
   return (
     observation === undefined ||
-    (observation.dynamicFetches.length === 0 &&
-      observation.requestApis.every((api) => api === "searchParams"))
+    (observation.dynamicFetches.length === 0 && observation.requestApis.length === 0)
   );
 }
 

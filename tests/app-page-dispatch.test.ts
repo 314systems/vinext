@@ -1685,7 +1685,7 @@ describe("app page dispatch", () => {
         dynamicFetches: [],
         requestApis: ["searchParams"],
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       shouldUseStaticGenerationNavigationSemantics({
         dynamicFetches: [],
