@@ -353,14 +353,18 @@ function resolveMatchedAutoAppRoutePrefetch(
     // tree instead of assuming that a fixed pathname or generateStaticParams
     // export is static. Vinext uses the loading-shell response as the concrete
     // capability probe and starts the Full request only after positive proof.
-    // This does not affect explicit/intent Full prefetches: once started, those
-    // remain reusable client state regardless of HTTP cache policy.
-    cacheForNavigation: fetchFullPayload && !hasLoadingShell,
+    // This does not affect explicit/intent Full prefetches: once completed,
+    // those remain reusable client state regardless of HTTP cache policy.
+    // Full responses are snapshotted before the router can consume them. Keep
+    // every newly-started Full request hidden until that snapshot reaches EOF;
+    // otherwise a click would join the pending snapshot and suppress the
+    // independently available loading shell/fresh navigation path.
+    cacheForNavigation: false,
     fetchFullPayload,
-    ...(fetchFullPayload && hasLoadingShell
+    ...(fetchFullPayload
       ? {
-          automaticFullPrefetchProbe: "loading-shell" as const,
           cacheForNavigationOnComplete: true,
+          ...(hasLoadingShell ? { automaticFullPrefetchProbe: "loading-shell" as const } : {}),
         }
       : {}),
     prefetchShellFirst: !route.isDynamic,
@@ -444,7 +448,8 @@ export function resolveAutoAppRoutePrefetch(
 
 function resolveFullAppRoutePrefetch(): AppRoutePrefetchPolicy {
   return {
-    cacheForNavigation: true,
+    cacheForNavigation: false,
+    cacheForNavigationOnComplete: true,
     fetchFullPayload: true,
     prefetchShellFirst: true,
     shouldPrefetch: true,
@@ -578,7 +583,8 @@ function prefetchUrl(
             ? resolveAutoAppRoutePrefetch(prefetchPolicyHref, interceptionContext !== null)
             : mode === "full-after-shell"
               ? {
-                  cacheForNavigation: true,
+                  cacheForNavigation: false,
+                  cacheForNavigationOnComplete: true,
                   fetchFullPayload: true,
                   prefetchShellFirst: true,
                   shouldPrefetch: true,
@@ -640,11 +646,14 @@ function prefetchUrl(
         }
         const prefetched = getPrefetchedUrls();
         if (prefetched.has(cacheKey)) {
-          if (!autoPrefetch.cacheForNavigation) {
+          if (!autoPrefetch.fetchFullPayload) {
             return;
           }
 
           const existing = getPrefetchCache().get(cacheKey);
+          if (existing?.cacheForNavigationOnComplete === true && existing.pending !== undefined) {
+            return;
+          }
           if (
             existing?.cacheForNavigation === false &&
             existing.cacheForNavigationOnComplete !== true
@@ -731,11 +740,11 @@ function prefetchUrl(
           });
         };
         const hasExactNavigationCacheEntry =
-          autoPrefetch.cacheForNavigation &&
+          autoPrefetch.fetchFullPayload &&
           hasPrefetchCacheEntryForNavigation(rscUrl, interceptionContext, mountedSlotsHeader);
         const hasNavigationCacheEntry =
           hasExactNavigationCacheEntry ||
-          (autoPrefetch.cacheForNavigation &&
+          (autoPrefetch.fetchFullPayload &&
             hasPrefetchCacheEntryForNavigation(rscUrl, interceptionContext, mountedSlotsHeader, {
               additionalRscUrls,
             }));
@@ -784,7 +793,7 @@ function prefetchUrl(
                 }
                 return fetchFullRscPayload();
               })()
-            : autoPrefetch.cacheForNavigation && (gateViaRouteTree || gateViaLoadingShell)
+            : autoPrefetch.fetchFullPayload && (gateViaRouteTree || gateViaLoadingShell)
               ? (async () => {
                   if (gateViaLoadingShell) {
                     await fetchLoadingShellForReuse();
@@ -863,7 +872,7 @@ function prefetchUrl(
               : fetchFullRscPayload();
         if (
           mode === "full" &&
-          autoPrefetch.cacheForNavigation &&
+          autoPrefetch.fetchFullPayload &&
           autoPrefetch.prefetchShellFirst &&
           mountedSlotsHeader === null &&
           !gateViaExplicitSearchShell
