@@ -305,9 +305,7 @@ describe("Link App Router prefetch mode", () => {
     try {
       expect(canAutoPrefetchFullAppRoute("/about")).toBe(true);
       expect(canAutoPrefetchFullAppRoute("/blog/hello-world")).toBe(false);
-      // Generated dynamic paths start provisionally non-consumable until the
-      // server response supplies positive static-cache proof.
-      expect(canAutoPrefetchFullAppRoute("/posts/hello-world")).toBe(false);
+      expect(canAutoPrefetchFullAppRoute("/posts/hello-world")).toBe(true);
       expect(canAutoPrefetchFullAppRoute("/docs/a/b")).toBe(false);
       expect(canAutoPrefetchFullAppRoute("/products/1")).toBe(true);
       expect(canAutoPrefetchFullAppRoute("/teams/vercel/dashboard")).toBe(false);
@@ -365,15 +363,15 @@ describe("Link App Router prefetch mode", () => {
       });
       expect(resolveAutoAppRoutePrefetch("/posts/hello-world")).toEqual({
         cacheForNavigation: false,
+        cacheForNavigationOnComplete: true,
         fetchFullPayload: true,
-        navigationCacheResponsePolicy: "require-shared-cache",
         prefetchShellFirst: false,
         shouldPrefetch: true,
       });
       expect(resolveAutoAppRoutePrefetch("/settings")).toEqual({
-        cacheForNavigation: true,
+        cacheForNavigation: false,
+        cacheForNavigationOnComplete: true,
         fetchFullPayload: true,
-        navigationCacheResponsePolicy: "reject-no-store",
         prefetchShellFirst: true,
         shouldPrefetch: true,
       });

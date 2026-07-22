@@ -1491,7 +1491,7 @@ describe("Link prefetch scheduling", () => {
     try {
       expect(observer.observe).toHaveBeenCalledWith(result.anchor);
       observer.dispatchIntersectingEntry(result.anchor);
-      await waitForFetchCalls(result.fetch, 1);
+      await waitForFetchCalls(result.fetch, 2);
 
       expect(observer.unobserve).not.toHaveBeenCalledWith(result.anchor);
       expectCanonicalRscFetchCall(
@@ -1957,9 +1957,14 @@ describe("Link prefetch scheduling", () => {
     });
 
     try {
+      result.fetch.mockResolvedValueOnce(
+        new Response("static-flight", {
+          headers: { "cache-control": "s-maxage=31536000, stale-while-revalidate" },
+        }),
+      );
       expect(observer.observe).toHaveBeenCalledWith(result.anchor);
       observer.dispatchIntersectingEntry(result.anchor);
-      await waitForFetchCalls(result.fetch, 1);
+      await waitForFetchCalls(result.fetch, 2);
 
       // Ported from Next.js: test/e2e/app-dir/navigation/navigation.test.ts
       // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/navigation/navigation.test.ts
@@ -1982,15 +1987,25 @@ describe("Link prefetch scheduling", () => {
         (fetchInit?.headers as Headers | undefined)?.get(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER),
       ).toBe("1");
       const { getPrefetchCache } = await import("../packages/vinext/src/shims/navigation.js");
-      const entry = Array.from(getPrefetchCache().values())[0];
+      const entry = Array.from(getPrefetchCache().values()).find(
+        (candidate) => candidate.optimisticRouteShell !== true,
+      );
+      await entry?.pending;
+      await flushPrefetchTasks();
       expect(entry?.cacheForNavigation).toBe(true);
       expect(entry?.optimisticRouteShell).toBe(false);
+      expect(
+        Array.from(getPrefetchCache().values()).some(
+          (candidate) =>
+            candidate.cacheForNavigation === false && candidate.optimisticRouteShell === true,
+        ),
+      ).toBe(true);
     } finally {
       result.restoreNodeEnv();
     }
   });
 
-  it("does not reuse a no-store full prefetch for a fixed loading-boundary route", async () => {
+  it("keeps pending Full prefetches non-consumable, then reuses the completed response", async () => {
     const observer = stubIntersectionObserver();
     const result = await renderIsolatedLink({
       href: "/personalized-loading",
@@ -1999,24 +2014,37 @@ describe("Link prefetch scheduling", () => {
     });
 
     try {
-      // A fixed pathname is not proof of a static render. This models a route
-      // with loading.tsx that exports force-dynamic and reads a request cookie.
+      // Next's Full prefetch is a navigation request issued ahead of time. It
+      // intentionally becomes reusable client state once complete, including
+      // for dynamic/no-store responses.
+      let closeFullResponse = () => {};
+      const fullBody = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("prefetched-cookie=before"));
+          closeFullResponse = () => controller.close();
+        },
+      });
       result.fetch.mockResolvedValueOnce(
-        new Response("prefetched-cookie=before", {
+        new Response(fullBody, {
           headers: { "cache-control": "no-store, must-revalidate" },
         }),
       );
       observer.dispatchIntersectingEntry(result.anchor);
-      await waitForFetchCalls(result.fetch, 1);
+      await waitForFetchCalls(result.fetch, 2);
 
       const { consumePrefetchResponseForNavigation, getPrefetchCache } =
         await import("../packages/vinext/src/shims/navigation.js");
-      const entry = Array.from(getPrefetchCache().values())[0];
-      await entry?.pending;
+      const entry = Array.from(getPrefetchCache().values()).find(
+        (candidate) => candidate.optimisticRouteShell !== true,
+      );
+      await flushPrefetchTasks();
 
       expect(entry?.cacheForNavigation).toBe(false);
-      // After the cookie/request state changes, navigation cannot consume the
-      // old prefetched payload and therefore must issue a fresh RSC request.
+      expect(
+        Array.from(getPrefetchCache().values()).some(
+          (candidate) => candidate.optimisticRouteShell === true,
+        ),
+      ).toBe(true);
       const fetchCall = result.fetch.mock.calls[0];
       const prefetchedUrl = fetchCall?.[0];
       expect(typeof prefetchedUrl).toBe("string");
@@ -2024,16 +2052,21 @@ describe("Link prefetch scheduling", () => {
         await consumePrefetchResponseForNavigation(prefetchedUrl as string, null, null),
       ).toBeNull();
 
-      result.fetch.mockResolvedValueOnce(new Response("prefetched-cookie=after"));
+      // Pointer intent must not promote the still-open Full response and make
+      // a click join its body. The separately cached loading shell remains the
+      // provisional navigation path.
       result.capturedAnchorProps.onMouseEnter?.({
         currentTarget: result.anchor,
       } as CapturedIntentEvent);
-      await waitForFetchCalls(result.fetch, 2);
-      expect(result.fetch.mock.calls.length).toBeGreaterThanOrEqual(2);
-      const freshFetchInit = result.fetch.mock.calls.at(-1)?.[1] as RequestInit | undefined;
+      await flushPrefetchTasks();
+      expect(entry?.cacheForNavigation).toBe(false);
+
+      closeFullResponse();
+      await entry?.pending;
+      expect(entry?.cacheForNavigation).toBe(true);
       expect(
-        (freshFetchInit?.headers as Headers | undefined)?.get(VINEXT_RSC_RENDER_MODE_HEADER),
-      ).toBeNull();
+        await consumePrefetchResponseForNavigation(prefetchedUrl as string, null, null),
+      ).not.toBeNull();
     } finally {
       result.restoreNodeEnv();
     }

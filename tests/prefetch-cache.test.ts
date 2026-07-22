@@ -564,7 +564,7 @@ describe("prefetch cache eviction", () => {
     expect(getPrefetchedUrls().has(rscUrl)).toBe(false);
   });
 
-  it("rejects no-store automatic full prefetches from navigation reuse", async () => {
+  it("reuses a completed full prefetch regardless of HTTP cache policy", async () => {
     const rscUrl = "/personalized-loading.rsc";
     prefetchRscResponse(
       rscUrl,
@@ -579,50 +579,52 @@ describe("prefetch cache eviction", () => {
       null,
       null,
       undefined,
-      { cacheForNavigation: true, navigationCacheResponsePolicy: "reject-no-store" },
+      { cacheForNavigation: false, cacheForNavigationOnComplete: true },
     );
 
     const entry = getPrefetchCache().get(rscUrl);
     await entry?.pending;
-    expect(entry?.cacheForNavigation).toBe(false);
-    expect(entry?.navigationCacheRejected).toBe(true);
-    await expect(consumePrefetchResponseForNavigation(rscUrl, null, null)).resolves.toBeNull();
+    expect(entry?.cacheForNavigation).toBe(true);
+    await expect(consumePrefetchResponseForNavigation(rscUrl, null, null)).resolves.not.toBeNull();
   });
 
-  it("admits generated dynamic paths only with positive shared-cache proof", async () => {
-    const staticUrl = "/posts/static.rsc";
-    const fallbackUrl = "/posts/fallback.rsc";
-    for (const [rscUrl, cacheControl] of [
-      [staticUrl, "s-maxage=31536000, stale-while-revalidate"],
-      [fallbackUrl, null],
-    ] as const) {
-      prefetchRscResponse(
-        rscUrl,
-        Promise.resolve(
-          new Response(rscUrl, {
-            headers: {
-              ...(cacheControl === null ? {} : { "cache-control": cacheControl }),
-              "content-type": "text/x-component",
-            },
-          }),
-        ),
-        null,
-        null,
-        undefined,
-        {
-          cacheForNavigation: false,
-          navigationCacheResponsePolicy: "require-shared-cache",
-        },
-      );
-      await getPrefetchCache().get(rscUrl)?.pending;
-    }
+  it("does not make navigation await a provisional full-prefetch body", async () => {
+    const rscUrl = "/pending-personalized-loading.rsc";
+    let closeBody = () => {};
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("partial"));
+        closeBody = () => controller.close();
+      },
+    });
+    prefetchRscResponse(
+      rscUrl,
+      Promise.resolve(
+        new Response(body, {
+          headers: {
+            "cache-control": "no-store, must-revalidate",
+            "content-type": "text/x-component",
+          },
+        }),
+      ),
+      null,
+      null,
+      undefined,
+      { cacheForNavigation: false, cacheForNavigationOnComplete: true },
+    );
 
-    expect(getPrefetchCache().get(staticUrl)?.cacheForNavigation).toBe(true);
-    expect(getPrefetchCache().get(fallbackUrl)?.cacheForNavigation).toBe(false);
-    await expect(
-      consumePrefetchResponseForNavigation(staticUrl, null, null),
-    ).resolves.not.toBeNull();
-    await expect(consumePrefetchResponseForNavigation(fallbackUrl, null, null)).resolves.toBeNull();
+    // The fetch promise has resolved with headers, but snapshotting is still
+    // blocked on EOF. A click must use the independently prefetched loading
+    // shell/fresh response immediately rather than joining this stream.
+    await Promise.resolve();
+    await expect(consumePrefetchResponseForNavigation(rscUrl, null, null)).resolves.toBeNull();
+    expect(getPrefetchCache().get(rscUrl)?.pending).toBeDefined();
+
+    closeBody();
+    await getPrefetchCache().get(rscUrl)?.pending;
+    const entry = getPrefetchCache().get(rscUrl);
+    expect(entry?.cacheForNavigation).toBe(true);
+    await expect(consumePrefetchResponseForNavigation(rscUrl, null, null)).resolves.not.toBeNull();
   });
 
   it("honors an explicit fallback stale window above the minimum for prefetched responses", async () => {

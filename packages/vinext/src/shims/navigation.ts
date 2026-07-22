@@ -40,7 +40,6 @@ import {
 import { hasPendingAppRouterPageRedirect } from "../server/app-browser-mpa-navigation.js";
 import {
   VINEXT_DYNAMIC_STALE_TIME_HEADER,
-  VINEXT_CACHE_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_PARAMS_HEADER,
   VINEXT_RENDERED_PATH_AND_SEARCH_HEADER,
@@ -285,11 +284,9 @@ export type PrefetchOptions = {
 
 export type PrefetchCacheKind = "loading-shell" | "navigation" | "route-tree";
 
-type NavigationCacheResponsePolicy = "reject-no-store" | "require-shared-cache";
-
 export type PrefetchCacheEntry = {
   cacheForNavigation?: boolean;
-  navigationCacheRejected?: boolean;
+  cacheForNavigationOnComplete?: boolean;
   expiresAt?: number;
   invalidationTimer?: ReturnType<typeof setTimeout>;
   mountedSlotsHeader?: string | null;
@@ -986,8 +983,8 @@ export function prefetchRscResponse(
   options?: PrefetchOptions,
   behavior: {
     cacheForNavigation?: boolean;
+    cacheForNavigationOnComplete?: boolean;
     fallbackTtlMs?: number;
-    navigationCacheResponsePolicy?: NavigationCacheResponsePolicy;
     optimisticRouteShell?: boolean;
     prefetchKind?: PrefetchCacheKind;
     searchAgnosticShell?: boolean;
@@ -1004,6 +1001,7 @@ export function prefetchRscResponse(
 
   const entry: PrefetchCacheEntry = {
     cacheForNavigation: behavior.cacheForNavigation ?? true,
+    cacheForNavigationOnComplete: behavior.cacheForNavigationOnComplete === true,
     cacheKeys: new Set([cacheKey]),
     mountedSlotsHeader,
     optimisticRouteShell: behavior.optimisticRouteShell === true,
@@ -1019,12 +1017,6 @@ export function prefetchRscResponse(
   entry.pending = fetchPromise
     .then(async (response) => {
       if (response.ok) {
-        const responsePolicy = behavior.navigationCacheResponsePolicy;
-        if (responsePolicy !== undefined) {
-          const admitted = responseAllowsNavigationCache(response, responsePolicy);
-          entry.cacheForNavigation = admitted;
-          entry.navigationCacheRejected = !admitted;
-        }
         const snapshot = await snapshotRscResponse(response);
         if (cache.get(cacheKey) !== entry) return;
         const previousSize = getPrefetchCacheEntrySize(entry);
@@ -1036,6 +1028,14 @@ export function prefetchRscResponse(
           entry.snapshot,
           behavior.fallbackTtlMs ?? PREFETCH_CACHE_TTL,
         );
+        // Next.js intentionally treats a completed Full prefetch as reusable
+        // client state even when it contains dynamic data. Keep it invisible
+        // while the stream is incomplete so a click never waits for body EOF;
+        // once snapshotted, it is the same navigation response fetched early.
+        // https://github.com/vercel/next.js/blob/canary/packages/next/src/client/components/segment-cache/scheduler.ts
+        if (behavior.cacheForNavigationOnComplete === true) {
+          entry.cacheForNavigation = true;
+        }
         addRenderedPathAndSearchPrefetchAlias(cache, prefetched, cacheKey, entry);
         evictPrefetchCacheIfNeeded();
       } else {
@@ -1060,27 +1060,6 @@ export function prefetchRscResponse(
   // entries inserted before it are candidates for removal.
   cache.set(cacheKey, entry);
   evictPrefetchCacheIfNeeded();
-}
-
-function responseAllowsNavigationCache(
-  response: Response,
-  policy: NavigationCacheResponsePolicy,
-): boolean {
-  const cacheControl = [
-    response.headers.get("cache-control"),
-    response.headers.get("cdn-cache-control"),
-  ]
-    .filter((value): value is string => value !== null)
-    .join(",");
-  const directives = cacheControl.split(",").map((directive) => directive.trim().toLowerCase());
-  if (directives.includes("no-store")) return false;
-  if (policy === "reject-no-store") return true;
-
-  if (directives.some((directive) => directive.startsWith("s-maxage="))) {
-    return true;
-  }
-  const cacheState = response.headers.get(VINEXT_CACHE_HEADER)?.toUpperCase();
-  return cacheState === "HIT" || cacheState === "STALE" || cacheState === "STATIC";
 }
 
 function addRenderedPathAndSearchPrefetchAlias(

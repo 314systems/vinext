@@ -328,12 +328,10 @@ function getLinkPrefetchRouterMode(): LinkPrefetchRouterMode {
   return hasAppNavigationRuntime() ? "app" : "pages";
 }
 
-type NavigationCacheResponsePolicy = "reject-no-store" | "require-shared-cache";
-
 type AppRoutePrefetchPolicy = {
   cacheForNavigation: boolean;
+  cacheForNavigationOnComplete?: boolean;
   fetchFullPayload: boolean;
-  navigationCacheResponsePolicy?: NavigationCacheResponsePolicy;
   prefetchShellFirst: boolean;
   shouldPrefetch: boolean;
 };
@@ -350,20 +348,13 @@ function resolveMatchedAutoAppRoutePrefetch(
     (!hasLoadingShell || canAttemptFullLoadingPrefetch) &&
     route.requiresDynamicNavigationRequest !== true;
   return {
-    // Filesystem route shape cannot prove render staticness: a fixed pathname
-    // may be force-dynamic, while a generateStaticParams pathname may have a
-    // static artifact. For loading-boundary candidates the server response is
-    // authoritative. Fixed paths are admitted unless the response says
-    // no-store; generated-param candidates require positive shared-cache proof.
-    cacheForNavigation: fetchFullPayload && !canProbeGeneratedDynamicPath,
+    // Full prefetches behind a loading boundary start provisionally invisible
+    // to navigation. A click while the stream is incomplete must use the
+    // loading shell/fresh request instead of waiting for the prefetch body to
+    // reach EOF. Once complete, reuse it like Next's Full segment prefetch.
+    cacheForNavigation: fetchFullPayload && !hasLoadingShell,
     fetchFullPayload,
-    ...(hasLoadingShell && fetchFullPayload
-      ? {
-          navigationCacheResponsePolicy: canProbeGeneratedDynamicPath
-            ? ("require-shared-cache" as const)
-            : ("reject-no-store" as const),
-        }
-      : {}),
+    ...(fetchFullPayload && hasLoadingShell ? { cacheForNavigationOnComplete: true } : {}),
     prefetchShellFirst: !route.isDynamic,
     shouldPrefetch: true,
   };
@@ -381,7 +372,7 @@ export function canAutoPrefetchFullAppRoute(href: string): boolean {
   const match = matchRouteWithTrie(routeHref, routes, linkPrefetchRouteTrieCache);
   if (!match) return false;
 
-  return resolveAutoAppRoutePrefetch(href).cacheForNavigation;
+  return resolveAutoAppRoutePrefetch(href).fetchFullPayload;
 }
 
 export function resolveAutoAppRoutePrefetch(
@@ -434,7 +425,7 @@ export function resolveAutoAppRoutePrefetch(
       ...prefetch,
       cacheForNavigation: false,
       fetchFullPayload: false,
-      navigationCacheResponsePolicy: undefined,
+      cacheForNavigationOnComplete: undefined,
       prefetchShellFirst: true,
     };
   }
@@ -611,7 +602,7 @@ function prefetchUrl(
           headers.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
         }
         const shouldSendSegmentPrefetchHeaders = isOptimisticRouteShellPrefetch || mode === "auto";
-        if (__prefetchInlining && autoPrefetch.cacheForNavigation) {
+        if (__prefetchInlining && autoPrefetch.fetchFullPayload) {
           headers.set(NEXT_ROUTER_PREFETCH_HEADER, "1");
           headers.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "/__PAGE__");
         } else if (shouldSendSegmentPrefetchHeaders) {
@@ -633,7 +624,10 @@ function prefetchUrl(
           }
 
           const existing = getPrefetchCache().get(cacheKey);
-          if (existing?.cacheForNavigation === false && existing.navigationCacheRejected !== true) {
+          if (
+            existing?.cacheForNavigation === false &&
+            existing.cacheForNavigationOnComplete !== true
+          ) {
             existing.cacheForNavigation = true;
           }
         }
@@ -846,13 +840,18 @@ function prefetchUrl(
           undefined,
           {
             cacheForNavigation: autoPrefetch.cacheForNavigation,
+            cacheForNavigationOnComplete: autoPrefetch.cacheForNavigationOnComplete,
             fallbackTtlMs: PREFETCH_CACHE_TTL,
-            navigationCacheResponsePolicy: autoPrefetch.navigationCacheResponsePolicy,
             optimisticRouteShell: isOptimisticRouteShellPrefetch,
             prefetchKind: isOptimisticRouteShellPrefetch ? "loading-shell" : "navigation",
             searchAgnosticShell: isAutomaticSearchParamShell && !hasSearchAgnosticShell,
           },
         );
+        // Keep a separate loading shell available while a provisional Full
+        // prefetch is incomplete and therefore invisible to navigation.
+        if (autoPrefetch.cacheForNavigationOnComplete === true) {
+          void fetchLoadingShellForReuse();
+        }
       } else if (HAS_PAGES_ROUTER && window.__NEXT_DATA__) {
         // Pages Router prefetch. When a code-split loader is registered for
         // the target route (prod builds expose them on window via the
@@ -922,7 +921,7 @@ async function promotePrefetchEntriesForNavigation(href: string): Promise<void> 
 
   for (const [cacheKey, entry] of getPrefetchCache()) {
     if (entry.optimisticRouteShell === true) continue;
-    if (entry.navigationCacheRejected === true) continue;
+    if (entry.cacheForNavigationOnComplete === true) continue;
     if (entry.prefetchKind === "route-tree") continue;
 
     const [rscUrl] = cacheKey.split("\0", 1);
