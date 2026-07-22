@@ -1,6 +1,6 @@
-import path from "node:path";
 import { readFile } from "node:fs/promises";
 import MagicString from "magic-string";
+import path from "pathslash";
 import { parseAst, type Plugin } from "vite";
 import type { AppRouteRuntime } from "../build/app-route-runtime.js";
 
