@@ -855,7 +855,6 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
   // resolves and exact-matches generateStaticParams for the same route.
   if (options.skipStaticParamsValidation !== true && !(options.isProduction && isForceDynamic)) {
     const dynamicParamsResponse = await validateAppPageDynamicParams({
-      clearRequestContext: options.clearRequestContext,
       enforceStaticParamsOnly: options.dynamicParamsConfig === false,
       generateStaticParams: options.generateStaticParams,
       isDynamicRoute: route.isDynamic,
@@ -872,7 +871,11 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
         { matchedParams: options.params },
         options.middlewareContext,
       );
-      return renderedNotFound ?? dynamicParamsResponse;
+      if (renderedNotFound) {
+        return renderedNotFound;
+      }
+      options.clearRequestContext();
+      return dynamicParamsResponse;
     }
   }
 
