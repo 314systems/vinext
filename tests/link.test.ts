@@ -362,6 +362,7 @@ describe("Link App Router prefetch mode", () => {
         shouldPrefetch: true,
       });
       expect(resolveAutoAppRoutePrefetch("/posts/hello-world")).toEqual({
+        automaticFullPrefetchProbe: "loading-shell",
         cacheForNavigation: false,
         cacheForNavigationOnComplete: true,
         fetchFullPayload: true,
@@ -369,6 +370,7 @@ describe("Link App Router prefetch mode", () => {
         shouldPrefetch: true,
       });
       expect(resolveAutoAppRoutePrefetch("/settings")).toEqual({
+        automaticFullPrefetchProbe: "loading-shell",
         cacheForNavigation: false,
         cacheForNavigationOnComplete: true,
         fetchFullPayload: true,

@@ -39,6 +39,7 @@ import {
 } from "../server/app-rsc-cache-busting.js";
 import { hasPendingAppRouterPageRedirect } from "../server/app-browser-mpa-navigation.js";
 import {
+  VINEXT_CACHE_HEADER,
   VINEXT_DYNAMIC_STALE_TIME_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_PARAMS_HEADER,
@@ -285,6 +286,7 @@ export type PrefetchOptions = {
 export type PrefetchCacheKind = "loading-shell" | "navigation" | "route-tree";
 
 export type PrefetchCacheEntry = {
+  automaticFullPrefetchEligible?: boolean;
   cacheForNavigation?: boolean;
   cacheForNavigationOnComplete?: boolean;
   expiresAt?: number;
@@ -551,6 +553,31 @@ export function hasPrefetchCacheEntryForNavigation(
     options.notifyInvalidation ?? true,
   );
   return false;
+}
+
+export function findProvisionalFullPrefetchEntryForNavigation(
+  rscUrl: string,
+  interceptionContext: string | null = null,
+  mountedSlotsHeader: string | null = null,
+  additionalRscUrls: readonly string[] = [],
+): PrefetchCacheEntry | null {
+  const normalizedTargets = new Set(
+    [rscUrl, ...additionalRscUrls]
+      .map((lookupRscUrl) => normalizeRscCacheLookupUrl(lookupRscUrl))
+      .filter((lookupRscUrl): lookupRscUrl is string => lookupRscUrl !== null),
+  );
+  if (normalizedTargets.size === 0) return null;
+
+  for (const [cacheKey, entry] of getPrefetchCache()) {
+    if (entry.cacheForNavigationOnComplete !== true || entry.pending === undefined) continue;
+    const source = parsePrefetchCacheKey(cacheKey);
+    if (source.interceptionContext !== interceptionContext) continue;
+    const normalizedSource = normalizeRscCacheLookupUrl(source.rscUrl);
+    if (normalizedSource === null || !normalizedTargets.has(normalizedSource)) continue;
+    if (!isPrefetchCacheEntryCompatibleWithMountedSlots(entry, mountedSlotsHeader)) continue;
+    return entry;
+  }
+  return null;
 }
 
 export function hasSearchAgnosticPrefetchShellForRoute(
@@ -985,6 +1012,7 @@ export function prefetchRscResponse(
     cacheForNavigation?: boolean;
     cacheForNavigationOnComplete?: boolean;
     fallbackTtlMs?: number;
+    recordAutomaticFullPrefetchEligibility?: boolean;
     optimisticRouteShell?: boolean;
     prefetchKind?: PrefetchCacheKind;
     searchAgnosticShell?: boolean;
@@ -1017,6 +1045,10 @@ export function prefetchRscResponse(
   entry.pending = fetchPromise
     .then(async (response) => {
       if (response.ok) {
+        if (behavior.recordAutomaticFullPrefetchEligibility === true) {
+          entry.automaticFullPrefetchEligible =
+            responseProvesAutomaticFullPrefetchEligibility(response);
+        }
         const snapshot = await snapshotRscResponse(response);
         if (cache.get(cacheKey) !== entry) return;
         const previousSize = getPrefetchCacheEntrySize(entry);
@@ -1060,6 +1092,23 @@ export function prefetchRscResponse(
   // entries inserted before it are candidates for removal.
   cache.set(cacheKey, entry);
   evictPrefetchCacheIfNeeded();
+}
+
+function responseProvesAutomaticFullPrefetchEligibility(response: Response): boolean {
+  const cacheControl = [
+    response.headers.get("cache-control"),
+    response.headers.get("cdn-cache-control"),
+  ]
+    .filter((value): value is string => value !== null)
+    .join(",");
+  const hasPositiveSharedLifetime = cacheControl.split(",").some((directive) => {
+    const match = /^\s*s-maxage=(\d+)\s*$/i.exec(directive);
+    return match !== null && Number(match[1]) > 0;
+  });
+  if (hasPositiveSharedLifetime) return true;
+
+  const cacheState = response.headers.get(VINEXT_CACHE_HEADER)?.toUpperCase();
+  return cacheState === "HIT" || cacheState === "STALE" || cacheState === "STATIC";
 }
 
 function addRenderedPathAndSearchPrefetchAlias(
