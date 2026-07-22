@@ -15,7 +15,9 @@ test.describe("Pages middleware rewrite cache parity", () => {
     const htmlResponse = await request.get(`${BASE}/mw-rewrite-static-gsp`);
     expect(htmlResponse.status()).toBe(200);
     expect(await htmlResponse.text()).toContain("Hello from static GSP");
-    expect(htmlResponse.headers()["cache-control"]).toBeUndefined();
+    expect(htmlResponse.headers()["cache-control"]).toBe(
+      "s-maxage=31536000, stale-while-revalidate",
+    );
 
     const dataResponse = await request.get(
       `${BASE}/_next/data/test-build-id/mw-rewrite-static-gsp.json`,
