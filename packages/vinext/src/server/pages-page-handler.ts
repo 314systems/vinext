@@ -27,6 +27,7 @@ import { resolvePagesPageData } from "./pages-page-data.js";
 import type { PagesPageModule } from "./pages-page-data.js";
 import { resolvePagesPageMethodResponse } from "./pages-page-method.js";
 import { renderPagesPageResponse } from "./pages-page-response.js";
+import { getPagesMiddlewareRewriteCacheState } from "./pages-middleware-rewrite-cache.js";
 import { buildPagesReadinessNextData } from "./pages-readiness.js";
 import type { PagesI18nRenderContext } from "./pages-page-response.js";
 import type { RenderPageEnhancers } from "./pages-document-initial-props.js";
@@ -297,6 +298,7 @@ export type CreatePagesPageHandlerOptions = {
 // Internal render options (mirrors the options shape passed to `renderPage`).
 type RenderPageOptions = {
   isDataReq?: boolean;
+  hasMiddlewareRewrite?: boolean;
   statusCode?: number;
   asPath?: string;
   originalUrl?: string;
@@ -577,7 +579,9 @@ export function createPagesPageHandler(
     // Pages getStaticProps renders are shared by pathname. Match Next.js by
     // removing request search state before exposing the render URL or router
     // context; otherwise a cold/stale request can persist its query in ISR.
-    const renderRouteUrl = isStaticPropsRender ? routeUrl.split("?")[0] : routeUrl;
+    const hasMiddlewareRewrite = options?.hasMiddlewareRewrite === true;
+    const renderRouteUrl =
+      isStaticPropsRender && !hasMiddlewareRewrite ? routeUrl.split("?")[0] : routeUrl;
     const routerAsPathSource = isStaticPropsRender
       ? renderRouteUrl
       : (renderAsPath ?? renderRouteUrl);
@@ -600,11 +604,15 @@ export function createPagesPageHandler(
         // custom 404 module (and its getStaticProps) runs. Keep this separate
         // from routeUrl so router, _document, and getInitialProps contexts
         // continue to observe the original request-facing URL.
+        const rewriteCacheState = getPagesMiddlewareRewriteCacheState(
+          renderRouteUrl,
+          hasMiddlewareRewrite,
+        );
         const isrCachePathname =
           isStaticPropsRender &&
           (routePattern === "/404" || routePattern === "/500" || routePattern === "/_error")
             ? routePattern
-            : renderRouteUrl.split("?")[0];
+            : rewriteCacheState.cachePathname;
         const isNotFoundErrorRender =
           routePattern === "/404" || (routePattern === "/_error" && renderStatusCode === 404);
         const isStatusErrorRender =
@@ -820,6 +828,8 @@ export function createPagesPageHandler(
           router,
           params,
           query,
+          nextDataQuery: query,
+          bypassCdnCache: rewriteCacheState.bypassCdnCache,
           asPath: routerAsPath,
           resolvedUrl: pagesResolvedUrl,
           renderIsrPassToStringAsync,
@@ -1047,6 +1057,7 @@ export function createPagesPageHandler(
           props: renderProps,
           params,
           query,
+          bypassCdnCache: rewriteCacheState.bypassCdnCache,
           renderDocumentToString(element) {
             return renderToStringAsync(element);
           },

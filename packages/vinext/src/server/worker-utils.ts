@@ -42,7 +42,10 @@ export function finalizeMissingStaticAssetResponse(
 ): Response {
   if (!missingBuildAsset || response.status !== 404) return response;
   cancelResponseBody(response);
-  return notFoundStaticAssetResponse();
+  const notFound = notFoundStaticAssetResponse();
+  const headers = new Headers(response.headers);
+  headers.set("Content-Type", notFound.headers.get("Content-Type")!);
+  return new Response(notFound.body, { status: 404, headers });
 }
 
 function buildHeaderRecord(

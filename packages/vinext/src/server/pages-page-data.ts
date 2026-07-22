@@ -10,7 +10,7 @@ import type {
   CacheControlMetadata,
 } from "vinext/shims/cache-handler";
 import { applyCdnResponseHeaders } from "./cache-control.js";
-import { buildMissIsrCacheControl, decideIsr } from "./isr-decision.js";
+import { buildMissIsrCacheControl, decideIsr, ISR_NO_STORE_CACHE_CONTROL } from "./isr-decision.js";
 import { buildCacheStateHeaders } from "./cache-headers.js";
 import { buildPagesCacheValue, type ISRCacheEntry } from "./isr-cache.js";
 import type { PagesPreviewData } from "./pages-preview.js";
@@ -230,6 +230,7 @@ type RenderPagesIsrHtmlOptions = {
   pageProps: Record<string, unknown>;
   props?: Record<string, unknown>;
   params: Record<string, unknown>;
+  nextDataQuery?: Record<string, unknown>;
   renderIsrPassToStringAsync: (element: ReactNode) => Promise<string>;
   routePattern: string;
   safeJsonStringify: (value: unknown) => string;
@@ -313,6 +314,8 @@ export type ResolvePagesPageDataOptions = {
   router?: PagesGetInitialPropsRouter;
   params: Record<string, unknown>;
   query: Record<string, unknown>;
+  nextDataQuery?: Record<string, unknown>;
+  bypassCdnCache?: boolean;
   asPath?: string;
   resolvedUrl?: string;
   route: Pick<Route, "isDynamic">;
@@ -449,8 +452,15 @@ function applyCachedPagesRepresentationHeaders(
   response: Response,
   cacheState: "HIT" | "STALE",
   entry: CacheHandlerValue,
-  options: Pick<ResolvePagesPageDataOptions, "expireSeconds">,
+  options: Pick<ResolvePagesPageDataOptions, "expireSeconds" | "bypassCdnCache">,
 ): Response {
+  if (options.bypassCdnCache) {
+    response.headers.set("Cache-Control", ISR_NO_STORE_CACHE_CONTROL);
+    for (const [name, value] of Object.entries(buildCacheStateHeaders(cacheState))) {
+      response.headers.set(name, value);
+    }
+    return response;
+  }
   const { cacheControl } = decideIsr({
     cacheState,
     kind: "pages",
@@ -906,6 +916,7 @@ function buildPagesCacheResponse(
   cacheControl?: CacheControlMetadata,
   status?: number,
   cachedHeaders?: Record<string, string | string[]>,
+  bypassCdnCache?: boolean,
 ): Response {
   // Legacy cache entries written before cacheControl metadata existed can still
   // hit this path without a persisted revalidate value; keep the historic
@@ -925,7 +936,11 @@ function buildPagesCacheResponse(
     "Content-Type": "text/html; charset=utf-8",
     ...buildCacheStateHeaders(cacheState),
   });
-  applyCdnResponseHeaders(headers, { cacheControl: cacheControlHeader });
+  if (bypassCdnCache) {
+    headers.set("Cache-Control", ISR_NO_STORE_CACHE_CONTROL);
+  } else {
+    applyCdnResponseHeaders(headers, { cacheControl: cacheControlHeader });
+  }
 
   if (fontLinkHeader) {
     headers.set("Link", fontLinkHeader);
@@ -1029,6 +1044,7 @@ export async function renderPagesIsrHtml(options: RenderPagesIsrHtmlOptions): Pr
     pageProps: options.pageProps,
     props: renderProps,
     params: options.params,
+    query: options.nextDataQuery,
     routePattern: options.routePattern,
     safeJsonStringify: options.safeJsonStringify,
     // Serialize the same readiness flags (gssp/gsp/autoExport/…) the initial
@@ -1439,6 +1455,7 @@ export async function resolvePagesPageData(
         cached.value.cacheControl,
         cachedValue.status,
         cachedValue.headers,
+        options.bypassCdnCache,
       );
       // Bot / crawler ETag consistency: attach an ETag to cache-HIT responses
       // for bot UAs so they are consistent with fresh-MISS bot responses (which
@@ -1518,6 +1535,7 @@ export async function resolvePagesPageData(
         cached.value.cacheControl,
         cachedValue.status,
         cachedValue.headers,
+        options.bypassCdnCache,
       );
       // Bot / crawler ETag consistency: same as the HIT branch — attach an
       // ETag to STALE responses for bot UAs and honour If-None-Match / 304.

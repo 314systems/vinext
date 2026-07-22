@@ -1646,12 +1646,16 @@ describe("readPagesRouterEntrySource", () => {
           canceled = true;
         },
       }),
-      { status: 404, headers: { "content-type": "text/html" } },
+      {
+        status: 404,
+        headers: { "content-type": "text/html", "x-from-middleware": "yes" },
+      },
     );
 
     const finalized = finalizeMissingStaticAssetResponse(routed404, true);
     expect(finalized.status).toBe(404);
     expect(finalized.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+    expect(finalized.headers.get("x-from-middleware")).toBe("yes");
     expect(await finalized.text()).toBe("Not Found");
     await vi.waitFor(() => expect(canceled).toBe(true));
 

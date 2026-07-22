@@ -87,6 +87,7 @@ import {
   type PagesPreviewState,
 } from "./pages-preview.js";
 import { isBotUserAgent } from "../utils/html-limited-bots.js";
+import type { PagesMiddlewareRewriteCacheState } from "./pages-middleware-rewrite-cache.js";
 
 /**
  * Render a React element to a string using renderToReadableStream.
@@ -696,6 +697,7 @@ export function createSSRHandler(
      */
     isDataReq: boolean = false,
     originalUrl: string = url,
+    middlewareRewriteCacheState?: PagesMiddlewareRewriteCacheState,
   ): Promise<void> => {
     const _reqStart = now();
     let _compileEnd: number | undefined;
@@ -865,7 +867,7 @@ export function createSSRHandler(
         const isStaticPropsRender =
           typeof pageModule.getStaticProps === "function" &&
           typeof pageModule.getServerSideProps !== "function";
-        if (isStaticPropsRender) {
+        if (isStaticPropsRender && !middlewareRewriteCacheState) {
           // Match Next.js's Pages handler: getStaticProps renders receive only
           // route params and a resolved asPath without request search state.
           query = mergeRouteParamsIntoQuery({}, params);
@@ -1589,7 +1591,7 @@ export function createSSRHandler(
           {
             props: renderProps,
             page: patternToNextFormat(route.pattern),
-            query: isFallbackRender ? {} : params,
+            query: isFallbackRender ? {} : query,
             buildId: process.env.__VINEXT_BUILD_ID,
             isFallback: isFallbackRender,
             locale: locale ?? currentDefaultLocale,
