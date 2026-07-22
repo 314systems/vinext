@@ -363,6 +363,28 @@ describe("app page execution helpers", () => {
     expect(pullCount).toBe(3);
   });
 
+  it("rejects completion when cancellation races a pending source read", async () => {
+    const sourceCancel = vi.fn();
+    const source = new ReadableStream<Uint8Array>({
+      pull() {
+        // Leave the downstream read pending until cancellation resolves it.
+      },
+      cancel: sourceCancel,
+    });
+    const observed = observeAppPageBinaryStreamCompletion(source);
+    const reader = observed.stream.getReader();
+    const pendingRead = reader.read();
+    const cancellation = new Error("client disconnected");
+    const completionResult = observed.completion.catch((error) => error);
+
+    await Promise.resolve();
+    await reader.cancel(cancellation);
+
+    await expect(pendingRead).resolves.toEqual({ done: true, value: undefined });
+    await expect(completionResult).resolves.toBe(cancellation);
+    expect(sourceCancel).toHaveBeenCalledWith(cancellation);
+  });
+
   it("appends pending cookies (cookies().set during render) to redirect responses", async () => {
     // Mirrors Next.js's `appendMutableCookies(headers, requestStore.mutableCookies)`
     // in app-render.tsx. An auth flow that does

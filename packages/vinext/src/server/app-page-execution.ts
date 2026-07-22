@@ -671,6 +671,7 @@ export function observeAppPageBinaryStreamCompletion(stream: ReadableStream<Uint
   const reader = stream.getReader();
   let resolveCompletion!: () => void;
   let rejectCompletion!: (reason?: unknown) => void;
+  let cancellationRequested = false;
   let settled = false;
   const completion = new Promise<void>((resolve, reject) => {
     resolveCompletion = resolve;
@@ -698,6 +699,7 @@ export function observeAppPageBinaryStreamCompletion(stream: ReadableStream<Uint
           try {
             const result = await reader.read();
             if (result.done) {
+              if (cancellationRequested) return;
               complete();
               controller.close();
               return;
@@ -709,9 +711,11 @@ export function observeAppPageBinaryStreamCompletion(stream: ReadableStream<Uint
           }
         },
         async cancel(reason) {
+          cancellationRequested = true;
+          const cancellationError = reason ?? new Error("App page binary stream was cancelled");
           try {
             await reader.cancel(reason);
-            fail(reason ?? new Error("App page binary stream was cancelled"));
+            fail(cancellationError);
           } catch (error) {
             fail(error);
             throw error;
