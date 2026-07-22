@@ -800,7 +800,7 @@ export async function renderAppPageLifecycle(
   const shouldCaptureRscForCacheMetadata =
     options.isProgressiveActionRender !== true &&
     (options.isProduction || options.isPrerender === true) &&
-    (revalidateSeconds === null || (revalidateSeconds > 0 && revalidateSeconds !== Infinity)) &&
+    (revalidateSeconds === null || revalidateSeconds > 0) &&
     !options.isDraftMode &&
     !options.isForceDynamic &&
     !shouldBypassRscCacheForSkipTransport;

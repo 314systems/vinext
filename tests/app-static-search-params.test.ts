@@ -33,10 +33,20 @@ describe("App Router static useSearchParams", () => {
       path.join(fixtureRoot, "next.config.ts"),
       `export default {
   async rewrites() {
-    return [{
-      source: "/rewritten-dynamic-search-params",
-      destination: "/dynamic-search-params?value=rewritten-value",
-    }];
+    return [
+      {
+        source: "/rewritten-dynamic-search-params",
+        destination: "/dynamic-search-params?value=rewritten-value",
+      },
+      {
+        source: "/rewritten-late-no-store",
+        destination: "/late-no-store?value=late-rewritten-value",
+      },
+      {
+        source: "/rewritten-revalidate-false",
+        destination: "/revalidate-false-search-params",
+      },
+    ];
   },
 };`,
     );
@@ -99,6 +109,33 @@ export default function Page() {
   return <Suspense fallback={<p>search params suspense</p>}><SearchParams /></Suspense>;
 }`,
     );
+    await writeFile(
+      path.join(fixtureRoot, "app", "late-no-store", "page.tsx"),
+      `import { Suspense } from "react";
+import { unstable_noStore } from "next/cache";
+import SearchParams from "../search-params";
+
+async function LateNoStore() {
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  unstable_noStore();
+  return <SearchParams />;
+}
+
+export default function Page() {
+  return <Suspense fallback={<p>late no-store suspense</p>}><LateNoStore /></Suspense>;
+}`,
+    );
+    await writeFile(
+      path.join(fixtureRoot, "app", "revalidate-false-search-params", "page.tsx"),
+      `export const revalidate = false;
+
+import { Suspense } from "react";
+import SearchParams from "../search-params";
+
+export default function Page() {
+  return <Suspense fallback={<p>search params suspense</p>}><SearchParams /></Suspense>;
+}`,
+    );
     await fs.symlink(
       path.join(workspaceRoot, "node_modules"),
       path.join(fixtureRoot, "node_modules"),
@@ -149,6 +186,9 @@ export default function Page() {
       outDir: path.join(fixtureRoot, "dist"),
       noCompression: true,
     });
+    // Simulate an evicted prerender artifact so revalidate=false takes the
+    // runtime cache-miss path instead of serving the startup-seeded entry.
+    Reflect.deleteProperty(globalThis, Symbol.for("vinext.cacheHandler"));
     try {
       const address = server.address();
       expect(address && typeof address === "object").toBeTruthy();
@@ -184,8 +224,27 @@ export default function Page() {
       expect(rewrittenHtml).toContain('"searchParams":[["value","rewritten-value"]]');
       expect(rewrittenHtml).not.toContain('"useLocationSearchParams":true');
       expect(rewrittenHtml).not.toContain("BAILOUT_TO_CLIENT_SIDE_RENDERING");
+
+      const lateNoStoreResponse = await fetch(`http://127.0.0.1:${port}/rewritten-late-no-store`);
+      expect(lateNoStoreResponse.status).toBe(200);
+      const lateNoStoreHtml = await lateNoStoreResponse.text();
+      expect(lateNoStoreHtml).toMatch(/<p id="value">(?:<!-- -->)?late-rewritten-value<\/p>/);
+      expect(lateNoStoreHtml).toContain('"searchParams":[["value","late-rewritten-value"]]');
+      expect(lateNoStoreHtml).toContain("<p>late no-store suspense</p>");
+      expect(lateNoStoreHtml).not.toContain('"useLocationSearchParams":true');
+      expect(lateNoStoreHtml).not.toContain("BAILOUT_TO_CLIENT_SIDE_RENDERING");
+
+      const evictedResponse = await fetch(
+        `http://127.0.0.1:${port}/rewritten-revalidate-false?value=evicted-value`,
+      );
+      expect(evictedResponse.status).toBe(200);
+      const evictedHtml = await evictedResponse.text();
+      expect(evictedHtml).toContain("<p>search params suspense</p>");
+      expect(evictedHtml).not.toMatch(/<p id="value">(?:<!-- -->)?evicted-value<\/p>/);
+      expect(evictedHtml).toContain('"useLocationSearchParams":true');
     } finally {
       server.close();
+      Reflect.deleteProperty(globalThis, Symbol.for("vinext.cacheHandler"));
     }
   }, 60_000);
 });

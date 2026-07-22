@@ -59,6 +59,7 @@ import { ssrAppRouterInstance } from "./app-ssr-router-instance.js";
 // @ts-expect-error — resolved by the vinext build plugin in SSR environments.
 import pagesClientAssets from "virtual:vinext-pages-client-assets";
 import { setPagesClientAssets, type PagesClientAssets } from "./pages-client-assets.js";
+import { isPromiseLike } from "../utils/promise.js";
 
 setPagesClientAssets(pagesClientAssets as PagesClientAssets);
 
@@ -321,7 +322,7 @@ function buildHeadInjectionHtml(
     searchParams: [...navContext.searchParams.entries()],
     ...(navContext.didSearchParamsBailout === true ||
     (typeof navContext.isStaticGeneration === "object" &&
-      navContext.isStaticGeneration.peek() !== false &&
+      navContext.isStaticGeneration.peek() === true &&
       navContext.isForceStatic !== true)
       ? { useLocationSearchParams: true }
       : {}),
@@ -349,6 +350,24 @@ function buildHeadInjectionHtml(
     insertedHTML +
     fontHTML
   );
+}
+
+async function settleStaticGenerationNavigationDecision(
+  navContext: NavigationContext,
+): Promise<void> {
+  const decision = navContext.isStaticGeneration;
+  if (typeof decision !== "object" || decision.peek() !== undefined) return;
+
+  try {
+    decision.read();
+  } catch (pending) {
+    if (!isPromiseLike(pending)) throw pending;
+    await pending;
+  }
+
+  if (decision.peek() === undefined) {
+    throw new Error("Static generation navigation decision did not settle");
+  }
 }
 
 function requireNavigationContext(navContext: NavigationContext | null): NavigationContext {
@@ -721,6 +740,13 @@ export async function handleSsr(
         if (shouldDelayInitialHtmlPull) {
           await waitAtLeastOneReactRenderTask();
         }
+
+        // The head transform chooses whether hydration should read the visible
+        // location query or the serialized (rewrite-aware) query. RSC can mark
+        // the route dynamic after the initial shell suspends, so do not let the
+        // transform inject that choice until the drain-only observation branch
+        // has reached EOF and finalized the decision.
+        await settleStaticGenerationNavigationDecision(ssrNavigationContext);
 
         const finalStream = deferUntilStreamConsumed(
           htmlStream.pipeThrough(
