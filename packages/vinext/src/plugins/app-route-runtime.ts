@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import MagicString from "magic-string";
 import path from "pathslash";
-import { parseAst, type Plugin } from "vite";
+import { parseAst, type Plugin, type ResolvedConfig } from "vite";
 import type { PluginApi } from "@vitejs/plugin-rsc";
 import type { AppRouteRuntime } from "../build/app-route-runtime.js";
 
@@ -45,8 +45,38 @@ export function withAppRouteRuntime(id: string, runtime: AppRouteRuntime): strin
 type ServerReferenceMeta = PluginApi["manager"]["serverReferenceMetaMap"][string];
 
 type CreateAppRouteRuntimePluginOptions = {
-  onEdgeServerReference?: (importId: string) => void;
+  onEdgeServerReference?: (importId: string, config: ResolvedConfig) => Promise<void> | void;
 };
+
+function createDevServerReferenceKey(importId: string, root: string): string {
+  const { pathname, query } = splitId(importId);
+  const suffix = query ? `?${query}` : "";
+  const relative = path.relative(root, pathname);
+  if (!relative.startsWith("../") && relative !== ".." && !path.isAbsolute(relative)) {
+    return `/${relative}${suffix}`;
+  }
+  return `${path.join("/@fs", pathname)}${suffix}`;
+}
+
+/**
+ * Allow plugin-rsc's dev reference validator to admit the edge-qualified id.
+ * Loading the action immediately afterward runs plugin-rsc's normal transform,
+ * which replaces this placeholder with the discovered export metadata.
+ */
+export function registerAppRouteRuntimeDevServerReference(
+  serverReferenceMetaMap: Record<string, ServerReferenceMeta>,
+  canonicalImportId: string,
+  root: string,
+): void {
+  const edgeImportId = withAppRouteRuntime(canonicalImportId, "edge");
+  if (serverReferenceMetaMap[edgeImportId]) return;
+
+  serverReferenceMetaMap[edgeImportId] = {
+    exportNames: [],
+    importId: edgeImportId,
+    referenceKey: createDevServerReferenceKey(edgeImportId, root),
+  };
+}
 
 /**
  * Register edge-qualified loaders before plugin-rsc generates its production
@@ -256,7 +286,7 @@ export function createAppRouteRuntimePlugin(
       }
       if (isEdgeClientImport) {
         if (await hasUseServerDirective(resolved.id)) {
-          pluginOptions.onEdgeServerReference?.(canonicalResolvedId);
+          await pluginOptions.onEdgeServerReference?.(canonicalResolvedId, this.environment.config);
         } else {
           edgeClientModules.add(canonicalResolvedId);
         }

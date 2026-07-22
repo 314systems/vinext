@@ -163,6 +163,7 @@ import { createMiddlewareServerOnlyPlugin } from "./plugins/middleware-server-on
 import {
   createAppRouteRuntimePlugin,
   createAppRouteRuntimeServerReferenceMap,
+  registerAppRouteRuntimeDevServerReference,
   registerAppRouteRuntimeServerReferences,
 } from "./plugins/app-route-runtime.js";
 import { validateMiddlewareModuleExports } from "./plugins/middleware-export-validation.js";
@@ -1824,8 +1825,18 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
 
   const plugins: PluginOption[] = [
     createAppRouteRuntimePlugin({
-      onEdgeServerReference(importId) {
+      async onEdgeServerReference(importId, config) {
         edgeServerReferenceImportIds.add(importId);
+        if (config.command !== "serve" || !rscPluginModulePromise) return;
+
+        const { getPluginApi } = await rscPluginModulePromise;
+        const pluginApi = getPluginApi(config);
+        if (!pluginApi) return;
+        registerAppRouteRuntimeDevServerReference(
+          pluginApi.manager.serverReferenceMetaMap,
+          importId,
+          config.root,
+        );
       },
     }),
     // Resolve tsconfig paths/baseUrl aliases so real-world Next.js repos

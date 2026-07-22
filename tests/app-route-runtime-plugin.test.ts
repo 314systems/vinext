@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   createAppRouteRuntimePlugin,
   createAppRouteRuntimeServerReferenceMap,
+  registerAppRouteRuntimeDevServerReference,
   registerAppRouteRuntimeServerReferences,
   withAppRouteRuntime,
 } from "../packages/vinext/src/plugins/app-route-runtime.js";
@@ -72,6 +73,23 @@ describe("App route runtime module graph", () => {
     });
   });
 
+  it("registers the runtime-qualified reference key used by Vite dev", () => {
+    const root = "/project";
+    const canonicalId = `${root}/app/actions.ts`;
+    const edgeId = withAppRouteRuntime(canonicalId, "edge");
+    const metas = {};
+
+    registerAppRouteRuntimeDevServerReference(metas, canonicalId, root);
+
+    expect(metas).toEqual({
+      [edgeId]: {
+        exportNames: [],
+        importId: edgeId,
+        referenceKey: "/app/actions.ts?__vinext_app_runtime=edge",
+      },
+    });
+  });
+
   it("discovers a server reference imported only through an edge client boundary", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-runtime-client-action-"));
     const client = path.join(root, "client.tsx");
@@ -100,7 +118,7 @@ describe("App route runtime module graph", () => {
       );
 
       expect(onEdgeServerReference).toHaveBeenCalledOnce();
-      expect(onEdgeServerReference).toHaveBeenCalledWith(action);
+      expect(onEdgeServerReference.mock.calls[0]?.[0]).toBe(action);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
