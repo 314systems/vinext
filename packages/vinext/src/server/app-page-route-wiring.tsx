@@ -1132,6 +1132,13 @@ export function buildAppPageElements<
             const SlotComponent = slotComponent!;
             return <SlotComponent {...slotProps} />;
           })();
+      if (overrideOrPageComponent) {
+        // Named parallel-slot entries flatten the slot page and its layout
+        // chain into one wire element. Key only the page leaf so dynamic
+        // siblings reset page-local client state while the surrounding slot
+        // layouts keep their state, matching Next.js segment ownership.
+        slotElement = <Fragment key={slotResetKey}>{slotElement}</Fragment>;
+      }
     }
     const branchSegments = slotOverride?.branchSegments ?? slotRouteSegments;
     const branchLayouts = new Map<

@@ -18,6 +18,13 @@ export default async function ClientCacheTarget({ params }: { params: Promise<{ 
       </Link>
       <div id="client-cache-id">{id}</div>
       <div id="client-cache-random">{Math.random()}</div>
+      <Link
+        href={`/nextjs-compat/client-cache/${id === "0" ? "1" : "0"}`}
+        prefetch={false}
+        id="client-cache-sibling"
+      >
+        To sibling
+      </Link>
     </main>
   );
 }

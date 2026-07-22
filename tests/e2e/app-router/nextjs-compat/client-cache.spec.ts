@@ -228,6 +228,17 @@ test.describe("Next.js compat: client cache", () => {
     expect(requestsFor(requests, `${ROOT}/0`)).toEqual([]);
   });
 
+  test("parallel-slot page state resets between dynamic siblings", async ({ page }) => {
+    await openHome(page);
+    await navigateTo(page, "#client-cache-full", "0");
+    await page.click("#client-cache-breadcrumb-count");
+    await expect(page.locator("#client-cache-breadcrumb-count")).toHaveAttribute("data-count", "1");
+
+    await page.click("#client-cache-sibling");
+    await expect(page.locator("#client-cache-id")).toHaveText("1");
+    await expect(page.locator("#client-cache-breadcrumb-count")).toHaveAttribute("data-count", "0");
+  });
+
   test("prefetch=true reuses the full parallel-route page for five minutes", async ({ page }) => {
     // Ported from Next.js:
     // test/e2e/app-dir/app-client-cache/client-cache.parallel-routes.test.ts

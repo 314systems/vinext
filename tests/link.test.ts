@@ -346,7 +346,7 @@ describe("Link App Router prefetch mode", () => {
       expect(resolveAutoAppRoutePrefetch("/blog/hello-world")).toEqual({
         cacheForNavigation: false,
         fallbackTtl: "static",
-        minimumTtlMs: undefined,
+        minimumTtlMs: 0,
         prefetchShellFirst: false,
         shouldPrefetch: true,
       });
@@ -360,7 +360,7 @@ describe("Link App Router prefetch mode", () => {
       expect(resolveAutoAppRoutePrefetch("/products/1")).toEqual({
         cacheForNavigation: true,
         fallbackTtl: "static",
-        minimumTtlMs: undefined,
+        minimumTtlMs: 0,
         prefetchShellFirst: false,
         shouldPrefetch: true,
       });
@@ -370,14 +370,14 @@ describe("Link App Router prefetch mode", () => {
       expect(resolveAutoAppRoutePrefetch("/clothing/1")).toEqual({
         cacheForNavigation: true,
         fallbackTtl: "static",
-        minimumTtlMs: undefined,
+        minimumTtlMs: 0,
         prefetchShellFirst: false,
         shouldPrefetch: true,
       });
       expect(resolveAutoAppRoutePrefetch("/teams/vercel/dashboard")).toEqual({
         cacheForNavigation: false,
         fallbackTtl: "static",
-        minimumTtlMs: undefined,
+        minimumTtlMs: 0,
         prefetchShellFirst: false,
         shouldPrefetch: true,
       });

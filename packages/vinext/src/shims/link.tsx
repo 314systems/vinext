@@ -346,7 +346,7 @@ function resolveMatchedAutoAppRoutePrefetch(route: VinextLinkPrefetchRoute): {
     // branches must be derived from the click-time target tree.
     cacheForNavigation: shouldCacheForNavigation,
     fallbackTtl: "static",
-    minimumTtlMs: undefined,
+    minimumTtlMs: route.isDynamic ? 0 : undefined,
     prefetchShellFirst: !route.isDynamic,
     shouldPrefetch: true,
   };

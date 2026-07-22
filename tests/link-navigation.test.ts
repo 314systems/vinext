@@ -15,6 +15,7 @@ import {
 import {
   NEXT_ROUTER_PREFETCH_HEADER,
   NEXT_ROUTER_SEGMENT_PREFETCH_HEADER,
+  VINEXT_DYNAMIC_STALE_TIME_HEADER,
   VINEXT_INTERCEPTION_CONTEXT_HEADER,
   VINEXT_RSC_RENDER_MODE_HEADER,
 } from "../packages/vinext/src/server/headers.js";
@@ -1959,6 +1960,35 @@ describe("Link prefetch scheduling", () => {
 
       expect(entry?.cacheForNavigation).toBe(true);
       expect(entry?.expiresAt).toBe(1_300_000);
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("honors a zero response stale time for automatic dynamic full prefetches", async () => {
+    vi.stubEnv("__NEXT_CLIENT_ROUTER_DYNAMIC_STALETIME", "0");
+    vi.stubEnv("__NEXT_CLIENT_ROUTER_STATIC_STALETIME", "300");
+    vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const observer = stubIntersectionObserver();
+
+    const result = await renderIsolatedLink({
+      href: "/products/1",
+      nodeEnv: "production",
+    });
+    result.fetch.mockResolvedValueOnce(
+      new Response("", { headers: { [VINEXT_DYNAMIC_STALE_TIME_HEADER]: "0" } }),
+    );
+
+    try {
+      observer.dispatchIntersectingEntry(result.anchor);
+      await waitForFetchCalls(result.fetch, 1);
+
+      const { getPrefetchCache } = await import("../packages/vinext/src/shims/navigation.js");
+      const entry = Array.from(getPrefetchCache().values())[0];
+      await entry?.pending;
+
+      expect(entry?.cacheForNavigation).toBe(true);
+      expect(entry?.expiresAt).toBe(1_000_000);
     } finally {
       result.restoreNodeEnv();
     }
