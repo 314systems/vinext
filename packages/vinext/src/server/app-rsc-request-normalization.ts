@@ -16,7 +16,7 @@ import {
 } from "./client-reuse-manifest.js";
 import { normalizeInterceptionContextHeader } from "./app-interception-context-header.js";
 import { normalizeMountedSlotsHeader } from "./app-mounted-slots-header.js";
-import { stripRscSuffix, VINEXT_RSC_CACHE_BUSTING_SEARCH_PARAM } from "./app-rsc-cache-busting.js";
+import { stripRscSuffix } from "./app-rsc-cache-busting.js";
 import {
   APP_RSC_RENDER_MODE_NAVIGATION,
   parseAppRscRenderMode,
@@ -33,6 +33,8 @@ export type NormalizedRscRequest = {
   pathname: string;
   /** Pathname with `.rsc` suffix removed. Used for route matching and navigation context. */
   cleanPathname: string;
+  /** Original encoded request pathname with basePath and `.rsc` removed. */
+  requestCleanPathname: string;
   /** True when the request targets a canonical `.rsc` payload URL. */
   isRscRequest: boolean;
   /** Sanitized X-Vinext-Interception-Context header (null bytes stripped). null when absent. */
@@ -44,6 +46,8 @@ export type NormalizedRscRequest = {
   renderMode: AppRscRenderMode;
   /** Parsed ClientReuseManifest hint. Verification and skip authorization happen later. */
   clientReuseManifest: ClientReuseManifestParseResult;
+  /** Whether the incoming pathname included the configured basePath. */
+  hadBasePath: boolean;
 };
 
 /**
@@ -63,10 +67,9 @@ export type NormalizedRscRequest = {
  *   4. Collapse double-slashes, resolve `.` and `..` segments (normalizePath)
  *   5. basePath check + strip — 404 when pathname lacks the basePath prefix.
  *      `/__vinext/` bypasses this for internal prerender endpoints.
- *   6. RSC detection: `.rsc` suffix, or Next-style `RSC: 1` plus the internal
- *      `_rsc` cache-busting query. The header alone does not select payload
- *      rendering at the canonical HTML URL, so caches that ignore Vary cannot
- *      store Flight responses under HTML URLs.
+ *   6. RSC detection: `.rsc` suffix or Next-style `RSC: 1`. The internal
+ *      `_rsc` cache-busting query is validated separately so full-route Flight
+ *      responses do not share the canonical HTML URL in caches that ignore Vary.
  *   7. cleanPathname — pathname with `.rsc` suffix stripped
  *   8. Sanitize X-Vinext-Interception-Context — strip null bytes (header injection)
  *   9. Normalize x-vinext-mounted-slots — dedup and sort for canonical cache keys
@@ -79,6 +82,7 @@ export type NormalizedRscRequest = {
 export function normalizeRscRequest(
   request: Request,
   basePath: string,
+  allowOutsideBasePath = false,
 ): Response | NormalizedRscRequest {
   const url = new URL(request.url);
 
@@ -100,24 +104,28 @@ export function normalizeRscRequest(
 
   // Step 4: Collapse double-slashes and resolve . / .. segments.
   let pathname = normalizePath(decoded);
+  let requestPathname = url.pathname;
+  let hadBasePath = true;
 
   // Step 5: basePath check and strip.
   // Skipped when basePath is empty (no basePath configured).
   // /__vinext/ prefix bypasses the check for internal prerender endpoints
   // that must be reachable regardless of basePath configuration.
   if (basePath) {
-    if (!hasBasePath(pathname, basePath) && !pathname.startsWith("/__vinext/")) {
+    hadBasePath = hasBasePath(requestPathname, basePath);
+    if (!hadBasePath && !pathname.startsWith("/__vinext/") && !allowOutsideBasePath) {
       return notFoundResponse();
     }
-    pathname = stripBasePath(pathname, basePath);
+    if (hadBasePath) {
+      pathname = stripBasePath(pathname, basePath);
+      requestPathname = stripBasePath(requestPathname, basePath);
+    }
   }
 
   // Steps 6-7: RSC detection and cleanPathname.
-  const isRscRequest =
-    pathname.endsWith(".rsc") ||
-    (request.headers.get(RSC_HEADER) === "1" &&
-      url.searchParams.has(VINEXT_RSC_CACHE_BUSTING_SEARCH_PARAM));
+  const isRscRequest = pathname.endsWith(".rsc") || request.headers.get(RSC_HEADER) === "1";
   const cleanPathname = stripRscSuffix(pathname);
+  const requestCleanPathname = stripRscSuffix(requestPathname);
 
   // Step 8: Validate and sanitize X-Vinext-Interception-Context.
   //
@@ -151,9 +159,11 @@ export function normalizeRscRequest(
 
   return {
     clientReuseManifest,
+    hadBasePath,
     url,
     pathname,
     cleanPathname,
+    requestCleanPathname,
     isRscRequest,
     interceptionContextHeader,
     interceptionIdHeader,
