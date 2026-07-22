@@ -99,6 +99,7 @@ import {
 } from "./app-browser-action-result.js";
 import {
   createSupplementalRefreshCoordinator,
+  mergeRefreshedInterceptedSlot,
   resolveNavigationSourcePageRefresh,
   resolvePersistedSourcePageRefresh,
   resolveSupplementalRefreshes,
@@ -112,12 +113,10 @@ import {
   hydrateRootInTransition,
 } from "./app-browser-hydration.js";
 import {
-  APP_SLOT_BINDINGS_KEY,
   AppElementsWire,
   getMountedSlotIdsHeader,
   resolveVisitedResponseInterceptionContext,
   type AppElements,
-  type AppElementsSlotBinding,
   type AppWireElements,
 } from "./app-elements.js";
 import {
@@ -446,56 +445,6 @@ function clearClientNavigationCaches(): void {
   clearVisitedResponseCache();
   clearPrefetchState();
   historyController.invalidateRestorableClientState();
-}
-
-function mergeRefreshedInterceptedSlot(
-  currentElements: AppElements,
-  interceptedElements: AppElements,
-): AppElements {
-  const interceptedMetadata = AppElementsWire.readMetadata(interceptedElements);
-  const interception = interceptedMetadata.interception;
-  if (interception === null) {
-    const sourcePageBinding = interceptedMetadata.slotBindings.find((binding) => {
-      const parsedSlot = AppElementsWire.parseElementKey(binding.slotId);
-      return (
-        binding.state === "active" &&
-        parsedSlot?.kind === "slot" &&
-        parsedSlot.name === "children" &&
-        Object.hasOwn(interceptedElements, binding.slotId)
-      );
-    });
-    if (!sourcePageBinding) return currentElements;
-    const currentMetadata = AppElementsWire.readMetadata(currentElements);
-    const slotBindings = currentMetadata.slotBindings.filter(
-      (binding) => binding.slotId !== sourcePageBinding.slotId,
-    );
-    slotBindings.push(sourcePageBinding);
-    return {
-      ...currentElements,
-      [sourcePageBinding.slotId]: interceptedElements[sourcePageBinding.slotId],
-      [APP_SLOT_BINDINGS_KEY]: slotBindings,
-    };
-  }
-  const interceptedSlot = interceptedElements[interception.slotId];
-  if (interceptedSlot === undefined) return currentElements;
-
-  const currentMetadata = AppElementsWire.readMetadata(currentElements);
-  const interceptedBinding = interceptedMetadata.slotBindings.find(
-    (binding) => binding.slotId === interception.slotId,
-  );
-  const slotBindings: AppElementsSlotBinding[] = currentMetadata.slotBindings.filter(
-    (binding) => binding.slotId !== interception.slotId,
-  );
-  // The supplemental payload is rendered for the same persisted slot owner,
-  // so its ownerLayoutId is present in the primary payload's __layoutIds.
-  // Keep the primary layout-id table while replacing only that slot binding.
-  if (interceptedBinding) slotBindings.push(interceptedBinding);
-
-  return {
-    ...currentElements,
-    [interception.slotId]: interceptedSlot,
-    [APP_SLOT_BINDINGS_KEY]: slotBindings,
-  };
 }
 
 type PersistedRefreshInterception = {

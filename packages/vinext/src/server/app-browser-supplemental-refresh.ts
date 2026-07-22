@@ -1,4 +1,10 @@
-import { AppElementsWire } from "./app-elements.js";
+import {
+  APP_SLOT_BINDINGS_KEY,
+  AppElementsWire,
+  normalizeAppElementsSlotBindings,
+  type AppElements,
+  type AppElementsSlotBinding,
+} from "./app-elements.js";
 import type { AppRouterState } from "./app-browser-state.js";
 import { addBasePathToPathname } from "../utils/base-path.js";
 
@@ -13,6 +19,58 @@ export type SupplementalRefreshHandle = {
   finish(): void;
   signal: AbortSignal;
 };
+
+export function mergeRefreshedInterceptedSlot(
+  currentElements: AppElements,
+  interceptedElements: AppElements,
+): AppElements {
+  const interceptedMetadata = AppElementsWire.readMetadata(interceptedElements);
+  const interception = interceptedMetadata.interception;
+  if (interception === null) {
+    const sourcePageBinding = interceptedMetadata.slotBindings.find((binding) => {
+      const parsedSlot = AppElementsWire.parseElementKey(binding.slotId);
+      return (
+        binding.state === "active" &&
+        parsedSlot?.kind === "slot" &&
+        parsedSlot.name === "children" &&
+        Object.hasOwn(interceptedElements, binding.slotId)
+      );
+    });
+    if (!sourcePageBinding) return currentElements;
+    const currentMetadata = AppElementsWire.readMetadata(currentElements);
+    const slotBindings = currentMetadata.slotBindings.filter(
+      (binding) => binding.slotId !== sourcePageBinding.slotId,
+    );
+    slotBindings.push(sourcePageBinding);
+    return {
+      ...currentElements,
+      [sourcePageBinding.slotId]: interceptedElements[sourcePageBinding.slotId],
+      [APP_SLOT_BINDINGS_KEY]: normalizeAppElementsSlotBindings(slotBindings, {
+        layoutIds: currentMetadata.layoutIds,
+      }),
+    };
+  }
+  const interceptedSlot = interceptedElements[interception.slotId];
+  if (interceptedSlot === undefined) return currentElements;
+
+  const currentMetadata = AppElementsWire.readMetadata(currentElements);
+  const interceptedBinding = interceptedMetadata.slotBindings.find(
+    (binding) => binding.slotId === interception.slotId,
+  );
+  const slotBindings: AppElementsSlotBinding[] = currentMetadata.slotBindings.filter(
+    (binding) => binding.slotId !== interception.slotId,
+  );
+  // The supplemental payload is rendered for the same persisted slot owner,
+  // so its ownerLayoutId is present in the primary payload's __layoutIds.
+  // Keep the primary layout-id table while replacing only that slot binding.
+  if (interceptedBinding) slotBindings.push(interceptedBinding);
+
+  return {
+    ...currentElements,
+    [interception.slotId]: interceptedSlot,
+    [APP_SLOT_BINDINGS_KEY]: slotBindings,
+  };
+}
 
 export function resolvePersistedSourcePageRefresh(options: {
   basePath: string;

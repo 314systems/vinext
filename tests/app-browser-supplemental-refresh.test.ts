@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   createSupplementalRefreshCoordinator,
+  mergeRefreshedInterceptedSlot,
   resolveNavigationSourcePageRefresh,
   resolvePersistedSourcePageRefresh,
   resolveSupplementalRefreshes,
   settleSuccessfulServerActionResult,
   shouldScheduleSupplementalRefreshRecovery,
 } from "../packages/vinext/src/server/app-browser-supplemental-refresh.js";
+import { AppElementsWire, type AppElements } from "../packages/vinext/src/server/app-elements.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -170,6 +172,41 @@ describe("server action supplemental refreshes", () => {
         },
       }),
     ).toBe("/nested-revalidate");
+  });
+
+  it("rejects a source-page slot whose owner is absent from the primary layout table", () => {
+    const currentElements: AppElements = {
+      ...AppElementsWire.createMetadataEntries({
+        interception: null,
+        interceptionContext: null,
+        layoutIds: ["layout:/"],
+        rootLayoutTreePath: "/",
+        routeId: "route:/target",
+        slotBindings: [],
+      }),
+    };
+    const supplementalElements: AppElements = {
+      ...AppElementsWire.createMetadataEntries({
+        interception: null,
+        interceptionContext: null,
+        layoutIds: ["layout:/source"],
+        rootLayoutTreePath: "/source",
+        routeId: "route:/source",
+        slotBindings: [
+          {
+            activeRouteId: "route:/source",
+            ownerLayoutId: "layout:/source",
+            slotId: "slot:children:/source",
+            state: "active",
+          },
+        ],
+      }),
+      "slot:children:/source": "fresh source",
+    };
+
+    expect(() => mergeRefreshedInterceptedSlot(currentElements, supplementalElements)).toThrow(
+      "owner layout id missing from __layoutIds",
+    );
   });
 
   it("merges multiple successful persisted slots", async () => {
