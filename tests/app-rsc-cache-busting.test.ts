@@ -108,6 +108,17 @@ describe("App Router RSC cache-busting", () => {
     expect(feedHash).not.toBe(galleryHash);
   });
 
+  it("varies RSC URLs by the vinext visible-router-state fingerprint", async () => {
+    const firstHeaders = createRscRequestHeaders();
+    firstHeaders.set("X-Vinext-Rsc-State", "first");
+    const secondHeaders = createRscRequestHeaders();
+    secondHeaders.set("X-Vinext-Rsc-State", "second");
+
+    await expect(createRscRequestUrl("/photos/42", firstHeaders)).resolves.not.toBe(
+      await createRscRequestUrl("/photos/42", secondHeaders),
+    );
+  });
+
   it("varies loading-shell prefetch payloads from normal navigations", async () => {
     const navigationHash = await computeRscCacheBustingSearchParam(createRscRequestHeaders());
     const prefetchShellHash = await computeRscCacheBustingSearchParam(
@@ -277,7 +288,7 @@ describe("App Router RSC cache-busting", () => {
     // Mirrors Next.js App Router's base Vary header:
     // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/route-modules/app-page/module.ts
     expect(VINEXT_RSC_VARY_HEADER).toBe(
-      "RSC, Next-Router-State-Tree, Next-Router-Prefetch, Next-Router-Segment-Prefetch, Next-Url, X-Vinext-Interception-Context, X-Vinext-Mounted-Slots, X-Vinext-Rsc-Render-Mode",
+      "RSC, Next-Router-State-Tree, Next-Router-Prefetch, Next-Router-Segment-Prefetch, Next-Url, X-Vinext-Rsc-State, X-Vinext-Interception-Context, X-Vinext-Mounted-Slots, X-Vinext-Rsc-Render-Mode",
     );
     expect(VINEXT_RSC_VARY_HEADER.split(", ")).not.toContain("Accept");
   });
