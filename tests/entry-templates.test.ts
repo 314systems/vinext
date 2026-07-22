@@ -1662,7 +1662,8 @@ describe("Pages Router entry template", () => {
       expect(code).toContain("if (shouldHydrateQuery) {");
       expect(code).toContain("const routeUrl = nextData.__vinext?.routeUrl;");
       expect(code).toContain("await Router.replace(");
-      expect(code).toContain("nextData.isFallback && routeUrl ? routeUrl : nextData.page,");
+      expect(code).toContain("? routeUrl");
+      expect(code).toContain(": { pathname: nextData.page, query: nextData.query },");
       expect(code).toContain("currentUrl,");
       expect(code).toContain("{ _h: 1, shallow: !nextData.isFallback, scroll: false },");
       expect(code).not.toContain("function VinextHydrationMarker");

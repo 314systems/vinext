@@ -38,7 +38,9 @@ export function createPagesDevHydrationScript(options: PagesDevHydrationOptions)
     const currentUrl = window.location.pathname + window.location.search + window.location.hash;
     const routeUrl = nextData.__vinext?.routeUrl;
     await Router.replace(
-      nextData.isFallback && routeUrl ? routeUrl : nextData.page,
+      nextData.isFallback && routeUrl
+        ? routeUrl
+        : { pathname: nextData.page, query: nextData.query },
       currentUrl,
       { _h: 1, shallow: !nextData.isFallback, scroll: false },
     );

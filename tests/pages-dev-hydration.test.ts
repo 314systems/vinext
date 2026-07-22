@@ -28,6 +28,7 @@ describe("createPagesDevHydrationScript", () => {
       "nextData.gsp && (window.location.search || nextData.__vinext?.hasRewrites)",
     );
     expect(script).toContain("{ _h: 1, shallow: !nextData.isFallback, scroll: false }");
+    expect(script).toContain(": { pathname: nextData.page, query: nextData.query },");
     expect(script).not.toContain("window.__VINEXT_PAGE_PATTERNS__ = [nextData.page]");
   });
 

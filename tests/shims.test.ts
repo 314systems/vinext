@@ -20374,15 +20374,15 @@ describe("Pages Router _next/data client navigation", () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
     const { win, replaceState, render } = createDataNavWindow({
-      page: "/ssg",
-      pathname: "/article/first",
-      loaders: { "/ssg": vi.fn(async () => makePageModule("ssg")) },
-      ssgPatterns: ["/ssg"],
+      page: "/ssg/[slug]",
+      pathname: "/to-ssg",
+      loaders: { "/ssg/[slug]": vi.fn(async () => makePageModule("ssg")) },
+      ssgPatterns: ["/ssg/[slug]"],
     });
     win.__NEXT_DATA__ = {
       ...win.__NEXT_DATA__,
-      page: "/ssg",
-      query: {},
+      page: "/ssg/[slug]",
+      query: { slug: "hello" },
       gsp: true,
       __vinext: { hasRewrites: true },
     };
@@ -20391,11 +20391,11 @@ describe("Pages Router _next/data client navigation", () => {
       {
         canPrefetchLoadingShell: false,
         isDynamic: false,
-        patternParts: ["ssg"],
+        patternParts: ["ssg", ":slug"],
       },
     ];
     (win as any).__VINEXT_CLIENT_REWRITES__ = {
-      beforeFiles: [{ source: "/article/:slug", destination: "/ssg" }],
+      beforeFiles: [{ source: "/to-ssg", destination: "/ssg/hello" }],
       afterFiles: [],
       fallback: [],
     };
@@ -20406,7 +20406,7 @@ describe("Pages Router _next/data client navigation", () => {
     try {
       const { default: Router } = await import("../packages/vinext/src/shims/router.js");
       await expect(
-        Router.replace("/ssg", "/article/first", {
+        Router.replace({ pathname: "/ssg/[slug]", query: { slug: "hello" } }, "/to-ssg", {
           _h: 1,
           shallow: true,
           scroll: false,
@@ -20415,21 +20415,21 @@ describe("Pages Router _next/data client navigation", () => {
 
       expect(globalThis.fetch).not.toHaveBeenCalled();
       expect(render).not.toHaveBeenCalled();
-      expect(win.__NEXT_DATA__).toMatchObject({ page: "/ssg", query: { slug: "first" } });
-      expect(Router.pathname).toBe("/ssg");
-      expect(Router.query).toEqual({ slug: "first" });
-      expect(Router.asPath).toBe("/article/first");
+      expect(win.__NEXT_DATA__).toMatchObject({ page: "/ssg/[slug]", query: { slug: "hello" } });
+      expect(Router.pathname).toBe("/ssg/[slug]");
+      expect(Router.query).toEqual({ slug: "hello" });
+      expect(Router.asPath).toBe("/to-ssg");
       expect(Router.isReady).toBe(true);
       expect(win.dispatchEvent).toHaveBeenCalledWith(
         expect.objectContaining({ type: "vinext:navigate" }),
       );
       expect(replaceState).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          as: "/article/first",
-          url: "/ssg?slug=first",
+          as: "/to-ssg",
+          url: "/ssg/hello",
         }),
         "",
-        "/article/first",
+        "/to-ssg",
       );
     } finally {
       if (previousWindow === undefined) delete (globalThis as any).window;
