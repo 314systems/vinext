@@ -212,36 +212,45 @@ function renderPagesRouterElement(
       }
     };
 
-    root.render(
-      wrapWithRouterContext(
-        element,
-        () => {
-          void (async () => {
-            if (!isCurrent()) return;
-
-            try {
-              beforeCommit?.();
-              await scrollHandler();
-              if (!isCurrent()) return;
-              clearPendingSnapshotIfCurrent();
-              clearIfCurrent();
-              resolve();
-            } catch (err) {
-              clearPendingSnapshotIfCurrent();
-              clearIfCurrent();
-              reject(err);
-            }
-          })();
-        },
-        (error) => {
-          clearPendingSnapshotIfCurrent();
-          clearIfCurrent();
-          reject(error);
-        },
-      ),
-    );
-    if (!hasBrowserDocument()) {
+    try {
+      // Next.js updates history after route/data resolution but before the new
+      // React tree renders. Keep the pending router snapshot installed across
+      // this update so render-time router reads still observe the destination.
       beforeCommit?.();
+      root.render(
+        wrapWithRouterContext(
+          element,
+          () => {
+            void (async () => {
+              if (!isCurrent()) return;
+
+              try {
+                await scrollHandler();
+                if (!isCurrent()) return;
+                clearPendingSnapshotIfCurrent();
+                clearIfCurrent();
+                resolve();
+              } catch (err) {
+                clearPendingSnapshotIfCurrent();
+                clearIfCurrent();
+                reject(err);
+              }
+            })();
+          },
+          (error) => {
+            clearPendingSnapshotIfCurrent();
+            clearIfCurrent();
+            reject(error);
+          },
+        ),
+      );
+    } catch (error) {
+      clearPendingSnapshotIfCurrent();
+      clearIfCurrent();
+      reject(error);
+      return;
+    }
+    if (!hasBrowserDocument()) {
       clearPendingSnapshotIfCurrent();
       clearIfCurrent();
       resolve();
@@ -3283,6 +3292,28 @@ async function performNavigation(
       interpolatedRoute = resolved;
     }
   }
+
+  // Initial GSP hydration starts from the destination page serialized by the
+  // server, while the browser URL can still be a next.config rewrite source.
+  // Resolve that visible URL locally and publish only the client-side query
+  // state. The server render and ISR entry deliberately remain keyed by the
+  // destination pathname, matching Next.js's auto-export hydration pass.
+  if (isHydrationQueryUpdate && hasClientRewriteRules()) {
+    const { resolveHybridClientRewriteHref } =
+      await import("./internal/hybrid-client-route-owner.js");
+    const rewrittenHref = resolveHybridClientRewriteHref(resolved, __basePath);
+    if (rewrittenHref) {
+      const target = resolvePagesDataNavigationTarget(rewrittenHref, __basePath, {
+        locale: navigationLocale,
+      });
+      const nextData = window.__NEXT_DATA__ as VinextNextData | undefined;
+      if (target && nextData) {
+        nextData.query = mergeRouteParamsIntoQuery(parseQueryString(target.search), target.params);
+        resolvedRoute = rewrittenHref;
+        interpolatedRoute = rewrittenHref;
+      }
+    }
+  }
   // Recompute `full` after potential `resolved` rewrite above. Cheap when
   // unchanged; correctness-critical when bracket interpolation rewrote it.
   const full = normalizePathTrailingSlash(
@@ -3515,6 +3546,7 @@ async function performNavigation(
       else window.scrollTo(0, 0);
     }
   }
+  if (isQueryUpdating) markPagesRouterReady();
   onStateUpdate?.();
   if (!isQueryUpdating) {
     routerEvents.emit("routeChangeComplete", resolved, { shallow });

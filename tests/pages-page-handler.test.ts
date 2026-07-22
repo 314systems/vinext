@@ -537,6 +537,57 @@ describe("createPagesPageHandler — _next/data", () => {
       setCdnCacheAdapter(new DefaultCdnCacheAdapter());
     }
   });
+
+  // Ported from Next.js's config-rewrite GSP hydration contract in:
+  // packages/next/src/client/index.tsx
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/client/index.tsx
+  it("shares config-rewritten GSP HTML without serializing source captures", async () => {
+    const routePath = `/config-rewrite-gsp-${Date.now()}`;
+    const getStaticProps = vi.fn(async () => ({
+      props: { message: "shared destination" },
+      revalidate: 60,
+    }));
+    const setSSRContext = vi.fn();
+    const handler = createPagesPageHandler(
+      makeOpts({
+        pageRoutes: [makeRoute(routePath, makePageModule({ getStaticProps }))],
+        hasRewrites: true,
+        setSSRContext,
+      }),
+    );
+
+    const first = await handler(
+      makeRequest("/article/first"),
+      `${routePath}?slug=first`,
+      null,
+      null,
+      undefined,
+    );
+    const firstHtml = await first.text();
+    const second = await handler(
+      makeRequest("/article/second"),
+      `${routePath}?slug=second`,
+      null,
+      null,
+      undefined,
+    );
+    const secondHtml = await second.text();
+
+    expect(getStaticProps).toHaveBeenCalledOnce();
+    expect(first.headers.get("x-nextjs-cache")).toBe("MISS");
+    expect(second.headers.get("x-nextjs-cache")).toBe("HIT");
+    expect(secondHtml).toBe(firstHtml);
+    expect(firstHtml).not.toContain('"slug":"first"');
+    expect(secondHtml).not.toContain('"slug":"second"');
+    const renderContexts = setSSRContext.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (value): value is { asPath: string; query: Record<string, unknown> } => value !== null,
+      );
+    expect(renderContexts).toEqual(
+      expect.arrayContaining([expect.objectContaining({ asPath: routePath, query: {} })]),
+    );
+  });
 });
 
 describe("createPagesPageHandler — preview responses", () => {

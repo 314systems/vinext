@@ -1507,7 +1507,7 @@ describe("afterFiles rewrites", () => {
     expect(renderPage).toHaveBeenCalledWith(
       expect.any(Request),
       "/ssg?slug=first",
-      { isDataReq: true, rewriteQueryKeys: ["slug"] },
+      { isDataReq: true },
       expect.any(Headers),
     );
     expect(result.response.headers.get(MIDDLEWARE_SKIP_HEADER)).toBeNull();

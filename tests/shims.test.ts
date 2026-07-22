@@ -20368,6 +20368,77 @@ describe("Pages Router _next/data client navigation", () => {
     }
   });
 
+  // Ported from Next.js: packages/next/src/client/index.tsx hydration replace
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/client/index.tsx
+  it("publishes config rewrite captures during GSP hydration without refetching", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const { win, replaceState, render } = createDataNavWindow({
+      page: "/ssg",
+      pathname: "/article/first",
+      loaders: { "/ssg": vi.fn(async () => makePageModule("ssg")) },
+      ssgPatterns: ["/ssg"],
+    });
+    win.__NEXT_DATA__ = {
+      ...win.__NEXT_DATA__,
+      page: "/ssg",
+      query: {},
+      gsp: true,
+      __vinext: { hasRewrites: true },
+    };
+    (win as any).__NEXT_HYDRATED = true;
+    (win as any).__VINEXT_PAGES_LINK_PREFETCH_ROUTES__ = [
+      {
+        canPrefetchLoadingShell: false,
+        isDynamic: false,
+        patternParts: ["ssg"],
+      },
+    ];
+    (win as any).__VINEXT_CLIENT_REWRITES__ = {
+      beforeFiles: [{ source: "/article/:slug", destination: "/ssg" }],
+      afterFiles: [],
+      fallback: [],
+    };
+    (globalThis as any).window = win;
+    globalThis.fetch = vi.fn() as any;
+    vi.resetModules();
+
+    try {
+      const { default: Router } = await import("../packages/vinext/src/shims/router.js");
+      await expect(
+        Router.replace("/ssg", "/article/first", {
+          _h: 1,
+          shallow: true,
+          scroll: false,
+        }),
+      ).resolves.toBe(true);
+
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+      expect(render).not.toHaveBeenCalled();
+      expect(win.__NEXT_DATA__).toMatchObject({ page: "/ssg", query: { slug: "first" } });
+      expect(Router.pathname).toBe("/ssg");
+      expect(Router.query).toEqual({ slug: "first" });
+      expect(Router.asPath).toBe("/article/first");
+      expect(Router.isReady).toBe(true);
+      expect(win.dispatchEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "vinext:navigate" }),
+      );
+      expect(replaceState).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          as: "/article/first",
+          url: "/ssg?slug=first",
+        }),
+        "",
+        "/article/first",
+      );
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+      vi.resetModules();
+    }
+  });
+
   it("uses beforeFiles rewrites for plain pages while preserving the visible URL", async () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
@@ -20667,7 +20738,7 @@ describe("Pages Router _next/data client navigation", () => {
 
   // Ported from Next.js: test/e2e/middleware-rewrites/test/index.test.ts
   // https://github.com/vercel/next.js/blob/canary/test/e2e/middleware-rewrites/test/index.test.ts
-  it("renders destination pages with pending router state before committing history", async () => {
+  it("commits destination history before rendering the destination page", async () => {
     const previousWindow = (globalThis as any).window;
     const previousDocument = (globalThis as any).document;
     const originalFetch = globalThis.fetch;
@@ -20725,7 +20796,7 @@ describe("Pages Router _next/data client navigation", () => {
           asPath: "/about?hello=world",
           pathname: "/about",
           query: { hello: "world" },
-          locationPathname: "/",
+          locationPathname: "/about",
         },
       ]);
       expect(pushState).toHaveBeenLastCalledWith(

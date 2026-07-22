@@ -568,9 +568,7 @@ export async function runPagesRequest(
         // Bare proxy — no middleware-header merge (see Step 8 asymmetry note).
         return { type: "response", response: await proxyExternal(request, rewritten) };
       }
-      const previousResolvedUrl = resolvedUrl;
       resolvedUrl = mergeRewriteQuery(resolvedUrl, rewritten);
-      recordRewriteQueryKeys(resolvedUrl, previousResolvedUrl);
       resolvedPathname = pathnameForResolvedUrl(resolvedUrl);
       resolvedPathnameIsRequestPathname = false;
       configRewriteFired = true;
@@ -652,9 +650,7 @@ export async function runPagesRequest(
           // Bare proxy — no middleware-header merge (see Step 8 asymmetry note).
           return { type: "response", response: await proxyExternal(request, rewritten) };
         }
-        const previousResolvedUrl = resolvedUrl;
         resolvedUrl = mergeRewriteQuery(resolvedUrl, rewritten);
-        recordRewriteQueryKeys(resolvedUrl, previousResolvedUrl);
         resolvedPathname = pathnameForResolvedUrl(resolvedUrl);
         resolvedPathnameIsRequestPathname = false;
         configRewriteFired = true;
@@ -708,9 +704,7 @@ export async function runPagesRequest(
             response: await proxyExternal(request, fallbackRewrite),
           };
         }
-        const previousResolvedUrl = resolvedUrl;
         resolvedUrl = mergeRewriteQuery(resolvedUrl, fallbackRewrite);
-        recordRewriteQueryKeys(resolvedUrl, previousResolvedUrl);
         resolvedPathname = pathnameForResolvedUrl(resolvedUrl);
         resolvedPathnameIsRequestPathname = false;
         configRewriteFired = true;
@@ -777,9 +771,7 @@ export async function runPagesRequest(
             response: await proxyExternal(request, fallbackRewrite),
           };
         }
-        const previousResolvedUrl = resolvedUrl;
         resolvedUrl = mergeRewriteQuery(resolvedUrl, fallbackRewrite);
-        recordRewriteQueryKeys(resolvedUrl, previousResolvedUrl);
         resolvedPathname = pathnameForResolvedUrl(resolvedUrl);
         resolvedPathnameIsRequestPathname = false;
         configRewriteFired = true;
@@ -865,9 +857,7 @@ export async function runPagesRequest(
         // Bare proxy — no middleware-header merge (see Step 8 asymmetry note).
         return { type: "response", response: await proxyExternal(request, fallbackRewrite) };
       }
-      const previousResolvedUrl = resolvedUrl;
       resolvedUrl = mergeRewriteQuery(resolvedUrl, fallbackRewrite);
-      recordRewriteQueryKeys(resolvedUrl, previousResolvedUrl);
       resolvedPathname = pathnameForResolvedUrl(resolvedUrl);
       resolvedPathnameIsRequestPathname = false;
       configRewriteFired = true;
