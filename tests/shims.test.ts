@@ -18270,12 +18270,82 @@ describe("Pages Router concurrent navigation", () => {
       expect(replaceState.mock.calls.filter((call) => call.length >= 3)).toEqual([]);
       expect(pushState).toHaveBeenCalledTimes(1);
       expect(pushState).toHaveBeenCalledWith(
-        expect.objectContaining({ __N: true }),
+        expect.objectContaining({ __N: true, url: "/new-home", as: "/new-home" }),
         "",
         "/new-home",
       );
       expect(win.location.pathname).toBe("/new-home");
       expect(render).toHaveBeenCalled();
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("announces a soft redirect before loading it and attributes destination failure", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const { win } = createNavWindow();
+    const destinationResponse = createDeferred<Response>();
+    Object.assign(win.location, { origin: "http://localhost" });
+    Object.assign(win.__NEXT_DATA__, {
+      buildId: "build-1",
+      __vinext: { ...win.__NEXT_DATA__.__vinext, hasMiddleware: true },
+    });
+    (globalThis as any).window = win;
+
+    const fetch = vi.fn(async (url: RequestInfo | URL) => {
+      const href = getFetchHref(url);
+      if (href === "/_next/data/build-1/old.json") {
+        return new Response("{}", {
+          headers: { "x-nextjs-redirect": "/new" },
+          status: 200,
+        });
+      }
+      if (href === "/new") return destinationResponse.promise;
+      throw new Error(`Unexpected fetch: ${href}`);
+    });
+    globalThis.fetch = fetch;
+
+    try {
+      vi.resetModules();
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      const Router = routerModule.default;
+      const events: Array<[string, string]> = [];
+      const onRouteChangeStart = (url: unknown) => {
+        events.push(["start", String(url)]);
+      };
+      const onRouteChangeError = (_error: unknown, url: unknown) => {
+        events.push(["error", String(url)]);
+      };
+      Router.events.on("routeChangeStart", onRouteChangeStart);
+      Router.events.on("routeChangeError", onRouteChangeError);
+
+      const navigation = Router.push("/old");
+      await vi.waitFor(() => expect(fetch).toHaveBeenCalledWith("/new", expect.any(Object)));
+      // Next.js recursively enters change() as soon as the redirect is known,
+      // before the destination route load settles.
+      // https://github.com/vercel/next.js/blob/canary/packages/next/src/shared/lib/router/router.ts
+      expect(events).toEqual([
+        ["start", "/old"],
+        ["start", "/new"],
+      ]);
+
+      destinationResponse.resolve(new Response("failed destination", { status: 500 }));
+      await expect(navigation).resolves.toBe(false);
+      expect(events).toEqual([
+        ["start", "/old"],
+        ["start", "/new"],
+        ["error", "/new"],
+      ]);
+
+      Router.events.off("routeChangeStart", onRouteChangeStart);
+      Router.events.off("routeChangeError", onRouteChangeError);
     } finally {
       vi.resetModules();
       if (previousWindow === undefined) {
@@ -18600,7 +18670,7 @@ describe("Pages Router concurrent navigation", () => {
       expect(replaceState.mock.calls.filter((call) => call.length >= 3)).toEqual([]);
       expect(pushState).toHaveBeenCalledTimes(1);
       expect(pushState).toHaveBeenCalledWith(
-        expect.objectContaining({ __N: true }),
+        expect.objectContaining({ __N: true, url: "/new-home", as: "/new-home" }),
         "",
         "/docs/new-home",
       );

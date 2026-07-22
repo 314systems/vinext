@@ -1531,6 +1531,8 @@ function scheduleHardNavigationAndThrow(url: string, message: string): never {
 type NavigateClientOptions = {
   allowNotFoundResponse?: boolean;
   commitNavigation?: (browserUrl: string) => void;
+  getNavigationEventUrl?: () => string;
+  onRedirect?: (browserUrl: string) => void;
   locale?: string;
   isHydrationQueryUpdate?: boolean;
   /**
@@ -2262,6 +2264,7 @@ async function navigateClientData(
       scheduleHardNavigationAndThrow(softRedirect, "Navigation redirected externally");
     }
 
+    options.onRedirect?.(redirectedUrl);
     await navigateClientHtml(
       redirectedUrl,
       redirectedUrl,
@@ -2381,6 +2384,7 @@ async function navigateClientHtml(
     const redirectedUrl = resolveSameOriginRedirectedUrl(res.url);
     if (redirectedUrl) {
       browserUrl = redirectedUrl;
+      options.onRedirect?.(redirectedUrl);
     }
   }
 
@@ -2556,6 +2560,15 @@ async function navigateClient(
       throw new NavigationCancelledError(url);
     }
   }
+  const onRedirect = options.onRedirect;
+  const navigationOptions: NavigateClientOptions = {
+    ...options,
+    onRedirect(browserUrl) {
+      assertStillCurrent();
+      routerRuntimeState.activeNavigationEventUrl = browserUrl;
+      onRedirect?.(browserUrl);
+    },
+  };
 
   try {
     // Error-route navigation (`router.push('/404'|'/_error', as)`): the masked
@@ -2564,7 +2577,14 @@ async function navigateClient(
     // (both would target the fictional masked URL) and fetch the resolved
     // error HTML directly, allowing a 404 response to hydrate.
     if (options.allowNotFoundResponse === true) {
-      await navigateClientHtml(url, fetchUrl, controller, navId, assertStillCurrent, options);
+      await navigateClientHtml(
+        url,
+        fetchUrl,
+        controller,
+        navId,
+        assertStillCurrent,
+        navigationOptions,
+      );
     } else {
       let browserUrl = url;
       let htmlFetchUrl = fetchUrl;
@@ -2579,6 +2599,7 @@ async function navigateClient(
         }
         browserUrl = redirectedUrl;
         htmlFetchUrl = redirectedUrl;
+        navigationOptions.onRedirect?.(redirectedUrl);
       }
       let routeLookupUrl = configRedirect ? browserUrl : routeUrl;
       if (routeUrl === url && hasClientRewriteRules()) {
@@ -2656,6 +2677,7 @@ async function navigateClient(
         }
         browserUrl = redirectedUrl;
         htmlFetchUrl = redirectedUrl;
+        navigationOptions.onRedirect?.(redirectedUrl);
       } else if (middlewareEffect) {
         // A masked navigation probes middleware using the browser-visible URL but must fetch page
         // data using the route URL. Without a rewrite header those are different requests, so do
@@ -2697,11 +2719,17 @@ async function navigateClient(
           controller,
           navId,
           assertStillCurrent,
-          options,
+          navigationOptions,
           middlewareDataResponse,
         );
       } else if (dataTarget) {
-        await navigateClientNoData(browserUrl, dataTarget, controller, assertStillCurrent, options);
+        await navigateClientNoData(
+          browserUrl,
+          dataTarget,
+          controller,
+          assertStillCurrent,
+          navigationOptions,
+        );
       } else {
         await navigateClientHtml(
           browserUrl,
@@ -2709,7 +2737,7 @@ async function navigateClient(
           controller,
           navId,
           assertStillCurrent,
-          options,
+          navigationOptions,
         );
       }
     }
@@ -2763,8 +2791,9 @@ async function runNavigateClient(
     return "completed";
   } catch (err: unknown) {
     const cancellationAlreadyEmitted = err instanceof NavigationCancelledError && err.eventEmitted;
+    const eventUrl = options.getNavigationEventUrl?.() ?? resolvedUrl;
     if (!cancellationAlreadyEmitted) {
-      routerEvents.emit("routeChangeError", err, resolvedUrl, { shallow: false });
+      routerEvents.emit("routeChangeError", err, eventUrl, { shallow: false });
     }
     if (err instanceof NavigationCancelledError) {
       return "cancelled";
@@ -2774,7 +2803,7 @@ async function runNavigateClient(
     // throw HardNavigationScheduledError, and this guard skips those; only
     // unexpected failures (parse, import, render) need recovery here.
     if (typeof window !== "undefined" && !(err instanceof HardNavigationScheduledError)) {
-      window.location.href = fullUrl;
+      window.location.href = eventUrl;
     }
     return "failed";
   }
@@ -3279,7 +3308,9 @@ async function performNavigation(
   if (!isQueryUpdating) {
     routerEvents.emit("routeChangeStart", full, { shallow });
   }
+  let navigationEventUrl = full;
   let completedBrowserUrl = full;
+  let completedNavState = navState;
   if (!shallow) {
     const result = await runNavigateClient(
       full,
@@ -3287,15 +3318,27 @@ async function performNavigation(
       htmlFetchUrl,
       {
         ...navigateOptions,
-        commitNavigation(browserUrl) {
+        getNavigationEventUrl() {
+          return navigationEventUrl;
+        },
+        onRedirect(browserUrl) {
+          if (browserUrl === navigationEventUrl) return;
+          navigationEventUrl = browserUrl;
           completedBrowserUrl = browserUrl;
-          // Next.js re-enters change() for a soft redirect, which announces
-          // the resolved destination before its history commit.
-          if (!isQueryUpdating && browserUrl !== full) {
+          const redirectedStateUrl = stripHash(stripBasePath(browserUrl, __basePath));
+          completedNavState = {
+            url: redirectedStateUrl,
+            as: redirectedStateUrl,
+            options: navStateOptions,
+          };
+          if (!isQueryUpdating) {
             routerEvents.emit("routeChangeStart", browserUrl, { shallow });
           }
+        },
+        commitNavigation(browserUrl) {
+          completedBrowserUrl = browserUrl;
           routerEvents.emit("beforeHistoryChange", browserUrl, { shallow });
-          updateHistory(mode, browserUrl, navState);
+          updateHistory(mode, browserUrl, completedNavState);
         },
       },
       // When href and as differ, the data fetch must target the route URL
