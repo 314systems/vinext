@@ -188,6 +188,8 @@ type RenderAppPageHtmlStreamOptions = {
   waitForAllReady?: boolean;
   /** When true, client navigation hooks use static-generation semantics. */
   isStaticGeneration?: boolean | StaticGenerationNavigationDecision;
+  /** Override the default shell-error recovery decision passed to handleSsr. */
+  fallbackToErrorDocumentOnShellError?: boolean;
   /** Dev-only: original server error to surface in the browser overlay. */
   initialDevServerError?: unknown;
   /** True when the app supplies a custom global-error.tsx. Disables the
@@ -260,7 +262,8 @@ export async function renderAppPageHtmlStream(
     // Only when the caller affirmatively knows there is no custom
     // global-error.tsx; undefined (unknown) keeps reject semantics.
     fallbackToErrorDocumentOnShellError:
-      options.waitForAllReady !== true && options.hasCustomGlobalError === false,
+      options.fallbackToErrorDocumentOnShellError ??
+      (options.waitForAllReady !== true && options.hasCustomGlobalError === false),
     dynamicStaleTimeSeconds: options.dynamicStaleTimeSeconds,
     getInitialNavigationCacheMetadata: options.getInitialNavigationCacheMetadata,
   };
