@@ -433,6 +433,20 @@ test.describe("Next.js compat: client cache", () => {
     expect(requestsFor(requests, `${ROOT}/2`).some((request) => !request.partial)).toBe(true);
   });
 
+  test("fresh dynamic pages reset client state inside a synthetic children slot", async ({
+    page,
+  }) => {
+    await page.goto("/nextjs-compat/client-cache-children-slot/one");
+    await waitForAppRouterHydration(page);
+
+    await page.locator("#children-slot-increment").click();
+    await expect(page.locator("#children-slot-count")).toHaveText("1");
+    await page.locator("#children-slot-next").click();
+
+    await expect(page.locator("#children-slot-id")).toHaveText("two");
+    await expect(page.locator("#children-slot-count")).toHaveText("0");
+  });
+
   test("a navigation tail cannot republish after refresh invalidates its cache generation", async ({
     page,
   }) => {

@@ -584,6 +584,7 @@ function createAppPageSlotBindings<
   options: {
     interception: AppElementsInterception | null;
     interceptionContext: string | null;
+    routeId: string;
     routePath: string;
   },
 ): readonly AppElementsSlotBinding[] {
@@ -593,6 +594,7 @@ function createAppPageSlotBindings<
       (layoutEntry) => layoutEntry.treePath === route.childrenSlot?.ownerTreePath,
     )?.id;
     bindings.push({
+      ...(route.childrenSlot.state === "active" ? { activeRouteId: options.routeId } : {}),
       ownerLayoutId: ownerLayoutId ?? null,
       slotId: route.childrenSlot.id,
       state: route.childrenSlot.state,
@@ -851,6 +853,7 @@ export function buildAppPageElements<
       slotBindings: createAppPageSlotBindings(options.route, layoutEntries, resolveSlotOverride, {
         interception: renderIdentity?.interception ?? options.interception ?? null,
         interceptionContext,
+        routeId,
         routePath: options.routePath,
       }),
     }),

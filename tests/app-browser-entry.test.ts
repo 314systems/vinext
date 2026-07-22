@@ -171,6 +171,7 @@ function createResolvedElements(
     : [AppElementsWire.encodeLayoutId(rootLayoutTreePath)],
   slotBindings: readonly AppElementsSlotBinding[] = [],
   interception: AppElementsInterception | null = null,
+  sourcePage: string | null = null,
 ) {
   return normalizeAppElements({
     ...AppElementsWire.createMetadataEntries({
@@ -180,6 +181,7 @@ function createResolvedElements(
       rootLayoutTreePath,
       routeId,
       slotBindings,
+      sourcePage,
     }),
     ...extraEntries,
   });
@@ -6429,6 +6431,92 @@ describe("app browser entry bfcacheId helpers", () => {
     expect(opened[feedLayoutId]).toBe("_b_1_");
     expect(opened[feedPageId]).toBe("_b_2_");
     expect(opened[modalSlotId]).toMatch(/^_b_\d+_$/);
+  });
+
+  it("preserves rewritten source identities when interception proof uses the matched pathname", () => {
+    const localeLayoutId = AppElementsWire.encodeLayoutId("/interception-mw/[locale]");
+    const sourcePageId = AppElementsWire.encodePageId("/interception-mw/en", null);
+    const modalSlotId = AppElementsWire.encodeSlotId("modal", "/interception-mw/[locale]");
+    const sourceRouteId = AppElementsWire.encodeRouteId("/interception-mw/en", null);
+    const targetRouteId = AppElementsWire.encodeRouteId("/interception-mw/en/foo/p/1", null);
+    const sourceBinding = {
+      activeRouteId: sourceRouteId,
+      ownerLayoutId: localeLayoutId,
+      slotId: modalSlotId,
+      state: "active",
+    } satisfies AppElementsSlotBinding;
+    const entries = {
+      [sourcePageId]: React.createElement("main", null),
+      [modalSlotId]: React.createElement("aside", null),
+    };
+    const sourceElements = createResolvedElements(
+      sourceRouteId,
+      "/",
+      null,
+      entries,
+      [rootLayoutId, localeLayoutId],
+      [sourceBinding],
+      null,
+      "/interception-mw/[locale]/page",
+    );
+    const interceptedElements = createResolvedElements(
+      sourceRouteId,
+      "/",
+      "/interception-mw/en",
+      entries,
+      [rootLayoutId, localeLayoutId],
+      [{ ...sourceBinding, activeRouteId: targetRouteId }],
+      createInterceptionProof("/interception-mw/en", "/interception-mw/en/foo/p/1", modalSlotId),
+      "/interception-mw/[locale]/page",
+    );
+
+    const next = createNextBfcacheIdMap({
+      current: {
+        [rootLayoutId]: "0",
+        [localeLayoutId]: "_b_1_",
+        [sourcePageId]: "_b_2_",
+        [modalSlotId]: "_b_3_",
+      },
+      currentElements: sourceElements,
+      currentPathname: "/interception-mw",
+      elements: interceptedElements,
+      nextPathname: "/interception-mw/foo/p/1",
+    });
+
+    expect(next[localeLayoutId]).toBe("_b_1_");
+    expect(next[sourcePageId]).toBe("_b_2_");
+    expect(next[modalSlotId]).not.toBe("_b_3_");
+  });
+
+  it("mints a fresh active children-slot identity when its route changes", () => {
+    const childrenSlotId = AppElementsWire.encodeSlotId("children", "/parent");
+    const createChildrenSlotElements = (routePath: string) =>
+      createResolvedElements(
+        AppElementsWire.encodeRouteId(routePath, null),
+        "/",
+        null,
+        { [childrenSlotId]: React.createElement("main", null) },
+        [rootLayoutId],
+        [
+          {
+            activeRouteId: AppElementsWire.encodeRouteId(routePath, null),
+            ownerLayoutId: rootLayoutId,
+            slotId: childrenSlotId,
+            state: "active",
+          },
+        ],
+      );
+
+    const next = createNextBfcacheIdMap({
+      current: { [rootLayoutId]: "0", [childrenSlotId]: "_b_1_" },
+      currentElements: createChildrenSlotElements("/parent/one"),
+      currentPathname: "/parent/one",
+      elements: createChildrenSlotElements("/parent/two"),
+      nextPathname: "/parent/two",
+    });
+
+    expect(next[rootLayoutId]).toBe("0");
+    expect(next[childrenSlotId]).not.toBe("_b_1_");
   });
 
   it("preserves source page identity while chained interception targets change", () => {

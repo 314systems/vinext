@@ -104,12 +104,26 @@ function createActiveSlotIdentity(
   return `${id}@${interception.targetRouteId}`;
 }
 
-function getInterceptedPageMatchedUrl(
+function getDirectMatchedRoutePathname(metadata: ParsedAppElementsMetadata | null): string | null {
+  // Complete page payloads carry sourcePage plus the concrete matched route id.
+  // Use that matched identity so a direct rewritten page and a later
+  // interception proof agree even though the browser-visible URL differs.
+  // Partial low-level element maps omit sourcePage and keep the pathname
+  // fallback below.
+  if (metadata?.metadata.interception != null || metadata?.metadata.sourcePage == null) return null;
+  const route = AppElementsWire.parseElementKey(metadata.metadata.routeId);
+  return route?.kind === "route" ? route.path : null;
+}
+
+function getPageMatchedUrl(
   parsed: Extract<BfcacheSegmentElementKey, { kind: "page" }>,
   metadata: ParsedAppElementsMetadata | null,
 ): string | null {
   const interception = metadata?.metadata.interception;
-  if (interception === null || interception === undefined) return null;
+  if (interception === null || interception === undefined) {
+    const matchedRoutePathname = getDirectMatchedRoutePathname(metadata);
+    return matchedRoutePathname === parsed.path ? matchedRoutePathname : null;
+  }
 
   for (const [routeId, matchedUrl] of [
     [interception.sourceRouteId, interception.sourceMatchedUrl],
@@ -124,12 +138,14 @@ function getInterceptedPageMatchedUrl(
   return null;
 }
 
-function getInterceptedTreePathname(
+function getTreePathname(
   treePath: string,
   metadata: ParsedAppElementsMetadata | null,
 ): string | null {
   const interception = metadata?.metadata.interception;
-  if (interception === null || interception === undefined) return null;
+  if (interception === null || interception === undefined) {
+    return getDirectMatchedRoutePathname(metadata);
+  }
 
   const slot = AppElementsWire.parseElementKey(interception.slotId);
   if (slot?.kind !== "slot") return interception.sourceMatchedUrl;
@@ -163,10 +179,11 @@ function createBfcacheSegmentIdentity(
     // retained page by its matched source URL so opening, refreshing, or
     // traversing an intercepted modal does not remount its client state. If a
     // payload ever carries the target as a page element, use the target proof
-    // for the same reason. Ordinary pages continue to use the concrete visible
-    // pathname, which resets state between dynamic siblings.
-    const interceptedMatchedUrl = getInterceptedPageMatchedUrl(parsed, options.metadata);
-    return `${id}@${interceptedMatchedUrl ?? options.pathname}`;
+    // for the same reason. Complete direct payloads use their concrete matched
+    // route, while partial payloads fall back to the visible pathname; both
+    // reset state between dynamic siblings.
+    const matchedUrl = getPageMatchedUrl(parsed, options.metadata);
+    return `${id}@${matchedUrl ?? options.pathname}`;
   }
 
   if (parsed.kind === "slot") {
@@ -176,7 +193,7 @@ function createBfcacheSegmentIdentity(
   }
 
   if (parsed.kind === "layout" || parsed.kind === "template") {
-    const pathname = getInterceptedTreePathname(parsed.treePath, options.metadata);
+    const pathname = getTreePathname(parsed.treePath, options.metadata);
     return `${id}@${getTreePathIdentityPrefix(pathname ?? options.pathname, parsed.treePath)}`;
   }
 
