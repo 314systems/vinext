@@ -16,7 +16,11 @@ import {
   VINEXT_RSC_VARY_HEADER,
 } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
 import { APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL } from "../packages/vinext/src/server/app-rsc-render-mode.js";
-import { VINEXT_CLIENT_REUSE_MANIFEST_HEADER } from "../packages/vinext/src/server/headers.js";
+import {
+  NEXT_URL_HEADER,
+  VINEXT_CLIENT_REUSE_MANIFEST_HEADER,
+  VINEXT_RSC_STATE_HEADER,
+} from "../packages/vinext/src/server/headers.js";
 import { fnv1a64 } from "../packages/vinext/src/utils/hash.js";
 import { withEnvVar } from "./env-test-helpers.js";
 
@@ -258,6 +262,36 @@ describe("App Router RSC cache-busting", () => {
   it("accepts previous SHA cache-busting params after adding a varying header", async () => {
     const headers = createRscRequestHeaders({ mountedSlotsHeader: "slot:modal:/" });
     const previousHash = await sha256CacheBustingHash("0,0,0,0,0,slot:modal:/");
+    const request = new Request(`https://example.com/photos/42.rsc?_rsc=${previousHash}`, {
+      headers,
+    });
+
+    await expect(
+      resolveInvalidRscCacheBustingRequest({ isRscRequest: true, request }),
+    ).resolves.toBeNull();
+  });
+
+  it("accepts the immediate previous navigation hash after adding the state header", async () => {
+    const headers = createRscRequestHeaders();
+    headers.set(NEXT_URL_HEADER, "/feed");
+    headers.set(VINEXT_RSC_STATE_HEADER, "current-state");
+    const previousHash = await sha256CacheBustingHash("0,0,0,/feed,0,0,0");
+    const request = new Request(`https://example.com/photos/42.rsc?_rsc=${previousHash}`, {
+      headers,
+    });
+
+    await expect(
+      resolveInvalidRscCacheBustingRequest({ isRscRequest: true, request }),
+    ).resolves.toBeNull();
+  });
+
+  it("accepts the immediate previous loading-shell hash with its render mode", async () => {
+    const headers = createRscRequestHeaders({
+      renderMode: APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
+    });
+    headers.set(NEXT_URL_HEADER, "/feed");
+    headers.set(VINEXT_RSC_STATE_HEADER, "current-state");
+    const previousHash = await sha256CacheBustingHash("0,0,0,/feed,0,0,prefetch-loading-shell");
     const request = new Request(`https://example.com/photos/42.rsc?_rsc=${previousHash}`, {
       headers,
     });
