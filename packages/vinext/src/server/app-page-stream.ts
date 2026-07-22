@@ -185,6 +185,8 @@ type RenderAppPageHtmlStreamOptions = {
   pprFallbackShellSignal?: AbortSignal;
   /** When true, wait for the full React tree before emitting bytes. */
   waitForAllReady?: boolean;
+  /** Override the default shell-error recovery decision passed to handleSsr. */
+  fallbackToErrorDocumentOnShellError?: boolean;
   /** Dev-only: original server error to surface in the browser overlay. */
   initialDevServerError?: unknown;
   /** Mirror inline Flight chunks into Next.js's `self.__next_f` transport. */
@@ -260,7 +262,8 @@ export async function renderAppPageHtmlStream(
     // Only when the caller affirmatively knows there is no custom
     // global-error.tsx; undefined (unknown) keeps reject semantics.
     fallbackToErrorDocumentOnShellError:
-      options.waitForAllReady !== true && options.hasCustomGlobalError === false,
+      options.fallbackToErrorDocumentOnShellError ??
+      (options.waitForAllReady !== true && options.hasCustomGlobalError === false),
     dynamicStaleTimeSeconds: options.dynamicStaleTimeSeconds,
     getInitialNavigationCacheMetadata: options.getInitialNavigationCacheMetadata,
   };
