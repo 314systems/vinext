@@ -2388,6 +2388,54 @@ describe("app page route wiring helpers", () => {
     ).not.toBeNull();
   });
 
+  it("owns the built-in not-found boundary at the root layout", () => {
+    const elements = buildAppPageElements({
+      element: createElement(PageProbe),
+      makeThenableParams(params) {
+        return Promise.resolve(params);
+      },
+      matchedParams: {},
+      resolvedMetadata: null,
+      resolvedViewport: {},
+      route: {
+        error: null,
+        errors: [null, null],
+        layoutTreePositions: [0, 1],
+        layouts: [{ default: RootLayout }, { default: GroupLayout }],
+        loading: null,
+        notFound: null,
+        notFounds: [null, null],
+        routeSegments: ["dashboard", "reports"],
+        slots: {},
+        templateTreePositions: [],
+        templates: [],
+      },
+      routePath: "/dashboard/reports",
+      rootNotFoundModule: null,
+    });
+
+    const routeEntry = elements["route:/dashboard/reports"];
+    const rootLayoutSlot = findSlotById(routeEntry, "layout:/");
+    const nestedLayoutSlot = findSlotById(routeEntry, "layout:/dashboard");
+    expect(rootLayoutSlot).not.toBeNull();
+    expect(nestedLayoutSlot).not.toBeNull();
+    if (!rootLayoutSlot || !nestedLayoutSlot) {
+      throw new Error("Expected both root and nested layout slots");
+    }
+
+    const rootNotFoundBoundary = findElementByTypeName(
+      rootLayoutSlot.props.children,
+      "NotFoundBoundary",
+    );
+    expect(rootNotFoundBoundary).not.toBeNull();
+    if (!rootNotFoundBoundary) throw new Error("Expected the built-in not-found boundary");
+    expect(getElementTypeName((rootNotFoundBoundary.props.fallback as ReactElement).type)).toBe(
+      "DefaultNotFound",
+    );
+    expect(findSlotById(rootNotFoundBoundary.props.children, "layout:/dashboard")).not.toBeNull();
+    expect(findElementByTypeName(nestedLayoutSlot.props.children, "NotFoundBoundary")).toBeNull();
+  });
+
   it("nests per-segment NotFoundBoundary inside the template wrapper", () => {
     function RootNotFound() {
       return createElement("div", { "data-not-found": "root" }, "Not Found");
