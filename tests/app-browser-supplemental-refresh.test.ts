@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   createSupplementalRefreshCoordinator,
+  resolvePersistedSourcePageRefresh,
   resolveSupplementalRefreshes,
   settleSuccessfulServerActionResult,
   shouldScheduleSupplementalRefreshRecovery,
@@ -13,6 +14,71 @@ afterEach(() => {
 describe("server action supplemental refreshes", () => {
   // Matches Next.js action discarding: test/e2e/app-dir/actions/app-action.test.ts
   // and packages/next/src/client/components/app-router-instance.ts.
+  it("retains the exact source query while refreshing an intercepted URL", () => {
+    expect(
+      resolvePersistedSourcePageRefresh({
+        basePath: "",
+        refreshUrl: new URL("https://example.com/refreshing/login?modal=new"),
+        state: {
+          previousNextUrl: "/refreshing?random=old",
+          slotBindings: [],
+        },
+      }),
+    ).toBe("/refreshing?random=old");
+  });
+
+  it("recovers the active children route when no interception source URL exists", () => {
+    expect(
+      resolvePersistedSourcePageRefresh({
+        basePath: "/docs",
+        refreshUrl: new URL("https://example.com/docs/nested-revalidate/modal?view=current"),
+        state: {
+          previousNextUrl: null,
+          slotBindings: [
+            {
+              activeRouteId: "route:/nested-revalidate",
+              ownerLayoutId: "layout:/nested-revalidate",
+              slotId: "slot:children:/nested-revalidate",
+              state: "active",
+            },
+            {
+              activeRouteId: "route:/nested-revalidate/drawer",
+              ownerLayoutId: "layout:/nested-revalidate",
+              slotId: "slot:drawer:/nested-revalidate",
+              state: "active",
+            },
+          ],
+        },
+      }),
+    ).toBe("/docs/nested-revalidate?view=current");
+  });
+
+  it("does not replace a normal traversal target with an unrelated source page", () => {
+    expect(
+      resolvePersistedSourcePageRefresh({
+        basePath: "",
+        refreshUrl: new URL("https://example.com/detail-page"),
+        state: {
+          previousNextUrl: null,
+          slotBindings: [
+            {
+              activeRouteId: "route:/",
+              ownerLayoutId: "layout:/",
+              slotId: "slot:children:/",
+              state: "active",
+            },
+            {
+              activeRouteId: "route:/",
+              ownerLayoutId: "layout:/",
+              slotId: "slot:interception:/",
+              state: "active",
+            },
+          ],
+        },
+      }),
+    ).toBeNull();
+  });
+
   it("merges multiple successful persisted slots", async () => {
     const result = await resolveSupplementalRefreshes({
       merge: (current, supplemental) => [...current, ...supplemental],

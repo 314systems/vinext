@@ -587,6 +587,7 @@ function createAppPageSlotBindings<
     interceptionId: string | null;
     interceptionContext: string | null;
     routePath: string;
+    sourceRouteId: string;
   },
 ): readonly AppElementsSlotBinding[] {
   const bindings: AppElementsSlotBinding[] = [];
@@ -595,6 +596,7 @@ function createAppPageSlotBindings<
       (layoutEntry) => layoutEntry.treePath === route.childrenSlot?.ownerTreePath,
     )?.id;
     bindings.push({
+      ...(route.childrenSlot.state === "active" ? { activeRouteId: options.sourceRouteId } : {}),
       ownerLayoutId: ownerLayoutId ?? null,
       slotId: route.childrenSlot.id,
       state: route.childrenSlot.state,
@@ -861,6 +863,7 @@ export function buildAppPageElements<
         interceptionId: options.interceptionId ?? null,
         interceptionContext,
         routePath: options.routePath,
+        sourceRouteId: routeId,
       }),
     }),
   };

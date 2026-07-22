@@ -99,6 +99,7 @@ import {
 } from "./app-browser-action-result.js";
 import {
   createSupplementalRefreshCoordinator,
+  resolvePersistedSourcePageRefresh,
   resolveSupplementalRefreshes,
   settleSuccessfulServerActionResult,
   shouldScheduleSupplementalRefreshRecovery,
@@ -449,13 +450,34 @@ function mergeRefreshedInterceptedSlot(
   currentElements: AppElements,
   interceptedElements: AppElements,
 ): AppElements {
-  const interception = AppElementsWire.readMetadata(interceptedElements).interception;
-  if (interception === null) return currentElements;
+  const interceptedMetadata = AppElementsWire.readMetadata(interceptedElements);
+  const interception = interceptedMetadata.interception;
+  if (interception === null) {
+    const sourcePageBinding = interceptedMetadata.slotBindings.find((binding) => {
+      const parsedSlot = AppElementsWire.parseElementKey(binding.slotId);
+      return (
+        binding.state === "active" &&
+        parsedSlot?.kind === "slot" &&
+        parsedSlot.name === "children" &&
+        Object.hasOwn(interceptedElements, binding.slotId)
+      );
+    });
+    if (!sourcePageBinding) return currentElements;
+    const currentMetadata = AppElementsWire.readMetadata(currentElements);
+    const slotBindings = currentMetadata.slotBindings.filter(
+      (binding) => binding.slotId !== sourcePageBinding.slotId,
+    );
+    slotBindings.push(sourcePageBinding);
+    return {
+      ...currentElements,
+      [sourcePageBinding.slotId]: interceptedElements[sourcePageBinding.slotId],
+      [APP_SLOT_BINDINGS_KEY]: slotBindings,
+    };
+  }
   const interceptedSlot = interceptedElements[interception.slotId];
   if (interceptedSlot === undefined) return currentElements;
 
   const currentMetadata = AppElementsWire.readMetadata(currentElements);
-  const interceptedMetadata = AppElementsWire.readMetadata(interceptedElements);
   const interceptedBinding = interceptedMetadata.slotBindings.find(
     (binding) => binding.slotId === interception.slotId,
   );
@@ -547,6 +569,22 @@ async function fetchPersistedInterceptedSlotRefresh(options: {
   const headers = createRscRequestHeaders({
     interceptionContext: options.interceptionContext,
     interceptionId: options.interceptionId,
+    mountedSlotsHeader: options.mountedSlotsHeader,
+  });
+  const response = await fetch(await createRscRequestUrl(options.targetPathname, headers), {
+    credentials: "include",
+    headers,
+    signal: options.signal,
+  });
+  return decodeAppElementsPromise(createFromFetch<AppWireElements>(Promise.resolve(response)));
+}
+
+async function fetchPersistedSourcePageRefresh(options: {
+  mountedSlotsHeader: string | null;
+  signal: AbortSignal;
+  targetPathname: string;
+}): Promise<AppElements> {
+  const headers = createRscRequestHeaders({
     mountedSlotsHeader: options.mountedSlotsHeader,
   });
   const response = await fetch(await createRscRequestUrl(options.targetPathname, headers), {
@@ -808,26 +846,41 @@ function commitSameUrlNavigatePayload(
       refreshUrl,
       requestInterceptionContext,
     );
-    if (persistedRefreshInterceptions.length > 0) {
+    const persistedSourcePageRefresh = resolvePersistedSourcePageRefresh({
+      basePath: __basePath,
+      refreshUrl,
+      state: actionInitiation.routerState,
+    });
+    if (persistedRefreshInterceptions.length > 0 || persistedSourcePageRefresh !== null) {
       supplementalRefreshHandle = serverActionSupplementalRefreshCoordinator.begin({
         activeNavigationId: browserNavigationController.getActiveNavigationId(),
         startedNavigationId: actionInitiation.navigationId,
       });
       const mountedSlotsHeader = getMountedSlotIdsHeader(actionInitiation.routerState.elements);
+      const supplemental = persistedRefreshInterceptions.map(
+        (interception) => (signal: AbortSignal) =>
+          fetchPersistedInterceptedSlotRefresh({
+            interceptionContext: interception.interceptionContext,
+            interceptionId: interception.interception.id,
+            mountedSlotsHeader,
+            signal,
+            targetPathname: interception.targetPathname,
+          }),
+      );
+      if (persistedSourcePageRefresh !== null) {
+        supplemental.push((signal) =>
+          fetchPersistedSourcePageRefresh({
+            mountedSlotsHeader,
+            signal,
+            targetPathname: persistedSourcePageRefresh,
+          }),
+        );
+      }
       supplementalRefresh = resolveSupplementalRefreshes({
         merge: mergeRefreshedInterceptedSlot,
         primary: nextElements,
         signal: supplementalRefreshHandle.signal,
-        supplemental: persistedRefreshInterceptions.map(
-          (interception) => (signal) =>
-            fetchPersistedInterceptedSlotRefresh({
-              interceptionContext: interception.interceptionContext,
-              interceptionId: interception.interception.id,
-              mountedSlotsHeader,
-              signal,
-              targetPathname: interception.targetPathname,
-            }),
-        ),
+        supplemental,
       });
       nextElements = supplementalRefresh.then((result) => result.value);
     }
@@ -1975,6 +2028,14 @@ function bootstrapHydration(
                 requestInterceptionContext,
               )
             : [];
+        const persistedSourcePageRefresh =
+          navigationKind === "refresh" || navigationKind === "traverse"
+            ? resolvePersistedSourcePageRefresh({
+                basePath: __basePath,
+                refreshUrl: url,
+                state: navigationInitiationState,
+              })
+            : null;
         // Next.js refetches page segments for same-page search changes even
         // when a visible Link prefetched the target. Search params are a page
         // input, so a cached full-route payload is not authoritative here.
@@ -2390,21 +2451,31 @@ function bootstrapHydration(
         let rscPayload = decodeAppElementsPromise(
           createFromFetch<AppWireElements>(Promise.resolve(reactResponse)),
         );
-        if (persistedRefreshInterceptions.length > 0) {
+        if (persistedRefreshInterceptions.length > 0 || persistedSourcePageRefresh !== null) {
+          const supplemental = persistedRefreshInterceptions.map(
+            (interception) => (signal: AbortSignal) =>
+              fetchPersistedInterceptedSlotRefresh({
+                interceptionContext: interception.interceptionContext,
+                interceptionId: interception.interception.id,
+                mountedSlotsHeader,
+                signal,
+                targetPathname: interception.targetPathname,
+              }),
+          );
+          if (persistedSourcePageRefresh !== null) {
+            supplemental.push((signal) =>
+              fetchPersistedSourcePageRefresh({
+                mountedSlotsHeader,
+                signal,
+                targetPathname: persistedSourcePageRefresh,
+              }),
+            );
+          }
           rscPayload = resolveSupplementalRefreshes({
             merge: mergeRefreshedInterceptedSlot,
             primary: rscPayload,
             signal: navigationAbortController.signal,
-            supplemental: persistedRefreshInterceptions.map(
-              (interception) => (signal) =>
-                fetchPersistedInterceptedSlotRefresh({
-                  interceptionContext: interception.interceptionContext,
-                  interceptionId: interception.interception.id,
-                  mountedSlotsHeader,
-                  signal,
-                  targetPathname: interception.targetPathname,
-                }),
-            ),
+            supplemental,
           }).then((result) => result.value);
         }
 
@@ -2442,7 +2513,7 @@ function bootstrapHydration(
           visibleCommitMode,
         });
         if (renderOutcome !== "committed") return;
-        if (persistedRefreshInterceptions.length > 0) {
+        if (persistedRefreshInterceptions.length > 0 || persistedSourcePageRefresh !== null) {
           clearVisitedResponseCache();
           void cacheBufferPromise.catch(() => {});
           return;

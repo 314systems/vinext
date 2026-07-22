@@ -1,3 +1,7 @@
+import { AppElementsWire } from "./app-elements.js";
+import type { AppRouterState } from "./app-browser-state.js";
+import { addBasePathToPathname } from "../utils/base-path.js";
+
 const APP_BROWSER_SUPPLEMENTAL_REFRESH_TIMEOUT_MS = 10_000;
 
 export type SupplementalRefreshResult<T> = {
@@ -9,6 +13,51 @@ export type SupplementalRefreshHandle = {
   finish(): void;
   signal: AbortSignal;
 };
+
+export function resolvePersistedSourcePageRefresh(options: {
+  basePath: string;
+  refreshUrl: URL;
+  state: Pick<AppRouterState, "previousNextUrl" | "slotBindings">;
+}): string | null {
+  let sourceUrl: URL;
+  if (options.state.previousNextUrl !== null) {
+    sourceUrl = new URL(options.state.previousNextUrl, options.refreshUrl);
+  } else {
+    const sourcePageBinding = options.state.slotBindings.find((binding) => {
+      const parsedSlot = AppElementsWire.parseElementKey(binding.slotId);
+      return (
+        binding.state === "active" &&
+        parsedSlot?.kind === "slot" &&
+        parsedSlot.name === "children" &&
+        binding.activeRouteId !== undefined
+      );
+    });
+    const activeRoute = sourcePageBinding?.activeRouteId
+      ? AppElementsWire.parseElementKey(sourcePageBinding.activeRouteId)
+      : null;
+    if (activeRoute?.kind !== "route") return null;
+    const hasPersistedNamedSlot = options.state.slotBindings.some(
+      (binding) =>
+        binding.state === "active" &&
+        binding.slotId !== sourcePageBinding?.slotId &&
+        binding.activeRouteId !== undefined &&
+        binding.activeRouteId !== sourcePageBinding?.activeRouteId,
+    );
+    if (!hasPersistedNamedSlot) return null;
+    sourceUrl = new URL(
+      addBasePathToPathname(activeRoute.path, options.basePath),
+      options.refreshUrl,
+    );
+    sourceUrl.search = options.refreshUrl.search;
+  }
+  if (
+    sourceUrl.pathname === options.refreshUrl.pathname &&
+    sourceUrl.search === options.refreshUrl.search
+  ) {
+    return null;
+  }
+  return `${sourceUrl.pathname}${sourceUrl.search}`;
+}
 
 export function createSupplementalRefreshCoordinator(): {
   abortAll(): void;
