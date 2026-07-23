@@ -161,6 +161,28 @@ export type PrefetchInliningConfig =
       maxSize: number;
     };
 
+/**
+ * Options for the React Compiler that vinext (mirroring Next.js) currently
+ * supports. Mirrors Next.js's `ReactCompilerOptions` in
+ * packages/next/src/server/config-shared.ts.
+ *
+ * @see https://react.dev/reference/react-compiler/configuration
+ */
+export type ReactCompilerOptions = {
+  /**
+   * Controls the strategy for determining which functions the React Compiler
+   * will optimize. Defaults to `'infer'`.
+   * @see https://react.dev/reference/react-compiler/compilationMode
+   */
+  compilationMode?: "infer" | "annotation" | "all";
+  /**
+   * Controls how the React Compiler handles errors during compilation.
+   * Defaults to `'none'` (skips components which cannot be compiled).
+   * @see https://react.dev/reference/react-compiler/panicThreshold
+   */
+  panicThreshold?: "none" | "critical_errors" | "all_errors";
+};
+
 export type NextConfig = {
   /** Additional env variables */
   env?: Record<string, string>;
@@ -292,6 +314,14 @@ export type NextConfig = {
   serverExternalPackages?: string[];
   /** Webpack config (ignored — we use Vite) */
   webpack?: unknown;
+  /**
+   * Enable the React Compiler. `true` enables it with default options; an
+   * options object enables it and forwards the supported subset of compiler
+   * options. Requires `babel-plugin-react-compiler` to be installed in the
+   * project.
+   * @see https://nextjs.org/docs/app/api-reference/config/next-config-js/reactCompiler
+   */
+  reactCompiler?: boolean | ReactCompilerOptions;
   /**
    * Compiler options for build-time code transforms.
    * vinext supports the subset that maps to Vite-compatible transforms.
@@ -512,6 +542,16 @@ export type ResolvedNextConfig = {
    * except the specified method names (case-insensitive).
    */
   removeConsole: boolean | { exclude: string[] };
+  /**
+   * Resolved `reactCompiler` from next.config. `null` when disabled; a
+   * normalized options object (possibly empty, for `reactCompiler: true`)
+   * when enabled. When enabled, vinext injects `babel-plugin-react-compiler`
+   * into the client-side Babel pipeline of @vitejs/plugin-react — matching
+   * Next.js, which only runs the React Compiler for browser bundles.
+   *
+   * @see https://nextjs.org/docs/app/api-reference/config/next-config-js/reactCompiler
+   */
+  reactCompiler: ReactCompilerOptions | null;
   /**
    * Mirrors Next.js `experimental.disableOptimizedLoading`. When `false`
    * (the default), Pages Router page scripts are emitted with `defer` in
@@ -1529,6 +1569,48 @@ function normalizeI18nConfig(value: unknown): NextI18nConfig | null {
 }
 
 /**
+ * Normalize the `reactCompiler` next.config option. Returns `null` when the
+ * compiler is disabled, or a sanitized options object when enabled.
+ *
+ * Mirrors Next.js's config schema (packages/next/src/server/config-schema.ts):
+ * `true` and object-form config enable the compiler; `false`/unset disable it.
+ * Next.js rejects invalid values at config validation time — vinext warns and
+ * drops the invalid keys instead, keeping the compiler enabled.
+ */
+export function resolveReactCompilerConfig(value: unknown): ReactCompilerOptions | null {
+  if (value === true) return {};
+  if (value === false || value === undefined || value === null) return null;
+  if (!isUnknownRecord(value)) {
+    console.warn(
+      `[vinext] Invalid next.config option "reactCompiler": expected a boolean or an options object, got ${JSON.stringify(value)}. The React Compiler stays disabled.`,
+    );
+    return null;
+  }
+
+  const resolved: ReactCompilerOptions = {};
+  const { compilationMode, panicThreshold } = value;
+  if (compilationMode === "infer" || compilationMode === "annotation" || compilationMode === "all") {
+    resolved.compilationMode = compilationMode;
+  } else if (compilationMode !== undefined) {
+    console.warn(
+      `[vinext] Invalid "reactCompiler.compilationMode" value ${JSON.stringify(compilationMode)}. Expected "infer", "annotation", or "all". Ignoring the option.`,
+    );
+  }
+  if (
+    panicThreshold === "none" ||
+    panicThreshold === "critical_errors" ||
+    panicThreshold === "all_errors"
+  ) {
+    resolved.panicThreshold = panicThreshold;
+  } else if (panicThreshold !== undefined) {
+    console.warn(
+      `[vinext] Invalid "reactCompiler.panicThreshold" value ${JSON.stringify(panicThreshold)}. Expected "none", "critical_errors", or "all_errors". Ignoring the option.`,
+    );
+  }
+  return resolved;
+}
+
+/**
  * Resolve a NextConfig into a fully-resolved ResolvedNextConfig.
  * Awaits async functions for redirects/rewrites/headers.
  */
@@ -1584,6 +1666,7 @@ export async function resolveNextConfig(
       deploymentId,
       sassOptions: null,
       removeConsole: false,
+      reactCompiler: null,
       disableOptimizedLoading: false,
       reactStrictMode: null,
       scrollRestoration: false,
@@ -1937,6 +2020,7 @@ export async function resolveNextConfig(
         : isUnknownRecord(config.compiler?.removeConsole)
           ? { exclude: readStringArray(config.compiler!.removeConsole.exclude) }
           : false,
+    reactCompiler: resolveReactCompilerConfig(config.reactCompiler),
     // Next.js stores this under `experimental.disableOptimizedLoading`.
     // Default `false` matches Next.js: page scripts get `defer` in <head>.
     disableOptimizedLoading: experimental?.disableOptimizedLoading === true,

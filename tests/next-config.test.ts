@@ -1857,6 +1857,65 @@ describe("resolveNextConfig removeConsole", () => {
   });
 });
 
+describe("resolveNextConfig reactCompiler", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("defaults to null when unset", async () => {
+    const resolved = await resolveNextConfig({});
+    expect(resolved.reactCompiler).toBeNull();
+  });
+
+  it("defaults to null for the empty default config", async () => {
+    const resolved = await resolveNextConfig(null);
+    expect(resolved.reactCompiler).toBeNull();
+  });
+
+  it("resolves `reactCompiler: true` to an empty options object", async () => {
+    const resolved = await resolveNextConfig({ reactCompiler: true });
+    expect(resolved.reactCompiler).toEqual({});
+  });
+
+  it("resolves `reactCompiler: false` to null", async () => {
+    const resolved = await resolveNextConfig({ reactCompiler: false });
+    expect(resolved.reactCompiler).toBeNull();
+  });
+
+  it("preserves supported compilationMode and panicThreshold options", async () => {
+    const resolved = await resolveNextConfig({
+      reactCompiler: { compilationMode: "annotation", panicThreshold: "critical_errors" },
+    });
+    expect(resolved.reactCompiler).toEqual({
+      compilationMode: "annotation",
+      panicThreshold: "critical_errors",
+    });
+  });
+
+  it("keeps the compiler enabled but drops invalid option values with a warning", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const resolved = await resolveNextConfig({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      reactCompiler: { compilationMode: "everything", panicThreshold: "sometimes" } as any,
+    });
+    expect(resolved.reactCompiler).toEqual({});
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls[0][0]).toContain("reactCompiler.compilationMode");
+    expect(warn.mock.calls[1][0]).toContain("reactCompiler.panicThreshold");
+  });
+
+  it("treats a non-boolean, non-object value as disabled with a warning", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const resolved = await resolveNextConfig({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      reactCompiler: "yes" as any,
+    });
+    expect(resolved.reactCompiler).toBeNull();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain('Invalid next.config option "reactCompiler"');
+  });
+});
+
 // Ported from Next.js: test/e2e/define/define.test.ts
 // https://github.com/vercel/next.js/blob/canary/test/e2e/define/define.test.ts
 describe("resolveNextConfig compiler.define / defineServer", () => {
@@ -2069,6 +2128,7 @@ describe("detectNextIntlConfig", () => {
       deploymentId: undefined,
       sassOptions: null,
       removeConsole: false,
+      reactCompiler: null,
       disableOptimizedLoading: false,
       reactStrictMode: null,
       scrollRestoration: false,

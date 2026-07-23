@@ -560,6 +560,7 @@ Every `next/*` import is shimmed to a Vite-compatible implementation.
 | Environment variables (`.env*`, `NEXT_PUBLIC_*`) | ✅  | Auto-loads Next.js-style dotenv files; only public vars are inlined                                                                                                                                                    |
 | `images` config                                  | 🟡  | Parsed but not used for optimization                                                                                                                                                                                   |
 | `experimental.optimizePackageImports`            | ✅  | Rewrites barrel imports to direct sub-module imports in RSC/SSR environments. A default set (lucide-react, date-fns, radix-ui, antd, MUI, and others) are always optimized. Add package names here to extend the list. |
+| `reactCompiler`                                  | ✅  | `true` or `{ compilationMode, panicThreshold }`. Requires `babel-plugin-react-compiler` installed in your project. Applied to client transforms only (matching Next.js). Not applied when `vinext({ react: false })`.  |
 | `vinext({ nextConfig })`                         | ✅  | Inline Next-style config from `vite.config.*`. Supports object-form and function-form config. When provided, this overrides root `next.config.*`.                                                                      |
 
 ### Environment variable loading (`.env*`)

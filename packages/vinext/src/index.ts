@@ -83,6 +83,12 @@ import {
   type ResolvedNextConfig,
 } from "./config/next-config.js";
 import { mergeServerExternalPackages } from "./config/server-external-packages.js";
+import {
+  buildReactCompilerBabelPlugin,
+  composeReactCompilerBabel,
+  detectReactMajorVersion,
+  type ReactCompilerBabelPluginEntry,
+} from "./config/react-compiler.js";
 
 import { findMiddlewareFile, isProxyFile, runMiddleware } from "./server/middleware.js";
 import { validateMiddlewareMatcherPatterns } from "./server/middleware-matcher-pattern.js";
@@ -1641,7 +1647,21 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
 
   const configuredReactOptions =
     options.react && options.react !== true ? options.react : undefined;
-  const reactOptions = configuredReactOptions;
+  // Populated in the `config` hook once next.config is resolved. Read lazily
+  // per file by the composed `babel` option below, so the React Compiler can
+  // be toggled by next.config even though @vitejs/plugin-react is
+  // instantiated before config resolution.
+  let reactCompilerBabelPlugin: ReactCompilerBabelPluginEntry | null = null;
+  const reactOptions: VitePluginReactOptions | undefined =
+    options.react === false
+      ? configuredReactOptions
+      : {
+          ...configuredReactOptions,
+          babel: composeReactCompilerBabel(
+            configuredReactOptions?.babel as Parameters<typeof composeReactCompilerBabel>[0],
+            () => reactCompilerBabelPlugin,
+          ) as VitePluginReactOptions["babel"],
+        };
 
   let reactPluginPromise: Promise<PluginOption[]> | null = null;
   if (options.react !== false) {
@@ -2107,6 +2127,38 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           const sharedBuildId = process.env.__VINEXT_SHARED_BUILD_ID;
           if (sharedBuildId && sharedBuildId.length > 0) {
             nextConfig = { ...nextConfig, buildId: sharedBuildId };
+          }
+
+          // React Compiler wiring. Mirrors Next.js: the compiler runs as a
+          // Babel plugin on client bundles only, and requires
+          // babel-plugin-react-compiler to be installed in the project (see
+          // packages/next/src/build/get-babel-loader-config.ts).
+          if (nextConfig.reactCompiler) {
+            if (options.react === false) {
+              console.warn(
+                "[vinext] next.config `reactCompiler` is enabled but `vinext({ react: false })` disables the auto-registered @vitejs/plugin-react. " +
+                  "Add babel-plugin-react-compiler to your own react() plugin's `babel.plugins`, or remove `react: false` from vinext().",
+              );
+            } else {
+              const compilerPluginPath = resolveOptionalDependency(
+                root,
+                "babel-plugin-react-compiler",
+              );
+              if (!compilerPluginPath) {
+                throw new Error(
+                  "vinext: `reactCompiler` is enabled in next.config but `babel-plugin-react-compiler` is not installed. " +
+                    "It is required to use the React Compiler.\n" +
+                    "Run: " +
+                    detectPackageManager(process.cwd()) +
+                    " babel-plugin-react-compiler",
+                );
+              }
+              reactCompilerBabelPlugin = buildReactCompilerBabelPlugin(nextConfig.reactCompiler, {
+                pluginPath: compilerPluginPath,
+                dev: env?.command === "serve" && env?.isPreview !== true,
+                reactMajorVersion: detectReactMajorVersion(root),
+              });
+            }
           }
         }
         const configuredTsconfigPath = isRecord(nextConfig.typescript)
