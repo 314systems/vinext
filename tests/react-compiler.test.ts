@@ -15,7 +15,9 @@ import path from "node:path";
 import {
   buildReactCompilerBabelPlugin,
   composeReactCompilerBabel,
+  createReactCompilerRolldownBabelPreset,
   detectReactMajorVersion,
+  getReactCompilerRuntime,
   type ReactCompilerBabelPluginEntry,
 } from "../packages/vinext/src/config/react-compiler.js";
 
@@ -133,5 +135,50 @@ describe("composeReactCompilerBabel", () => {
   it("preserves other user babel options while injecting plugins", () => {
     const babel = composeReactCompilerBabel({ babelrc: false }, () => entry);
     expect(babel("/a.tsx", {})).toEqual({ babelrc: false, plugins: [entry] });
+  });
+});
+
+describe("createReactCompilerRolldownBabelPreset", () => {
+  const entry: ReactCompilerBabelPluginEntry = [
+    PLUGIN_PATH,
+    { environment: { enableNameAnonymousFunctions: false } },
+  ];
+
+  it("stays inactive until next.config enables the compiler", () => {
+    let currentEntry: ReactCompilerBabelPluginEntry | null = null;
+    const preset = createReactCompilerRolldownBabelPreset(() => currentEntry);
+
+    expect(preset.preset()).toEqual({ plugins: [] });
+    expect(preset.rolldown.applyToEnvironmentHook({ config: { consumer: "client" } })).toBe(false);
+
+    currentEntry = entry;
+    expect(preset.preset()).toEqual({ plugins: [entry] });
+    expect(preset.rolldown.applyToEnvironmentHook({ config: { consumer: "client" } })).toBe(true);
+  });
+
+  it("only applies to client environments", () => {
+    const preset = createReactCompilerRolldownBabelPreset(() => entry);
+    expect(preset.rolldown.applyToEnvironmentHook({ config: { consumer: "server" } })).toBe(false);
+  });
+
+  it("pre-optimizes the compiler runtime matching the React target", () => {
+    const react18Entry: ReactCompilerBabelPluginEntry = [PLUGIN_PATH, { target: "18" }];
+    const react18Preset = createReactCompilerRolldownBabelPreset(() => react18Entry);
+    expect(react18Preset.rolldown.optimizeDeps.include).toEqual(["react-compiler-runtime"]);
+
+    const react19Preset = createReactCompilerRolldownBabelPreset(() => entry);
+    expect(react19Preset.rolldown.optimizeDeps.include).toEqual(["react/compiler-runtime"]);
+    expect(getReactCompilerRuntime(react18Entry)).toBe("react-compiler-runtime");
+    expect(getReactCompilerRuntime(entry)).toBe("react/compiler-runtime");
+  });
+
+  it("uses the annotation filter for annotation mode", () => {
+    const annotationEntry: ReactCompilerBabelPluginEntry = [
+      PLUGIN_PATH,
+      { compilationMode: "annotation" },
+    ];
+    const preset = createReactCompilerRolldownBabelPreset(() => annotationEntry);
+    expect(preset.rolldown.filter.code.test('"use memo";')).toBe(true);
+    expect(preset.rolldown.filter.code.test("function Component() {}")).toBe(false);
   });
 });

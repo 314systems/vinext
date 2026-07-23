@@ -1589,7 +1589,11 @@ export function resolveReactCompilerConfig(value: unknown): ReactCompilerOptions
 
   const resolved: ReactCompilerOptions = {};
   const { compilationMode, panicThreshold } = value;
-  if (compilationMode === "infer" || compilationMode === "annotation" || compilationMode === "all") {
+  if (
+    compilationMode === "infer" ||
+    compilationMode === "annotation" ||
+    compilationMode === "all"
+  ) {
     resolved.compilationMode = compilationMode;
   } else if (compilationMode !== undefined) {
     console.warn(

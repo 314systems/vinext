@@ -86,7 +86,9 @@ import { mergeServerExternalPackages } from "./config/server-external-packages.j
 import {
   buildReactCompilerBabelPlugin,
   composeReactCompilerBabel,
+  createReactCompilerRolldownBabelPreset,
   detectReactMajorVersion,
+  getReactCompilerRuntime,
   type ReactCompilerBabelPluginEntry,
 } from "./config/react-compiler.js";
 
@@ -464,6 +466,9 @@ function hasServerOnlyMarkerImport(code: string): boolean {
 
 const __dirname = import.meta.dirname;
 type VitePluginReactModule = typeof import("@vitejs/plugin-react");
+type RolldownBabelModule = {
+  default(options: { presets: unknown[] }): Plugin | Promise<Plugin>;
+};
 
 function resolveOptionalDependency(projectRoot: string, specifier: string): string | null {
   try {
@@ -1588,6 +1593,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   // Pre-resolve both the main plugin and the /transforms subpath eagerly
   // so all import() calls in this module use consistent resolution.
   let resolvedReactPath: string | null = null;
+  let resolvedRolldownBabelPath: string | null = null;
   let resolvedRscPath: string | null = null;
   let resolvedRscTransformsPath: string | null = null;
   let rscPluginModulePromise: Promise<typeof import("@vitejs/plugin-rsc")> | null = null;
@@ -1595,6 +1601,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   // instances. In source/workspace development, test fixtures may not declare
   // peer deps explicitly, so fall back to vinext's own install location.
   resolvedReactPath = resolveOptionalDependency(earlyBaseDir, "@vitejs/plugin-react");
+  resolvedRolldownBabelPath = resolveOptionalDependency(earlyBaseDir, "@rolldown/plugin-babel");
   resolvedRscPath = resolveOptionalDependency(earlyBaseDir, "@vitejs/plugin-rsc");
   resolvedRscTransformsPath = resolveOptionalDependency(
     earlyBaseDir,
@@ -1647,23 +1654,15 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
 
   const configuredReactOptions =
     options.react && options.react !== true ? options.react : undefined;
-  // Populated in the `config` hook once next.config is resolved. Read lazily
-  // per file by the composed `babel` option below, so the React Compiler can
-  // be toggled by next.config even though @vitejs/plugin-react is
-  // instantiated before config resolution.
+  const earlyReactMajorVersion = detectReactMajorVersion(earlyBaseDir);
+  // Populated in the `config` hook once next.config is resolved. Both the
+  // plugin-react v5 Babel callback and the plugin-react v6 Rolldown Babel
+  // preset read it lazily after plugin instantiation.
   let reactCompilerBabelPlugin: ReactCompilerBabelPluginEntry | null = null;
-  const reactOptions: VitePluginReactOptions | undefined =
-    options.react === false
-      ? configuredReactOptions
-      : {
-          ...configuredReactOptions,
-          babel: composeReactCompilerBabel(
-            configuredReactOptions?.babel as Parameters<typeof composeReactCompilerBabel>[0],
-            () => reactCompilerBabelPlugin,
-          ) as VitePluginReactOptions["babel"],
-        };
+  let usesRolldownReactCompiler = false;
 
   let reactPluginPromise: Promise<PluginOption[]> | null = null;
+  let reactCompilerPluginPromise: Promise<Plugin | null> | null = null;
   if (options.react !== false) {
     if (!resolvedReactPath) {
       throw new Error(
@@ -1677,6 +1676,22 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     reactPluginPromise = reactImport
       .then((mod) => {
         const react = (mod as VitePluginReactModule).default;
+        usesRolldownReactCompiler = typeof mod.reactCompilerPreset === "function";
+        const reactOptions = usesRolldownReactCompiler
+          ? configuredReactOptions
+          : ({
+              ...configuredReactOptions,
+              babel: composeReactCompilerBabel(
+                (
+                  configuredReactOptions as
+                    | (VitePluginReactOptions & {
+                        babel?: Parameters<typeof composeReactCompilerBabel>[0];
+                      })
+                    | undefined
+                )?.babel,
+                () => reactCompilerBabelPlugin,
+              ),
+            } as VitePluginReactOptions);
         const limitToCommand = (plugin: Plugin, command: "serve" | "build"): Plugin => {
           const originalApply = plugin.apply;
           return {
@@ -1710,6 +1725,17 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           cause,
         });
       });
+    if (resolvedRolldownBabelPath) {
+      const babelImport = import(pathToFileURL(resolvedRolldownBabelPath).href) as Promise<unknown>;
+      reactCompilerPluginPromise = Promise.all([reactImport, babelImport]).then(
+        async ([reactModule, babelModule]) => {
+          if (typeof reactModule.reactCompilerPreset !== "function") return null;
+          return (babelModule as RolldownBabelModule).default({
+            presets: [createReactCompilerRolldownBabelPreset(() => reactCompilerBabelPlugin)],
+          });
+        },
+      );
+    }
   }
 
   const imageImportDimCache = new Map<string, { width: number; height: number }>();
@@ -1830,6 +1856,26 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     mdxProxyPlugin,
     // React Fast Refresh + JSX transform for client components.
     reactPluginPromise,
+    // plugin-react v6 delegates React Compiler transforms to
+    // @rolldown/plugin-babel. This preset remains inactive unless next.config
+    // enables reactCompiler and the environment is a client consumer.
+    reactCompilerPluginPromise,
+    {
+      name: "vinext:react-compiler-runtime",
+      configEnvironment(name, environmentConfig) {
+        if (
+          (name !== "client" && environmentConfig.consumer !== "client") ||
+          !reactCompilerBabelPlugin
+        ) {
+          return null;
+        }
+        return {
+          optimizeDeps: {
+            include: [getReactCompilerRuntime(reactCompilerBabelPlugin)],
+          },
+        };
+      },
+    },
     // Next.js ignores requests without any statically known path component
     // during graph analysis and leaves a deterministic runtime failure.
     createIgnoreDynamicRequestsPlugin(() => nextConfig?.turbopackTranspilePackages ?? []),
@@ -2140,6 +2186,15 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                   "Add babel-plugin-react-compiler to your own react() plugin's `babel.plugins`, or remove `react: false` from vinext().",
               );
             } else {
+              if (usesRolldownReactCompiler && !resolvedRolldownBabelPath) {
+                throw new Error(
+                  "vinext: `reactCompiler` is enabled with @vitejs/plugin-react v6 but `@rolldown/plugin-babel` is not installed. " +
+                    "It is required to run the React Compiler.\n" +
+                    "Run: " +
+                    detectPackageManager(process.cwd()) +
+                    " @rolldown/plugin-babel babel-plugin-react-compiler",
+                );
+              }
               const compilerPluginPath = resolveOptionalDependency(
                 root,
                 "babel-plugin-react-compiler",
@@ -2156,7 +2211,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               reactCompilerBabelPlugin = buildReactCompilerBabelPlugin(nextConfig.reactCompiler, {
                 pluginPath: compilerPluginPath,
                 dev: env?.command === "serve" && env?.isPreview !== true,
-                reactMajorVersion: detectReactMajorVersion(root),
+                reactMajorVersion: detectReactMajorVersion(root) ?? earlyReactMajorVersion,
               });
             }
           }

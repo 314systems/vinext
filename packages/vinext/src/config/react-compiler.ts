@@ -15,6 +15,21 @@ import type { ReactCompilerOptions } from "./next-config.js";
 /** A `[pluginPath, options]` Babel plugin entry for `babel.plugins`. */
 export type ReactCompilerBabelPluginEntry = [string, Record<string, unknown>];
 
+export type ReactCompilerRolldownBabelPreset = {
+  preset: () => { plugins: ReactCompilerBabelPluginEntry[] };
+  rolldown: {
+    filter: { code: RegExp };
+    applyToEnvironmentHook: (environment: { config: { consumer?: string } }) => boolean;
+    optimizeDeps: { include: string[] };
+  };
+};
+
+export function getReactCompilerRuntime(
+  pluginEntry: ReactCompilerBabelPluginEntry,
+): "react-compiler-runtime" | "react/compiler-runtime" {
+  return pluginEntry[1].target === "18" ? "react-compiler-runtime" : "react/compiler-runtime";
+}
+
 /**
  * Build the Babel plugin entry for the React Compiler.
  *
@@ -79,7 +94,7 @@ export function composeReactCompilerBabel(
 ): (id: string, options: { ssr?: boolean }) => BabelOptionsLike {
   return (id, options) => {
     const base: BabelOptionsLike =
-      typeof userBabel === "function" ? userBabel(id, options) : { ...(userBabel ?? {}) };
+      typeof userBabel === "function" ? userBabel(id, options) : { ...userBabel };
     if (options.ssr) return base;
     const entry = getPluginEntry();
     if (!entry) return base;
@@ -87,5 +102,38 @@ export function composeReactCompilerBabel(
       ...base,
       plugins: [entry, ...(Array.isArray(base.plugins) ? base.plugins : [])],
     };
+  };
+}
+
+/**
+ * Build the lazy preset consumed by @rolldown/plugin-babel in
+ * @vitejs/plugin-react v6. The preset is created before Vite resolves config,
+ * so every hook reads the entry populated from next.config later.
+ */
+export function createReactCompilerRolldownBabelPreset(
+  getPluginEntry: () => ReactCompilerBabelPluginEntry | null,
+): ReactCompilerRolldownBabelPreset {
+  return {
+    preset: () => {
+      const entry = getPluginEntry();
+      return { plugins: entry ? [entry] : [] };
+    },
+    rolldown: {
+      get filter() {
+        return {
+          code:
+            getPluginEntry()?.[1].compilationMode === "annotation"
+              ? /['"]use memo['"]/
+              : /\b[A-Z]|\buse/,
+        };
+      },
+      applyToEnvironmentHook(environment) {
+        return getPluginEntry() !== null && environment.config.consumer === "client";
+      },
+      get optimizeDeps() {
+        const entry = getPluginEntry();
+        return { include: entry ? [getReactCompilerRuntime(entry)] : [] };
+      },
+    },
   };
 }
