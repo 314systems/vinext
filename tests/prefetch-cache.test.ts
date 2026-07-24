@@ -905,6 +905,37 @@ describe("prefetch cache eviction", () => {
       vi.spyOn(Date, "now").mockReturnValue(now + 200_000);
       expect(nav.consumePrefetchResponse(rscUrl, null, null)).toBeNull();
     });
+
+    it("allows automatic dynamic full prefetches to expire immediately", async () => {
+      process.env.__NEXT_CLIENT_ROUTER_DYNAMIC_STALETIME = "0";
+      vi.resetModules();
+      const nav = await import("../packages/vinext/src/shims/navigation.js");
+
+      const rscUrl = "/without-loading/1.rsc";
+      const now = 1_000_000;
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      nav.prefetchRscResponse(
+        rscUrl,
+        Promise.resolve(
+          new Response("flight", { headers: { "content-type": "text/x-component" } }),
+        ),
+        null,
+        null,
+        undefined,
+        {
+          cacheForNavigation: true,
+          fallbackTtlMs: nav.DYNAMIC_NAVIGATION_CACHE_TTL,
+          minimumTtlMs: 0,
+        },
+      );
+
+      const entry = nav.getPrefetchCache().get(rscUrl);
+      await entry?.pending;
+
+      expect(entry?.expiresAt).toBe(now);
+      expect(nav.hasPrefetchCacheEntryForNavigation(rscUrl, null, null)).toBe(false);
+      expect(nav.consumePrefetchResponse(rscUrl, null, null)).toBeNull();
+    });
   });
 
   it("matches only search-agnostic optimistic shells across page search params", () => {

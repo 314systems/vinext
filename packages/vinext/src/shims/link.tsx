@@ -353,16 +353,23 @@ function getLinkPrefetchRouterMode(): LinkPrefetchRouterMode {
 
 function resolveMatchedAutoAppRoutePrefetch(route: VinextLinkPrefetchRoute): {
   cacheForNavigation: boolean;
+  fallbackTtl: "dynamic" | "static";
+  minimumTtlMs: number | undefined;
   prefetchShellFirst: boolean;
   shouldPrefetch: boolean;
 } {
   const hasLoadingShell = route.canPrefetchLoadingShell;
+  const shouldCacheForNavigation =
+    !hasLoadingShell && route.requiresDynamicNavigationRequest !== true;
   return {
-    // Automatic prefetches are only unsafe as authoritative navigation
-    // payloads for dynamic routes whose active parallel branches must be
-    // derived from the click-time target tree. Other concrete dynamic URLs can
-    // match Next.js's full-prefetch behavior, including client-param routes.
-    cacheForNavigation: !hasLoadingShell && route.requiresDynamicNavigationRequest !== true,
+    // Vinext does not yet have Next.js's per-segment runtime-prefetch hints.
+    // Routes with loading boundaries prefetch a shell first so navigation can
+    // commit loading.js immediately. Dynamic routes without loading-shell
+    // fallbacks can be cached for navigation unless their active parallel
+    // branches must be derived from the click-time target tree.
+    cacheForNavigation: shouldCacheForNavigation,
+    fallbackTtl: "static",
+    minimumTtlMs: route.isDynamic ? 0 : undefined,
     prefetchShellFirst: !route.isDynamic,
     shouldPrefetch: true,
   };
@@ -385,26 +392,52 @@ export function canAutoPrefetchFullAppRoute(href: string): boolean {
 
 export function resolveAutoAppRoutePrefetch(href: string): {
   cacheForNavigation: boolean;
+  fallbackTtl: "dynamic" | "static";
+  minimumTtlMs: number | undefined;
   prefetchShellFirst: boolean;
   shouldPrefetch: boolean;
 } {
   if (typeof window === "undefined") {
-    return { cacheForNavigation: false, prefetchShellFirst: false, shouldPrefetch: false };
+    return {
+      cacheForNavigation: false,
+      fallbackTtl: "static",
+      minimumTtlMs: undefined,
+      prefetchShellFirst: false,
+      shouldPrefetch: false,
+    };
   }
 
   const routes = window.__VINEXT_LINK_PREFETCH_ROUTES__;
   if (!routes) {
-    return { cacheForNavigation: false, prefetchShellFirst: false, shouldPrefetch: false };
+    return {
+      cacheForNavigation: false,
+      fallbackTtl: "static",
+      minimumTtlMs: undefined,
+      prefetchShellFirst: false,
+      shouldPrefetch: false,
+    };
   }
 
   const routeHref = toSameOriginRouteHref(href);
   if (routeHref === null) {
-    return { cacheForNavigation: false, prefetchShellFirst: false, shouldPrefetch: false };
+    return {
+      cacheForNavigation: false,
+      fallbackTtl: "static",
+      minimumTtlMs: undefined,
+      prefetchShellFirst: false,
+      shouldPrefetch: false,
+    };
   }
 
   const match = matchRouteWithTrie(routeHref, routes, linkPrefetchRouteTrieCache);
   if (!match) {
-    return { cacheForNavigation: false, prefetchShellFirst: false, shouldPrefetch: false };
+    return {
+      cacheForNavigation: false,
+      fallbackTtl: "static",
+      minimumTtlMs: undefined,
+      prefetchShellFirst: false,
+      shouldPrefetch: false,
+    };
   }
 
   const prefetch = resolveMatchedAutoAppRoutePrefetch(match.route);
@@ -422,11 +455,15 @@ export function resolveAutoAppRoutePrefetch(href: string): {
 
 function resolveFullAppRoutePrefetch(): {
   cacheForNavigation: true;
+  fallbackTtl: "static";
+  minimumTtlMs: undefined;
   prefetchShellFirst: boolean;
   shouldPrefetch: true;
 } {
   return {
     cacheForNavigation: true,
+    fallbackTtl: "static",
+    minimumTtlMs: undefined,
     prefetchShellFirst: true,
     shouldPrefetch: true,
   };
@@ -487,6 +524,19 @@ function prefetchUrl(
   ) {
     return;
   }
+  if (
+    mode === "auto" &&
+    priority === "low" &&
+    target.origin === window.location.origin &&
+    target.pathname === window.location.pathname &&
+    target.search !== window.location.search &&
+    target.hash !== ""
+  ) {
+    // Match Next.js's same-page query+hash behavior: the visible Link does not
+    // issue its query RSC request during viewport prefetch. The click remains
+    // authoritative and fetches the changed search state before scrolling.
+    return;
+  }
 
   const runPrefetch = () => {
     void (async () => {
@@ -526,6 +576,7 @@ function prefetchUrl(
           hasPrefetchCacheEntryForNavigation,
           peekPrefetchResponseForNavigation,
           prefetchRscResponse,
+          DYNAMIC_NAVIGATION_CACHE_TTL,
           restoreRscResponse,
           PREFETCH_CACHE_TTL,
         } = navigation;
@@ -556,7 +607,13 @@ function prefetchUrl(
           mode === "auto"
             ? resolveAutoAppRoutePrefetch(prefetchPolicyHref)
             : mode === "full-after-shell"
-              ? { cacheForNavigation: true, prefetchShellFirst: true, shouldPrefetch: true }
+              ? {
+                  cacheForNavigation: true,
+                  fallbackTtl: "static" as const,
+                  minimumTtlMs: undefined,
+                  prefetchShellFirst: true,
+                  shouldPrefetch: true,
+                }
               : resolveFullAppRoutePrefetch();
         if (!autoPrefetch.shouldPrefetch) return;
 
@@ -826,7 +883,11 @@ function prefetchUrl(
           undefined,
           {
             cacheForNavigation: autoPrefetch.cacheForNavigation,
-            fallbackTtlMs: PREFETCH_CACHE_TTL,
+            fallbackTtlMs:
+              autoPrefetch.fallbackTtl === "dynamic"
+                ? DYNAMIC_NAVIGATION_CACHE_TTL
+                : PREFETCH_CACHE_TTL,
+            minimumTtlMs: autoPrefetch.minimumTtlMs,
             optimisticRouteShell: isOptimisticRouteShellPrefetch,
             prefetchKind: isOptimisticRouteShellPrefetch ? "loading-shell" : "navigation",
             prepareSnapshot: autoPrefetch.cacheForNavigation
@@ -1225,7 +1286,9 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
   const pagesAsHref = asHref ?? dynamicRouteHref?.as;
   const unresolvedHref = pagesAsHref ?? hrefStr;
   const rawResolvedHref =
-    typeof unresolvedHref === "string" && unresolvedHref.startsWith("#")
+    typeof unresolvedHref === "string" &&
+    unresolvedHref.startsWith("#") &&
+    !getNavigationRuntime()?.functions.navigate
       ? resolvePagesQueryOnlyHref(unresolvedHref)
       : unresolvedHref;
   const concreteRouteHref = HAS_PAGES_ROUTER
