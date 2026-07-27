@@ -152,6 +152,44 @@ describe("slot BFCache entry ordering", () => {
     expect(order).toEqual(["one", "three", "two"]);
   });
 
+  it("does not evict a committed snapshot during a discarded render", async () => {
+    const { stageBfcacheSlotEntryForRender } = await import("../packages/vinext/src/shims/slot.js");
+    const entry = (stateKey: string) => ({ content: stateKey, stateKey });
+    const snapshots = new Map([
+      ["one", entry("one")],
+      ["two", entry("two")],
+      ["three", entry("three")],
+    ]);
+    const committedOrder = ["one", "two", "three"];
+
+    const discarded = stageBfcacheSlotEntryForRender(snapshots, committedOrder, entry("four"), 3);
+    expect(discarded.order).toEqual(["four", "one", "two"]);
+    expect(snapshots.has("three")).toBe(true);
+    expect(snapshots.has("four")).toBe(false);
+
+    const resumed = stageBfcacheSlotEntryForRender(snapshots, committedOrder, entry("one"), 3);
+    expect(resumed.entries.map((snapshot) => snapshot.stateKey)).toEqual(["one", "two", "three"]);
+
+    const overwritten = stageBfcacheSlotEntryForRender(
+      snapshots,
+      committedOrder,
+      { content: "speculative one", stateKey: "one" },
+      3,
+    );
+    expect(overwritten.entries[0]?.content).toBe("speculative one");
+    expect(snapshots.get("one")?.content).toBe("one");
+
+    const winningRender = stageBfcacheSlotEntryForRender(
+      snapshots,
+      committedOrder,
+      entry("two"),
+      3,
+    );
+    expect(winningRender.entries.find((snapshot) => snapshot.stateKey === "one")?.content).toBe(
+      "one",
+    );
+  });
+
   it("keeps a single retained entry when the limit is one", async () => {
     const { updateBfcacheSlotEntryOrder } = await import("../packages/vinext/src/shims/slot.js");
 
