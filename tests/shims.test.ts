@@ -22634,11 +22634,11 @@ describe("image optimization request parsing", () => {
       16, 32, 48, 64, 96, 128, 256, 384, 640, 750, 828, 1080, 1200, 1920, 2048, 3840,
     ];
     const params = parseImageParams(
-      new URL("http://localhost/_next/image?url=%2Fimg.jpg&w=64&q=75"),
+      new URL("http://localhost/_next/image?url=%2Fimg.jpg&w=16&q=75"),
       allowedWidths,
     );
     expect(params).not.toBeNull();
-    expect(params!.width).toBe(64);
+    expect(params!.width).toBe(16);
   });
 
   it("negotiateImageFormat prefers AVIF over WebP", async () => {
@@ -22686,11 +22686,15 @@ describe("image optimization request parsing", () => {
     expect(isImageOptimizationPath("/")).toBe(false);
   });
 
-  it("exports DEFAULT_DEVICE_SIZES and DEFAULT_IMAGE_SIZES matching Next.js defaults", async () => {
-    const { DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } =
+  it("uses Next.js default widths for image optimization requests", async () => {
+    const { parseImageParams } =
       await import("../packages/vinext/src/server/image-optimization.js");
-    expect(DEFAULT_DEVICE_SIZES).toEqual([640, 750, 828, 1080, 1200, 1920, 2048, 3840]);
-    expect(DEFAULT_IMAGE_SIZES).toEqual([16, 32, 48, 64, 96, 128, 256, 384]);
+    const request = (width: number) =>
+      new URL(`http://localhost/_next/image?url=%2Fimg.jpg&w=${width}&q=75`);
+
+    expect(parseImageParams(request(16))).toBeNull();
+    expect(parseImageParams(request(32))?.width).toBe(32);
+    expect(parseImageParams(request(640))?.width).toBe(640);
   });
 });
 
