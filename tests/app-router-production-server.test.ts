@@ -1098,7 +1098,7 @@ describe("App Router Production server (startProdServer)", () => {
   // (and `revalidate = false`) should produce a stable cached response. Two
   // requests must return identical HTML bytes; the first MISS render writes
   // to the cache and the second is a HIT. This was historically broken
-  // because `resolveAppPageCacheWritePolicy` rejected non-finite revalidate
+  // because `resolveAppPageCacheControl` rejected non-finite revalidate
   // intervals, so indefinite-cache pages re-rendered on every request.
   it("export const revalidate = Infinity: second request is a HIT with identical HTML", async () => {
     const res1 = await fetch(`${baseUrl}/revalidate-infinity-test`);

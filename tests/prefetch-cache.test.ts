@@ -13,10 +13,14 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vite-plus/test"
 import { AppElementsWire } from "../packages/vinext/src/server/app-elements.js";
 import { VINEXT_RSC_COMPATIBILITY_ID_HEADER } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
 import {
+  NEXT_ROUTER_STALE_TIME_HEADER,
   VINEXT_DYNAMIC_STALE_TIME_HEADER,
+  VINEXT_RSC_COMPLETION_METADATA_HEADER,
+  VINEXT_STALE_TIME_PENDING_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_RENDERED_PATH_AND_SEARCH_HEADER,
 } from "../packages/vinext/src/server/headers.js";
+import { appendRscCompletionMetadata } from "../packages/vinext/src/server/rsc-completion-metadata.js";
 
 type Navigation = typeof import("../packages/vinext/src/shims/navigation.js");
 let storePrefetchResponse: Navigation["storePrefetchResponse"];
@@ -29,6 +33,7 @@ let PREFETCH_CACHE_TTL: Navigation["PREFETCH_CACHE_TTL"];
 let DYNAMIC_NAVIGATION_CACHE_TTL: Navigation["DYNAMIC_NAVIGATION_CACHE_TTL"];
 let snapshotRscResponse: Navigation["snapshotRscResponse"];
 let restoreRscResponse: Navigation["restoreRscResponse"];
+let resolveCachedRscResponseTtlMs: Navigation["resolveCachedRscResponseTtlMs"];
 let prefetchRscResponse: Navigation["prefetchRscResponse"];
 let invalidatePrefetchCache: Navigation["invalidatePrefetchCache"];
 let hasPrefetchCacheEntryForNavigation: Navigation["hasPrefetchCacheEntryForNavigation"];
@@ -67,6 +72,7 @@ beforeEach(async () => {
   DYNAMIC_NAVIGATION_CACHE_TTL = nav.DYNAMIC_NAVIGATION_CACHE_TTL;
   snapshotRscResponse = nav.snapshotRscResponse;
   restoreRscResponse = nav.restoreRscResponse;
+  resolveCachedRscResponseTtlMs = nav.resolveCachedRscResponseTtlMs;
   prefetchRscResponse = nav.prefetchRscResponse;
   invalidatePrefetchCache = nav.invalidatePrefetchCache;
   hasPrefetchCacheEntryForNavigation = nav.hasPrefetchCacheEntryForNavigation;
@@ -426,6 +432,118 @@ describe("prefetch cache eviction", () => {
     expect(restored.headers.get(VINEXT_DYNAMIC_STALE_TIME_HEADER)).toBe("60");
     expect(restored.headers.get("x-vinext-params")).toBe(encodeURIComponent('{"id":"2"}'));
     await expect(restored.text()).resolves.toBe("flight");
+  });
+
+  it("carries the server-resolved cacheLife stale time through snapshot and replay", async () => {
+    const response = new Response("flight", {
+      headers: {
+        "content-type": "text/x-component",
+        [NEXT_ROUTER_STALE_TIME_HEADER]: "30",
+      },
+    });
+
+    const snapshot = await snapshotRscResponse(response);
+    const restored = restoreRscResponse(snapshot);
+
+    expect(snapshot.serverStaleTime).toEqual({ kind: "resolved", seconds: 30 });
+    expect(restored.headers.get(NEXT_ROUTER_STALE_TIME_HEADER)).toBe("30");
+  });
+
+  it("carries the pending-stale marker through snapshot and replay", async () => {
+    const response = new Response("flight", {
+      headers: {
+        "content-type": "text/x-component",
+        [VINEXT_STALE_TIME_PENDING_HEADER]: "1",
+      },
+    });
+
+    const snapshot = await snapshotRscResponse(response);
+    const restored = restoreRscResponse(snapshot);
+
+    expect(snapshot.serverStaleTime).toEqual({ kind: "pending" });
+    expect(restored.headers.get(VINEXT_STALE_TIME_PENDING_HEADER)).toBe("1");
+  });
+
+  it("replaces a provisional pending bound with completed dynamic metadata", async () => {
+    const response = new Response(
+      appendRscCompletionMetadata(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("flight"));
+            controller.close();
+          },
+        }),
+        () => ({ dynamicStaleTimeSeconds: 60, serverStaleTimeSeconds: null }),
+      ),
+      {
+        headers: {
+          "content-type": "text/x-component",
+          [VINEXT_RSC_COMPLETION_METADATA_HEADER]: "1",
+          [VINEXT_STALE_TIME_PENDING_HEADER]: "1",
+        },
+      },
+    );
+
+    const snapshot = await snapshotRscResponse(response);
+
+    expect(snapshot.completedDynamicStaleTimeSeconds).toBe(60);
+    expect(snapshot.serverStaleTime).toBeUndefined();
+    expect(resolveCachedRscResponseTtlMs(snapshot, 300_000)).toBe(60_000);
+    expect(restoreRscResponse(snapshot).headers.get(VINEXT_STALE_TIME_PENDING_HEADER)).toBeNull();
+  });
+
+  it("keeps the pending floor when completion metadata lacks a cacheLife result", async () => {
+    const response = new Response(
+      appendRscCompletionMetadata(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("flight"));
+            controller.close();
+          },
+        }),
+        () => ({ dynamicStaleTimeSeconds: 300 }),
+      ),
+      {
+        headers: {
+          "content-type": "text/x-component",
+          [VINEXT_RSC_COMPLETION_METADATA_HEADER]: "1",
+          [VINEXT_STALE_TIME_PENDING_HEADER]: "1",
+        },
+      },
+    );
+
+    const snapshot = await snapshotRscResponse(response);
+
+    expect(snapshot.serverStaleTime).toEqual({ kind: "pending" });
+    expect(resolveCachedRscResponseTtlMs(snapshot, 300_000)).toBe(30_000);
+  });
+
+  it("replaces a provisional pending bound with the completed cacheLife minimum", async () => {
+    const response = new Response(
+      appendRscCompletionMetadata(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("flight"));
+            controller.close();
+          },
+        }),
+        () => ({ dynamicStaleTimeSeconds: 300, serverStaleTimeSeconds: 30 }),
+      ),
+      {
+        headers: {
+          "content-type": "text/x-component",
+          [VINEXT_RSC_COMPLETION_METADATA_HEADER]: "1",
+          [VINEXT_STALE_TIME_PENDING_HEADER]: "1",
+        },
+      },
+    );
+
+    const snapshot = await snapshotRscResponse(response);
+
+    expect(snapshot.completedDynamicStaleTimeSeconds).toBe(300);
+    expect(snapshot.serverStaleTime).toEqual({ kind: "resolved", seconds: 30 });
+    expect(resolveCachedRscResponseTtlMs(snapshot, 300_000)).toBe(30_000);
+    expect(restoreRscResponse(snapshot).headers.get(NEXT_ROUTER_STALE_TIME_HEADER)).toBe("30");
   });
 
   it("releases queued App prefetch fetch slots after consuming the response body", async () => {
@@ -1168,6 +1286,94 @@ describe("prefetch cache eviction", () => {
 
     const consumed = consumePrefetchResponse(rscUrl, null, null);
     expect(consumed?.expiresAt).toBe(now + 30_000);
+  });
+
+  it("takes the shorter of the staleTimes config and the resolved cacheLife stale time", async () => {
+    // A route whose `use cache` subtree declares cacheLife("seconds")
+    // (stale: 30) alongside a 300s experimental.staleTimes value. Both are
+    // min-wins lattices, so the shorter one bounds prefetch reuse.
+    const now = 1_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const rscUrl = "/cache-life-prefetch.rsc";
+
+    prefetchRscResponse(
+      rscUrl,
+      Promise.resolve(
+        new Response("flight", {
+          headers: {
+            "content-type": "text/x-component",
+            [VINEXT_DYNAMIC_STALE_TIME_HEADER]: "300",
+            [NEXT_ROUTER_STALE_TIME_HEADER]: "30",
+          },
+        }),
+      ),
+      null,
+      null,
+      undefined,
+      { fallbackTtlMs: 300_000 },
+    );
+    await getPrefetchCache().get(rscUrl)?.pending;
+
+    expect(getPrefetchCache().get(rscUrl)?.expiresAt).toBe(now + 30_000);
+  });
+
+  it("floors a shorter-than-minimum cacheLife stale time for prefetch entries", async () => {
+    // cacheLife({ stale: 1 }) is honored verbatim by the visited-response cache
+    // but floored here: Next.js's getStaleTimeMs clamps prefetch stale times to
+    // 30s so a too-short server value cannot prevent prefetching from ever
+    // paying off.
+    const now = 1_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const rscUrl = "/tiny-cache-life-prefetch.rsc";
+
+    prefetchRscResponse(
+      rscUrl,
+      Promise.resolve(
+        new Response("flight", {
+          headers: {
+            "content-type": "text/x-component",
+            [NEXT_ROUTER_STALE_TIME_HEADER]: "1",
+          },
+        }),
+      ),
+      null,
+      null,
+      undefined,
+      { fallbackTtlMs: PREFETCH_CACHE_TTL },
+    );
+    await getPrefetchCache().get(rscUrl)?.pending;
+
+    expect(getPrefetchCache().get(rscUrl)?.expiresAt).toBe(now + 30_000);
+  });
+
+  it("bounds a pending-stale cold response at the floor instead of the fallback TTL", async () => {
+    // A cacheable render streamed before its cacheLife resolved (#961 keeps
+    // cold responses non-blocking) advertises no value, but the unresolved
+    // claim — once floored — can never license less than 30s. Holding the
+    // response for the 300s fallback would reproduce the headline bug on the
+    // first prefetch of every entry epoch.
+    const now = 1_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const rscUrl = "/pending-stale-prefetch.rsc";
+
+    prefetchRscResponse(
+      rscUrl,
+      Promise.resolve(
+        new Response("flight", {
+          headers: {
+            "content-type": "text/x-component",
+            [VINEXT_STALE_TIME_PENDING_HEADER]: "1",
+          },
+        }),
+      ),
+      null,
+      null,
+      undefined,
+      { fallbackTtlMs: 300_000 },
+    );
+    await getPrefetchCache().get(rscUrl)?.pending;
+
+    expect(getPrefetchCache().get(rscUrl)?.expiresAt).toBe(now + 30_000);
   });
 
   it("leaves a resolved in-flight prefetch for a newer navigation when the old navigation is stale", async () => {
