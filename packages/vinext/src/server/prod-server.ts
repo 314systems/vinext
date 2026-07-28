@@ -374,6 +374,7 @@ const OMIT_STATIC_RESPONSE_HEADERS: ReadonlySet<string> = new Set([
   VINEXT_STATIC_FILE_HEADER,
   "content-encoding",
   "content-length",
+  "content-range",
   "content-type",
 ]);
 
@@ -412,6 +413,15 @@ function mergeVaryHeader(
   }
   return merged;
 }
+
+const OMIT_METHOD_NOT_ALLOWED_HEADERS: ReadonlySet<string> = new Set([
+  "allow",
+  "content-encoding",
+  "content-length",
+  "content-range",
+  "content-type",
+  "transfer-encoding",
+]);
 
 function installClientBuildManifestGlobals(
   clientDir: string,
@@ -916,7 +926,7 @@ function sendStaticMethodNotAllowed(
 ): void {
   const body = "Method Not Allowed";
   res.writeHead(405, {
-    ...extraHeaders,
+    ...omitHeadersCaseInsensitive(extraHeaders ?? {}, OMIT_METHOD_NOT_ALLOWED_HEADERS),
     Allow: "GET, HEAD",
     "Content-Type": "text/plain; charset=utf-8",
     "Content-Length": String(Buffer.byteLength(body)),
@@ -2190,7 +2200,6 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         // Set-Cookie / security headers from middleware are included in the response.
         serveFilesystemRoute: async (requestPathname, stagedHeaders, phase) => {
           if (
-            (req.method !== "GET" && req.method !== "HEAD") ||
             requestPathname === "/" ||
             requestPathname === "/api" ||
             requestPathname.startsWith("/api/") ||
