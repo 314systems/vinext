@@ -14,6 +14,7 @@ import {
   buildAppPageElements,
   createAppPageSourcePage,
   createAppPageTreePath,
+  resolveAppPageLoadingModuleAtOrAbove,
   type AppPageErrorModule,
   type AppPageModule,
   type AppPageRouteWiringRoute,
@@ -41,6 +42,8 @@ import {
 } from "./app-page-search-params-observation.js";
 import { shouldServeStreamingMetadata } from "./streaming-metadata.js";
 import { resolveAppPageBranchParams, resolveAppPageSegmentParams } from "./app-page-params.js";
+import { createAppRenderDependency, type AppRenderDependency } from "./app-render-dependency.js";
+import { isPromiseLike } from "../utils/promise.js";
 
 function resolveInterceptLayoutParams(
   branchSegments: readonly string[],
@@ -65,6 +68,17 @@ function isReactOwnedPageComponent(component: AppPageComponent): boolean {
   };
   return (
     candidate.$$typeof === REACT_CLIENT_REFERENCE || candidate.prototype?.isReactComponent != null
+  );
+}
+
+function isReactSuspension(error: unknown): boolean {
+  if (isPromiseLike(error)) {
+    return true;
+  }
+
+  return (
+    error instanceof Error &&
+    error.message.startsWith("Suspense Exception: This is not a real error!")
   );
 }
 
@@ -495,9 +509,26 @@ export async function buildPageElements<
 
   const pageProps: Record<string, unknown> = { params: makeThenableParams(effectiveParams) };
   const hasRequestSearchParams = Object.keys(pageSearchParams).length > 0;
+  const pageTreePosition = (sourcePageSegments ?? route.routeSegments ?? []).length;
+  const hasPageLoadingBoundary =
+    resolveAppPageLoadingModuleAtOrAbove(route, pageTreePosition) !== null ||
+    (isSiblingIntercept &&
+      resolveAppPageLoadingModuleAtOrAbove(
+        {
+          loading: null,
+          loadings: opts?.interceptLoadings,
+          loadingTreePositions: opts?.interceptLoadingTreePositions,
+        },
+        pageTreePosition,
+      ) !== null);
+  const pageRenderDependency =
+    EffectivePageComponent && !isReactOwnedPageComponent(EffectivePageComponent)
+      ? createAppRenderDependency()
+      : null;
   const createPageElement = (
     PageComponent: AppPageComponent,
     props: Readonly<Record<string, unknown>>,
+    renderDependency?: AppRenderDependency | null,
   ) => {
     if (isReactOwnedPageComponent(PageComponent)) {
       const invocationProps = { ...props };
@@ -521,7 +552,48 @@ export async function buildPageElements<
           ? makeObservedAppPageSearchParamsThenable(pageSearchParams)
           : makeThenableParams(pageSearchParams);
       }
-      return ServerPageComponent(invocationProps);
+
+      try {
+        const result = ServerPageComponent(invocationProps);
+        if (isPromiseLike(result)) {
+          if (renderDependency) {
+            if (hasPageLoadingBoundary) {
+              // A loading boundary needs the dependent route/layout entries to
+              // serialize while the page is still pending so its fallback can
+              // stream. Request state consumed by those entries must therefore
+              // be established in the page's first continuation; an async
+              // consumer gets its own continuation before reading that state.
+              void Promise.resolve().then(() => renderDependency.release());
+            } else {
+              // With no loading UI to stream, preserve the stronger ordering
+              // contract: even a synchronous layout cannot observe request
+              // state until the async page has finished initializing it.
+              void Promise.resolve(result).then(
+                () => renderDependency.release(),
+                () => renderDependency.release(),
+              );
+            }
+          }
+          return result;
+        }
+        renderDependency?.release();
+        return result;
+      } catch (error) {
+        if (isReactSuspension(error)) {
+          // React requires its internal use() suspension value to be rethrown
+          // immediately. With loading UI, release from a microtask so the
+          // page-entry Suspense boundary can serialize its fallback. Without
+          // loading UI, the page retry releases the dependency after it can
+          // render, preserving the same page-before-layout ordering as an
+          // ordinary async return.
+          if (renderDependency && hasPageLoadingBoundary) {
+            void Promise.resolve().then(() => renderDependency.release());
+          }
+          throw error;
+        }
+        renderDependency?.release();
+        throw error;
+      }
     };
     return createElement(PageInvoker as unknown as AppPageComponent);
   };
@@ -538,7 +610,7 @@ export async function buildPageElements<
   // so a layout.tsx adjacent to the (.) / (..) / (...) marker dir is respected.
   let siblingInterceptElement: ReturnType<typeof createElement> | null =
     isSiblingIntercept && EffectivePageComponent
-      ? createPageElement(EffectivePageComponent, pageProps)
+      ? createPageElement(EffectivePageComponent, pageProps, pageRenderDependency)
       : null;
   if (isSiblingIntercept && siblingInterceptElement !== null) {
     const layoutIndexesByTreePosition = new Map<number, number[]>();
@@ -596,7 +668,7 @@ export async function buildPageElements<
     element: isSiblingIntercept
       ? siblingInterceptElement
       : EffectivePageComponent
-        ? createPageElement(EffectivePageComponent, pageProps)
+        ? createPageElement(EffectivePageComponent, pageProps, pageRenderDependency)
         : null,
     createPageElement,
     // Fall back to vinext's built-in default global error module so that
@@ -610,6 +682,7 @@ export async function buildPageElements<
     mountedSlotIds,
     makeThenableParams,
     matchedParams: params,
+    pageRenderDependency,
     metadataPlacement,
     resolvedMetadata,
     resolvedMetadataPathname: routePath,

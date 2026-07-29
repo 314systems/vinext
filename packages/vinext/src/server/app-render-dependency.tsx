@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { use, type ReactNode } from "react";
 
 export type AppRenderDependency = {
   promise: Promise<void>;
@@ -53,8 +53,13 @@ export function renderAfterAppDependencies(
     return children;
   }
 
-  async function AwaitAppRenderDependencies() {
-    await Promise.all(dependencies.map((dependency) => dependency.promise));
+  // AppRenderDependency promises are resolve-only by construction. If an
+  // abort/reject path is added later, use() will deliberately surface that
+  // rejection through the render error-boundary path.
+  const pendingDependencies = Promise.all(dependencies.map((dependency) => dependency.promise));
+
+  function AwaitAppRenderDependencies() {
+    use(pendingDependencies);
     return children;
   }
 
