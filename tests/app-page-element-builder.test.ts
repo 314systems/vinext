@@ -43,6 +43,9 @@ const { markDynamicUsageMock, markRenderRequestApiUsageMock } = vi.hoisted(() =>
 
 vi.mock("../packages/vinext/src/shims/headers.js", () => ({
   getHeadersAccessPhase: () => "render",
+  // These builder tests render outside a draft request, so the shared "use
+  // cache" path in cache-runtime.ts must see draft mode off.
+  isDraftModeEnabled: () => false,
   markDynamicUsage: markDynamicUsageMock,
   markRenderRequestApiUsage: markRenderRequestApiUsageMock,
   throwIfInsideCacheScope: vi.fn(),
