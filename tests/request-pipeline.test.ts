@@ -940,7 +940,10 @@ describe("filterInternalHeaders", () => {
 });
 
 describe("buildRequestHeadersFromMiddlewareResponse", () => {
-  it("preserves credential headers when applying partial middleware override headers", () => {
+  it("drops every header absent from the override list, credentials included", () => {
+    // Next.js treats the override list as the complete post-middleware header
+    // set (resolve-routes.ts deletes non-listed request headers), so an absent
+    // name means deleted — it must never be restored from the base request.
     const baseHeaders = new Headers({
       authorization: "Bearer token",
       cookie: "session=abc",
@@ -951,34 +954,30 @@ describe("buildRequestHeadersFromMiddlewareResponse", () => {
       "x-middleware-request-x-added": "1",
     });
 
-    const result = buildRequestHeadersFromMiddlewareResponse(baseHeaders, middlewareHeaders, {
-      preserveCredentialHeaders: true,
-    });
-
-    expect(result).not.toBeNull();
-    expect(result!.get("authorization")).toBe("Bearer token");
-    expect(result!.get("cookie")).toBe("session=abc");
-    expect(result!.get("x-added")).toBe("1");
-    expect(result!.get("x-keep")).toBeNull();
-  });
-
-  it("deletes credential headers when middleware explicitly omits their forwarded values", () => {
-    const baseHeaders = new Headers({
-      authorization: "Bearer token",
-      cookie: "session=abc",
-      "x-keep": "original",
-    });
-    const middlewareHeaders = new Headers({
-      "x-middleware-override-headers": "authorization,cookie,x-keep",
-      "x-middleware-request-x-keep": "updated",
-    });
-
     const result = buildRequestHeadersFromMiddlewareResponse(baseHeaders, middlewareHeaders);
 
     expect(result).not.toBeNull();
     expect(result!.get("authorization")).toBeNull();
     expect(result!.get("cookie")).toBeNull();
-    expect(result!.get("x-keep")).toBe("updated");
+    expect(result!.get("x-keep")).toBeNull();
+    expect(result!.get("x-added")).toBe("1");
+  });
+
+  it("keeps base headers when middleware sends no override list at all", () => {
+    // NextResponse.next() without `request` emits no override list; that is the
+    // "unchanged" signal, and only then are base headers carried through.
+    const baseHeaders = new Headers({
+      authorization: "Bearer token",
+      cookie: "session=abc",
+    });
+    const middlewareHeaders = new Headers({ "x-middleware-request-x-added": "1" });
+
+    const result = buildRequestHeadersFromMiddlewareResponse(baseHeaders, middlewareHeaders);
+
+    expect(result).not.toBeNull();
+    expect(result!.get("authorization")).toBe("Bearer token");
+    expect(result!.get("cookie")).toBe("session=abc");
+    expect(result!.get("x-added")).toBe("1");
   });
 });
 

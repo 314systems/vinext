@@ -120,9 +120,7 @@ function requestWithMiddlewareRequestHeaders(
   middlewareHeaders: Headers | null,
 ): Request {
   const nextHeaders = middlewareHeaders
-    ? buildRequestHeadersFromMiddlewareResponse(request.headers, middlewareHeaders, {
-        preserveCredentialHeaders: true,
-      })
+    ? buildRequestHeadersFromMiddlewareResponse(request.headers, middlewareHeaders)
     : null;
   if (!nextHeaders) return request;
 

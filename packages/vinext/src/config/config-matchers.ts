@@ -448,13 +448,8 @@ function shouldEvaluateRule(ruleBasePath: false | undefined, state: BasePathMatc
 export function applyMiddlewareRequestHeaders(
   middlewareHeaders: Record<string, string | string[]>,
   request: Request,
-  options: { preserveCredentialHeaders?: boolean } = {},
 ): { request: Request; postMwReqCtx: RequestContext } {
-  const nextHeaders = buildRequestHeadersFromMiddlewareResponse(
-    request.headers,
-    middlewareHeaders,
-    options,
-  );
+  const nextHeaders = buildRequestHeadersFromMiddlewareResponse(request.headers, middlewareHeaders);
 
   for (const key of Object.keys(middlewareHeaders)) {
     if (key.startsWith(MIDDLEWARE_HEADER_PREFIX) && key !== MIDDLEWARE_CACHE_HEADER) {

@@ -472,7 +472,6 @@ export async function runPagesRequest(
   const { postMwReqCtx, request: postMwReq } = applyMiddlewareRequestHeaders(
     middlewareHeaders,
     request,
-    { preserveCredentialHeaders: isExternalUrl(resolvedUrl) },
   );
   request = postMwReq;
   const pathnameForResolvedUrl = (value: string): string => value.split("#", 1)[0].split("?", 1)[0];

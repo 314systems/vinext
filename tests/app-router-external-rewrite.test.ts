@@ -140,6 +140,32 @@ describe("App Router external rewrite proxy credential forwarding", () => {
     expect(capturedHeaders!["x-vinext-mw-ctx"]).toBeUndefined();
   });
 
+  it("does not send credentials a middleware rewrite deleted to the external target", async () => {
+    // `x-middleware-override-headers` carries the complete post-middleware
+    // header set, so headers.delete("cookie") before NextResponse.rewrite must
+    // keep first-party credentials off the cross-origin request.
+    mockResponseMode = "plain";
+    capturedHeaders = null;
+
+    const response = await fetch(`${baseUrl}/middleware-external-rewrite`, {
+      headers: {
+        Cookie: "session=secret123",
+        Authorization: "Bearer tok_secret",
+        "x-from-test": "keep-me",
+        "x-middleware-test-rewrite-target": `http://localhost:${mockPort}`,
+        "x-middleware-test-request-override": "strip-credentials",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(capturedHeaders).not.toBeNull();
+    expect(capturedHeaders!["cookie"]).toBeUndefined();
+    expect(capturedHeaders!["authorization"]).toBeUndefined();
+    // Headers the middleware kept still arrive.
+    expect(capturedHeaders!["x-from-test"]).toBe("keep-me");
+    expect(capturedHeaders!["x-hello-from-middleware1"]).toBe("hello");
+  });
+
   it("strips content-encoding and content-length for Node fetch auto-decompression", async () => {
     mockResponseMode = "gzipHeaderAndBody";
     const response = await fetch(`${baseUrl}/proxy-external-test/some-path`);
