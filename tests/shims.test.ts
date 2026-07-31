@@ -4107,6 +4107,7 @@ describe("next/headers shim", () => {
 
     // Simulate middleware updating the cookie header
     const middlewareResponseHeaders = new Headers({
+      "x-middleware-override-headers": "cookie",
       "x-middleware-request-cookie": "a=2; b=3",
     });
 
@@ -4133,6 +4134,7 @@ describe("next/headers shim", () => {
     await runWithHeadersContext(ctx, async () => {
       applyMiddlewareRequestHeaders(
         new Headers({
+          "x-middleware-override-headers": "cookie",
           "x-middleware-request-cookie": "a=1; a=2; b=4",
         }),
       );
@@ -4164,6 +4166,7 @@ describe("next/headers shim", () => {
     await runWithHeadersContext(ctx, async () => {
       applyMiddlewareRequestHeaders(
         new Headers({
+          "x-middleware-override-headers": "cookie",
           "x-middleware-request-cookie": "empty=; flag",
         }),
       );
@@ -9651,6 +9654,54 @@ describe("double-encoded path handling in middleware", () => {
     }
   });
 
+  it("external middleware rewrite proxy preserves headers for an empty override value", async () => {
+    // NextResponse emits an empty override value for `new Headers()`, and
+    // Next.js skips its request-header mutation block for that falsy value.
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/lib/router-utils/resolve-routes.ts
+    const { NextResponse } = await import("../packages/vinext/src/shims/server.js");
+    const { proxyExternalMiddlewareRewrite } =
+      await import("../packages/vinext/src/server/app-middleware.js");
+    const http = await import("node:http");
+    let capturedHeaders: Record<string, string | string[] | undefined> = {};
+    const server = http.createServer((req, res) => {
+      capturedHeaders = req.headers;
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("proxied");
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    try {
+      const address = server.address();
+      expect(address && typeof address === "object").toBe(true);
+      const port = address && typeof address === "object" ? address.port : 0;
+      const request = new Request("http://localhost:3000/source", {
+        headers: {
+          authorization: "Bearer secret",
+          cookie: "session=abc",
+          "x-keep": "original",
+        },
+      });
+      const middlewareResponse = NextResponse.rewrite(`http://127.0.0.1:${port}/target`, {
+        request: { headers: new Headers() },
+      });
+
+      expect(middlewareResponse.headers.get("x-middleware-override-headers")).toBe("");
+
+      const response = await proxyExternalMiddlewareRewrite(
+        request,
+        `http://127.0.0.1:${port}/target`,
+        { headers: null, requestHeaders: middlewareResponse.headers, status: null },
+      );
+
+      expect(response.status).toBe(200);
+      expect(capturedHeaders.authorization).toBe("Bearer secret");
+      expect(capturedHeaders.cookie).toBe("session=abc");
+      expect(capturedHeaders["x-keep"]).toBe("original");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it("Pages Router runMiddleware preserves the encoded pathname for middleware", async () => {
     const { runMiddleware } = await import("../packages/vinext/src/server/middleware.js");
     // Create a mock Vite server that returns a middleware module
@@ -11818,6 +11869,47 @@ describe("middleware request header overrides", () => {
     expect(nextRequest.headers.get("x-keep")).toBe("original");
     expect(nextRequest.headers.get("x-added")).toBe("1");
     expect(postMwReqCtx.cookies).toEqual({ a: "1", b: "2" });
+    expect(middlewareHeaders).toEqual({});
+  });
+
+  it("config-matchers preserves unlisted request values under their literal protocol names", async () => {
+    const { applyMiddlewareRequestHeaders } =
+      await import("../packages/vinext/src/config/config-matchers.js");
+
+    const middlewareHeaders: Record<string, string> = {
+      "x-middleware-request-x-added": "forged-by-middleware",
+      "x-middleware-next": "1",
+    };
+    const request = new Request("http://localhost/test", {
+      headers: { "x-added": "original" },
+    });
+
+    const { request: nextRequest } = applyMiddlewareRequestHeaders(middlewareHeaders, request);
+
+    expect(nextRequest.headers.get("x-added")).toBe("original");
+    expect(nextRequest.headers.get("x-middleware-request-x-added")).toBe("forged-by-middleware");
+    expect(middlewareHeaders).toEqual({
+      "x-middleware-request-x-added": "forged-by-middleware",
+    });
+  });
+
+  it("config-matchers drops empty unlisted request values", async () => {
+    const { applyMiddlewareRequestHeaders } =
+      await import("../packages/vinext/src/config/config-matchers.js");
+
+    const middlewareHeaders: Record<string, string> = {
+      "x-middleware-request-x-empty": "",
+      "x-middleware-next": "1",
+    };
+    const request = new Request("http://localhost/test", {
+      headers: { "x-original": "kept" },
+    });
+
+    const { request: nextRequest } = applyMiddlewareRequestHeaders(middlewareHeaders, request);
+
+    expect(nextRequest).toBe(request);
+    expect(nextRequest.headers.get("x-original")).toBe("kept");
+    expect(nextRequest.headers.has("x-middleware-request-x-empty")).toBe(false);
     expect(middlewareHeaders).toEqual({});
   });
 
