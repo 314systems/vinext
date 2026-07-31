@@ -3241,6 +3241,124 @@ describe("createAppRscHandler", () => {
     expect(dispatchMatchedPage).not.toHaveBeenCalled();
   });
 
+  it("uses one isolated middleware branch for body-bearing RSC actions", async () => {
+    const rscHeaders = createRscRequestHeaders();
+    rscHeaders.set("content-type", "text/plain");
+    rscHeaders.set("next-action", "abc123");
+    const rscHash = await computeRscCacheBustingSearchParam(rscHeaders);
+    const cloneSpy = vi.spyOn(Request.prototype, "clone");
+    const handleServerActionRequest = vi.fn(async ({ request }: { request: Request }) => {
+      await expect(request.text()).resolves.toBe("streamed-action-body");
+      return new Response("action");
+    });
+    const middleware = vi.fn(async (request: Request) => {
+      await expect(request.text()).resolves.toBe("streamed-action-body");
+      return new Response(null, {
+        headers: { "x-middleware-next": "1" },
+      });
+    });
+    const handler = createHandler({
+      configHeaders: [],
+      handleServerActionRequest,
+      middlewareModule: {
+        default: middleware,
+      },
+    });
+
+    try {
+      const response = await handler(
+        new Request(`https://example.test/docs/about.rsc?_rsc=${rscHash}`, {
+          body: "streamed-action-body",
+          headers: rscHeaders,
+          method: "POST",
+        }),
+        null,
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("action");
+      expect(middleware).toHaveBeenCalledOnce();
+      expect(handleServerActionRequest).toHaveBeenCalledOnce();
+      // URL/query/header normalization shares the downstream body owner. The
+      // only tee is the real middleware/downstream boundary, and middleware's
+      // branch is transferred into NextRequest rather than abandoned.
+      expect(cloneSpy).toHaveBeenCalledTimes(1);
+      expect((cloneSpy.mock.results[0]!.value as Request).bodyUsed).toBe(true);
+    } finally {
+      cloneSpy.mockRestore();
+    }
+  });
+
+  it("does not tee body-bearing RSC actions when middleware is absent", async () => {
+    const rscHeaders = createRscRequestHeaders();
+    rscHeaders.set("content-type", "text/plain");
+    rscHeaders.set("next-action", "abc123");
+    const rscHash = await computeRscCacheBustingSearchParam(rscHeaders);
+    const cloneSpy = vi.spyOn(Request.prototype, "clone");
+    const handleServerActionRequest = vi.fn(async ({ request }: { request: Request }) => {
+      await expect(request.text()).resolves.toBe("streamed-action-body");
+      return new Response("action");
+    });
+    const handler = createHandler({ configHeaders: [], handleServerActionRequest });
+
+    try {
+      const response = await handler(
+        new Request(`https://example.test/docs/about.rsc?_rsc=${rscHash}`, {
+          body: "streamed-action-body",
+          headers: rscHeaders,
+          method: "POST",
+        }),
+        null,
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("action");
+      expect(cloneSpy).not.toHaveBeenCalled();
+    } finally {
+      cloneSpy.mockRestore();
+    }
+  });
+
+  it("cancels the isolated RSC body branch when middleware does not match", async () => {
+    const rscHeaders = createRscRequestHeaders();
+    rscHeaders.set("content-type", "text/plain");
+    rscHeaders.set("next-action", "abc123");
+    const rscHash = await computeRscCacheBustingSearchParam(rscHeaders);
+    const cloneSpy = vi.spyOn(Request.prototype, "clone");
+    const middleware = vi.fn(() => new Response("unexpected"));
+    const handleServerActionRequest = vi.fn(async ({ request }: { request: Request }) => {
+      await expect(request.text()).resolves.toBe("streamed-action-body");
+      return new Response("action");
+    });
+    const handler = createHandler({
+      configHeaders: [],
+      handleServerActionRequest,
+      middlewareModule: {
+        config: { matcher: "/middleware-only" },
+        default: middleware,
+      },
+    });
+
+    try {
+      const response = await handler(
+        new Request(`https://example.test/docs/about.rsc?_rsc=${rscHash}`, {
+          body: "streamed-action-body",
+          headers: rscHeaders,
+          method: "POST",
+        }),
+        null,
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("action");
+      expect(middleware).not.toHaveBeenCalled();
+      expect(cloneSpy).toHaveBeenCalledTimes(1);
+      expect((cloneSpy.mock.results[0]!.value as Request).bodyUsed).toBe(true);
+    } finally {
+      cloneSpy.mockRestore();
+    }
+  });
+
   it("accepts the vinext action header name for server actions", async () => {
     const handleServerActionRequest = vi.fn(async () => new Response("action", { status: 200 }));
     const handler = createHandler({ handleServerActionRequest });

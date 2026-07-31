@@ -1236,7 +1236,7 @@ export default createAppRscHandler({
   },
   ${
     middlewarePath
-      ? `runMiddleware({ cleanPathname, context, hadBasePath, isDataRequest, request }) {
+      ? `runMiddleware({ cleanPathname, context, hadBasePath, isDataRequest, middlewareRequest, request }) {
     return __applyAppMiddleware({
       basePath: __basePath,
       cleanPathname,
@@ -1246,6 +1246,7 @@ export default createAppRscHandler({
       i18nConfig: __i18nConfig,
       isDataRequest,
       isProxy: ${JSON.stringify(isProxyFile(middlewarePath))},
+      middlewareRequest,
       module: middlewareModule,
       request,
       trailingSlash: __trailingSlash,

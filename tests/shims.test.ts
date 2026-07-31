@@ -4832,7 +4832,7 @@ describe("next/server shim", () => {
     expect(req.cookies.has("missing")).toBe(false);
   });
 
-  it("NextRequest copies a Request body without disturbing the source request", async () => {
+  it("NextRequest transfers a Request body instead of teeing it", async () => {
     const { NextRequest } = await import("../packages/vinext/src/shims/server.js");
     const source = new Request("https://example.com/api/echo", {
       body: JSON.stringify({ ok: true }),
@@ -4843,8 +4843,10 @@ describe("next/server shim", () => {
     const req = new NextRequest(source);
 
     await expect(req.json()).resolves.toEqual({ ok: true });
-    expect(source.bodyUsed).toBe(false);
-    await expect(source.json()).resolves.toEqual({ ok: true });
+    // Next.js parity (`super(input, init)`), and the reason it matters: cloning
+    // here would tee the body, and the branch left on `source` would buffer the
+    // whole request in memory because nothing reads or cancels it.
+    expect(source.bodyUsed).toBe(true);
   });
 
   it("NextResponse.json() creates a JSON response", async () => {
@@ -9564,6 +9566,63 @@ describe("double-encoded path handling in middleware", () => {
     expect(middlewareBody).toEqual({ message: "hello" });
     expect(request.bodyUsed).toBe(false);
     await expect(request.json()).resolves.toEqual({ message: "hello" });
+  });
+
+  it("App Router middleware cancels its unread body branch in development", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    try {
+      const { applyAppMiddleware } =
+        await import("../packages/vinext/src/server/app-middleware.js");
+      const request = new Request("http://localhost:3000/actions", {
+        body: "action-payload",
+        method: "POST",
+      });
+      let middlewareRequest: Request | undefined;
+
+      const result = await applyAppMiddleware({
+        cleanPathname: "/actions",
+        context: { headers: null, requestHeaders: null, status: null },
+        isProxy: false,
+        module: {
+          default: (request: Request) => {
+            middlewareRequest = request;
+            return new Response(null, { headers: { "x-middleware-next": "1" } });
+          },
+        },
+        request,
+      });
+
+      expect(result.kind).toBe("continue");
+      await vi.waitFor(() => expect(middlewareRequest?.bodyUsed).toBe(true));
+      await expect(request.text()).resolves.toBe("action-payload");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("App Router middleware cancels the downstream body branch when it returns a response", async () => {
+    const { applyAppMiddleware } = await import("../packages/vinext/src/server/app-middleware.js");
+    const sourceCancel = vi.fn();
+    const request = new Request("http://localhost:3000/upload", {
+      body: new ReadableStream<Uint8Array>({
+        cancel: sourceCancel,
+      }),
+      duplex: "half",
+      method: "POST",
+    } as RequestInit & { duplex: "half" });
+
+    const result = await applyAppMiddleware({
+      cleanPathname: "/upload",
+      context: { headers: null, requestHeaders: null, status: null },
+      isProxy: false,
+      module: {
+        default: () => new Response("blocked", { status: 403 }),
+      },
+      request,
+    });
+
+    expect(result.kind).toBe("response");
+    await vi.waitFor(() => expect(sourceCancel).toHaveBeenCalledOnce());
   });
 
   it("external middleware rewrite proxy strips upstream x-middleware headers without middleware context", async () => {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { executeMiddleware } from "../packages/vinext/src/server/middleware-runtime.js";
 import type { NextRequest } from "../packages/vinext/src/shims/server.js";
 
@@ -12,6 +12,33 @@ import type { NextRequest } from "../packages/vinext/src/shims/server.js";
 // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/web/adapter.ts
 
 describe("middleware redirect protocol", () => {
+  it.each(["development", "production"])(
+    "preserves a request body transferred into the middleware response in %s",
+    async (nodeEnv) => {
+      vi.stubEnv("NODE_ENV", nodeEnv);
+      const request = new Request("http://localhost:3000/echo", {
+        body: "streamed-response",
+        method: "POST",
+      });
+
+      try {
+        const result = await executeMiddleware({
+          isProxy: false,
+          module: {
+            default: (request: Request) => new Response(request.body),
+          },
+          request,
+        });
+
+        expect(result.continue).toBe(false);
+        await expect(result.response?.text()).resolves.toBe("streamed-response");
+        await request.body?.cancel();
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
   it("exposes trusted data-request state to middleware", async () => {
     let capturedRequest: NextRequest | undefined;
     const module = {
