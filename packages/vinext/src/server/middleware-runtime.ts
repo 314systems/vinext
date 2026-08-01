@@ -18,6 +18,7 @@ import { matchesMiddleware, type MatcherConfig } from "./middleware-matcher.js";
 import { shouldKeepMiddlewareHeader } from "../utils/middleware-request-headers.js";
 import { processMiddlewareHeaders } from "./request-pipeline.js";
 import { badRequestResponse, internalServerErrorResponse } from "./http-error-responses.js";
+import { isOpenRedirectShaped } from "./open-redirect.js";
 import {
   addBasePathToPathname,
   hasBasePath,
@@ -161,8 +162,9 @@ function stripMiddlewareHeadersFromResponse(response: Response): Response {
 }
 
 /**
- * Make a same-host URL relative to the request origin. Cross-origin URLs are
- * returned unchanged. Mirrors Next.js's `getRelativeURL` behaviour:
+ * Make a same-host URL relative to the request origin unless removing the
+ * origin would create a protocol-relative redirect. Cross-origin URLs are
+ * returned unchanged. Based on Next.js's `getRelativeURL` behaviour:
  * https://github.com/vercel/next.js/blob/canary/packages/next/src/shared/lib/router/utils/relativize-url.ts
  */
 function relativizeLocation(location: string, requestUrl: string): string {
@@ -174,6 +176,11 @@ function relativizeLocation(location: string, requestUrl: string): string {
   }
   const base = new URL(requestUrl);
   if (parsed.origin !== base.origin) return parsed.toString();
+  // A leading double slash is a valid same-origin pathname while the URL is
+  // absolute, but becomes a protocol-relative redirect if the origin is
+  // removed. Keep the absolute form for every shape covered by the shared
+  // redirect guard.
+  if (isOpenRedirectShaped(parsed.pathname)) return parsed.toString();
   return parsed.pathname + parsed.search + parsed.hash;
 }
 
@@ -401,7 +408,8 @@ export async function executeMiddleware(
               }
             }
             if (normalized !== null) {
-              normalizedLocation = normalized + loc.search + loc.hash;
+              loc.pathname = normalized;
+              normalizedLocation = relativizeLocation(loc.toString(), options.request.url);
             }
           }
         } catch {
