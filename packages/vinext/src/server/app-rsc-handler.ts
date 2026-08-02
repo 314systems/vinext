@@ -52,7 +52,7 @@ import {
   stripRscSuffix,
   VINEXT_RSC_CACHE_BUSTING_SEARCH_PARAM,
 } from "./app-rsc-cache-busting.js";
-import { finalizeAppRscResponse } from "./app-rsc-response-finalizer.js";
+import { applyAppRscConfigHeaders, finalizeAppRscResponse } from "./app-rsc-response-finalizer.js";
 import { normalizeRscRequest } from "./app-rsc-request-normalization.js";
 import { buildNextDataNotFoundResponse, normalizePagesDataRequest } from "./pages-data-route.js";
 import { normalizeDefaultLocalePathname } from "./pages-i18n.js";
@@ -257,6 +257,8 @@ type HandleServerActionRequestOptions<TRoute> = {
   scriptNonce?: string;
   routeMatch: AppRscRouteMatch<TRoute> | null;
   routePathname: string;
+  dispatchRedirectTargetRequest: (request: Request) => Promise<Response>;
+  sourceConfigHeaders: Headers | null;
   searchParams: URLSearchParams;
 };
 
@@ -514,6 +516,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   isDataRequest: boolean,
   isMiddlewareDataRequest: boolean,
   pagesDataRequest: Request | null,
+  dispatchInternalRequest: (request: Request) => Promise<Response>,
+  allowInternalRscDocumentFallback: boolean,
 ): Promise<Response> {
   const handlerStart = process.env.NODE_ENV !== "production" ? performance.now() : 0;
 
@@ -970,6 +974,24 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     middlewareContext.status = 500;
   }
 
+  let sourceConfigHeaders: Headers | null = null;
+  if (filesystemRouteEligible && isPostRequest && actionId && options.handleServerActionRequest) {
+    sourceConfigHeaders = new Headers();
+    const sourceConfigUrl = new URL(request.url);
+    sourceConfigUrl.pathname = hadBasePath
+      ? addBasePathToPathname(requestCleanPathname, options.basePath)
+      : requestCleanPathname;
+    await applyAppRscConfigHeaders(
+      sourceConfigHeaders,
+      cloneRequestWithUrl(request, sourceConfigUrl.toString()),
+      {
+        basePath: options.basePath,
+        configHeaders: options.configHeaders,
+        i18nConfig: options.i18nConfig,
+        requestContext: preMiddlewareRequestContext,
+      },
+    );
+  }
   const serverActionResponse =
     filesystemRouteEligible && isPostRequest && actionId && options.handleServerActionRequest
       ? await options.handleServerActionRequest({
@@ -984,6 +1006,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
           scriptNonce,
           routeMatch: preActionMatch,
           routePathname: preActionRoutePathname,
+          dispatchRedirectTargetRequest: dispatchInternalRequest,
+          sourceConfigHeaders,
           searchParams: getResolvedSearchParams(),
         })
       : null;
@@ -1001,7 +1025,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       !isInterceptionMatch && (match === null || match.route.isDynamic)
         ? ((await options.renderPagesFallback?.({
             appRouteMatch: match ?? null,
-            allowRscDocumentFallback: didMiddlewareRewritePathname,
+            allowRscDocumentFallback:
+              didMiddlewareRewritePathname || allowInternalRscDocumentFallback,
             isDataRequest,
             isRscRequest,
             matchKind,
@@ -1352,7 +1377,7 @@ function applyProgressiveActionSideEffects(
 export function createAppRscHandler<TRoute extends AppRscHandlerRoute>(
   options: CreateAppRscHandlerOptions<TRoute>,
 ): (request: Request, ctx: unknown) => Promise<Response> {
-  return async function appRscHandler(rawRequest, ctx) {
+  return async function appRscHandler(rawRequest, ctx, allowInternalRscDocumentFallback = false) {
     // Register config-driven cache adapters before anything touches the cache.
     // On the Cloudflare worker the entry already registered them with `env` (this
     // guarded call is a no-op); on Node/dev this is where they get wired, with no
@@ -1462,6 +1487,8 @@ export function createAppRscHandler<TRoute extends AppRscHandlerRoute>(
               isPagesDataRequest,
               isPagesDataRequest,
               pagesDataRequest,
+              (internalRequest) => appRscHandler(internalRequest, ctx, true),
+              allowInternalRscDocumentFallback,
             );
           } catch (error) {
             if (process.env.NODE_ENV !== "production") {
