@@ -1497,6 +1497,7 @@ describe("Pages Router entry template", () => {
         await resolveNextConfig({
           basePath: "/root",
           generateBuildId: () => "test-build-id",
+          skipProxyUrlNormalize: true,
         }),
         createValidFileMatcher(),
         middlewarePath,
@@ -1505,9 +1506,10 @@ describe("Pages Router entry template", () => {
 
       expect(code).toContain("export function normalizeDataRequest(request)");
       expect(code).toContain(
-        "vinextConfig.basePath,\n    hasMiddleware && vinextConfig.trailingSlash",
+        "vinextConfig.basePath,\n    __shouldAddTrailingSlashToPagesDataPath(\n      hasMiddleware,\n      vinextConfig.trailingSlash,\n      vinextConfig.skipProxyUrlNormalize",
       );
       expect(code).toContain("export const hasMiddleware = true");
+      expect(code).toContain('"skipProxyUrlNormalize":true');
       expect(code).not.toContain('request.headers.get("x-nextjs-data")');
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
