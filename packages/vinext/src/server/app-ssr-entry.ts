@@ -390,6 +390,8 @@ export async function handleSsr(
     rootParams?: RootParams;
     /** Dev-only: original server error to surface in the browser overlay. */
     initialDevServerError?: unknown;
+    /** Mirror inline Flight chunks into Next.js's `self.__next_f` transport. */
+    mirrorNextFlight?: boolean;
     /** When true, wait for the full React tree (including Suspense boundaries)
      *  to resolve before returning the HTML stream. Used for static prerender
      *  and ISR cache writes to avoid caching fallback content. */
@@ -424,22 +426,22 @@ export async function handleSsr(
 
         if (options?.sideStream) {
           ssrStream = rscStream;
-          rscEmbed = createRscEmbedTransform(
-            options.sideStream,
-            options?.scriptNonce,
-            options?.getInitialNavigationCacheMetadata,
-          );
+          rscEmbed = createRscEmbedTransform(options.sideStream, {
+            mirrorNextFlight: options?.mirrorNextFlight,
+            scriptNonce: options?.scriptNonce,
+            getInitialNavigationCacheMetadata: options?.getInitialNavigationCacheMetadata,
+          });
           if (options.capturedRscDataRef) {
             options.capturedRscDataRef.value = rscEmbed.getRawBuffer();
           }
         } else {
           const [s1, s2] = rscStream.tee();
           ssrStream = s1;
-          rscEmbed = createRscEmbedTransform(
-            s2,
-            options?.scriptNonce,
-            options?.getInitialNavigationCacheMetadata,
-          );
+          rscEmbed = createRscEmbedTransform(s2, {
+            mirrorNextFlight: options?.mirrorNextFlight,
+            scriptNonce: options?.scriptNonce,
+            getInitialNavigationCacheMetadata: options?.getInitialNavigationCacheMetadata,
+          });
         }
 
         let flightRoot: PromiseLike<AppWireElements> | null = null;
