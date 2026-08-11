@@ -24156,6 +24156,73 @@ describe("next/navigation enhancements", () => {
     }
   });
 
+  it("useSearchParams bails to the nearest client Suspense boundary during static generation", async () => {
+    const { isBailoutToCSRError, setNavigationContext, useSearchParams } =
+      await import("../packages/vinext/src/shims/navigation.js");
+
+    try {
+      setNavigationContext({
+        pathname: "/static-search",
+        searchParams: new URLSearchParams(),
+        params: {},
+        isStaticGeneration: true,
+      });
+
+      expect(() => useSearchParams()).toThrow("Bail out to client-side rendering");
+      try {
+        useSearchParams();
+      } catch (error) {
+        expect(isBailoutToCSRError(error)).toBe(true);
+      }
+    } finally {
+      setNavigationContext(null);
+    }
+  });
+
+  it("useSearchParams preserves fallback-shell tracking during static generation", async () => {
+    const { createPprFallbackShellState, runWithPprFallbackShellState } =
+      await import("../packages/vinext/src/shims/ppr-fallback-shell.js");
+    const { setNavigationContext, useSearchParams } =
+      await import("../packages/vinext/src/shims/navigation.js");
+    const state = createPprFallbackShellState({
+      fallbackParamNames: ["slug"],
+      routePattern: "/blog/:slug",
+    });
+
+    try {
+      setNavigationContext({
+        pathname: "/blog/[slug]",
+        searchParams: new URLSearchParams(),
+        params: { slug: "[slug]" },
+        isStaticGeneration: true,
+      });
+
+      expect(() => runWithPprFallbackShellState(state, useSearchParams)).not.toThrow();
+      expect(state.hasDynamicBoundary).toBe(true);
+    } finally {
+      setNavigationContext(null);
+    }
+  });
+
+  it("useSearchParams returns empty values for force-static generation", async () => {
+    const { setNavigationContext, useSearchParams } =
+      await import("../packages/vinext/src/shims/navigation.js");
+
+    try {
+      setNavigationContext({
+        pathname: "/force-static-search",
+        searchParams: new URLSearchParams(),
+        params: {},
+        isStaticGeneration: true,
+        isForceStatic: true,
+      });
+
+      expect(useSearchParams().toString()).toBe("");
+    } finally {
+      setNavigationContext(null);
+    }
+  });
+
   it("useSearchParams reuses the same readonly wrapper for the same server context", async () => {
     const { setNavigationContext, useSearchParams } =
       await import("../packages/vinext/src/shims/navigation.js");
