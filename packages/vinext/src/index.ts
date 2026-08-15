@@ -167,6 +167,7 @@ import {
   INSTRUMENTATION_CLIENT_EMPTY_MODULE,
 } from "./client/instrumentation-client-inject.js";
 import { createMiddlewareServerOnlyPlugin } from "./plugins/middleware-server-only.js";
+import { createPagesNodeExternalsPlugin } from "./plugins/pages-node-externals.js";
 import { validateMiddlewareModuleExports } from "./plugins/middleware-export-validation.js";
 import { createOptimizeImportsPlugin } from "./plugins/optimize-imports.js";
 import { createDynamicPreloadMetadataPlugin } from "./plugins/dynamic-preload-metadata.js";
@@ -1427,6 +1428,8 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   let warnedInlineNextConfigOverride = false;
   let hasNitroPlugin = false;
   let resolvedServerExternalPackages: string[] = [];
+  let pagesTsconfigAliases: Record<string, string> = {};
+  let pagesBundledPackages = new Set<string>();
   let isServeCommand = false;
   let pagesOptimizeEntries: string[] = [];
   const pagesClientAssetsOutputDirs = new Set<string>();
@@ -1942,6 +1945,16 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
       },
       serverOnlyShimPath: resolveShimModulePath(shimsDir, "server-only"),
     }),
+    createPagesNodeExternalsPlugin({
+      getRoot: () => root,
+      getPagesDir: () => (hasPagesDir ? pagesDir : null),
+      getAliases: () => nextConfig?.aliases ?? {},
+      getTsconfigAliases: () => pagesTsconfigAliases,
+      getBundledPackages: () => pagesBundledPackages,
+      // Workers and Nitro need a self-contained server bundle. Their runtime
+      // builds intentionally keep package code inside the graph.
+      isEnabled: () => !hasCloudflarePlugin && !hasNitroPlugin,
+    }),
     // Resolve `data:text/css[+module],...` imports into virtual CSS files so
     // Vite's CSS pipeline (LightningCSS, CSS modules) processes them instead
     // of leaving the data URL as a runtime import that Node/workerd cannot
@@ -2116,6 +2129,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           : undefined;
         const resolvedTsconfigAliases = resolveTsconfigAliases(root, configuredTsconfigPath);
         tsconfigPathAliases = resolvedTsconfigAliases.vite;
+        pagesTsconfigAliases = tsconfigPathAliases;
         sassTsconfigPathAliases = resolvedTsconfigAliases.sass;
         // Vite's native option discovers tsconfig.json and cannot receive Next's
         // typescript.tsconfigPath. Only auto-enable it for the default config;
@@ -2585,6 +2599,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           ...(nextConfig?.turbopackTranspilePackages ?? []),
           ...(nextConfig?.optimizePackageImports ?? []),
         ];
+        pagesBundledPackages = new Set(serverTranspilePackages);
         const nextServerExternal = mergeServerExternalPackages(
           nextConfig?.serverExternalPackages,
           serverTranspilePackages,

@@ -715,6 +715,71 @@ describe("optimizeDeps.exclude for vinext", () => {
     }
   }, 15000);
 
+  it("uses server package conditions in RSC and SSR environments", async () => {
+    const vinext = (await import("../packages/vinext/src/index.js")).default;
+    const plugins = vinext();
+    const conditionsPlugin = plugins.find(
+      (p: any) =>
+        p.name === "vinext:server-conditions" && typeof p.configEnvironment === "function",
+    );
+    expect(conditionsPlugin).toBeDefined();
+
+    for (const environmentName of ["rsc", "ssr"]) {
+      const workerConfig = {
+        resolve: {
+          conditions: ["workerd", "worker", "module", "browser", "development|production"],
+        },
+        optimizeDeps: {
+          rolldownOptions: {
+            resolve: {
+              conditionNames: ["workerd", "worker", "module", "browser", "development"],
+            },
+          },
+        },
+      };
+      (conditionsPlugin as any).configEnvironment(environmentName, workerConfig);
+      expect(workerConfig.resolve.conditions).toEqual([
+        "workerd",
+        "worker",
+        "module",
+        "development|production",
+      ]);
+      expect(workerConfig.optimizeDeps.rolldownOptions.resolve.conditionNames).toEqual([
+        "workerd",
+        "worker",
+        "module",
+        "development",
+      ]);
+    }
+
+    const clientConfig = {
+      resolve: { conditions: ["module", "browser"] },
+      optimizeDeps: {
+        rolldownOptions: { resolve: { conditionNames: ["module", "browser"] } },
+      },
+    };
+    (conditionsPlugin as any).configEnvironment("client", clientConfig);
+    expect(clientConfig.resolve.conditions).toEqual(["module", "browser"]);
+    expect(clientConfig.optimizeDeps.rolldownOptions.resolve.conditionNames).toEqual([
+      "module",
+      "browser",
+    ]);
+
+    const auxiliaryWorkerConfig = {
+      resolve: { conditions: ["workerd", "worker", "module", "browser"] },
+      optimizeDeps: {
+        rolldownOptions: {
+          resolve: { conditionNames: ["workerd", "worker", "module", "browser"] },
+        },
+      },
+    };
+    (conditionsPlugin as any).configEnvironment("auxiliary-worker", auxiliaryWorkerConfig);
+    expect(auxiliaryWorkerConfig.resolve.conditions).toContain("browser");
+    expect(auxiliaryWorkerConfig.optimizeDeps.rolldownOptions.resolve.conditionNames).toContain(
+      "browser",
+    );
+  }, 15000);
+
   it("suppresses missing optional Cloudflare Pages Router worker optimizer warnings", async () => {
     const vinext = (await import("../packages/vinext/src/index.js")).default;
     const plugins = vinext();
