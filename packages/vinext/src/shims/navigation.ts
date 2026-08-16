@@ -344,6 +344,7 @@ export type PrefetchCacheEntry = {
   pending?: Promise<void>;
   preparedElements?: AppElements;
   prefetchKind?: PrefetchCacheKind;
+  reuseAfterHistoryRestore?: boolean;
   searchAgnosticShell?: boolean;
   size?: number;
   timestamp: number;
@@ -1106,12 +1107,32 @@ export function invalidatePrefetchCache(): void {
   }
 }
 
+/**
+ * Prevent completed navigation responses from becoming authoritative again
+ * after restoring a history snapshot. Explicit Link/router prefetches remain
+ * consumable. Responses with a positive cache lifetime and interception
+ * responses retain the cache reuse licensed by Next's segment cache.
+ */
+export function disableNavigationResponsePrefetchCacheReuse(): void {
+  let didDemote = false;
+  for (const entry of new Set(getPrefetchCache().values())) {
+    if (entry.prefetchKind === undefined && entry.reuseAfterHistoryRestore !== true) {
+      didDemote ||= entry.cacheForNavigation !== false;
+      entry.cacheForNavigation = false;
+    }
+  }
+  if (didDemote && !isServer) {
+    getNavigationRuntime()?.functions.pingVisibleLinks?.();
+  }
+}
+
 export function seedPrefetchResponseSnapshot(
   rscUrl: string,
   snapshot: CachedRscResponse,
   interceptionContext: string | null = null,
   mountedSlotsHeader: string | null = null,
   fallbackTtlMs: number = DYNAMIC_NAVIGATION_CACHE_TTL,
+  reuseAfterHistoryRestore: boolean = false,
 ): void {
   const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
   const cache = getPrefetchCache();
@@ -1126,6 +1147,7 @@ export function seedPrefetchResponseSnapshot(
     expiresAt: resolveCachedRscResponseExpiresAt(timestamp, snapshot, fallbackTtlMs),
     mountedSlotsHeader,
     outcome: "cache-seeded",
+    reuseAfterHistoryRestore,
     size: snapshot.buffer.byteLength,
     snapshot,
     timestamp,
@@ -1993,6 +2015,10 @@ const _EMPTY_PARAMS: Record<string, string | string[]> = {};
 
 export type ClientNavigationRenderSnapshot = {
   pathname: string;
+  // Preserve the browser URL's raw query spelling for exact navigation
+  // identity. ReadonlyURLSearchParams intentionally canonicalizes `%20` to `+`
+  // when serialized, so it cannot reconstruct the href used for a commit.
+  search: string;
   searchParams: ReadonlyURLSearchParams;
   params: Record<string, string | string[]>;
 };
@@ -2036,14 +2062,14 @@ export function createClientNavigationRenderSnapshot(
 
   return {
     pathname: stripBasePath(url.pathname, __basePath),
+    search: url.search,
     searchParams: new ReadonlyURLSearchParams(url.search),
     params,
   };
 }
 
 export function createSnapshotPathAndSearch(snapshot: ClientNavigationRenderSnapshot): string {
-  const query = snapshot.searchParams.toString();
-  return query === "" ? snapshot.pathname : `${snapshot.pathname}?${query}`;
+  return snapshot.pathname + snapshot.search;
 }
 
 // Module-level fallback for environments without window (tests, SSR).
@@ -2575,6 +2601,7 @@ export async function navigateClientSide(
   // an RSC fetch; everything else proceeds to the RSC navigation below.
   const earlyIntent = navigationPlanner.classifyEarlyNavigationIntent({
     basePath: __basePath,
+    currentUrlSpace: "browser",
     currentHref: window.location.href,
     mode,
     scroll,
@@ -2635,6 +2662,7 @@ export async function navigateClientSide(
         undefined,
         scrollIntent,
         visibleCommitMode,
+        earlyIntent.bypassNavigationCache,
       );
     } else {
       if (mode === "replace") {

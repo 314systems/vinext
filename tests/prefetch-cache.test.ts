@@ -42,6 +42,7 @@ let restoreRscResponse: Navigation["restoreRscResponse"];
 let resolveCachedRscResponseTtlMs: Navigation["resolveCachedRscResponseTtlMs"];
 let prefetchRscResponse: Navigation["prefetchRscResponse"];
 let invalidatePrefetchCache: Navigation["invalidatePrefetchCache"];
+let disableNavigationResponsePrefetchCacheReuse: Navigation["disableNavigationResponsePrefetchCacheReuse"];
 let hasPrefetchCacheEntryForNavigation: Navigation["hasPrefetchCacheEntryForNavigation"];
 let hasSearchAgnosticPrefetchShellForRoute: Navigation["hasSearchAgnosticPrefetchShellForRoute"];
 let peekPrefetchResponseForNavigation: Navigation["peekPrefetchResponseForNavigation"];
@@ -82,6 +83,7 @@ beforeEach(async () => {
   resolveCachedRscResponseTtlMs = nav.resolveCachedRscResponseTtlMs;
   prefetchRscResponse = nav.prefetchRscResponse;
   invalidatePrefetchCache = nav.invalidatePrefetchCache;
+  disableNavigationResponsePrefetchCacheReuse = nav.disableNavigationResponsePrefetchCacheReuse;
   hasPrefetchCacheEntryForNavigation = nav.hasPrefetchCacheEntryForNavigation;
   hasSearchAgnosticPrefetchShellForRoute = nav.hasSearchAgnosticPrefetchShellForRoute;
   peekPrefetchResponseForNavigation = nav.peekPrefetchResponseForNavigation;
@@ -249,6 +251,80 @@ describe("prefetch cache eviction", () => {
 
     expect(firstInvalidate).toHaveBeenCalledTimes(1);
     expect(secondInvalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it("demotes completed navigation snapshots without discarding explicit prefetches", () => {
+    const cache = getPrefetchCache();
+    const prefetched = getPrefetchedUrls();
+    const navigationKey = "/departed.rsc";
+    const prefetchKey = "/prefetched.rsc";
+    const staticKey = "/static.rsc";
+    const dynamicKey = "/dynamic.rsc";
+    const interceptedKey = "/intercepted.rsc\0/";
+    const snapshot = {
+      buffer: new TextEncoder().encode("flight").buffer,
+      contentType: "text/x-component",
+      paramsHeader: null,
+      renderedPathAndSearch: null,
+      url: navigationKey,
+    };
+
+    cache.set(navigationKey, {
+      cacheForNavigation: true,
+      outcome: "cache-seeded",
+      snapshot,
+      timestamp: Date.now(),
+    });
+    cache.set(prefetchKey, {
+      cacheForNavigation: true,
+      outcome: "cache-seeded",
+      prefetchKind: "navigation",
+      snapshot: { ...snapshot, url: prefetchKey },
+      timestamp: Date.now(),
+    });
+    cache.set(staticKey, {
+      cacheForNavigation: true,
+      outcome: "cache-seeded",
+      reuseAfterHistoryRestore: true,
+      snapshot: { ...snapshot, url: staticKey },
+      timestamp: Date.now(),
+    });
+    cache.set(dynamicKey, {
+      cacheForNavigation: true,
+      outcome: "cache-seeded",
+      reuseAfterHistoryRestore: true,
+      snapshot: { ...snapshot, dynamicStaleTimeSeconds: 30, url: dynamicKey },
+      timestamp: Date.now(),
+    });
+    cache.set(interceptedKey, {
+      cacheForNavigation: true,
+      outcome: "cache-seeded",
+      reuseAfterHistoryRestore: true,
+      snapshot: { ...snapshot, url: "/intercepted.rsc" },
+      timestamp: Date.now(),
+    });
+    prefetched.add(navigationKey);
+    prefetched.add(prefetchKey);
+    const pingVisibleLinks = vi.fn();
+    Reflect.set(globalThis.window, Symbol.for("vinext.navigationRuntime"), {
+      bootstrap: { routeManifest: null, rsc: undefined },
+      functions: { pingVisibleLinks },
+    });
+
+    disableNavigationResponsePrefetchCacheReuse();
+
+    expect(cache.get(navigationKey)?.cacheForNavigation).toBe(false);
+    expect(cache.get(prefetchKey)?.cacheForNavigation).toBe(true);
+    expect(cache.get(staticKey)?.cacheForNavigation).toBe(true);
+    expect(cache.get(dynamicKey)?.cacheForNavigation).toBe(true);
+    expect(cache.get(interceptedKey)?.cacheForNavigation).toBe(true);
+    expect(prefetched).toEqual(new Set([navigationKey, prefetchKey]));
+    expect(pingVisibleLinks).toHaveBeenCalledTimes(1);
+
+    cache.delete(navigationKey);
+    pingVisibleLinks.mockClear();
+    disableNavigationResponsePrefetchCacheReuse();
+    expect(pingVisibleLinks).not.toHaveBeenCalled();
   });
 
   it("reuses a prefetched response only when mounted-slot context matches", () => {
