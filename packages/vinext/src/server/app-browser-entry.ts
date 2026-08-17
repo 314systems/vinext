@@ -180,6 +180,7 @@ import {
   resolvePrefetchNavigationResponseUrl,
 } from "./app-browser-prefetch-response.js";
 import {
+  canCommitOptimisticRouteTemplate,
   createOptimisticRouteTemplate,
   getOptimisticPrefetchSourceKey,
   getOptimisticRouteTemplateKey,
@@ -2084,7 +2085,18 @@ function bootstrapHydration(
               templates: optimisticRouteTemplates,
             });
 
-            if (optimisticPayload !== null) {
+            if (
+              optimisticPayload !== null &&
+              canCommitOptimisticRouteTemplate({
+                currentElements: navigationInitiationState.elements,
+                currentLayoutIds: navigationInitiationState.layoutIds,
+                currentParams: navigationInitiationState.navigationSnapshot.params,
+                routeManifest,
+                targetRouteParams: optimisticPayload.routeParams,
+                targetUrlParts: optimisticPayload.urlParts,
+                template: optimisticPayload.template,
+              })
+            ) {
               detachedNavigationCommits = true;
               const optimisticNavigationSnapshot = createClientNavigationRenderSnapshot(
                 currentHref,
