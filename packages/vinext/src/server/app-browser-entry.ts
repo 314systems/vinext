@@ -88,6 +88,7 @@ import {
   type PendingBrowserRouterState,
 } from "./app-browser-navigation-controller.js";
 import { AppBrowserMpaNavigationScheduler } from "./app-browser-mpa-navigation.js";
+import { shouldRecoverSamePathSearchCommitOnResponseCompletion } from "./app-browser-navigation-response.js";
 import {
   resolveManifestNavigationInterceptionContext,
   resolveMiddlewareRewriteNavigationInterceptionContext,
@@ -617,6 +618,7 @@ type RenderNavigationPayloadOptions = {
   historyUpdateMode: HistoryUpdateMode | undefined;
   navigationCommitKind?: "authoritative" | "detached";
   navigationInitiationState: AppRouterState;
+  navigationResponseCompletion?: Promise<unknown>;
   navigationSnapshot: ClientNavigationRenderSnapshot;
   navId: number;
   onCommittedState?: (state: AppRouterState) => void;
@@ -644,6 +646,7 @@ async function renderNavigationPayload(
     historyUpdateMode: options.historyUpdateMode,
     navigationCommitKind: options.navigationCommitKind,
     navigationInitiationState: options.navigationInitiationState,
+    navigationResponseCompletion: options.navigationResponseCompletion,
     navigationSnapshot: options.navigationSnapshot,
     navId: options.navId,
     nextElements: options.payload,
@@ -2275,6 +2278,15 @@ function bootstrapHydration(
           navigationCommitKind: detachedNavigationCommits ? "authoritative" : undefined,
           navigationInitiationState,
           navigationSnapshot,
+          navigationResponseCompletion: shouldRecoverSamePathSearchCommitOnResponseCompletion({
+            basePath: __basePath,
+            currentSnapshot: navigationInitiationState.navigationSnapshot,
+            navigationKind,
+            programmaticTransition,
+            targetUrl: url,
+          })
+            ? cacheBufferPromise
+            : undefined,
           navId,
           onCommittedState: (state) => {
             committedState = state;
