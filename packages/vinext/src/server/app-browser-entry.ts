@@ -1249,6 +1249,19 @@ function restoreHydrationNavigationContext(
   });
 }
 
+function restoreEmbeddedHydrationNavigationContext(
+  pathname: string,
+  searchParams: SearchParamInput,
+  params: Record<string, string | string[]>,
+  searchParamsFromBrowser: boolean,
+): void {
+  restoreHydrationNavigationContext(
+    pathname,
+    searchParamsFromBrowser ? window.location.search : searchParams,
+    params,
+  );
+}
+
 function restorePopstateScrollPosition(
   state: unknown,
   options?: {
@@ -1444,7 +1457,12 @@ function applyRuntimeRscBootstrap(rsc: NavigationRuntimeRscBootstrap): void {
     applyClientParams(rsc.params);
   }
   if (rsc.nav) {
-    restoreHydrationNavigationContext(rsc.nav.pathname, rsc.nav.searchParams, params);
+    restoreEmbeddedHydrationNavigationContext(
+      rsc.nav.pathname,
+      rsc.nav.searchParams,
+      params,
+      rsc.searchParamsFromBrowser === true,
+    );
   }
 }
 
