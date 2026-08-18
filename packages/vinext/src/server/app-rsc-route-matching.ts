@@ -6,6 +6,7 @@ import {
   matchRoutePatternPrefix,
   type RoutePatternParams,
 } from "../routing/route-pattern.js";
+import { createAppRouteGraphInterceptionId } from "../routing/app-route-graph.js";
 import {
   decodeMatchedParams,
   splitPathnameForRouteMatch,
@@ -117,6 +118,7 @@ type AppRscInterceptLoadState = {
 };
 
 type AppRscInterceptLookupEntry = {
+  interceptionId: string | null;
   interceptionGraphId: string | null;
   sourceRouteIndex: number;
   slotKey: string;
@@ -191,7 +193,11 @@ export function createAppRscRouteMatcher<Route extends AppRscRouteForMatching>(
 ): {
   matchRoute(url: string): { route: Route; params: AppRscRouteParams } | null;
   matchRequestRoute(url: string): { route: Route; params: AppRscRouteParams } | null;
-  findIntercept(pathname: string, sourcePathname?: string | null): AppRscInterceptMatch | null;
+  findIntercept(
+    pathname: string,
+    sourcePathname?: string | null,
+    interceptionId?: string | null,
+  ): AppRscInterceptMatch | null;
 } {
   const routeTrie = buildRouteTrie(routes);
   const interceptLookup = createInterceptLookup(routes);
@@ -212,7 +218,7 @@ export function createAppRscRouteMatcher<Route extends AppRscRouteForMatching>(
       normalizeMatchedParamsForRoute(result);
       return result;
     },
-    findIntercept(pathname, sourcePathname = null) {
+    findIntercept(pathname, sourcePathname = null, interceptionId = null) {
       // Mirror Next.js' rewrite semantics: interception only fires when the
       // Next-URL header is present AND matches the intercepting route's regex
       // (with descendants allowed). Without a source pathname there is no
@@ -225,6 +231,7 @@ export function createAppRscRouteMatcher<Route extends AppRscRouteForMatching>(
       const matchedSourceRoute = trieMatchRaw(routeTrie, sourceParts);
 
       for (const entry of interceptLookup) {
+        if (interceptionId !== null && entry.interceptionId !== interceptionId) continue;
         // Primary gate: when the intercept declares a `sourceMatchPattern`
         // (the intercepting route's path, descendants allowed), require the
         // request's source pathname to satisfy it. This mirrors Next.js'
@@ -440,6 +447,14 @@ function createInterceptLookup<Route extends AppRscRouteForMatching>(
               ? (patternToIndex.get(sourceMatchPattern) ?? routeIndex)
               : routeIndex;
           interceptLookup.push({
+            interceptionId:
+              typeof slotModule.id === "string" && sourceMatchPattern !== null
+                ? createAppRouteGraphInterceptionId(
+                    slotModule.id,
+                    sourceMatchPattern,
+                    intercept.targetPattern,
+                  )
+                : null,
             interceptionGraphId: null,
             sourceRouteIndex: ownerRouteIndex,
             slotKey,
@@ -482,6 +497,7 @@ function createInterceptLookup<Route extends AppRscRouteForMatching>(
           ? sourceMatchPattern.split("/").filter(Boolean)
           : null;
         interceptLookup.push({
+          interceptionId: typeof intercept.id === "string" ? intercept.id : null,
           interceptionGraphId: typeof intercept.id === "string" ? intercept.id : null,
           sourceRouteIndex: routeIndex,
           slotKey: SIBLING_PAGE_INTERCEPT_SLOT_KEY,
