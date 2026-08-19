@@ -21,9 +21,11 @@ import type {
 import type { ImageConfig } from "../server/image-optimization.js";
 import type { AppRoute } from "../routing/app-router.js";
 import { generateDevOriginCheckCode } from "../server/dev-origin-check.js";
+import { safeJsonStringify } from "../server/html.js";
 import type { MetadataFileRoute } from "../server/metadata-routes.js";
 import { isProxyFile } from "../server/middleware.js";
 import { DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "../server/image-optimization.js";
+import { ACTION_OWNER_MANIFEST_ID } from "../plugins/action-owner-manifest.js";
 
 const DEFAULT_EXPIRE_TIME = 31_536_000;
 const DEFAULT_REACT_MAX_HEADERS_LENGTH = 6000;
@@ -48,13 +50,17 @@ const appRouteHandlerResponsePath = resolveEntryPath(
   "../server/app-route-handler-response.js",
   import.meta.url,
 );
+const appServerActionExecutionPath = resolveEntryPath(
+  "../server/app-server-action-execution.js",
+  import.meta.url,
+);
+const appActionForwardingPath = resolveEntryPath(
+  "../server/app-action-forwarding.js",
+  import.meta.url,
+);
 const appMiddlewarePath = resolveEntryPath("../server/app-middleware.js", import.meta.url);
 const metadataRouteResponsePath = resolveEntryPath(
   "../server/metadata-route-response.js",
-  import.meta.url,
-);
-const appServerActionExecutionPath = resolveEntryPath(
-  "../server/app-server-action-execution.js",
   import.meta.url,
 );
 const appRscErrorsPath = resolveEntryPath("../server/app-rsc-errors.js", import.meta.url);
@@ -122,6 +128,7 @@ const appPagesBridgePath = resolveEntryPath("../server/app-pages-bridge.js", imp
  * Passed from the Vite plugin where the full next.config.js is loaded.
  */
 type AppRouterConfig = {
+  actionOwners?: Record<string, string[]> | null;
   redirects?: NextRedirect[];
   rewrites?: {
     beforeFiles: NextRewrite[];
@@ -236,6 +243,7 @@ export function generateRscEntry(
   const cacheComponents = config?.cacheComponents === true;
   const prefetchInlining = config?.prefetchInlining ?? false;
   const hasServerActions = config?.hasServerActions !== false;
+  const actionOwners = config?.actionOwners;
   const hasAppRouteHandlers = routes.some((route) => route.routePath !== null);
   const i18nConfig = config?.i18n ?? null;
   const hasPagesDir = config?.hasPagesDir ?? false;
@@ -315,6 +323,7 @@ const prerenderToReadableStream = createRscPrerenderer(async (model, options) =>
 import { createElement } from "react";
 import { getNavigationContext as _getNavigationContext } from "next/navigation";
 import { configureMemoryCacheHandler as __configureMemoryCacheHandler } from "vinext/shims/cache-handler";
+import { getRequestExecutionContext as __getRequestExecutionContext } from "vinext/shims/request-context";
 import { headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, consumeInvalidDynamicUsageError, setHeadersAccessPhase } from "next/headers";
 import { mergeMetadata, resolveModuleMetadata, mergeViewport, resolveModuleViewport } from "vinext/metadata";
 ${
@@ -332,6 +341,11 @@ import { ensureInstrumentationRegistered as __ensureInstrumentationRegistered } 
 import { createAppRscHandler } from "vinext/server/app-rsc-handler";
 import { registerConfiguredCacheAdapters as __registerConfiguredCacheAdapters } from "virtual:vinext-cache-adapters";
 import __pagesClientAssets from "virtual:vinext-pages-client-assets";
+${
+  actionOwners === undefined
+    ? `import __vinextActionOwners from ${JSON.stringify(ACTION_OWNER_MANIFEST_ID)};`
+    : ""
+}
 import { setPagesClientAssets as __setPagesClientAssets } from "vinext/server/pages-client-assets";
 import { decodePathParams as __decodePathParams } from ${JSON.stringify(normalizePathModulePath)};
 import { buildRequestHeadersFromMiddlewareResponse as __buildRequestHeadersFromMiddlewareResponse } from ${JSON.stringify(middlewareRequestHeadersPath)};
@@ -345,7 +359,8 @@ ${
 const __loadAppRouteHandlerDispatch = () => import(${JSON.stringify(appRouteHandlerDispatchPath)});
 ${
   hasServerActions
-    ? `const __loadAppServerActionExecution = () => import(${JSON.stringify(appServerActionExecutionPath)});`
+    ? `const __loadAppServerActionExecution = () => import(${JSON.stringify(appServerActionExecutionPath)});
+const __loadAppActionForwarding = () => import(${JSON.stringify(appActionForwardingPath)});`
     : ""
 }
 ${
@@ -436,7 +451,6 @@ import { renderPagesFallback as __renderPagesFallback } from ${JSON.stringify(ap
 // so per-route dispatch can opt into suppression via .run(true, ...).
 import { suppressHookWarningAls } from ${JSON.stringify(appHookWarningSuppressionPath)};
 import { clearAppRequestContext as __clearRequestContext, setAppNavigationContext as setNavigationContext } from ${JSON.stringify(appRequestContextPath)};
-
 __configureMemoryCacheHandler({ cacheMaxMemorySize: ${JSON.stringify(cacheMaxMemorySize)} });
 import { createAppPrerenderStaticParamsResolver as __createAppPrerenderStaticParamsResolver } from ${JSON.stringify(appPrerenderStaticParamsPath)};
 import { ensureAppRouteModulesLoaded as __ensureRouteLoaded, loadAppInterceptPage as __loadAppInterceptPage } from ${JSON.stringify(appRouteModuleLoaderPath)};
@@ -754,7 +768,8 @@ ${rootParamNameEntries.join("\n")}
 };
 
 __setPagesClientAssets(__pagesClientAssets);
-export default createAppRscHandler({
+function __VINEXT_ACTION_OWNERS() { return ${actionOwners === undefined ? "__vinextActionOwners" : safeJsonStringify(actionOwners)}; }
+const __appRscHandler = createAppRscHandler({
   basePath: __basePath,
   buildId: process.env.__VINEXT_BUILD_ID ?? null,
   ensureRouteLoaded: __ensureRouteLoaded,
@@ -1057,6 +1072,10 @@ export default createAppRscHandler({
       isProgressiveServerActionRequest: __isProgressiveServerActionRequest,
       readActionFormDataWithLimit: __readFormDataWithLimit,
     } = await __loadAppServerActionExecution();
+    const {
+      areServerActionsOwnedByRoute: __areServerActionsOwnedByRoute,
+      forwardServerActionIfNeeded: __forwardServerActionIfNeeded,
+    } = await __loadAppActionForwarding();
     // A multipart form POST to a page is always a server-action attempt, so a
     // body that decodes to no action must surface as 404 action-not-found
     // (#1340). Route handlers run after this dispatch and accept raw multipart
@@ -1089,6 +1108,39 @@ export default createAppRscHandler({
       decodeFormState,
       getAndClearPendingCookies,
       getDraftModeCookieHeader,
+      forwardAction(__progressiveActionId) {
+        return __forwardServerActionIfNeeded({
+          actionId: __progressiveActionId,
+          actionOwners: __VINEXT_ACTION_OWNERS(),
+          allowedOrigins: __allowedOrigins,
+          basePath: __basePath,
+          clearRequestContext: __clearRequestContext,
+          currentRoutePattern: routeMatch?.route.pattern ?? null,
+          dispatch(__forwardRequest) {
+            const __executionContext = __getRequestExecutionContext();
+            return __appRscHandler(
+              __forwardRequest,
+              __executionContext
+                ? {
+                    actionForwarded: true,
+                    cache: __executionContext.cache,
+                    passThroughOnException: __executionContext.passThroughOnException?.bind(__executionContext),
+                    waitUntil: __executionContext.waitUntil.bind(__executionContext),
+                  }
+                : { actionForwarded: true },
+            );
+          },
+          middlewareContext,
+          request,
+        });
+      },
+      validateActionReferences(__progressiveActionIds) {
+        return __areServerActionsOwnedByRoute(
+          __VINEXT_ACTION_OWNERS(),
+          __progressiveActionIds,
+          routeMatch?.route.pattern ?? null,
+        );
+      },
       hasPageRoute: __hasPageRoute,
       maxActionBodySize: __MAX_ACTION_BODY_SIZE,
       middlewareHeaders: middlewareContext.headers,
@@ -1114,6 +1166,34 @@ export default createAppRscHandler({
     sourceConfigHeaders,
     searchParams,
   }) {
+    const { forwardServerActionIfNeeded: __forwardServerActionIfNeeded } =
+      await __loadAppActionForwarding();
+    const __currentActionMatch = routeMatch;
+    const __forwardResponse = await __forwardServerActionIfNeeded({
+      actionId,
+      actionOwners: __VINEXT_ACTION_OWNERS(),
+      allowedOrigins: __allowedOrigins,
+      basePath: __basePath,
+      clearRequestContext: __clearRequestContext,
+      currentRoutePattern: __currentActionMatch?.route.pattern ?? null,
+      dispatch(__forwardRequest) {
+        const __executionContext = __getRequestExecutionContext();
+        return __appRscHandler(
+          __forwardRequest,
+          __executionContext
+            ? {
+                actionForwarded: true,
+                cache: __executionContext.cache,
+                passThroughOnException: __executionContext.passThroughOnException?.bind(__executionContext),
+                waitUntil: __executionContext.waitUntil.bind(__executionContext),
+              }
+            : { actionForwarded: true },
+        );
+      },
+      middlewareContext,
+      request,
+    });
+    if (__forwardResponse) return __forwardResponse;
     const {
       handleServerActionRscRequest: __handleServerActionRscRequest,
       readActionBodyWithLimit: __readBodyWithLimit,
@@ -1180,6 +1260,9 @@ export default createAppRscHandler({
       },
       createTemporaryReferenceSet,
       decodeReply,
+      dispatchRedirectRequest(redirectRequest) {
+        return __appRscHandler(redirectRequest, undefined);
+      },
       draftModeSecret: __draftModeSecret,
       findIntercept(pathnameToMatch) {
         return findIntercept(pathnameToMatch, interceptionContext);
@@ -1358,6 +1441,8 @@ export default createAppRscHandler({
   trailingSlash: __trailingSlash,
   validateDevRequestOrigin: __validateDevRequestOrigin,
 });
+
+export default __appRscHandler;
 
 if (import.meta.hot) {
   import.meta.hot.accept();
