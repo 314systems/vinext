@@ -12,13 +12,12 @@ import {
   matchAppRoute,
 } from "../routing/app-router.js";
 import { apiRouter, matchRoute, pagesRouter } from "../routing/pages-router.js";
-import { normalizeStaticPathsEntry, type StaticPathsEntry } from "../routing/route-pattern.js";
 import {
-  getAppRouteRenderEntryPath,
-  classifyAppRoute,
-  classifyPagesRoute,
-  hasNamedExport,
-} from "./report.js";
+  normalizeStaticPathname,
+  normalizeStaticPathsEntry,
+  type StaticPathsEntry,
+} from "../routing/route-pattern.js";
+import { getAppRouteRenderEntryPath, classifyAppRoute, classifyPagesRoute } from "./report.js";
 import { buildUrlFromParams, resolveParentParams, type StaticParamsMap } from "./prerender.js";
 import { readPrerenderSecret } from "./server-manifest.js";
 import { startProdServer } from "../server/prod-server.js";
@@ -68,6 +67,7 @@ type EmitPrerenderPathManifestOptions = {
   routeRootConfig?: VinextRouteRootConfig | null;
   pagesBundlePath?: string;
   rscBundlePath?: string;
+  buildIdentity?: CdnCacheAdapterCapabilities["buildIdentity"];
   responseVary?: CdnCacheAdapterCapabilities["responseVary"];
 };
 
@@ -137,6 +137,111 @@ function validatePagesStaticPathsResult(
   };
 }
 
+type DynamicPatternParam = { name: string; optional: boolean; repeat: boolean };
+
+function hasUnsafeRawUrlPathCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code === 92 || code <= 31 || code === 127) return true;
+  }
+  return false;
+}
+
+function getDynamicPatternParams(pattern: string): DynamicPatternParam[] {
+  return pattern
+    .split("/")
+    .filter((segment) => segment.startsWith(":"))
+    .map((segment) => ({
+      name: segment.slice(1, segment.endsWith("+") || segment.endsWith("*") ? -1 : undefined),
+      optional: segment.endsWith("*"),
+      repeat: segment.endsWith("+") || segment.endsWith("*"),
+    }));
+}
+
+function validateDiscoveredParams(
+  value: unknown,
+  pattern: string,
+  source: "generateStaticParams" | "getStaticPaths",
+): Record<string, string | string[]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${source} must return parameter objects for ${pattern}.`);
+  }
+
+  const params = { ...(value as Record<string, unknown>) };
+  for (const { name, optional, repeat } of getDynamicPatternParams(pattern)) {
+    const hasValue = Object.prototype.hasOwnProperty.call(params, name);
+    let paramValue = params[name];
+    if (
+      optional &&
+      hasValue &&
+      (paramValue === null || paramValue === undefined || paramValue === false)
+    ) {
+      paramValue = [];
+      params[name] = paramValue;
+    }
+    const valid = repeat
+      ? Array.isArray(paramValue) && paramValue.every((entry) => typeof entry === "string")
+      : typeof paramValue === "string";
+    if (!valid) {
+      throw new Error(
+        `Parameter ${name} from ${source} for ${pattern} must be ${repeat ? "an array of strings" : "a string"}.`,
+      );
+    }
+    const values = Array.isArray(paramValue) ? paramValue : [paramValue];
+    if (values.some((entry) => entry === "." || entry === "..")) {
+      throw new Error(
+        `Parameter ${name} from ${source} for ${pattern} must not contain dot path segments.`,
+      );
+    }
+  }
+  return params as Record<string, string | string[]>;
+}
+
+function validatePagesStaticPathsEntry(entry: StaticPathsEntry, pattern: string): StaticPathsEntry {
+  if (typeof entry === "string") {
+    if (
+      !entry.startsWith("/") ||
+      entry.includes("//") ||
+      entry.includes("?") ||
+      entry.includes("#") ||
+      hasUnsafeRawUrlPathCharacter(entry)
+    ) {
+      throw new Error(
+        `The provided path \`${entry}\` from getStaticPaths does not match the route pattern \`${pattern}\`.`,
+      );
+    }
+    let decodedSegments: string[];
+    try {
+      decodedSegments = entry.split("/").map((segment) => decodeURIComponent(segment));
+    } catch {
+      throw new Error(
+        `The provided path \`${entry}\` from getStaticPaths contains malformed percent-encoding.`,
+      );
+    }
+    if (decodedSegments.some((segment) => segment === "." || segment === "..")) {
+      throw new Error(
+        `The provided path \`${entry}\` from getStaticPaths contains a dot path segment.`,
+      );
+    }
+    return entry;
+  }
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return entry;
+
+  const extraKeys = Object.keys(entry).filter((key) => key !== "params" && key !== "locale");
+  if (extraKeys.length > 0) {
+    throw new Error(
+      `Additional key(s) returned from getStaticPaths for ${pattern}: ${extraKeys.join(", ")}.`,
+    );
+  }
+  if (entry.locale !== undefined && typeof entry.locale !== "string") {
+    throw new Error(`Invalid locale returned from getStaticPaths for ${pattern}.`);
+  }
+  return {
+    ...entry,
+    params: validateDiscoveredParams(entry.params, pattern, "getStaticPaths"),
+  };
+}
+
 async function fetchDiscoveryEndpoint(
   url: string,
   headers: Record<string, string>,
@@ -150,7 +255,7 @@ async function fetchDiscoveryEndpoint(
     });
     const text = await res.text();
     if (!res.ok) throw new Error(`path discovery returned HTTP ${res.status}`);
-    if (text === "null") return null;
+    if (res.status === 204) return null;
     return text;
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
@@ -159,15 +264,6 @@ async function fetchDiscoveryEndpoint(
     throw error;
   } finally {
     clearTimeout(timeout);
-  }
-}
-
-function fileHasNamedExport(filePath: string | null | undefined, name: string): boolean {
-  if (!filePath) return false;
-  try {
-    return hasNamedExport(fs.readFileSync(filePath, "utf-8"), name);
-  } catch {
-    return false;
   }
 }
 
@@ -207,11 +303,6 @@ function resolveConfiguredRouteDirs(
   };
 }
 
-function appRouteMayHaveGenerateStaticParams(route: Awaited<ReturnType<typeof appRouter>>[number]) {
-  if (fileHasNamedExport(route.pagePath, "generateStaticParams")) return true;
-  return route.layouts.some((layoutPath) => fileHasNamedExport(layoutPath, "generateStaticParams"));
-}
-
 async function shouldStartPathDiscoveryServer(options: {
   appDir: string | null;
   pagesDir: string | null;
@@ -219,20 +310,12 @@ async function shouldStartPathDiscoveryServer(options: {
 }): Promise<boolean> {
   if (options.appDir) {
     const routes = await appRouter(options.appDir, options.pageExtensions);
-    if (routes.some((route) => route.isDynamic && appRouteMayHaveGenerateStaticParams(route))) {
-      return true;
-    }
+    if (routes.some((route) => route.isDynamic)) return true;
   }
 
   if (options.pagesDir) {
     const routes = await pagesRouter(options.pagesDir, options.pageExtensions);
-    if (
-      routes.some(
-        (route) => route.isDynamic && fileHasNamedExport(route.filePath, "getStaticPaths"),
-      )
-    ) {
-      return true;
-    }
+    if (routes.some((route) => route.isDynamic)) return true;
   }
 
   return false;
@@ -287,7 +370,6 @@ async function collectPagesPaths(options: {
       continue;
     }
 
-    if (!fileHasNamedExport(route.filePath, "getStaticPaths")) continue;
     if (!options.baseUrl) continue;
 
     try {
@@ -301,32 +383,44 @@ async function collectPagesPaths(options: {
         options.secretHeaders,
       );
       if (text === null) {
-        throw new Error(`Invalid value returned from getStaticPaths for ${route.pattern}.`);
+        continue;
       }
 
       const pathsResult = validatePagesStaticPathsResult(JSON.parse(text), route.pattern);
       for (const item of pathsResult.paths) {
-        let itemToNormalize = item;
+        const validatedItem = validatePagesStaticPathsEntry(item, route.pattern);
+        let itemToNormalize = validatedItem;
         let locale = options.i18n?.defaultLocale;
-        if (options.i18n && typeof item === "string") {
-          const localeInfo = extractPagesStaticPathLocale(item, options.i18n);
+        if (options.i18n && typeof validatedItem === "string") {
+          const localeInfo = extractPagesStaticPathLocale(validatedItem, options.i18n);
           itemToNormalize = localeInfo.url;
-          locale = localeInfo.locale;
-        } else if (options.i18n && item && typeof item === "object" && item.locale) {
-          if (!options.i18n.locales.includes(item.locale)) {
+        } else if (
+          options.i18n &&
+          validatedItem &&
+          typeof validatedItem === "object" &&
+          validatedItem.locale
+        ) {
+          if (!options.i18n.locales.includes(validatedItem.locale)) {
             throw new Error(
-              `Invalid locale returned from getStaticPaths for ${route.pattern}: ${item.locale}`,
+              `Invalid locale returned from getStaticPaths for ${route.pattern}: ${validatedItem.locale}`,
             );
           }
-          locale = item.locale;
+          locale = validatedItem.locale;
         }
 
         const normalized = normalizeStaticPathsEntry(itemToNormalize, route.pattern);
         if ("error" in normalized) {
           throw new Error(normalized.error);
         }
-        const pathname = buildUrlFromParams(route.pattern, normalized.params);
-        addPath(paths, seen, localizePagesPath(pathname, locale, options.i18n));
+        const pathname =
+          typeof validatedItem === "string"
+            ? normalizeStaticPathname(validatedItem)
+            : localizePagesPath(
+                buildUrlFromParams(route.pattern, normalized.params),
+                locale,
+                options.i18n,
+              );
+        addPath(paths, seen, pathname);
       }
     } catch (error) {
       throwDiscoveryFailure(route.pattern, error);
@@ -334,6 +428,22 @@ async function collectPagesPaths(options: {
   }
 
   return paths;
+}
+
+async function excludePagesApiWarmPaths(options: {
+  i18n: ResolvedNextConfig["i18n"];
+  pagesDir: string;
+  pageExtensions: readonly string[];
+  paths: readonly string[];
+}): Promise<string[]> {
+  const apiRoutes = await apiRouter(options.pagesDir, options.pageExtensions);
+  return options.paths.filter((pathname) => {
+    const pagesPathname = options.i18n
+      ? extractLocaleFromUrl(pathname, options.i18n).url
+      : pathname;
+    if (pagesPathname !== "/api" && !pagesPathname.startsWith("/api/")) return true;
+    return matchRoute(pagesPathname, apiRoutes) === null;
+  });
 }
 
 function localizePagesPath(
@@ -348,7 +458,7 @@ function localizePagesPath(
 function extractPagesStaticPathLocale(
   url: string,
   i18n: NonNullable<ResolvedNextConfig["i18n"]>,
-): { locale: string; url: string } {
+): { explicitLocalePrefix?: string; locale: string; url: string } {
   const queryIndex = url.indexOf("?");
   const pathname = queryIndex === -1 ? url : url.slice(0, queryIndex);
   const query = queryIndex === -1 ? "" : url.slice(queryIndex);
@@ -359,7 +469,7 @@ function extractPagesStaticPathLocale(
       : undefined;
   if (!locale) return extractLocaleFromUrl(url, i18n);
   const rest = `/${parts.slice(1).join("/")}`;
-  return { locale, url: `${rest || "/"}${query}` };
+  return { explicitLocalePrefix: parts[0], locale, url: `${rest || "/"}${query}` };
 }
 
 async function collectAppPaths(options: {
@@ -391,7 +501,20 @@ async function collectAppPaths(options: {
             options.secretHeaders,
           );
           if (text === null) return null;
-          return JSON.parse(text) as Record<string, string | string[]>[];
+          const value = JSON.parse(text) as unknown;
+          if (!Array.isArray(value)) {
+            throw new Error(`generateStaticParams must return an array for ${pattern}.`);
+          }
+          return value.map((entry) => {
+            if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+              throw new Error(`generateStaticParams must return parameter objects for ${pattern}.`);
+            }
+            return validateDiscoveredParams(
+              { ...params, ...(entry as Record<string, unknown>) },
+              pattern,
+              "generateStaticParams",
+            );
+          });
         })();
         void request.catch(() => staticParamsCache.delete(cacheKey));
         staticParamsCache.set(cacheKey, request);
@@ -423,7 +546,6 @@ async function collectAppPaths(options: {
       continue;
     }
 
-    if (!appRouteMayHaveGenerateStaticParams(route)) continue;
     try {
       const generateStaticParams = staticParamsMap[route.pattern];
       if (typeof generateStaticParams !== "function") continue;
@@ -471,13 +593,13 @@ async function collectAppPaths(options: {
   return { loadingShellPaths, paths };
 }
 
-async function resolveAppRscWarmPaths(options: {
+async function resolveAppWarmPaths(options: {
   appDir: string;
   i18n: ResolvedNextConfig["i18n"];
   pagesDir: string | null;
   pageExtensions: readonly string[];
   paths: readonly string[];
-}): Promise<{ loadingShellPaths: string[]; rscPaths: string[] }> {
+}): Promise<{ htmlPaths: string[]; loadingShellPaths: string[]; rscPaths: string[] }> {
   const appRoutes = await appRouter(options.appDir, options.pageExtensions);
   const [pageRoutes, apiRoutes] = options.pagesDir
     ? await Promise.all([
@@ -487,18 +609,10 @@ async function resolveAppRscWarmPaths(options: {
     : [[], []];
 
   const rscPaths: string[] = [];
+  const htmlPaths: string[] = [];
   const loadingShellPaths: string[] = [];
   for (const pathname of options.paths) {
     const appMatch = matchAppRoute(pathname, appRoutes);
-    if (!appMatch) continue;
-    // The trie returns the exact object from appRoutes. Its public matcher type
-    // exposes the shared AppRoute fields, so recover the graph-owned metadata
-    // here without rescanning the route table for every concrete path.
-    const matchedAppRoute = appMatch.route as (typeof appRoutes)[number];
-
-    const appRenderEntryPath = getAppRouteRenderEntryPath(matchedAppRoute);
-    if (!appRenderEntryPath) continue;
-
     // Pages Router i18n prefixes are routing metadata rather than part of the
     // filesystem route. Production strips them before matching Pages/API
     // routes, while the App Router still matches the original pathname.
@@ -511,16 +625,35 @@ async function resolveAppRscWarmPaths(options: {
     // rather than becoming a Pages API request after normalization.
     const isPagesApiRequest = pathname === "/api" || pathname.startsWith("/api/");
     const pagesMatch = matchRoute(pagesPathname, isPagesApiRequest ? apiRoutes : pageRoutes);
-    if (pagesMatch && pagesRouteHasPriorityOverAppRoute(pagesMatch.route, matchedAppRoute)) {
+    if (
+      pagesMatch &&
+      (!appMatch || pagesRouteHasPriorityOverAppRoute(pagesMatch.route, appMatch.route))
+    ) {
+      if (!isPagesApiRequest) htmlPaths.push(pathname);
+      continue;
+    }
+    if (!appMatch) continue;
+
+    // The trie returns the exact object from appRoutes. Its public matcher type
+    // exposes the shared AppRoute fields, so recover the graph-owned metadata
+    // here without rescanning the route table for every concrete path.
+    const matchedAppRoute = appMatch.route as (typeof appRoutes)[number];
+    const appRenderEntryPath = getAppRouteRenderEntryPath(matchedAppRoute);
+    if (!appRenderEntryPath) continue;
+    if (
+      classifyAppRoute(appRenderEntryPath, matchedAppRoute.routePath, matchedAppRoute.isDynamic)
+        .type === "api"
+    ) {
       continue;
     }
 
+    htmlPaths.push(pathname);
     rscPaths.push(pathname);
     if (appRouteHasMainTreeLoadingBoundary(matchedAppRoute)) {
       loadingShellPaths.push(pathname);
     }
   }
-  return { loadingShellPaths, rscPaths };
+  return { htmlPaths, loadingShellPaths, rscPaths };
 }
 
 function configuredRouteAffectsWarmPath(
@@ -676,29 +809,44 @@ export async function emitPrerenderPathManifest(
       ? paths.filter((pathname) => configuredRouteAffectsWarmPath(pathname, config))
       : [],
   );
-  const warmPaths = paths.filter((pathname) => !excludedWarmPathSet.has(pathname));
-  const appOwnedWarmPaths =
-    options.responseVary && appDir
-      ? await resolveAppRscWarmPaths({
-          appDir,
+  const configuredPagesWarmPaths = discoveredPagesPaths.filter(
+    (pathname) => !excludedWarmPathSet.has(pathname),
+  );
+  const resolvedPagesWarmPaths =
+    !appDir && pagesDir
+      ? await excludePagesApiWarmPaths({
           i18n: config.i18n,
           pagesDir,
           pageExtensions: config.pageExtensions,
-          paths: discoveredAppPaths.filter((pathname) => !excludedWarmPathSet.has(pathname)),
+          paths: configuredPagesWarmPaths,
         })
-      : {
-          loadingShellPaths: discoveredLoadingShellPaths,
-          rscPaths: discoveredAppPaths,
-        };
+      : configuredPagesWarmPaths;
+  const configuredCandidatePaths = paths.filter((pathname) => !excludedWarmPathSet.has(pathname));
+  const appOwnedWarmPaths = appDir
+    ? await resolveAppWarmPaths({
+        appDir,
+        i18n: config.i18n,
+        pagesDir,
+        pageExtensions: config.pageExtensions,
+        paths: configuredCandidatePaths,
+      })
+    : {
+        htmlPaths: discoveredAppPaths,
+        loadingShellPaths: discoveredLoadingShellPaths,
+        rscPaths: discoveredAppPaths,
+      };
+  const warmPaths = appDir ? appOwnedWarmPaths.htmlPaths : resolvedPagesWarmPaths;
 
   const manifest: PrerenderPathManifest = {
     ...(config.basePath ? { basePath: config.basePath } : {}),
     buildId: config.buildId,
-    ...(rscBuildId ? { buildIdentity: rscBuildId } : {}),
+    ...(rscBuildId && options.buildIdentity === "response-header"
+      ? { buildIdentity: rscBuildId }
+      : {}),
     ...(config.deploymentId ? { deploymentId: config.deploymentId } : {}),
     ...(pagesDir
       ? {
-          pagesPaths: discoveredPagesPaths.filter((pathname) => !excludedWarmPathSet.has(pathname)),
+          pagesPaths: resolvedPagesWarmPaths,
         }
       : {}),
     ...(excludedWarmPathSet.size > 0 ? { excludedWarmPaths: Array.from(excludedWarmPathSet) } : {}),
