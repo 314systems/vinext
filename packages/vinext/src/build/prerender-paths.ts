@@ -23,9 +23,21 @@ import { BLOCKED_PAGES, PHASE_PRODUCTION_BUILD } from "vinext/shims/constants";
 import { VINEXT_PRERENDER_SECRET_HEADER } from "../server/headers.js";
 import type { VinextRouteRootConfig } from "../config/prerender.js";
 import { enterPrerenderPhase } from "./prerender-phase.js";
+import type { CdnCacheAdapterCapabilities } from "../cache/cache-adapters-virtual.js";
 
 export type PrerenderPathManifest = {
+  basePath?: string;
   buildId?: string;
+  deploymentId?: string;
+  /** Opaque per-build identity emitted by RSC responses. */
+  rscBuildId?: string;
+  responseVary?: CdnCacheAdapterCapabilities["responseVary"];
+  /** App Router paths discovered without rendering their page responses. */
+  rscPaths?: string[];
+  /** App Router paths with an ordinary main-tree loading boundary. */
+  loadingShellPaths?: string[];
+  /** Pages Router paths selected by the existing HTML warm discovery pass. */
+  pagesPaths?: string[];
   trailingSlash?: boolean;
   paths: string[];
 };
@@ -44,11 +56,24 @@ type EmitPrerenderPathManifestOptions = {
   routeRootConfig?: VinextRouteRootConfig | null;
   pagesBundlePath?: string;
   rscBundlePath?: string;
+  responseVary?: CdnCacheAdapterCapabilities["responseVary"];
 };
 
 function readBuiltBuildId(serverDir: string): string | null {
   try {
     const buildId = fs.readFileSync(path.join(serverDir, "BUILD_ID"), "utf-8").trim();
+    return buildId.length > 0 ? buildId : null;
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function readBuiltRscBuildId(serverDir: string): string | null {
+  try {
+    const buildId = fs.readFileSync(path.join(serverDir, "RSC_BUILD_ID"), "utf-8").trim();
     return buildId.length > 0 ? buildId : null;
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
@@ -246,10 +271,12 @@ async function collectAppPaths(options: {
   baseUrl: string | null;
   pageExtensions: readonly string[];
   secretHeaders: Record<string, string>;
-}): Promise<string[]> {
+}): Promise<{ loadingShellPaths: string[]; paths: string[] }> {
   const routes = await appRouter(options.appDir, options.pageExtensions);
   const paths: string[] = [];
   const seen = new Set<string>();
+  const loadingShellPaths: string[] = [];
+  const seenLoadingShellPaths = new Set<string>();
   const staticParamsCache = new Map<string, Promise<Record<string, string | string[]>[] | null>>();
   const staticParamsMap = new Proxy({} as StaticParamsMap, {
     get(_target, pattern: string) {
@@ -287,11 +314,21 @@ async function collectAppPaths(options: {
     const { type } = classifyAppRoute(renderEntryPath, route.routePath, route.isDynamic);
     if (type === "api") continue;
 
-    const isConfiguredDynamic = type === "ssr" && !route.isDynamic;
-    if (isConfiguredDynamic) continue;
+    const hasMainTreeLoadingBoundary =
+      route.loadingPath != null ||
+      (route.loadingPaths?.some(
+        (_loadingPath, index) => (route.loadingTreePositions?.[index] ?? 0) > 0,
+      ) ??
+        false);
+    const addDiscoveredPath = (pathname: string): void => {
+      addPath(paths, seen, pathname);
+      if (hasMainTreeLoadingBoundary) {
+        addPath(loadingShellPaths, seenLoadingShellPaths, pathname);
+      }
+    };
 
     if (!route.isDynamic) {
-      addPath(paths, seen, route.pattern);
+      addDiscoveredPath(route.pattern);
       continue;
     }
 
@@ -326,14 +363,14 @@ async function collectAppPaths(options: {
 
       for (const params of paramSets) {
         if (params === null || params === undefined) continue;
-        addPath(paths, seen, buildUrlFromParams(route.pattern, params));
+        addDiscoveredPath(buildUrlFromParams(route.pattern, params));
       }
     } catch (error) {
       warnDiscoveryFailure(route.pattern, error);
     }
   }
 
-  return paths;
+  return { loadingShellPaths, paths };
 }
 
 async function startPathDiscoveryServer(options: {
@@ -377,12 +414,19 @@ export async function emitPrerenderPathManifest(
     ? { ...options.nextConfig }
     : { ...(await resolveNextConfig(await loadNextConfig(root, PHASE_PRODUCTION_BUILD), root)) };
   const builtBuildId = readBuiltBuildId(manifestDir) ?? readBuiltBuildId(bundleServerDir);
+  const rscBuildId = readBuiltRscBuildId(manifestDir) ?? readBuiltRscBuildId(bundleServerDir);
   if (builtBuildId) {
     config.buildId = builtBuildId;
   }
 
   const paths: string[] = [];
   const seen = new Set<string>();
+  const discoveredPagesPaths: string[] = [];
+  const seenPagesPaths = new Set<string>();
+  const discoveredAppPaths: string[] = [];
+  const seenAppPaths = new Set<string>();
+  const discoveredLoadingShellPaths: string[] = [];
+  const seenLoadingShellPaths = new Set<string>();
   await withPrerenderEndpoints(async () => {
     let prodServer: { server: HttpServer; port: number } | null = null;
     const needsServer = await shouldStartPathDiscoveryServer({
@@ -414,13 +458,18 @@ export async function emitPrerenderPathManifest(
 
     try {
       if (appDir) {
-        for (const pathname of await collectAppPaths({
+        const appPathResult = await collectAppPaths({
           appDir,
           baseUrl,
           pageExtensions: config.pageExtensions,
           secretHeaders,
-        })) {
+        });
+        for (const pathname of appPathResult.paths) {
           addPath(paths, seen, pathname);
+          addPath(discoveredAppPaths, seenAppPaths, pathname);
+        }
+        for (const pathname of appPathResult.loadingShellPaths) {
+          addPath(discoveredLoadingShellPaths, seenLoadingShellPaths, pathname);
         }
       }
 
@@ -432,6 +481,7 @@ export async function emitPrerenderPathManifest(
           secretHeaders,
         })) {
           addPath(paths, seen, pathname);
+          addPath(discoveredPagesPaths, seenPagesPaths, pathname);
         }
       }
     } finally {
@@ -442,7 +492,14 @@ export async function emitPrerenderPathManifest(
   });
 
   const manifest: PrerenderPathManifest = {
+    ...(config.basePath ? { basePath: config.basePath } : {}),
     buildId: config.buildId,
+    ...(config.deploymentId ? { deploymentId: config.deploymentId } : {}),
+    ...(pagesDir ? { pagesPaths: discoveredPagesPaths } : {}),
+    ...(rscBuildId ? { rscBuildId } : {}),
+    ...(options.responseVary ? { responseVary: options.responseVary } : {}),
+    ...(options.responseVary ? { rscPaths: discoveredAppPaths } : {}),
+    ...(options.responseVary ? { loadingShellPaths: discoveredLoadingShellPaths } : {}),
     trailingSlash: config.trailingSlash,
     paths,
   };

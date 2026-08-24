@@ -35,7 +35,7 @@ import {
 import {
   isAbsoluteOrProtocolRelativeUrl,
   normalizePathTrailingSlash,
-  toBrowserNavigationHref,
+  toCanonicalBrowserNavigationHref,
   toSameOriginAppPath,
   withBasePath,
 } from "./url-utils.js";
@@ -375,7 +375,12 @@ function prefetchUrl(
   });
   if (prefetchHref == null) return;
 
-  const fullHref = toBrowserNavigationHref(prefetchHref, window.location.href, __basePath);
+  const fullHref = toCanonicalBrowserNavigationHref(
+    prefetchHref,
+    window.location.href,
+    __basePath,
+    __trailingSlash,
+  );
   const routePrefetchHref =
     pagesRouteHref === undefined
       ? prefetchHref
@@ -384,10 +389,11 @@ function prefetchUrl(
           basePath: __basePath,
           currentOrigin: window.location.origin,
         }) ?? prefetchHref);
-  const fullRouteHref = toBrowserNavigationHref(
+  const fullRouteHref = toCanonicalBrowserNavigationHref(
     routePrefetchHref,
     window.location.href,
     __basePath,
+    __trailingSlash,
   );
   const target = new URL(fullHref, window.location.href);
   if (
@@ -454,7 +460,12 @@ function prefetchUrl(
           DYNAMIC_NAVIGATION_CACHE_TTL,
           PREFETCH_CACHE_TTL,
         } = navigation;
-        const { createRscRequestUrl } = rscCacheBusting;
+        const {
+          canonicalizeLoadingShellRscRequestHeaders,
+          canonicalizePrewarmableRscRequestHeaders,
+          createCanonicalRscRequestUrl,
+          createRscRequestUrl,
+        } = rscCacheBusting;
         const {
           NEXT_ROUTER_PREFETCH_HEADER,
           NEXT_ROUTER_SEGMENT_PREFETCH_HEADER,
@@ -477,14 +488,14 @@ function prefetchUrl(
           ? hybridRouteOwner!.resolveHybridClientRewriteHref(fullHref, __basePath)
           : null;
         const prefetchPolicyHref = rewrittenPrefetchHref ?? prefetchHref;
+        const interceptionContext = getPrefetchInterceptionContext(fullHref);
+        const mountedSlotsHeader = getMountedSlotsHeader();
         const autoPrefetch =
           mode === "auto"
             ? resolveAutoAppRoutePrefetch(prefetchPolicyHref)
             : resolveFullAppRoutePrefetch();
         if (!autoPrefetch.shouldPrefetch) return;
 
-        const interceptionContext = getPrefetchInterceptionContext(fullHref);
-        const mountedSlotsHeader = getMountedSlotsHeader();
         const isOptimisticRouteShellPrefetch = !autoPrefetch.cacheForNavigation;
         const hasSearchParams = new URL(fullHref, window.location.href).search !== "";
         const isAutomaticSearchParamShell =
@@ -524,13 +535,32 @@ function prefetchUrl(
           headers.set(NEXT_ROUTER_PREFETCH_HEADER, "1");
           headers.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, "1");
         }
+        const canUseCanonicalSharedRequest =
+          process.env.__VINEXT_CANONICAL_RSC_REQUESTS === "1" &&
+          interceptionContext === null &&
+          mountedSlotsHeader === null &&
+          (rewrittenPrefetchHref === null || rewrittenPrefetchHref === fullHref) &&
+          !requiresRouteTreePrefetch &&
+          !__prefetchInlining;
+        const usesCanonicalLoadingShell =
+          canUseCanonicalSharedRequest &&
+          isOptimisticRouteShellPrefetch &&
+          canonicalizeLoadingShellRscRequestHeaders(headers);
+        const usesCanonicalFullRoute =
+          canUseCanonicalSharedRequest &&
+          !isOptimisticRouteShellPrefetch &&
+          canonicalizePrewarmableRscRequestHeaders(headers);
+        const usesCanonicalPrewarmedRequest = usesCanonicalLoadingShell || usesCanonicalFullRoute;
         // Distinguish the same visible URL when it is prefetched from different
         // request contexts such as /feed vs /gallery or different mounted slots.
-        const rscUrl = await createRscRequestUrl(fullHref, headers);
+        const rscUrl = usesCanonicalFullRoute
+          ? createCanonicalRscRequestUrl(fullHref)
+          : await createRscRequestUrl(fullHref, headers);
         const additionalRscUrls =
           rewrittenPrefetchHref && rewrittenPrefetchHref !== fullHref
             ? [await createRscRequestUrl(rewrittenPrefetchHref, headers)]
             : [];
+        if (navigationEpoch !== linkPrefetchNavigationEpoch) return;
         const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
         const prefetched = getPrefetchedUrls();
         if (autoPrefetch.cacheForNavigation) {
@@ -654,6 +684,7 @@ function prefetchUrl(
         // timing so duplicate visible links see the full payload as already
         // pending while tests/userland can still observe the later data fetch.
         const gateViaRouteTree =
+          !usesCanonicalPrewarmedRequest &&
           (__prefetchInlining || requiresRouteTreePrefetch) &&
           mode === "auto" &&
           autoPrefetch.prefetchShellFirst;
@@ -663,6 +694,7 @@ function prefetchUrl(
           autoPrefetch.prefetchShellFirst &&
           mountedSlotsHeader === null;
         const gateViaLoadingShell =
+          !usesCanonicalPrewarmedRequest &&
           (mode === "full-after-shell" || gateViaExplicitSearchShell) &&
           autoPrefetch.prefetchShellFirst;
         const fetchPromise =
@@ -695,6 +727,7 @@ function prefetchUrl(
               })()
             : fetchFullRscPayload();
         if (
+          !usesCanonicalPrewarmedRequest &&
           !__prefetchInlining &&
           mode === "full" &&
           autoPrefetch.cacheForNavigation &&
@@ -785,7 +818,7 @@ async function promotePrefetchEntriesForNavigation(href: string): Promise<void> 
   let target: URL;
   try {
     target = new URL(
-      toBrowserNavigationHref(href, window.location.href, __basePath),
+      toCanonicalBrowserNavigationHref(href, window.location.href, __basePath, __trailingSlash),
       window.location.href,
     );
   } catch {
@@ -1400,10 +1433,11 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
     // Resolve relative hrefs (#hash, ?query) for onNavigate and the navigation fallback.
     // Pages query-only links must use the rewrite-aware target resolved above,
     // so callbacks and router-error fallback agree with the actual navigation.
-    const absoluteFullHref = toBrowserNavigationHref(
+    const absoluteFullHref = toCanonicalBrowserNavigationHref(
       hasAppNavigationRuntime ? navigateHref : pagesNavigateHref,
       window.location.href,
       __basePath,
+      __trailingSlash,
     );
 
     // Call onNavigate callback if provided (Next.js 16 View Transitions support)

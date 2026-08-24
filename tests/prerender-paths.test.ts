@@ -52,6 +52,7 @@ describe("prerender path manifest", () => {
   it("writes concrete warmup paths without rendering page artifacts", async () => {
     writeFile("package.json", JSON.stringify({ type: "module" }));
     writeFile("dist/server/BUILD_ID", "build-a\n");
+    writeFile("dist/server/RSC_BUILD_ID", "rsc-build-a\n");
     writeFile("dist/server/index.js", "export default {};\n");
     writeFile("app/page.tsx", "export default function Page() { return null; }\n");
     writeFile(
@@ -62,6 +63,7 @@ describe("prerender path manifest", () => {
         "export default function Page() { return null; }",
       ].join("\n"),
     );
+    writeFile("app/cached/loading.tsx", "export default function Loading() { return null; }\n");
     writeFile(
       "app/dynamic/page.tsx",
       "export const dynamic = 'force-dynamic'; export default function Page() { return null; }\n",
@@ -70,12 +72,16 @@ describe("prerender path manifest", () => {
     const { emitPrerenderPathManifest } =
       await import("../packages/vinext/src/build/prerender-paths.js");
 
-    const manifest = await emitPrerenderPathManifest({ root: tmpDir });
+    const manifest = await emitPrerenderPathManifest({ root: tmpDir, responseVary: "verbatim" });
 
     expect(manifest).toEqual({
       buildId: "build-a",
+      loadingShellPaths: ["/cached/intro", "/cached/featured"],
+      rscBuildId: "rsc-build-a",
+      responseVary: "verbatim",
+      rscPaths: ["/", "/dynamic", "/cached/intro", "/cached/featured"],
       trailingSlash: false,
-      paths: ["/", "/cached/intro", "/cached/featured"],
+      paths: ["/", "/dynamic", "/cached/intro", "/cached/featured"],
     });
     expect(fs.existsSync(path.join(tmpDir, "dist/server/prerendered-routes"))).toBe(false);
     expect(
@@ -94,6 +100,39 @@ describe("prerender path manifest", () => {
       }),
     );
     expect(closeMock).toHaveBeenCalledOnce();
+  });
+
+  it("discovers strict-Vary RSC paths without consulting completed prerender output", async () => {
+    writeFile("package.json", JSON.stringify({ type: "module" }));
+    writeFile("dist/server/BUILD_ID", "build-a\n");
+    writeFile("dist/server/RSC_BUILD_ID", "rsc-build-a\n");
+    writeFile("dist/server/index.js", "export default {};\n");
+    writeFile("app/page.tsx", "export const revalidate = 60; export default function Page() {}\n");
+    writeFile(
+      "dist/server/vinext-prerender.json",
+      JSON.stringify({
+        buildId: "old-build",
+        routes: [
+          {
+            route: "/old",
+            status: "rendered",
+            router: "app",
+            revalidate: 60,
+            fallback: false,
+          },
+        ],
+      }),
+    );
+    const { emitPrerenderPathManifest } =
+      await import("../packages/vinext/src/build/prerender-paths.js");
+
+    const manifest = await emitPrerenderPathManifest({
+      root: tmpDir,
+      responseVary: "verbatim",
+    });
+
+    expect(manifest?.rscPaths).toEqual(["/"]);
+    expect(manifest?.rscBuildId).toBe("rsc-build-a");
   });
 
   it("skips dynamic warmup paths when static params discovery aborts", async () => {
@@ -245,6 +284,7 @@ describe("prerender path manifest", () => {
     });
 
     expect(manifest?.paths).toEqual(["/pages-only"]);
+    expect(manifest?.pagesPaths).toEqual(["/pages-only"]);
   });
 
   it("does not reload disk config when supplied resolved config", async () => {
