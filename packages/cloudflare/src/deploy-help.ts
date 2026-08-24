@@ -29,7 +29,13 @@ export function formatDeployHelp(): string {
     --warm-cdn-timeout <ms>  Per-request CDN warmup timeout (default: 10000)
     --warm-cdn-retries <n>   Retries per failed CDN warmup request (default: 1;
                              staged-version propagation default: 60)
-    --warm-cdn-strict        Fail deploy when any CDN warmup request fails
+    --warm-cdn-readiness-probes <count>
+                             Consecutive successful staged-readiness probes
+                             required before warming (default: 6)
+    --warm-cdn-readiness-probe-delay <ms>
+                             Delay between staged-readiness probes (default: 1000)
+    --dangerously-promote-on-cdn-warm-error
+                             Promote even when staged warmup cannot be verified
     --warm-cdn-no-promote    Leave the warmed Worker version staged at 0% traffic
     --warm-cdn-promotion-delay <ms>
                              Delay before promotion after warmup (default: 15000)

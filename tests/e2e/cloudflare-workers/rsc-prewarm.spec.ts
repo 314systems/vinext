@@ -8,6 +8,7 @@ import {
   type Response,
 } from "@playwright/test";
 import fs from "node:fs";
+import { VINEXT_EXPECTED_WORKER_VERSION_HEADER } from "../../../packages/cloudflare/src/version-headers.js";
 
 const TARGET_PATH = "/prewarm-target";
 const PAGES_TARGET_PATH = "/pages-prewarm";
@@ -190,6 +191,25 @@ test("deploy-prewarmed Pages HTML and RSC variants are reused", async ({
   // no-store version endpoint. This proves the promoted build is stable
   // without touching either canonical cache entry before its HIT assertion.
   await waitForStablePromotion({ baseURL, buildId, playwright, rscBuildId });
+
+  const workerName = new URL(baseURL).hostname.split(".")[0];
+  const downstreamOnlyOverride = await request.get(`${baseURL}/api/prewarm-version?downstream=1`, {
+    headers: {
+      "Cloudflare-Workers-Version-Overrides":
+        'unrelated-downstream="00000000-0000-4000-8000-000000000000"',
+    },
+  });
+  expect(downstreamOnlyOverride.ok()).toBe(true);
+
+  const mismatchedOverride = await request.get(`${baseURL}/api/prewarm-version?mismatch=1`, {
+    headers: {
+      "Cloudflare-Workers-Version-Overrides": `${workerName}="00000000-0000-4000-8000-000000000000"`,
+      [VINEXT_EXPECTED_WORKER_VERSION_HEADER]: "00000000-0000-4000-8000-000000000000",
+    },
+  });
+  expect(mismatchedOverride.status()).toBe(503);
+  expect(mismatchedOverride.headers()["cache-control"]).toBe("no-store");
+  expect(await mismatchedOverride.text()).toContain("Cloudflare invoked Worker version");
 
   const pagesResponse = await getResponseAfterPromotion(request, `${baseURL}${PAGES_TARGET_PATH}`);
   const pagesResponseHeaders = pagesResponse.headers();
