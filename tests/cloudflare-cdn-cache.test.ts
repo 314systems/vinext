@@ -21,7 +21,9 @@ import {
   finalizeAppPageRscCacheResponse,
 } from "../packages/vinext/src/server/app-page-cache-finalizer.js";
 import { finalizeAppRscResponse } from "../packages/vinext/src/server/app-rsc-response-finalizer.js";
+import { applyCdnResponseIdentityHeaders } from "../packages/vinext/src/server/cache-control.js";
 import type { RequestContext } from "../packages/vinext/src/config/request-context.js";
+import { VINEXT_CDN_BUILD_ID_HEADER } from "../packages/cloudflare/src/cache/cdn-build-id.js";
 
 const CDN_KEY = Symbol.for("vinext.cdnCacheAdapter");
 
@@ -68,7 +70,10 @@ function finalizePendingDynamicRscResponse(): Response {
 }
 
 beforeEach(resetActiveAdapter);
-afterEach(resetActiveAdapter);
+afterEach(() => {
+  resetActiveAdapter();
+  vi.unstubAllEnvs();
+});
 
 // ─── Adapter behavior ────────────────────────────────────────────────────
 
@@ -77,6 +82,32 @@ describe("CloudflareCdnCacheAdapter", () => {
 
   it("does not own background revalidation (the edge re-requests origin)", () => {
     expect(adapter.ownsBackgroundRevalidation).toBe(false);
+  });
+
+  it("stamps the application build identity on cacheable and no-store responses", () => {
+    vi.stubEnv("__VINEXT_BUILD_ID", "pinned-build");
+    vi.stubEnv("__VINEXT_RSC_BUILD_IDENTITY", "instance-a");
+
+    expect(adapter.buildResponseHeaders({ cacheControl: "s-maxage=60" })).toMatchObject({
+      [VINEXT_CDN_BUILD_ID_HEADER]: "instance-a",
+    });
+    expect(adapter.buildResponseHeaders({ cacheControl: "no-store" })).toMatchObject({
+      [VINEXT_CDN_BUILD_ID_HEADER]: "instance-a",
+    });
+  });
+
+  it("stamps build identity at the outer response boundary, including redirects", () => {
+    vi.stubEnv("__VINEXT_BUILD_ID", "build-a");
+    setCdnCacheAdapter(adapter);
+
+    const response = applyCdnResponseIdentityHeaders(
+      Response.redirect("https://example.com/target", 307),
+      new Request("https://example.com/source", { headers: { Accept: "text/html" } }),
+    );
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe("https://example.com/target");
+    expect(response.headers.get(VINEXT_CDN_BUILD_ID_HEADER)).toBe("build-a");
   });
 
   it("get returns null so the origin always renders fresh", async () => {

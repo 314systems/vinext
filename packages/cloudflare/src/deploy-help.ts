@@ -27,7 +27,8 @@ export function formatDeployHelp(): string {
     --warm-cdn-concurrency <count>
                              Maximum number of CDN warmup requests in parallel (default: 25)
     --warm-cdn-timeout <ms>  Per-request CDN warmup timeout (default: 10000)
-    --warm-cdn-retries <n>   Retries for transient CDN warmup failures (default: 1)
+    --warm-cdn-retries <n>   Retries per failed CDN warmup request (default: 1;
+                             staged-version propagation default: 60)
     --warm-cdn-strict        Fail deploy when any CDN warmup request fails
     --warm-cdn-no-promote    Leave the warmed Worker version staged at 0% traffic
     --warm-cdn-promotion-delay <ms>
@@ -48,8 +49,9 @@ export function formatDeployHelp(): string {
   a custom domain (zone analytics are unavailable on *.workers.dev) and the
   CLOUDFLARE_API_TOKEN environment variable with Zone.Analytics read permission.
 
-  CDN warmup requests populate the edge cache only in the Cloudflare data centers
-  reached by the warmup run; they do not globally prefill every edge location.
+  Workers Cache automatically uses tiered caching. Warmed entries can therefore
+  be reused outside the data center reached by the warmup request after cache
+  propagation, but the deploy does not wait for every edge location to fill.
 
   Examples:
     npx @vinext/cloudflare deploy                                      Build and deploy to production

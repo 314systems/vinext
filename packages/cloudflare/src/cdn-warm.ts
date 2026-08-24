@@ -1,5 +1,7 @@
 import path from "node:path";
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   PRERENDER_PATHS_MANIFEST,
   type PrerenderPathManifest,
@@ -21,6 +23,7 @@ import {
 } from "vinext/internal/server/app-rsc-cache-busting";
 import { isNonCacheableCacheControl } from "vinext/shims/cdn-cache";
 import { normalizePathTrailingSlash } from "vinext/shims/url-utils";
+import { VINEXT_CDN_BUILD_ID_HEADER } from "./cache/cdn-build-id.js";
 
 export type CdnWarmOptions = {
   targetUrl: string;
@@ -31,6 +34,8 @@ export type CdnWarmOptions = {
   loadingShellPaths?: readonly string[];
   /** Build identity that the warmed RSC response must have been rendered by. */
   expectedRscBuildId?: string;
+  /** Application build identity stamped by the configured CDN adapter. */
+  expectedBuildId?: string;
   deploymentId?: string;
   headers?: HeadersInit;
   concurrency?: number;
@@ -45,10 +50,16 @@ export type CdnWarmOptions = {
 
 export const DEFAULT_CDN_WARM_CONCURRENCY = 25;
 export const DEFAULT_CDN_WARM_TIMEOUT_MS = 10_000;
+const DEFAULT_STAGED_READINESS_RETRIES = 60;
+const DEFAULT_STAGED_READINESS_INTERVAL_MS = 1_000;
+const DEFAULT_STAGED_READINESS_SUCCESSES = 6;
+const STAGED_READINESS_QUERY_PARAM = "__vinext_cdn_warm_readiness";
 
 export type PrerenderCdnWarmOptions = Omit<CdnWarmOptions, "paths"> & {
   root: string;
   includeFallbackShells?: boolean;
+  /** Use the manifest build identity unless the configured adapter cannot expose it. */
+  validateBuildIdentity?: boolean;
 };
 
 export type CdnWarmResult = {
@@ -57,9 +68,20 @@ export type CdnWarmResult = {
   skipped: number;
   failed: number;
   failures: Array<{ path: string; error: string }>;
+  retryPlan: CdnWarmRequestPlan;
 };
 
+export type CdnWarmRequestPlan = {
+  loadingShellPaths: string[];
+  paths: string[];
+  rscPaths: string[];
+};
+
+export type CdnWarmReadinessResult = { ready: true } | { error: string; ready: false };
+
 export type PrerenderWarmPlan = {
+  buildId?: string;
+  buildIdentity?: string;
   deploymentId?: string;
   loadingShellPaths: string[];
   paths: string[];
@@ -104,6 +126,9 @@ function readPrerenderPathManifest(manifestPath: string): PrerenderPathManifest 
       (manifest.pagesPaths !== undefined &&
         (!Array.isArray(manifest.pagesPaths) ||
           !manifest.pagesPaths.every((pathname) => typeof pathname === "string"))) ||
+      (manifest.excludedWarmPaths !== undefined &&
+        (!Array.isArray(manifest.excludedWarmPaths) ||
+          !manifest.excludedWarmPaths.every((pathname) => typeof pathname === "string"))) ||
       (manifest.rscPaths !== undefined &&
         (!Array.isArray(manifest.rscPaths) ||
           !manifest.rscPaths.every((pathname) => typeof pathname === "string"))) ||
@@ -111,6 +136,7 @@ function readPrerenderPathManifest(manifestPath: string): PrerenderPathManifest 
         (!Array.isArray(manifest.loadingShellPaths) ||
           !manifest.loadingShellPaths.every((pathname) => typeof pathname === "string"))) ||
       (manifest.basePath !== undefined && typeof manifest.basePath !== "string") ||
+      (manifest.buildIdentity !== undefined && typeof manifest.buildIdentity !== "string") ||
       (manifest.deploymentId !== undefined && typeof manifest.deploymentId !== "string") ||
       (manifest.rscBuildId !== undefined && typeof manifest.rscBuildId !== "string") ||
       (manifest.trailingSlash !== undefined && typeof manifest.trailingSlash !== "boolean") ||
@@ -147,9 +173,11 @@ function readPrerenderPathWarmPaths(
     manifest,
     pagesPaths: (manifest.pagesPaths ?? [])
       .filter((pathname) => pathname.startsWith("/"))
+      .filter((pathname) => !manifest.excludedWarmPaths?.includes(pathname))
       .map((pathname) => applyWarmPathConfig(pathname, manifest)),
     paths: manifest.paths
       .filter((pathname) => pathname.startsWith("/"))
+      .filter((pathname) => !manifest.excludedWarmPaths?.includes(pathname))
       .map((pathname) => applyWarmPathConfig(pathname, manifest)),
   };
 }
@@ -191,10 +219,13 @@ export function readPrerenderWarmPlan(
         includeFallbackShells: true,
       })
         .filter((pathname) => pathname.startsWith("/"))
+        .filter((pathname) => !manifest.excludedWarmPaths?.includes(pathname))
         .map(applyConfig);
     }
   }
   return {
+    buildId: manifest.buildId,
+    ...(manifest.buildIdentity ? { buildIdentity: manifest.buildIdentity } : {}),
     ...(manifest.deploymentId ? { deploymentId: manifest.deploymentId } : {}),
     loadingShellPaths: supportsCanonicalRsc
       ? (manifest.loadingShellPaths ?? []).map(applyConfig)
@@ -279,11 +310,43 @@ async function fetchWithTimeout(
   }
 }
 
+async function fetchHeadersWithTimeout(
+  fetchImpl: typeof fetch,
+  url: URL,
+  timeoutMs: number,
+  headers?: HeadersInit,
+): Promise<Response> {
+  const controller = new AbortController();
+  const requestHeaders = new Headers(headers);
+  requestHeaders.set("User-Agent", "vinext-cloudflare-cdn-warm");
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timedOut = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new DOMException(`Timed out after ${timeoutMs}ms`, "AbortError"));
+      }, timeoutMs);
+    });
+    return await Promise.race([
+      fetchImpl(url, {
+        method: "GET",
+        redirect: "manual",
+        headers: requestHeaders,
+        signal: controller.signal,
+      }),
+      timedOut,
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 type WarmTarget = {
   headers?: HeadersInit;
-  kind: "html" | "rsc";
+  kind: "html" | "rsc-full" | "rsc-loading-shell";
   label: string;
   pathname: string;
+  sourcePathname: string;
 };
 
 class CdnWarmProgress {
@@ -312,15 +375,48 @@ class CdnWarmProgress {
 const REQUIRED_RSC_VARY_HEADERS = VINEXT_RSC_VARY_HEADER.split(",").map((name) =>
   name.trim().toLowerCase(),
 );
-const ADMITTED_CF_CACHE_STATUSES = new Set([
-  "HIT",
-  "MISS",
-  "EXPIRED",
-  "REVALIDATED",
-  "UPDATING",
-  "STALE",
-]);
-const NON_CACHEABLE_CF_CACHE_STATUSES = new Set(["BYPASS", "DYNAMIC"]);
+const ADMITTED_CF_CACHE_STATUSES = new Set(["HIT", "MISS", "EXPIRED", "REVALIDATED", "UPDATING"]);
+const NON_CACHEABLE_CF_CACHE_STATUSES = new Set(["BYPASS"]);
+const CDN_CACHE_POLICY_HEADERS = [
+  "Cloudflare-CDN-Cache-Control",
+  "CDN-Cache-Control",
+  "Cache-Control",
+] as const;
+
+function splitCacheControlDirectives(value: string): string[] {
+  const directives: string[] = [];
+  let start = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let index = 0; index < value.length; index++) {
+    const character = value[index];
+    if (escaped) {
+      escaped = false;
+    } else if (quoted && character === "\\") {
+      escaped = true;
+    } else if (character === '"') {
+      quoted = !quoted;
+    } else if (character === "," && !quoted) {
+      directives.push(value.slice(start, index));
+      start = index + 1;
+    }
+  }
+  directives.push(value.slice(start));
+  return directives;
+}
+
+function hasFieldQualifiedSetCookie(value: string): boolean {
+  return splitCacheControlDirectives(value).some((directive) => {
+    const separator = directive.indexOf("=");
+    if (separator === -1) return false;
+    const name = directive.slice(0, separator).trim().toLowerCase();
+    if (name !== "private" && name !== "no-cache") return false;
+    const rawFields = directive.slice(separator + 1).trim();
+    const fields =
+      rawFields.startsWith('"') && rawFields.endsWith('"') ? rawFields.slice(1, -1) : rawFields;
+    return fields.split(",").some((field) => field.trim().toLowerCase() === "set-cookie");
+  });
+}
 
 type WarmValidation =
   | { outcome: "warmed" }
@@ -328,25 +424,63 @@ type WarmValidation =
   | { outcome: "failed"; error: string };
 
 function validateCachePolicy(response: Response, requireCacheStatus: boolean): WarmValidation {
-  const nonCacheableHeaders = [
-    "Cache-Control",
-    "CDN-Cache-Control",
-    "Cloudflare-CDN-Cache-Control",
-  ].filter((name) => {
-    const value = response.headers.get(name);
-    return value !== null && isNonCacheableCacheControl(value);
-  });
+  const effectivePolicy = CDN_CACHE_POLICY_HEADERS.map((name) => ({
+    name,
+    value: response.headers.get(name),
+  })).find(
+    (entry): entry is { name: (typeof CDN_CACHE_POLICY_HEADERS)[number]; value: string } =>
+      entry.value !== null,
+  );
+  const nonCacheableHeaders =
+    effectivePolicy && isNonCacheableCacheControl(effectivePolicy.value)
+      ? [effectivePolicy.name]
+      : [];
   const hasSetCookie = response.headers.has("Set-Cookie");
   const cacheStatus = response.headers.get("CF-Cache-Status")?.trim().toUpperCase();
+
+  // Cloudflare-CDN-Cache-Control is consumed at the edge and is deliberately
+  // not forwarded to clients. A cacheable Cloudflare-specific policy can
+  // therefore coexist with a downstream `no-store` policy or a Set-Cookie
+  // header that is stripped from the cached object. CF-Cache-Status is the
+  // authoritative admission result: MISS means the response was eligible for
+  // cache, while response-time rejection is reported as BYPASS. Downstream
+  // freshness cannot reveal a stripped higher-priority edge policy.
+  if (cacheStatus && ADMITTED_CF_CACHE_STATUSES.has(cacheStatus)) {
+    if (hasSetCookie && (!effectivePolicy || !hasFieldQualifiedSetCookie(effectivePolicy.value))) {
+      return {
+        outcome: "failed",
+        error: "response sets a cookie without an observable field-qualified cache policy",
+      };
+    }
+    return { outcome: "warmed" };
+  }
+
+  if (cacheStatus && NON_CACHEABLE_CF_CACHE_STATUSES.has(cacheStatus)) {
+    const reason =
+      nonCacheableHeaders.length > 0
+        ? `${nonCacheableHeaders.join(", ")} opts out of caching`
+        : hasSetCookie
+          ? "response sets a cookie"
+          : `CF-Cache-Status is ${cacheStatus}`;
+    return { outcome: "skipped", reason };
+  }
+
+  if (cacheStatus === "DYNAMIC") {
+    if (nonCacheableHeaders.length > 0 || hasSetCookie) {
+      const reason =
+        nonCacheableHeaders.length > 0
+          ? `${nonCacheableHeaders.join(", ")} opts out of caching`
+          : "response sets a cookie";
+      return { outcome: "skipped", reason };
+    }
+    return { outcome: "failed", error: "CF-Cache-Status is DYNAMIC" };
+  }
 
   if (nonCacheableHeaders.length > 0 || hasSetCookie) {
     const reason =
       nonCacheableHeaders.length > 0
         ? `${nonCacheableHeaders.join(", ")} opts out of caching`
         : "response sets a cookie";
-    if (cacheStatus && NON_CACHEABLE_CF_CACHE_STATUSES.has(cacheStatus)) {
-      return { outcome: "skipped", reason };
-    }
     return {
       outcome: "failed",
       error: `${reason}, but CF-Cache-Status is ${cacheStatus ?? "missing"}`,
@@ -358,13 +492,30 @@ function validateCachePolicy(response: Response, requireCacheStatus: boolean): W
       ? { outcome: "failed", error: "response is missing CF-Cache-Status" }
       : { outcome: "warmed" };
   }
-  if (!ADMITTED_CF_CACHE_STATUSES.has(cacheStatus)) {
-    return { outcome: "failed", error: `CF-Cache-Status is ${cacheStatus}` };
-  }
-  return { outcome: "warmed" };
+  return { outcome: "failed", error: `CF-Cache-Status is ${cacheStatus}` };
 }
 
-function validateRscWarmResponse(response: Response, expectedRscBuildId?: string): WarmValidation {
+function validateBuildIdentity(
+  response: Response,
+  expectedBuildId?: string,
+): WarmValidation | null {
+  if (
+    expectedBuildId !== undefined &&
+    response.headers.get(VINEXT_CDN_BUILD_ID_HEADER) !== expectedBuildId
+  ) {
+    return {
+      outcome: "failed",
+      error: `response ${VINEXT_CDN_BUILD_ID_HEADER} does not match build ${expectedBuildId}`,
+    };
+  }
+  return null;
+}
+
+function validateRscWarmResponse(
+  response: Response,
+  expectedBuildId?: string,
+  expectedRscBuildId?: string,
+): WarmValidation {
   if (response.redirected || response.status < 200 || response.status >= 300) {
     return {
       outcome: "failed",
@@ -374,6 +525,8 @@ function validateRscWarmResponse(response: Response, expectedRscBuildId?: string
   if (!response.headers.get("Content-Type")?.toLowerCase().startsWith(VINEXT_RSC_CONTENT_TYPE)) {
     return { outcome: "failed", error: `expected ${VINEXT_RSC_CONTENT_TYPE} response` };
   }
+  const buildIdentityValidation = validateBuildIdentity(response, expectedBuildId);
+  if (buildIdentityValidation) return buildIdentityValidation;
   if (
     expectedRscBuildId !== undefined &&
     response.headers.get(VINEXT_RSC_BUILD_ID_HEADER) !== expectedRscBuildId
@@ -383,6 +536,8 @@ function validateRscWarmResponse(response: Response, expectedRscBuildId?: string
       error: `response ${VINEXT_RSC_BUILD_ID_HEADER} does not match build ${expectedRscBuildId}`,
     };
   }
+  const cachePolicyValidation = validateCachePolicy(response, true);
+  if (cachePolicyValidation.outcome !== "warmed") return cachePolicyValidation;
   const vary = new Set(
     (response.headers.get("Vary") ?? "")
       .split(",")
@@ -397,17 +552,200 @@ function validateRscWarmResponse(response: Response, expectedRscBuildId?: string
   if (extraVary) {
     return { outcome: "failed", error: `response Vary has unsupported field ${extraVary}` };
   }
-  return validateCachePolicy(response, true);
+  return { outcome: "warmed" };
 }
 
-function validateHtmlWarmResponse(response: Response): WarmValidation {
+function validateHtmlWarmResponse(response: Response, expectedBuildId?: string): WarmValidation {
   if (response.redirected || response.status < 200 || response.status >= 300) {
     return {
       outcome: "failed",
       error: response.redirected ? "redirected response" : `HTTP ${response.status}`,
     };
   }
-  return validateCachePolicy(response, true);
+  const buildIdentityValidation = validateBuildIdentity(response, expectedBuildId);
+  if (buildIdentityValidation) return buildIdentityValidation;
+  const cachePolicyValidation = validateCachePolicy(response, true);
+  if (cachePolicyValidation.outcome !== "warmed") return cachePolicyValidation;
+  const extraVary = (response.headers.get("Vary") ?? "")
+    .split(",")
+    .map((name) => name.trim().toLowerCase())
+    .find((name) => name && !REQUIRED_RSC_VARY_HEADERS.includes(name));
+  if (extraVary) {
+    return { outcome: "failed", error: `response Vary has unsupported field ${extraVary}` };
+  }
+  return { outcome: "warmed" };
+}
+
+function validateReadinessResponse(
+  response: Response,
+  kind: "html" | "rsc",
+  expectedBuildId?: string,
+  expectedRscBuildId?: string,
+): string | null {
+  if (response.redirected || response.status < 200 || response.status >= 300) {
+    return response.redirected ? "redirected response" : `HTTP ${response.status}`;
+  }
+  if (
+    kind === "rsc" &&
+    !response.headers.get("Content-Type")?.toLowerCase().startsWith(VINEXT_RSC_CONTENT_TYPE)
+  ) {
+    return `expected ${VINEXT_RSC_CONTENT_TYPE} response`;
+  }
+  const buildIdentityValidation = validateBuildIdentity(response, expectedBuildId);
+  if (buildIdentityValidation?.outcome === "failed") return buildIdentityValidation.error;
+  if (
+    kind === "rsc" &&
+    expectedRscBuildId !== undefined &&
+    response.headers.get(VINEXT_RSC_BUILD_ID_HEADER) !== expectedRscBuildId
+  ) {
+    return `response ${VINEXT_RSC_BUILD_ID_HEADER} does not match build ${expectedRscBuildId}`;
+  }
+  return null;
+}
+
+/**
+ * Wait until version-override requests consistently reach the uploaded build
+ * before any real cache key is filled. Every probe has a unique query key, so
+ * an early response cannot make a later readiness attempt pass from cache.
+ */
+export async function waitForCdnWarmTargetReadiness(
+  options: Pick<
+    CdnWarmOptions,
+    | "deploymentId"
+    | "expectedBuildId"
+    | "expectedRscBuildId"
+    | "fetchImpl"
+    | "headers"
+    | "retries"
+    | "targetUrl"
+    | "timeoutMs"
+  > & {
+    plan: CdnWarmRequestPlan;
+    maxAttempts?: number;
+    probeIntervalMs?: number;
+    requiredConsecutiveSuccesses?: number;
+  },
+): Promise<CdnWarmReadinessResult> {
+  const rscPath = options.plan.rscPaths[0] ?? options.plan.loadingShellPaths[0];
+  const htmlPath = options.plan.paths[0];
+  const kind = rscPath ? "rsc" : "html";
+  const pathname = rscPath ?? htmlPath;
+  if (!pathname) return { ready: true };
+  if (options.expectedBuildId === undefined && options.expectedRscBuildId === undefined) {
+    return {
+      error: "no response build identity is available for a staged-version readiness probe",
+      ready: false,
+    };
+  }
+
+  const headers = new Headers(options.headers);
+  const probePath = kind === "rsc" ? createCanonicalRscRequestUrl(pathname) : pathname;
+  if (kind === "rsc") {
+    for (const [name, value] of createCanonicalRscRequestHeaders(options.deploymentId)) {
+      headers.set(name, value);
+    }
+  } else {
+    headers.set("Accept", "text/html");
+  }
+  headers.set("Cache-Control", "no-cache");
+  headers.set("Pragma", "no-cache");
+
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_CDN_WARM_TIMEOUT_MS);
+  const probeIntervalMs = Math.max(
+    0,
+    options.probeIntervalMs ?? DEFAULT_STAGED_READINESS_INTERVAL_MS,
+  );
+  const requiredConsecutiveSuccesses = Math.max(
+    1,
+    options.requiredConsecutiveSuccesses ?? DEFAULT_STAGED_READINESS_SUCCESSES,
+  );
+  const readinessRetries = Math.max(0, options.retries ?? DEFAULT_STAGED_READINESS_RETRIES);
+  const maxAttempts = Math.max(
+    requiredConsecutiveSuccesses,
+    options.maxAttempts ?? requiredConsecutiveSuccesses + readinessRetries,
+  );
+  const probeId = randomUUID();
+  let consecutiveSuccesses = 0;
+  let lastError = "readiness probe did not run";
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const url = buildWarmupUrl(options.targetUrl, probePath);
+    url.searchParams.set(STAGED_READINESS_QUERY_PARAM, `${probeId}-${attempt}`);
+    let response: Response | undefined;
+    try {
+      response = await fetchHeadersWithTimeout(fetchImpl, url, timeoutMs, headers);
+      const validationError = validateReadinessResponse(
+        response,
+        kind,
+        options.expectedBuildId,
+        options.expectedRscBuildId,
+      );
+      if (process.env.VINEXT_CDN_WARM_DEBUG === "1") {
+        console.log(
+          `  CDN warm readiness attempt ${attempt + 1}: ` +
+            `${url.pathname}${url.search} HTTP ${response.status} ` +
+            `build=${response.headers.get(VINEXT_RSC_BUILD_ID_HEADER) ?? response.headers.get(VINEXT_CDN_BUILD_ID_HEADER) ?? "missing"}`,
+        );
+      }
+      if (validationError === null) {
+        consecutiveSuccesses++;
+        if (consecutiveSuccesses >= requiredConsecutiveSuccesses) return { ready: true };
+      } else {
+        consecutiveSuccesses = 0;
+        lastError = validationError;
+      }
+    } catch (error) {
+      consecutiveSuccesses = 0;
+      lastError =
+        error instanceof DOMException && error.name === "AbortError"
+          ? `timed out after ${timeoutMs}ms`
+          : error instanceof Error
+            ? error.message
+            : String(error);
+    } finally {
+      if (response?.body) await response.body.cancel().catch(() => {});
+    }
+    if (attempt + 1 < maxAttempts && probeIntervalMs > 0) await delay(probeIntervalMs);
+  }
+
+  return {
+    error: `${lastError}; uploaded build was not stable for ${requiredConsecutiveSuccesses} consecutive probe(s)`,
+    ready: false,
+  };
+}
+
+function shouldRetryValidationFailure(
+  response: Response,
+  target: WarmTarget,
+  options: {
+    expectedBuildId?: string;
+    expectedRscBuildId?: string;
+    retryNotFound: boolean;
+    retryPropagationFailures: boolean;
+  },
+): boolean {
+  if (!options.retryPropagationFailures) {
+    return isRetryableStatus(response.status, options.retryNotFound);
+  }
+
+  const expectedIdentities = [
+    options.expectedBuildId === undefined
+      ? null
+      : response.headers.get(VINEXT_CDN_BUILD_ID_HEADER) === options.expectedBuildId,
+    target.kind === "html" || options.expectedRscBuildId === undefined
+      ? null
+      : response.headers.get(VINEXT_RSC_BUILD_ID_HEADER) === options.expectedRscBuildId,
+  ].filter((matches): matches is boolean => matches !== null);
+
+  // A matching identity proves routing reached the uploaded Worker. From that
+  // point, retry only transient HTTP failures; response-shape and admission
+  // failures are deterministic for that build.
+  if (expectedIdentities.some((matches) => matches)) {
+    return isRetryableStatus(response.status, false);
+  }
+  if (expectedIdentities.some((matches) => !matches)) return true;
+  return isRetryableStatus(response.status, options.retryNotFound);
 }
 
 async function warmOnePath(
@@ -415,18 +753,20 @@ async function warmOnePath(
   options: Required<Pick<CdnWarmOptions, "targetUrl" | "timeoutMs" | "retries">> & {
     fetchImpl: typeof fetch;
     headers?: HeadersInit;
+    expectedBuildId?: string;
     expectedRscBuildId?: string;
-    retryAllValidationErrors: boolean;
+    retryPropagationFailures: boolean;
     retryDelayMs: number;
     retryNotFound: boolean;
   },
 ): Promise<
   | { path: string; ok: true; skipped: false }
   | { path: string; ok: true; skipped: true; reason: string }
-  | { path: string; ok: false; error: string }
+  | { path: string; ok: false; error: string; retryable: boolean }
 > {
   const url = buildWarmupUrl(options.targetUrl, target.pathname);
   let lastError = "request failed before the first attempt";
+  let lastRetryable = true;
 
   const canRetry = (attempt: number): boolean => attempt < options.retries;
 
@@ -456,8 +796,12 @@ async function warmOnePath(
         );
       }
 
-      if (target.kind === "rsc") {
-        const validation = validateRscWarmResponse(response, options.expectedRscBuildId);
+      if (target.kind !== "html") {
+        const validation = validateRscWarmResponse(
+          response,
+          options.expectedBuildId,
+          options.expectedRscBuildId,
+        );
         if (validation.outcome === "warmed") {
           return { path: target.label, ok: true, skipped: false };
         }
@@ -465,17 +809,14 @@ async function warmOnePath(
           return { path: target.label, ok: true, skipped: true, reason: validation.reason };
         }
         lastError = validation.error;
-        if (
-          !options.retryAllValidationErrors &&
-          !isRetryableStatus(response.status, options.retryNotFound)
-        )
-          break;
+        lastRetryable = shouldRetryValidationFailure(response, target, options);
+        if (!lastRetryable) break;
         if (!canRetry(attempt)) break;
         await waitBeforeRetry();
         continue;
       }
 
-      const validation = validateHtmlWarmResponse(response);
+      const validation = validateHtmlWarmResponse(response, options.expectedBuildId);
       if (validation.outcome === "warmed") {
         return { path: target.label, ok: true, skipped: false };
       }
@@ -483,12 +824,10 @@ async function warmOnePath(
         return { path: target.label, ok: true, skipped: true, reason: validation.reason };
       }
       lastError = validation.error;
-      if (
-        !options.retryAllValidationErrors &&
-        !isRetryableStatus(response.status, options.retryNotFound)
-      )
-        break;
+      lastRetryable = shouldRetryValidationFailure(response, target, options);
+      if (!lastRetryable) break;
     } catch (error) {
+      lastRetryable = true;
       if (error instanceof DOMException && error.name === "AbortError") {
         lastError = `timed out after ${options.timeoutMs}ms`;
       } else {
@@ -499,7 +838,7 @@ async function warmOnePath(
     await waitBeforeRetry();
   }
 
-  return { path: target.label, ok: false, error: lastError };
+  return { path: target.label, ok: false, error: lastError, retryable: lastRetryable };
 }
 
 async function runWithConcurrency<T, R>(
@@ -526,19 +865,23 @@ async function runWithConcurrency<T, R>(
 export async function warmCdnCache(options: CdnWarmOptions): Promise<CdnWarmResult> {
   const requests: WarmTarget[] = [];
   const htmlRequests: WarmTarget[] = [];
+  const fullRscPaths = new Set(options.rscPaths ?? []);
   const loadingShellPaths = new Set(options.loadingShellPaths ?? []);
   const commonHeaders = new Headers(options.headers);
-  for (const pathname of options.rscPaths ?? []) {
-    const rscHeaders = new Headers(commonHeaders);
-    for (const [name, value] of createCanonicalRscRequestHeaders(options.deploymentId)) {
-      rscHeaders.set(name, value);
+  for (const pathname of new Set([...fullRscPaths, ...loadingShellPaths])) {
+    if (fullRscPaths.has(pathname)) {
+      const rscHeaders = new Headers(commonHeaders);
+      for (const [name, value] of createCanonicalRscRequestHeaders(options.deploymentId)) {
+        rscHeaders.set(name, value);
+      }
+      requests.push({
+        headers: rscHeaders,
+        kind: "rsc-full",
+        label: `${pathname} (RSC full)`,
+        pathname: createCanonicalRscRequestUrl(pathname),
+        sourcePathname: pathname,
+      });
     }
-    requests.push({
-      headers: rscHeaders,
-      kind: "rsc",
-      label: `${pathname} (RSC full)`,
-      pathname: createCanonicalRscRequestUrl(pathname),
-    });
 
     if (loadingShellPaths.has(pathname)) {
       const loadingHeaders = new Headers(commonHeaders);
@@ -549,9 +892,10 @@ export async function warmCdnCache(options: CdnWarmOptions): Promise<CdnWarmResu
       }
       requests.push({
         headers: loadingHeaders,
-        kind: "rsc",
+        kind: "rsc-loading-shell",
         label: `${pathname} (RSC loading shell)`,
         pathname: await createRscRequestUrl(pathname, loadingHeaders),
+        sourcePathname: pathname,
       });
     }
   }
@@ -559,55 +903,63 @@ export async function warmCdnCache(options: CdnWarmOptions): Promise<CdnWarmResu
   for (const pathname of options.paths) {
     const htmlHeaders = new Headers(commonHeaders);
     htmlHeaders.set("Accept", "text/html");
-    htmlRequests.push({ headers: htmlHeaders, kind: "html", label: pathname, pathname });
+    htmlRequests.push({
+      headers: htmlHeaders,
+      kind: "html",
+      label: pathname,
+      pathname,
+      sourcePathname: pathname,
+    });
   }
-  // For a serialized propagating target, prove that requests have reached the
-  // uploaded build before filling any HTML cache entries.
   requests.push(...htmlRequests);
   const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_CDN_WARM_TIMEOUT_MS);
   const hasVersionOverride = new Headers(options.headers).has(WORKER_VERSION_OVERRIDE_HEADER);
   const propagatingTarget = options.propagatingTarget ?? hasVersionOverride;
-  // Immediately after upload, prove the RSC handler and immutable assets have
-  // reached the new build, then give the first real HTML fill the same retry
-  // policy. Once those gates pass, fill the remaining independent cache keys
-  // concurrently. Propagation is bounded by the retry count, never by a
-  // queue-wide wall-clock deadline that can expire before work starts.
+  // A propagating target gives every key one initial attempt, then retries only
+  // failed keys after the queue completes. Build identity validation prevents
+  // an old Worker response from being mistaken for a successful fill.
   const concurrency = Math.max(1, options.concurrency ?? DEFAULT_CDN_WARM_CONCURRENCY);
   const normalRetries = Math.max(0, options.retries ?? 1);
-  const propagationRetries = Math.max(0, options.retries ?? 30);
+  const propagationRetries = Math.max(0, options.retries ?? 60);
   const normalRetryDelayMs = Math.max(0, options.retryDelayMs ?? 0);
   const propagationRetryDelayMs = Math.max(0, options.retryDelayMs ?? 1_000);
   const fetchImpl = options.fetchImpl ?? fetch;
 
   if (requests.length === 0) {
-    return { total: 0, warmed: 0, skipped: 0, failed: 0, failures: [] };
+    return {
+      total: 0,
+      warmed: 0,
+      skipped: 0,
+      failed: 0,
+      failures: [],
+      retryPlan: { loadingShellPaths: [], paths: [], rscPaths: [] },
+    };
   }
 
   console.log(`\n  Warming CDN cache with ${requests.length} discovered request(s)...`);
 
   const progress = new CdnWarmProgress();
   let completedRequests = 0;
-  progress.update(0, requests.length, "waiting for uploaded build");
+  progress.update(0, requests.length, "starting warmup");
 
-  type WarmRetryMode = "normal" | "propagation-gate" | "propagation-pass" | "propagation-retry";
+  type WarmRetryMode = "normal" | "propagation-pass" | "propagation-retry";
   const warmTarget = (target: WarmTarget, retryMode: WarmRetryMode = "normal") => {
     const isPropagationRequest = retryMode !== "normal";
     const retries =
-      retryMode === "propagation-gate"
-        ? propagationRetries
-        : retryMode === "propagation-retry"
-          ? Math.max(0, propagationRetries - 1)
-          : retryMode === "propagation-pass"
-            ? 0
-            : normalRetries;
+      retryMode === "propagation-retry"
+        ? Math.max(0, propagationRetries - 1)
+        : retryMode === "propagation-pass"
+          ? 0
+          : normalRetries;
     return warmOnePath(target, {
       targetUrl: options.targetUrl,
       timeoutMs,
       retries,
       fetchImpl,
       headers: options.headers,
+      expectedBuildId: options.expectedBuildId,
       expectedRscBuildId: options.expectedRscBuildId,
-      retryAllValidationErrors: isPropagationRequest,
+      retryPropagationFailures: isPropagationRequest,
       retryDelayMs: isPropagationRequest ? propagationRetryDelayMs : normalRetryDelayMs,
       retryNotFound: isPropagationRequest,
     });
@@ -636,92 +988,53 @@ export async function warmCdnCache(options: CdnWarmOptions): Promise<CdnWarmResu
     );
     const failed = targets
       .map((target, index) => ({ index, result: results[index], target }))
-      .filter(({ result }) => !result.ok);
-    if (failed.length === 0 || propagationRetries === 0) return results;
+      .filter(
+        (
+          entry,
+        ): entry is {
+          index: number;
+          result: { path: string; ok: false; error: string; retryable: boolean };
+          target: WarmTarget;
+        } => !entry.result.ok,
+      );
+    const retryableFailed = failed.filter(({ result }) => result.retryable);
+    if (retryableFailed.length === 0 || propagationRetries === 0) return results;
 
     progress.finish();
     console.log(
-      `  CDN warmup: retrying ${failed.length} failed request(s) after completing the initial pass...`,
+      `  CDN warmup: retrying ${retryableFailed.length} failed request(s) after completing the initial pass...`,
     );
     const retried = await runWithConcurrency(
-      failed.map(({ target }) => target),
+      retryableFailed.map(({ target }) => target),
       concurrency,
       (target) => warmRequest(target, "propagation-retry", false),
     );
-    for (const [retryIndex, { index }] of failed.entries()) {
+    for (const [retryIndex, { index }] of retryableFailed.entries()) {
       results[index] = retried[retryIndex];
     }
     return results;
   };
 
-  /*
-   * The two gates below establish that the uploaded RSC and HTML handlers are
-   * reachable before the large concurrent pass starts. Remaining requests get
-   * one attempt first, then only failures consume their retry budget after the
-   * queue has completed. This lets a large successful queue provide additional
-   * propagation time without fetching successful cache keys twice.
-   */
-
-  const skipRequests = (
-    targets: readonly WarmTarget[],
-    error: string,
-  ): Array<{ path: string; ok: false; error: string }> =>
-    targets.map((target) => {
-      progress.update(++completedRequests, requests.length, target.label);
-      return { path: target.label, ok: false as const, error };
-    });
-
-  const warmAfterHtmlGate = async (
-    confirmed: Awaited<ReturnType<typeof warmOnePath>>[],
-    remaining: readonly WarmTarget[],
-  ): Promise<Awaited<ReturnType<typeof warmOnePath>>[]> => {
-    const htmlGateIndex = remaining.findIndex((target) => target.kind === "html");
-    if (htmlGateIndex < 0) {
-      return [...confirmed, ...(await warmPropagatingPass(remaining))];
-    }
-
-    const htmlGateResult = await warmRequest(remaining[htmlGateIndex], "propagation-gate");
-    const afterHtmlGate = remaining.filter((_target, index) => index !== htmlGateIndex);
-    if (!htmlGateResult.ok) {
-      return [
-        ...confirmed,
-        htmlGateResult,
-        ...skipRequests(
-          afterHtmlGate,
-          `skipped because the first HTML request did not reach the uploaded build: ${htmlGateResult.error}`,
-        ),
-      ];
-    }
-    return [...confirmed, htmlGateResult, ...(await warmPropagatingPass(afterHtmlGate))];
-  };
-
-  const gateIndex = propagatingTarget ? requests.findIndex((target) => target.kind === "rsc") : -1;
   let results: Awaited<ReturnType<typeof warmOnePath>>[];
-  if (gateIndex >= 0) {
-    const gateResult = await warmRequest(requests[gateIndex], "propagation-gate");
-    const remaining = requests.filter((_target, index) => index !== gateIndex);
-    if (gateResult.ok) {
-      results = await warmAfterHtmlGate([gateResult], remaining);
-    } else {
-      results = [
-        gateResult,
-        ...skipRequests(
-          remaining,
-          "skipped because the uploaded RSC build identity was not confirmed",
-        ),
-      ];
-    }
-  } else if (propagatingTarget) {
-    results = await warmAfterHtmlGate([], requests);
+  if (propagatingTarget) {
+    results = await warmPropagatingPass(requests);
   } else {
     results = await runWithConcurrency(requests, concurrency, (target) => warmRequest(target));
   }
 
   progress.finish();
 
-  const failures = results
-    .filter((result): result is { path: string; ok: false; error: string } => !result.ok)
-    .map(({ path, error }) => ({ path, error }));
+  const failedRequests = requests
+    .map((target, index) => ({ result: results[index], target }))
+    .filter(
+      (
+        entry,
+      ): entry is {
+        result: { path: string; ok: false; error: string; retryable: boolean };
+        target: WarmTarget;
+      } => !entry.result.ok,
+    );
+  const failures = failedRequests.map(({ result: { path, error } }) => ({ path, error }));
   const skippedResults = results.filter((result) => result.ok && result.skipped);
   const warmed = results.length - failures.length - skippedResults.length;
 
@@ -746,6 +1059,17 @@ export async function warmCdnCache(options: CdnWarmOptions): Promise<CdnWarmResu
     skipped: skippedResults.length,
     failed: failures.length,
     failures,
+    retryPlan: {
+      loadingShellPaths: failedRequests
+        .filter(({ target }) => target.kind === "rsc-loading-shell")
+        .map(({ target }) => target.sourcePathname),
+      paths: failedRequests
+        .filter(({ target }) => target.kind === "html")
+        .map(({ target }) => target.sourcePathname),
+      rscPaths: failedRequests
+        .filter(({ target }) => target.kind === "rsc-full")
+        .map(({ target }) => target.sourcePathname),
+    },
   };
 
   if (options.strict && failures.length > 0) {
@@ -765,5 +1089,18 @@ export async function warmCdnCacheFromPrerender(
     includeFallbackShells: options.includeFallbackShells,
     strict: options.strict,
   });
-  return warmCdnCache({ ...options, ...plan });
+  const warmPlan = {
+    deploymentId: plan.deploymentId,
+    loadingShellPaths: plan.loadingShellPaths,
+    paths: plan.paths,
+    rscPaths: plan.rscPaths,
+  };
+  return warmCdnCache({
+    ...options,
+    ...warmPlan,
+    expectedBuildId:
+      options.expectedBuildId ??
+      (options.validateBuildIdentity === false ? undefined : plan.buildIdentity),
+    expectedRscBuildId: options.expectedRscBuildId ?? plan.rscBuildId,
+  });
 }

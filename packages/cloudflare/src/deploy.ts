@@ -31,6 +31,7 @@ import {
   findVinextPrerenderConfigInPlugins,
   findVinextRouteRootConfigInPlugins,
   formatVinextPrerenderLabel,
+  hasBuildIdentityResponseHeader,
   hasVerbatimResponseVary,
   resolveVinextPrerenderDecision,
   type ResolvedVinextPrerenderConfig,
@@ -45,7 +46,13 @@ import {
   type ProjectInfo,
 } from "vinext/internal/utils/project";
 import { parseWranglerConfig, runTPR } from "./tpr.js";
-import { readPrerenderWarmPlan, warmCdnCache, type CdnWarmOptions } from "./cdn-warm.js";
+import {
+  readPrerenderWarmPlan,
+  waitForCdnWarmTargetReadiness,
+  warmCdnCache,
+  type CdnWarmOptions,
+  type CdnWarmRequestPlan,
+} from "./cdn-warm.js";
 import {
   formatMissingCacheAdapterError,
   formatImageOptimizationHint,
@@ -554,6 +561,10 @@ export async function runWranglerDeploy(
   return deployedUrl ?? "(URL not detected in wrangler output)";
 }
 
+export function hasCdnWarmRequests(plan: CdnWarmRequestPlan): boolean {
+  return plan.paths.length + plan.rscPaths.length + plan.loadingShellPaths.length > 0;
+}
+
 export async function deployWithCdnWarmup(
   root: string,
   paths: readonly string[],
@@ -570,23 +581,38 @@ export async function deployWithCdnWarmup(
     | "warmCdnPromote"
     | "warmCdnPromotionDelay"
   > &
-    Pick<CdnWarmOptions, "deploymentId" | "expectedRscBuildId" | "loadingShellPaths" | "rscPaths">,
+    Pick<
+      CdnWarmOptions,
+      "deploymentId" | "expectedBuildId" | "expectedRscBuildId" | "loadingShellPaths" | "rscPaths"
+    >,
 ): Promise<string> {
+  if (options.warmCdnStrict && paths.length > 0 && options.expectedBuildId === undefined) {
+    throw new Error(
+      "Strict CDN HTML warmup requires a CDN adapter that declares build-identity response headers. " +
+        "Configure that adapter capability or rerun without --warm-cdn-strict.",
+    );
+  }
   const upload = runWranglerVersionUpload(root, options);
   const warmUploadedVersion = (
     targetUrl: string,
     headers?: HeadersInit,
     propagatingTarget = false,
+    plan: CdnWarmRequestPlan = {
+      loadingShellPaths: [...(options.loadingShellPaths ?? [])],
+      paths: [...paths],
+      rscPaths: [...(options.rscPaths ?? [])],
+    },
   ) =>
     warmCdnCache({
       targetUrl,
-      paths,
+      paths: plan.paths,
       headers,
       propagatingTarget,
       deploymentId: options.deploymentId,
+      expectedBuildId: options.expectedBuildId,
       expectedRscBuildId: options.expectedRscBuildId,
-      loadingShellPaths: options.loadingShellPaths,
-      rscPaths: options.rscPaths,
+      loadingShellPaths: plan.loadingShellPaths,
+      rscPaths: plan.rscPaths,
       concurrency: options.warmCdnConcurrency,
       timeoutMs: options.warmCdnTimeout,
       retries: options.warmCdnRetries,
@@ -594,11 +620,26 @@ export async function deployWithCdnWarmup(
     });
 
   const wranglerConfig = parseWranglerConfig(root, options.config);
-  const deploymentStatus = readWranglerDeploymentStatus(root, options);
+  const deploymentStatus = runWranglerDeploymentStatus(root, options);
   const stagingTraffic = getZeroPercentStagingTraffic(deploymentStatus, upload.versionId);
+  const canVerifyStagedHtml = options.expectedBuildId !== undefined;
+  if (!canVerifyStagedHtml && paths.length > 0) {
+    console.warn(
+      `  CDN warmup: skipping ${paths.length} HTML request(s) because the CDN adapter does not declare build-identity response headers.`,
+    );
+  }
   let staged: ReturnType<typeof runWranglerVersionDeploy> | null = null;
   let triggersDeployedUrl: string | null = null;
-  let warmedBeforePromotion = false;
+  let stagedCacheFilled = false;
+  let remainingWarmPlan: CdnWarmRequestPlan = {
+    loadingShellPaths: [...(options.loadingShellPaths ?? [])],
+    paths: canVerifyStagedHtml ? [...paths] : [],
+    rscPaths: [...(options.rscPaths ?? [])],
+  };
+  const initialWarmRequests =
+    remainingWarmPlan.paths.length +
+    remainingWarmPlan.rscPaths.length +
+    remainingWarmPlan.loadingShellPaths.length;
   let triggersApplied = false;
 
   function applyTriggers(): void {
@@ -614,17 +655,57 @@ export async function deployWithCdnWarmup(
     } catch (error) {
       throw withStagedVersionCleanupNote(error);
     }
-    const targetUrl = resolveCdnWarmupTargetUrl(
-      root,
-      staged.deployedUrl ?? triggersDeployedUrl,
-      options,
-    );
-    const workerName = resolveWorkerNameForVersionOverride(wranglerConfig, options);
+    const targetUrl =
+      resolveCdnWarmupTargetUrl(root, triggersDeployedUrl, options) ?? staged.deployedUrl;
+    const workerName =
+      options.name ??
+      upload.workerName ??
+      resolveWorkerNameForVersionOverride(wranglerConfig, options);
     const headers = buildVersionOverrideHeaders(workerName, upload.versionId);
     if (targetUrl && headers) {
       try {
-        const warmResult = await warmUploadedVersion(targetUrl, headers, true);
-        warmedBeforePromotion = warmResult.failed === 0;
+        const stagedWarmPlan: CdnWarmRequestPlan = {
+          loadingShellPaths: remainingWarmPlan.loadingShellPaths,
+          paths: remainingWarmPlan.paths,
+          rscPaths: remainingWarmPlan.rscPaths,
+        };
+        const stagedWarmRequests =
+          stagedWarmPlan.paths.length +
+          stagedWarmPlan.rscPaths.length +
+          stagedWarmPlan.loadingShellPaths.length;
+        if (stagedWarmRequests > 0) {
+          console.log("  CDN warmup: waiting for the staged Worker version to become stable...");
+          const readiness = await waitForCdnWarmTargetReadiness({
+            targetUrl,
+            headers,
+            plan: stagedWarmPlan,
+            deploymentId: options.deploymentId,
+            expectedBuildId: options.expectedBuildId,
+            expectedRscBuildId: options.expectedRscBuildId,
+            retries: options.warmCdnRetries,
+            timeoutMs: options.warmCdnTimeout,
+          });
+          if (!readiness.ready) {
+            const message = `CDN warmup could not verify staged Worker readiness: ${readiness.error}.`;
+            if (options.warmCdnStrict || options.warmCdnPromote === false) {
+              const noPromoteNote =
+                options.warmCdnPromote === false
+                  ? " CDN warmup cannot continue because promotion is disabled and the staged version was not warmed."
+                  : "";
+              throw new Error(`${message}${noPromoteNote}`);
+            }
+            console.warn(`  ${message} Warming after promotion instead.`);
+          } else {
+            console.log("  CDN warmup: staged Worker version is stable.");
+            const warmResult = await warmUploadedVersion(targetUrl, headers, true, stagedWarmPlan);
+            stagedCacheFilled = warmResult.warmed > 0;
+            remainingWarmPlan = {
+              loadingShellPaths: warmResult.retryPlan.loadingShellPaths,
+              paths: warmResult.retryPlan.paths,
+              rscPaths: warmResult.retryPlan.rscPaths,
+            };
+          }
+        }
       } catch (error) {
         throw withStagedVersionCleanupNote(error);
       }
@@ -636,6 +717,11 @@ export async function deployWithCdnWarmup(
       );
     }
   } else {
+    if (options.warmCdnStrict && initialWarmRequests > 0) {
+      throw new Error(
+        "Strict CDN warmup cannot stage the uploaded Worker at 0% because the current deployment is not exactly one version serving 100% traffic. No traffic or triggers were changed.",
+      );
+    }
     console.warn(
       "  CDN warmup: pre-traffic version override skipped because the current deployment is not one version serving 100% traffic.",
     );
@@ -661,7 +747,7 @@ export async function deployWithCdnWarmup(
 
   let deployed: ReturnType<typeof runWranglerVersionDeploy>;
   try {
-    if (warmedBeforePromotion) {
+    if (stagedCacheFilled) {
       const promotionDelay = options.warmCdnPromotionDelay ?? DEFAULT_CDN_WARM_PROMOTION_DELAY_MS;
       if (promotionDelay > 0) {
         console.log(
@@ -674,25 +760,26 @@ export async function deployWithCdnWarmup(
       root,
       [{ versionId: upload.versionId, percentage: 100 }],
       options,
-      warmedBeforePromotion ? "promote-warmed" : "promote-uploaded",
+      stagedCacheFilled ? "promote-warmed" : "promote-uploaded",
     );
   } catch (error) {
     throw staged ? withStagedVersionCleanupNote(error) : error;
   }
-  if (!warmedBeforePromotion) {
-    try {
-      applyTriggers();
-    } catch (error) {
-      throw withPromotedVersionTriggerNote(error);
-    }
-    const targetUrl = resolveCdnWarmupTargetUrl(
-      root,
-      deployed.deployedUrl ?? triggersDeployedUrl,
-      options,
-    );
+  try {
+    applyTriggers();
+  } catch (error) {
+    throw withPromotedVersionTriggerNote(error);
+  }
+  const remainingWarmRequests =
+    remainingWarmPlan.paths.length +
+    remainingWarmPlan.rscPaths.length +
+    remainingWarmPlan.loadingShellPaths.length;
+  if (remainingWarmRequests > 0) {
+    const targetUrl =
+      resolveCdnWarmupTargetUrl(root, triggersDeployedUrl, options) ?? deployed.deployedUrl;
     if (targetUrl) {
       try {
-        await warmUploadedVersion(targetUrl, undefined, true);
+        await warmUploadedVersion(targetUrl, undefined, true, remainingWarmPlan);
       } catch (error) {
         throw withPromotedVersionWarmupNote(error);
       }
@@ -725,28 +812,11 @@ export function resolveCdnWarmupTargetUrl(
   options: Pick<DeployOptions, "preview" | "env" | "config">,
 ): string | null;
 export function resolveCdnWarmupTargetUrl(
-  root: string,
+  _root: string,
   deployedUrl: string | null,
-  options?: Pick<DeployOptions, "preview" | "env" | "config">,
+  _options?: Pick<DeployOptions, "preview" | "env" | "config">,
 ): string | null {
-  const config = parseWranglerConfig(root, options?.config);
-  const env = getWranglerTargetEnv(options ?? {});
-  const customDomain = (env ? config?.env?.[env]?.customDomain : undefined) ?? config?.customDomain;
-  if (customDomain) {
-    return `https://${customDomain}`;
-  }
   return deployedUrl;
-}
-
-function readWranglerDeploymentStatus(
-  root: string,
-  options: Pick<DeployOptions, "preview" | "env" | "name" | "config">,
-): WranglerDeploymentStatus | null {
-  try {
-    return runWranglerDeploymentStatus(root, options);
-  } catch {
-    return null;
-  }
 }
 
 export function getZeroPercentStagingTraffic(
@@ -940,6 +1010,7 @@ export async function deploy(options: DeployOptions): Promise<void> {
     nextOutput: nextConfig.output,
   });
   const hasStrictResponseVary = hasVerbatimResponseVary(viteConfigMetadata.cacheConfig);
+  const hasBuildIdentityHeader = hasBuildIdentityResponseHeader(viteConfigMetadata.cacheConfig);
   const shouldEmitPrerenderPathManifest =
     options.warmCdnCache || (!options.skipBuild && prerenderDecision);
 
@@ -1021,10 +1092,11 @@ export async function deploy(options: DeployOptions): Promise<void> {
       includeFallbackShells: options.warmCdnIncludeFallbacks,
       strict: options.warmCdnStrict,
     });
-    if (warmPlan.paths.length > 0) {
+    if (hasCdnWarmRequests(warmPlan)) {
       url = await deployWithCdnWarmup(root, warmPlan.paths, {
         ...wranglerOptions,
         deploymentId: warmPlan.deploymentId,
+        expectedBuildId: hasBuildIdentityHeader ? warmPlan.buildIdentity : undefined,
         expectedRscBuildId: warmPlan.rscBuildId,
         loadingShellPaths: warmPlan.loadingShellPaths,
         rscPaths: warmPlan.rscPaths,

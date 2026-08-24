@@ -14,6 +14,7 @@ import {
   VINEXT_RSC_BUILD_ID_HEADER,
   VINEXT_RSC_VARY_HEADER,
 } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
+import { VINEXT_CDN_BUILD_ID_HEADER } from "../packages/cloudflare/src/cache/cdn-build-id.js";
 
 let tmpDir: string;
 
@@ -30,6 +31,7 @@ function cacheableRsc(body = "flight"): Response {
       "cdn-cache-control": "public, max-age=60",
       "cf-cache-status": "MISS",
       "content-type": "text/x-component",
+      [VINEXT_CDN_BUILD_ID_HEADER]: "build-a",
       [VINEXT_RSC_BUILD_ID_HEADER]: "rsc-build-a",
       vary: VINEXT_RSC_VARY_HEADER,
     },
@@ -43,6 +45,7 @@ function cacheableHtml(body = "html"): Response {
       "cdn-cache-control": "public, max-age=60",
       "cf-cache-status": "MISS",
       "content-type": "text/html",
+      [VINEXT_CDN_BUILD_ID_HEADER]: "build-a",
     },
   });
 }
@@ -78,6 +81,7 @@ describe("Cloudflare CDN warmup", () => {
       JSON.stringify({
         basePath: "/docs",
         buildId: "build-a",
+        buildIdentity: "rsc-build-a",
         deploymentId: "dpl_123",
         loadingShellPaths: ["/dashboard"],
         paths: ["/dashboard", "/dynamic", "/pages"],
@@ -93,6 +97,8 @@ describe("Cloudflare CDN warmup", () => {
     );
 
     expect(readPrerenderWarmPlan(tmpDir)).toEqual({
+      buildId: "build-a",
+      buildIdentity: "rsc-build-a",
       deploymentId: "dpl_123",
       loadingShellPaths: ["/docs/dashboard/"],
       paths: ["/docs/dashboard/", "/docs/dynamic/", "/docs/pages/"],
@@ -115,6 +121,7 @@ describe("Cloudflare CDN warmup", () => {
     );
 
     expect(readPrerenderWarmPlan(tmpDir)).toEqual({
+      buildId: "build-a",
       loadingShellPaths: [],
       paths: ["/dashboard"],
       rscPaths: [],
@@ -125,7 +132,11 @@ describe("Cloudflare CDN warmup", () => {
     writeFile("dist/server/BUILD_ID", "build-a\n");
     writeFile(
       "dist/server/vinext-prerender-paths.json",
-      JSON.stringify({ buildId: "build-a", paths: ["/", "/cached/intro"] }),
+      JSON.stringify({
+        buildId: "build-a",
+        excludedWarmPaths: ["/blog/[slug]"],
+        paths: ["/", "/cached/intro"],
+      }),
     );
     writeFile(
       "dist/server/vinext-prerender.json",
@@ -144,10 +155,7 @@ describe("Cloudflare CDN warmup", () => {
       }),
     );
 
-    expect(readPrerenderWarmPlan(tmpDir, { includeFallbackShells: true }).paths).toEqual([
-      "/",
-      "/blog/[slug]",
-    ]);
+    expect(readPrerenderWarmPlan(tmpDir, { includeFallbackShells: true }).paths).toEqual(["/"]);
   });
 
   it("falls back to discovered paths when fallback shells were not locally rendered", () => {
@@ -187,6 +195,7 @@ describe("Cloudflare CDN warmup", () => {
 
     const result = await warmCdnCache({
       deploymentId: "dpl_123",
+      expectedBuildId: "build-a",
       expectedRscBuildId: "rsc-build-a",
       fetchImpl: fetchImpl as typeof fetch,
       loadingShellPaths: ["/search?q=x"],
@@ -195,7 +204,14 @@ describe("Cloudflare CDN warmup", () => {
       targetUrl: "https://app.example.com",
     });
 
-    expect(result).toEqual({ total: 3, warmed: 3, skipped: 0, failed: 0, failures: [] });
+    expect(result).toEqual({
+      total: 3,
+      warmed: 3,
+      skipped: 0,
+      failed: 0,
+      failures: [],
+      retryPlan: { loadingShellPaths: [], paths: [], rscPaths: [] },
+    });
     expect(fetchImpl).toHaveBeenCalledTimes(3);
     const fullCall = fetchImpl.mock.calls.find((call) => {
       const headers = new Headers(call[1]?.headers);
@@ -265,10 +281,17 @@ describe("Cloudflare CDN warmup", () => {
         strict: true,
         targetUrl: "https://app.example.com",
       }),
-    ).resolves.toEqual({ total: 2, warmed: 0, skipped: 2, failed: 0, failures: [] });
+    ).resolves.toEqual({
+      total: 2,
+      warmed: 0,
+      skipped: 2,
+      failed: 0,
+      failures: [],
+      retryPlan: { loadingShellPaths: [], paths: [], rscPaths: [] },
+    });
   });
 
-  it("fails contradictory cache policy instead of claiming a warm", async () => {
+  it("uses Cloudflare cache-control precedence when validating admission", async () => {
     const fetchImpl = vi.fn(async () => {
       const response = cacheableRsc();
       response.headers.set("cache-control", "no-store");
@@ -284,7 +307,217 @@ describe("Cloudflare CDN warmup", () => {
         strict: true,
         targetUrl: "https://app.example.com",
       }),
-    ).rejects.toThrow("opts out of caching, but CF-Cache-Status is MISS");
+    ).resolves.toMatchObject({ warmed: 1, failed: 0 });
+  });
+
+  it("trusts Cloudflare admission when a stripped edge policy overrides downstream no-store", async () => {
+    const fetchImpl = vi.fn(async () => {
+      const response = cacheableRsc();
+      response.headers.set("cdn-cache-control", "no-store");
+      return response;
+    });
+
+    await expect(
+      warmCdnCache({
+        expectedRscBuildId: "rsc-build-a",
+        fetchImpl: fetchImpl as typeof fetch,
+        paths: [],
+        rscPaths: ["/broken"],
+        strict: true,
+        targetUrl: "https://app.example.com",
+      }),
+    ).resolves.toMatchObject({ warmed: 1, failed: 0 });
+  });
+
+  it("accepts admitted field-qualified cookie policies and stripped cached cookies", async () => {
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const response =
+        new Headers(init?.headers).get("rsc") === "1" ? cacheableRsc() : cacheableHtml();
+      response.headers.set(
+        "cdn-cache-control",
+        'public, max-age=60, private="set-cookie", no-cache="set-cookie"',
+      );
+      response.headers.set("set-cookie", "session=first-response-only; Path=/");
+      return response;
+    });
+
+    await expect(
+      warmCdnCache({
+        expectedRscBuildId: "rsc-build-a",
+        fetchImpl: fetchImpl as typeof fetch,
+        paths: ["/cookie-policy"],
+        rscPaths: ["/cookie-policy"],
+        strict: true,
+        targetUrl: "https://app.example.com",
+      }),
+    ).resolves.toMatchObject({ warmed: 2, failed: 0 });
+  });
+
+  it("rejects plain Set-Cookie MISS responses without proof the cookie was stripped", async () => {
+    const fetchImpl = vi.fn(async () => {
+      const response = cacheableHtml();
+      response.headers.set("set-cookie", "session=uncacheable; Path=/");
+      return response;
+    });
+
+    await expect(
+      warmCdnCache({
+        fetchImpl: fetchImpl as typeof fetch,
+        paths: ["/plain-cookie"],
+        strict: true,
+        targetUrl: "https://app.example.com",
+      }),
+    ).rejects.toThrow("response sets a cookie without an observable field-qualified cache policy");
+  });
+
+  it("requires an exact set-cookie field name in field-qualified cache policy", async () => {
+    const fetchImpl = vi.fn(async () => {
+      const response = cacheableHtml();
+      response.headers.set(
+        "cdn-cache-control",
+        'public, max-age=60, private="not-set-cookie, x-set-cookie"',
+      );
+      response.headers.set("set-cookie", "session=uncacheable; Path=/");
+      return response;
+    });
+
+    await expect(
+      warmCdnCache({
+        fetchImpl: fetchImpl as typeof fetch,
+        paths: ["/substring-cookie-policy"],
+        strict: true,
+        targetUrl: "https://app.example.com",
+      }),
+    ).rejects.toThrow("response sets a cookie without an observable field-qualified cache policy");
+  });
+
+  it("skips hidden Cloudflare-specific cache opt-outs reported as BYPASS", async () => {
+    const fetchImpl = vi.fn(async () => {
+      const response = cacheableRsc();
+      response.headers.set("cf-cache-status", "BYPASS");
+      return response;
+    });
+
+    await expect(
+      warmCdnCache({
+        expectedBuildId: "build-a",
+        expectedRscBuildId: "rsc-build-a",
+        fetchImpl: fetchImpl as typeof fetch,
+        paths: [],
+        rscPaths: ["/hidden-opt-out"],
+        strict: true,
+        targetUrl: "https://app.example.com",
+      }),
+    ).resolves.toMatchObject({ warmed: 0, skipped: 1, failed: 0 });
+  });
+
+  it("rejects cache statuses that cannot prove a reusable fill", async () => {
+    const staleFetch = vi.fn(async () => {
+      const response = cacheableRsc();
+      response.headers.set("cf-cache-status", "STALE");
+      return response;
+    });
+    await expect(
+      warmCdnCache({
+        expectedRscBuildId: "rsc-build-a",
+        fetchImpl: staleFetch as typeof fetch,
+        paths: [],
+        rscPaths: ["/stale"],
+        strict: true,
+        targetUrl: "https://app.example.com",
+      }),
+    ).rejects.toThrow("CF-Cache-Status is STALE");
+  });
+
+  it("rejects DYNAMIC when the route response itself is cacheable", async () => {
+    const fetchImpl = vi.fn(async () => {
+      const response = cacheableRsc();
+      response.headers.set("cf-cache-status", "DYNAMIC");
+      return response;
+    });
+
+    await expect(
+      warmCdnCache({
+        expectedBuildId: "build-a",
+        expectedRscBuildId: "rsc-build-a",
+        fetchImpl: fetchImpl as typeof fetch,
+        paths: [],
+        rscPaths: ["/request-ineligible"],
+        strict: true,
+        targetUrl: "https://app.example.com",
+      }),
+    ).rejects.toThrow("CF-Cache-Status is DYNAMIC");
+  });
+
+  it("skips DYNAMIC only when the route response opts out of caching", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response("flight", {
+          headers: {
+            "cache-control": "no-store",
+            "cf-cache-status": "DYNAMIC",
+            "content-type": "text/x-component",
+            [VINEXT_CDN_BUILD_ID_HEADER]: "build-a",
+            [VINEXT_RSC_BUILD_ID_HEADER]: "rsc-build-a",
+            vary: VINEXT_RSC_VARY_HEADER,
+          },
+        }),
+    );
+
+    await expect(
+      warmCdnCache({
+        expectedBuildId: "build-a",
+        expectedRscBuildId: "rsc-build-a",
+        fetchImpl: fetchImpl as typeof fetch,
+        paths: [],
+        rscPaths: ["/response-ineligible"],
+        strict: true,
+        targetUrl: "https://app.example.com",
+      }),
+    ).resolves.toMatchObject({ warmed: 0, skipped: 1, failed: 0 });
+  });
+
+  it("trusts admitted freshness when a higher-priority edge policy is hidden", async () => {
+    const fetchImpl = vi.fn(async () => {
+      const response = cacheableRsc();
+      response.headers.set("cdn-cache-control", "public, max-age=0, stale-while-revalidate=60");
+      return response;
+    });
+    await expect(
+      warmCdnCache({
+        expectedRscBuildId: "rsc-build-a",
+        fetchImpl: fetchImpl as typeof fetch,
+        paths: [],
+        rscPaths: ["/immediately-stale"],
+        strict: true,
+        targetUrl: "https://app.example.com",
+      }),
+    ).resolves.toMatchObject({ warmed: 1, failed: 0 });
+  });
+
+  it("skips non-cacheable responses for adapters without build identity", async () => {
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const isRsc = new Headers(init?.headers).get("rsc") === "1";
+      return new Response(isRsc ? "flight" : "html", {
+        headers: {
+          "cache-control": "no-store",
+          "cf-cache-status": "BYPASS",
+          "content-type": isRsc ? "text/x-component" : "text/html",
+          ...(isRsc ? { [VINEXT_RSC_BUILD_ID_HEADER]: "rsc-build-a" } : {}),
+        },
+      });
+    });
+
+    await expect(
+      warmCdnCache({
+        expectedRscBuildId: "rsc-build-a",
+        fetchImpl: fetchImpl as typeof fetch,
+        paths: ["/dynamic"],
+        rscPaths: ["/dynamic"],
+        strict: true,
+        targetUrl: "https://app.example.com",
+      }),
+    ).resolves.toMatchObject({ warmed: 0, skipped: 2, failed: 0 });
   });
 
   it("requires CDN admission evidence for HTML responses", async () => {
@@ -300,7 +533,159 @@ describe("Cloudflare CDN warmup", () => {
     ).rejects.toThrow("response is missing CF-Cache-Status");
   });
 
-  it("retries staged-target failures after the initial queue has completed", async () => {
+  it("rejects HTML variants that the warmer request cannot share with browsers", async () => {
+    const fetchImpl = vi.fn(async () => {
+      const response = cacheableHtml();
+      response.headers.set("vary", `${VINEXT_RSC_VARY_HEADER}, User-Agent`);
+      return response;
+    });
+
+    await expect(
+      warmCdnCache({
+        expectedBuildId: "build-a",
+        fetchImpl: fetchImpl as typeof fetch,
+        paths: ["/browser-specific-html"],
+        strict: true,
+        targetUrl: "https://app.example.com",
+      }),
+    ).rejects.toThrow("response Vary has unsupported field user-agent");
+  });
+
+  it("accepts HTML varied only by framework RSC selector headers", async () => {
+    const fetchImpl = vi.fn(async () => {
+      const response = cacheableHtml();
+      response.headers.set("vary", VINEXT_RSC_VARY_HEADER);
+      return response;
+    });
+
+    await expect(
+      warmCdnCache({
+        expectedBuildId: "build-a",
+        fetchImpl: fetchImpl as typeof fetch,
+        paths: ["/shared-html"],
+        strict: true,
+        targetUrl: "https://app.example.com",
+      }),
+    ).resolves.toMatchObject({ warmed: 1, failed: 0 });
+  });
+
+  it("rejects responses rendered by a different application build", async () => {
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const response =
+        new Headers(init?.headers).get("rsc") === "1" ? cacheableRsc() : cacheableHtml();
+      response.headers.set(VINEXT_CDN_BUILD_ID_HEADER, "old-build");
+      return response;
+    });
+
+    await expect(
+      warmCdnCache({
+        expectedBuildId: "build-a",
+        expectedRscBuildId: "rsc-build-a",
+        fetchImpl: fetchImpl as typeof fetch,
+        paths: ["/about"],
+        propagatingTarget: true,
+        retries: 0,
+        rscPaths: ["/about"],
+        strict: true,
+        targetUrl: "https://app.example.com",
+      }),
+    ).rejects.toThrow(`response ${VINEXT_CDN_BUILD_ID_HEADER} does not match build build-a`);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries old-build BYPASS responses before accepting a staged skip", async () => {
+    const attempts = new Map<string, number>();
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const isRsc = new Headers(init?.headers).get("rsc") === "1";
+      const kind = isRsc ? "rsc" : "html";
+      const attempt = (attempts.get(kind) ?? 0) + 1;
+      attempts.set(kind, attempt);
+      if (attempt === 1) {
+        return new Response(isRsc ? "old-flight" : "old-html", {
+          headers: {
+            "cache-control": "no-store",
+            "cf-cache-status": "BYPASS",
+            "content-type": isRsc ? "text/x-component" : "text/html",
+            [VINEXT_CDN_BUILD_ID_HEADER]: "old-build",
+            ...(isRsc ? { [VINEXT_RSC_BUILD_ID_HEADER]: "old-rsc-build" } : {}),
+          },
+        });
+      }
+      return isRsc ? cacheableRsc() : cacheableHtml();
+    });
+
+    await expect(
+      warmCdnCache({
+        expectedBuildId: "build-a",
+        expectedRscBuildId: "rsc-build-a",
+        fetchImpl: fetchImpl as typeof fetch,
+        paths: ["/became-cacheable"],
+        propagatingTarget: true,
+        retries: 1,
+        retryDelayMs: 0,
+        rscPaths: ["/became-cacheable"],
+        strict: true,
+        targetUrl: "https://app.example.com",
+      }),
+    ).resolves.toMatchObject({ warmed: 2, skipped: 0, failed: 0 });
+    expect(attempts).toEqual(
+      new Map([
+        ["rsc", 2],
+        ["html", 2],
+      ]),
+    );
+  });
+
+  it("does not retry permanent validation failures from the uploaded build", async () => {
+    const fetchImpl = vi.fn(async () => {
+      const response = cacheableRsc();
+      response.headers.set("vary", `${VINEXT_RSC_VARY_HEADER}, User-Agent`);
+      return response;
+    });
+
+    await expect(
+      warmCdnCache({
+        expectedBuildId: "build-a",
+        expectedRscBuildId: "rsc-build-a",
+        fetchImpl: fetchImpl as typeof fetch,
+        paths: [],
+        propagatingTarget: true,
+        retries: 60,
+        retryDelayMs: 0,
+        rscPaths: ["/invalid-current-build"],
+        strict: true,
+        targetUrl: "https://app.example.com",
+      }),
+    ).rejects.toThrow("response Vary has unsupported field user-agent");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a deterministic failure when either build identity matches", async () => {
+    const fetchImpl = vi.fn(async () => {
+      const response = cacheableRsc();
+      response.headers.delete(VINEXT_CDN_BUILD_ID_HEADER);
+      response.headers.set("vary", `${VINEXT_RSC_VARY_HEADER}, User-Agent`);
+      return response;
+    });
+
+    await expect(
+      warmCdnCache({
+        expectedBuildId: "build-a",
+        expectedRscBuildId: "rsc-build-a",
+        fetchImpl: fetchImpl as typeof fetch,
+        paths: [],
+        propagatingTarget: true,
+        retries: 60,
+        retryDelayMs: 0,
+        rscPaths: ["/invalid-current-rsc-build"],
+        strict: true,
+        targetUrl: "https://app.example.com",
+      }),
+    ).rejects.toThrow(`response ${VINEXT_CDN_BUILD_ID_HEADER} does not match build build-a`);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries first and later staged-target failures only after the initial queue", async () => {
     const attempts = new Map<string, number>();
     const calls: string[] = [];
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -310,7 +695,7 @@ describe("Cloudflare CDN warmup", () => {
       calls.push(key);
       const attempt = (attempts.get(key) ?? 0) + 1;
       attempts.set(key, attempt);
-      if (url.pathname === "/later" && attempt === 1) {
+      if ((url.pathname === "/first" || url.pathname === "/later") && attempt === 1) {
         if (!isRsc) return new Response("not propagated", { status: 500 });
         const stale = cacheableRsc();
         stale.headers.set(VINEXT_RSC_BUILD_ID_HEADER, "stale-rsc-build");
@@ -333,13 +718,15 @@ describe("Cloudflare CDN warmup", () => {
         targetUrl: "https://app.example.com",
       }),
     ).resolves.toMatchObject({ total: 6, warmed: 6, failed: 0 });
-    expect(attempts.get("/first:rsc")).toBe(1);
-    expect(attempts.get("/first:html")).toBe(1);
+    expect(attempts.get("/first:rsc")).toBe(2);
+    expect(attempts.get("/first:html")).toBe(2);
     expect(attempts.get("/later:rsc")).toBe(2);
     expect(attempts.get("/later:html")).toBe(2);
     expect(attempts.get("/tail:rsc")).toBe(1);
     expect(attempts.get("/tail:html")).toBe(1);
     const lastInitialRequest = Math.max(calls.indexOf("/tail:rsc"), calls.indexOf("/tail:html"));
+    expect(calls.lastIndexOf("/first:rsc")).toBeGreaterThan(lastInitialRequest);
+    expect(calls.lastIndexOf("/first:html")).toBeGreaterThan(lastInitialRequest);
     expect(calls.lastIndexOf("/later:rsc")).toBeGreaterThan(lastInitialRequest);
     expect(calls.lastIndexOf("/later:html")).toBeGreaterThan(lastInitialRequest);
   });
@@ -382,6 +769,34 @@ describe("Cloudflare CDN warmup", () => {
     expect(attempts.get("/later:html")).toBe(2);
   });
 
+  it("keeps the staged propagation budget independent for each failed key", async () => {
+    const attempts = new Map<string, number>();
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const pathname = new URL(requestHref(input)!).pathname;
+      const attempt = (attempts.get(pathname) ?? 0) + 1;
+      attempts.set(pathname, attempt);
+      if (pathname === "/slow" && attempt <= 30) {
+        return new Response("not propagated", { status: 404 });
+      }
+      return cacheableRsc();
+    });
+
+    await expect(
+      warmCdnCache({
+        expectedRscBuildId: "rsc-build-a",
+        fetchImpl: fetchImpl as typeof fetch,
+        paths: [],
+        propagatingTarget: true,
+        retryDelayMs: 0,
+        rscPaths: ["/ready", "/slow"],
+        strict: true,
+        targetUrl: "https://app.example.com",
+      }),
+    ).resolves.toMatchObject({ total: 2, warmed: 2, failed: 0 });
+    expect(attempts.get("/ready")).toBe(1);
+    expect(attempts.get("/slow")).toBe(31);
+  });
+
   it("warms directly from the discovery manifest", async () => {
     writeFile("dist/server/BUILD_ID", "build-a\n");
     writeFile(
@@ -397,5 +812,90 @@ describe("Cloudflare CDN warmup", () => {
         targetUrl: "https://app.example.com",
       }),
     ).resolves.toMatchObject({ total: 1, warmed: 1, skipped: 0, failed: 0 });
+  });
+
+  it("requires an explicit opt-out for adapters without a build identity header", async () => {
+    writeFile("dist/server/BUILD_ID", "build-a\n");
+    writeFile(
+      "dist/server/vinext-prerender-paths.json",
+      JSON.stringify({ buildId: "build-a", paths: ["/custom-adapter"] }),
+    );
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response("html", {
+          headers: {
+            "cache-control": "public, max-age=0, must-revalidate",
+            "cdn-cache-control": "public, max-age=60",
+            "cf-cache-status": "MISS",
+            "content-type": "text/html",
+          },
+        }),
+    );
+
+    await expect(
+      warmCdnCacheFromPrerender({
+        fetchImpl: fetchImpl as typeof fetch,
+        root: tmpDir,
+        strict: true,
+        targetUrl: "https://app.example.com",
+        validateBuildIdentity: false,
+      }),
+    ).resolves.toMatchObject({ total: 1, warmed: 1, failed: 0 });
+  });
+
+  it("uses the discovery manifest build identity by default", async () => {
+    writeFile("dist/server/BUILD_ID", "pinned-build\n");
+    writeFile(
+      "dist/server/vinext-prerender-paths.json",
+      JSON.stringify({
+        buildId: "pinned-build",
+        buildIdentity: "instance-a",
+        paths: ["/wrong-build"],
+      }),
+    );
+    const fetchImpl = vi.fn(async () => {
+      const response = cacheableHtml();
+      response.headers.set(VINEXT_CDN_BUILD_ID_HEADER, "old-instance");
+      return response;
+    });
+
+    await expect(
+      warmCdnCacheFromPrerender({
+        fetchImpl: fetchImpl as typeof fetch,
+        root: tmpDir,
+        strict: true,
+        targetUrl: "https://app.example.com",
+      }),
+    ).rejects.toThrow(`response ${VINEXT_CDN_BUILD_ID_HEADER} does not match build instance-a`);
+  });
+
+  it("uses the discovery manifest RSC build identity by default", async () => {
+    writeFile("dist/server/BUILD_ID", "pinned-build\n");
+    writeFile(
+      "dist/server/vinext-prerender-paths.json",
+      JSON.stringify({
+        buildId: "pinned-build",
+        buildIdentity: "instance-a",
+        paths: [],
+        responseVary: "verbatim",
+        rscBuildId: "instance-a",
+        rscPaths: ["/wrong-rsc-build"],
+      }),
+    );
+    const fetchImpl = vi.fn(async () => {
+      const response = cacheableRsc();
+      response.headers.set(VINEXT_RSC_BUILD_ID_HEADER, "old-instance");
+      return response;
+    });
+
+    await expect(
+      warmCdnCacheFromPrerender({
+        fetchImpl: fetchImpl as typeof fetch,
+        root: tmpDir,
+        strict: true,
+        targetUrl: "https://app.example.com",
+        validateBuildIdentity: false,
+      }),
+    ).rejects.toThrow(`response ${VINEXT_RSC_BUILD_ID_HEADER} does not match build instance-a`);
   });
 });
