@@ -511,20 +511,15 @@ function validateBuildIdentity(
   return null;
 }
 
+function isExpectedTerminalStatus(status: number): boolean {
+  return (status >= 300 && status < 400) || status === 404;
+}
+
 function validateRscWarmResponse(
   response: Response,
   expectedBuildId?: string,
   expectedRscBuildId?: string,
 ): WarmValidation {
-  if (response.redirected || response.status < 200 || response.status >= 300) {
-    return {
-      outcome: "failed",
-      error: response.redirected ? "redirected response" : `HTTP ${response.status}`,
-    };
-  }
-  if (!response.headers.get("Content-Type")?.toLowerCase().startsWith(VINEXT_RSC_CONTENT_TYPE)) {
-    return { outcome: "failed", error: `expected ${VINEXT_RSC_CONTENT_TYPE} response` };
-  }
   const buildIdentityValidation = validateBuildIdentity(response, expectedBuildId);
   if (buildIdentityValidation) return buildIdentityValidation;
   if (
@@ -536,8 +531,30 @@ function validateRscWarmResponse(
       error: `response ${VINEXT_RSC_BUILD_ID_HEADER} does not match build ${expectedRscBuildId}`,
     };
   }
+  if (response.redirected) {
+    return { outcome: "failed", error: "redirected response" };
+  }
+  const terminalResponse = response.status < 200 || response.status >= 300;
+  if (terminalResponse) {
+    if (
+      !isExpectedTerminalStatus(response.status) ||
+      (expectedBuildId === undefined && expectedRscBuildId === undefined)
+    ) {
+      return { outcome: "failed", error: `HTTP ${response.status}` };
+    }
+  } else if (
+    !response.headers.get("Content-Type")?.toLowerCase().startsWith(VINEXT_RSC_CONTENT_TYPE)
+  ) {
+    return { outcome: "failed", error: `expected ${VINEXT_RSC_CONTENT_TYPE} response` };
+  }
   const cachePolicyValidation = validateCachePolicy(response, true);
   if (cachePolicyValidation.outcome !== "warmed") return cachePolicyValidation;
+  if (
+    terminalResponse &&
+    !response.headers.get("Content-Type")?.toLowerCase().startsWith(VINEXT_RSC_CONTENT_TYPE)
+  ) {
+    return { outcome: "failed", error: `expected ${VINEXT_RSC_CONTENT_TYPE} response` };
+  }
   const vary = new Set(
     (response.headers.get("Vary") ?? "")
       .split(",")
@@ -556,14 +573,17 @@ function validateRscWarmResponse(
 }
 
 function validateHtmlWarmResponse(response: Response, expectedBuildId?: string): WarmValidation {
-  if (response.redirected || response.status < 200 || response.status >= 300) {
-    return {
-      outcome: "failed",
-      error: response.redirected ? "redirected response" : `HTTP ${response.status}`,
-    };
-  }
   const buildIdentityValidation = validateBuildIdentity(response, expectedBuildId);
   if (buildIdentityValidation) return buildIdentityValidation;
+  if (response.redirected) {
+    return { outcome: "failed", error: "redirected response" };
+  }
+  const terminalResponse = response.status < 200 || response.status >= 300;
+  if (terminalResponse) {
+    if (!isExpectedTerminalStatus(response.status) || expectedBuildId === undefined) {
+      return { outcome: "failed", error: `HTTP ${response.status}` };
+    }
+  }
   const cachePolicyValidation = validateCachePolicy(response, true);
   if (cachePolicyValidation.outcome !== "warmed") return cachePolicyValidation;
   const extraVary = (response.headers.get("Vary") ?? "")
@@ -582,15 +602,6 @@ function validateReadinessResponse(
   expectedBuildId?: string,
   expectedRscBuildId?: string,
 ): string | null {
-  if (response.redirected || response.status < 200 || response.status >= 300) {
-    return response.redirected ? "redirected response" : `HTTP ${response.status}`;
-  }
-  if (
-    kind === "rsc" &&
-    !response.headers.get("Content-Type")?.toLowerCase().startsWith(VINEXT_RSC_CONTENT_TYPE)
-  ) {
-    return `expected ${VINEXT_RSC_CONTENT_TYPE} response`;
-  }
   const buildIdentityValidation = validateBuildIdentity(response, expectedBuildId);
   if (buildIdentityValidation?.outcome === "failed") return buildIdentityValidation.error;
   if (
@@ -600,6 +611,18 @@ function validateReadinessResponse(
   ) {
     return `response ${VINEXT_RSC_BUILD_ID_HEADER} does not match build ${expectedRscBuildId}`;
   }
+  if (response.redirected) return "redirected response";
+  if (
+    response.status >= 200 &&
+    response.status < 300 &&
+    kind === "rsc" &&
+    !response.headers.get("Content-Type")?.toLowerCase().startsWith(VINEXT_RSC_CONTENT_TYPE)
+  ) {
+    return `expected ${VINEXT_RSC_CONTENT_TYPE} response`;
+  }
+  // Readiness proves only that version overrides consistently reach the
+  // uploaded build. The real warm pass validates status, representation, and
+  // cache admission for every untouched cache key.
   return null;
 }
 

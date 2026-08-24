@@ -592,6 +592,16 @@ export async function deployWithCdnWarmup(
         "Configure that adapter capability or rerun without --warm-cdn-strict.",
     );
   }
+  if (
+    options.warmCdnPromote === false &&
+    paths.length > 0 &&
+    options.expectedBuildId === undefined
+  ) {
+    throw new Error(
+      "CDN warmup cannot skip promotion because the discovered HTML requests cannot be verified. " +
+        "Configure a CDN adapter that declares build-identity response headers.",
+    );
+  }
   const upload = runWranglerVersionUpload(root, options);
   const warmUploadedVersion = (
     targetUrl: string,
@@ -727,11 +737,23 @@ export async function deployWithCdnWarmup(
     );
   }
 
+  const remainingWarmRequests =
+    remainingWarmPlan.paths.length +
+    remainingWarmPlan.rscPaths.length +
+    remainingWarmPlan.loadingShellPaths.length;
+
   if (options.warmCdnPromote === false) {
     if (!staged) {
       throw new Error(
         "CDN warmup cannot skip promotion because the uploaded Worker version could not be staged at 0% traffic. " +
           "The current deployment must have exactly one version serving 100% traffic.",
+      );
+    }
+    if (remainingWarmRequests > 0) {
+      throw withStagedVersionCleanupNote(
+        new Error(
+          `CDN warmup cannot skip promotion because ${remainingWarmRequests} request(s) remain unwarmed.`,
+        ),
       );
     }
     console.log(
@@ -770,10 +792,6 @@ export async function deployWithCdnWarmup(
   } catch (error) {
     throw withPromotedVersionTriggerNote(error);
   }
-  const remainingWarmRequests =
-    remainingWarmPlan.paths.length +
-    remainingWarmPlan.rscPaths.length +
-    remainingWarmPlan.loadingShellPaths.length;
   if (remainingWarmRequests > 0) {
     const targetUrl =
       resolveCdnWarmupTargetUrl(root, triggersDeployedUrl, options) ?? deployed.deployedUrl;
@@ -1108,6 +1126,11 @@ export async function deploy(options: DeployOptions): Promise<void> {
         warmCdnPromotionDelay: options.warmCdnPromotionDelay,
       });
     } else {
+      if (options.warmCdnPromote === false) {
+        throw new Error(
+          "CDN warmup cannot skip promotion because no build-discovered requests were found to warm.",
+        );
+      }
       console.log("\n  CDN warmup skipped: no build-discovered paths found.");
       url = await runWranglerDeploy(root, wranglerOptions);
     }
