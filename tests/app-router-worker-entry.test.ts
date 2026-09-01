@@ -15,6 +15,7 @@ export const __assetPrefix = "";
 export const __basePath = "";
 export const __imageAllowedWidths = [];
 export const __imageConfig = {};
+export const __prerenderSecret = "worker-prerender-secret";
 export default async function rscHandler(request) {
   globalThis.${CAPTURE_RSC_REQUEST}(request);
   return new Response("ok");
@@ -104,7 +105,9 @@ describe("App Router Production server worker entry compatibility", () => {
       });
 
       expect(capturedRequests).toHaveLength(2);
+      expect(capturedRequests[0].headers.get("x-vinext-prerender-secret")).toBeNull();
       expect(capturedRequests[0].headers.get("x-vinext-prerender-route-params")).toBeNull();
+      expect(capturedRequests[1].headers.get("x-vinext-prerender-secret")).toBeNull();
       expect(capturedRequests[1].headers.get("x-vinext-prerender-route-params")).toBe(routeParams);
     } finally {
       await server?.close();

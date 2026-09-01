@@ -682,6 +682,38 @@ describe("Cloudflare CDN warmup", () => {
     });
   });
 
+  it("bounds readiness retries by an independent phase deadline", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response("version validation failed", {
+          status: 503,
+          headers: { [VINEXT_CDN_BUILD_ID_HEADER]: "old-build" },
+        }),
+    );
+
+    const readiness = waitForCdnWarmTargetReadiness({
+      expectedBuildId: "build-a",
+      fetchImpl: fetchImpl as typeof fetch,
+      maxAttempts: 100,
+      phaseTimeoutMs: 25,
+      plan: { loadingShellPaths: [], paths: ["/"], rscPaths: [] },
+      probeIntervalMs: 10,
+      requiredConsecutiveSuccesses: 1,
+      targetUrl: "https://app.example.com",
+    });
+
+    await expect(readiness).resolves.toEqual({
+      error:
+        "staged readiness exceeded its 25ms phase deadline; uploaded build was not stable for 1 consecutive probe(s)",
+      ready: false,
+    });
+    // The exact count depends on response/cancellation overhead inside this
+    // real wall-clock window. Prove that the phase retried but stopped on its
+    // own deadline instead of exhausting the configured attempt ceiling.
+    expect(fetchImpl.mock.calls.length).toBeGreaterThan(1);
+    expect(fetchImpl.mock.calls.length).toBeLessThan(100);
+  });
+
   it("does not skip a non-success response from a different build", async () => {
     const fetchImpl = vi.fn(
       async () =>

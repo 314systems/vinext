@@ -57,6 +57,32 @@ export const PRERENDER_PATH_DISCOVERY_ENV = "__VINEXT_PRERENDER_PATH_DISCOVERY";
 export const PRERENDER_PATHS_MANIFEST = "vinext-prerender-paths.json";
 
 const PATH_DISCOVERY_FETCH_TIMEOUT_MS = 30_000;
+export const DEFAULT_REMOTE_PATH_DISCOVERY_RETRY_DELAY_MS = 1_000;
+export const DEFAULT_REMOTE_PATH_DISCOVERY_PHASE_TIMEOUT_MS = 120_000;
+
+type PathDiscoveryRetryOptions = {
+  deadlineAt?: number;
+  phaseTimeoutMs?: number;
+  retries?: number;
+  retryDelayMs?: number;
+};
+
+function readDiscoveryUserFailure(response: Response, text: string): string | null {
+  if (
+    response.status !== 500 ||
+    !response.headers.get("content-type")?.includes("application/json")
+  ) {
+    return null;
+  }
+  try {
+    const value = JSON.parse(text) as unknown;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const error = (value as { error?: unknown }).error;
+    return typeof error === "string" && error.length > 0 ? error : null;
+  } catch {
+    return null;
+  }
+}
 
 type EmitPrerenderPathManifestOptions = {
   root: string;
@@ -69,6 +95,15 @@ type EmitPrerenderPathManifestOptions = {
   rscBundlePath?: string;
   buildIdentity?: CdnCacheAdapterCapabilities["buildIdentity"];
   responseVary?: CdnCacheAdapterCapabilities["responseVary"];
+  /** Execute dynamic path hooks against an already-uploaded Worker. */
+  pathDiscoveryTarget?: {
+    baseUrl: string;
+    headers?: HeadersInit;
+    /** Retry transient staged-version routing responses before failing discovery. */
+    phaseTimeoutMs?: number;
+    retries?: number;
+    retryDelayMs?: number;
+  };
 };
 
 function readBuiltBuildId(serverDir: string): string | null {
@@ -103,6 +138,13 @@ function addPath(paths: string[], seen: Set<string>, pathname: string): void {
 
 function throwDiscoveryFailure(route: string, error: unknown): never {
   const message = error instanceof Error ? error.message : String(error);
+  if (/cloudflare:|ERR_UNSUPPORTED_ESM_URL_SCHEME/i.test(message)) {
+    throw new Error(
+      `Failed to discover warmup path(s) for ${route}: Cloudflare runtime bindings cannot execute in the local Node prerender server. ` +
+        "Use `vinext-cloudflare deploy --experimental-warm-cdn-cache` so path discovery runs against the staged Worker version.",
+      { cause: error },
+    );
+  }
   throw new Error(`Failed to discover warmup path(s) for ${route}: ${message}`, { cause: error });
 }
 
@@ -245,26 +287,114 @@ function validatePagesStaticPathsEntry(entry: StaticPathsEntry, pattern: string)
 async function fetchDiscoveryEndpoint(
   url: string,
   headers: Record<string, string>,
+  retryOptions: PathDiscoveryRetryOptions = {},
 ): Promise<string | null> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), PATH_DISCOVERY_FETCH_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, {
-      headers,
-      signal: controller.signal,
-    });
-    const text = await res.text();
-    if (!res.ok) throw new Error(`path discovery returned HTTP ${res.status}`);
-    if (res.status === 204) return null;
-    return text;
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new Error(`path discovery timed out after ${PATH_DISCOVERY_FETCH_TIMEOUT_MS}ms`);
+  const hasSharedPhaseDeadline = retryOptions.deadlineAt !== undefined;
+  const retryDelayMs = Math.max(
+    0,
+    retryOptions.retryDelayMs ??
+      (hasSharedPhaseDeadline ? DEFAULT_REMOTE_PATH_DISCOVERY_RETRY_DELAY_MS : 0),
+  );
+  const phaseTimeoutMs = Math.max(
+    1,
+    retryOptions.phaseTimeoutMs ?? DEFAULT_REMOTE_PATH_DISCOVERY_PHASE_TIMEOUT_MS,
+  );
+  // An explicit retry limit remains authoritative. Otherwise let fast
+  // transient responses keep retrying for the advertised phase duration
+  // instead of silently stopping halfway through it. A zero-delay caller uses
+  // the standard cadence only for calculating a bounded attempt budget; the
+  // deadline below remains the authoritative wall-clock limit.
+  const retryBudgetDelayMs =
+    retryDelayMs > 0 ? retryDelayMs : DEFAULT_REMOTE_PATH_DISCOVERY_RETRY_DELAY_MS;
+  const retries = Math.max(
+    0,
+    retryOptions.retries ??
+      (hasSharedPhaseDeadline ? Math.ceil(phaseTimeoutMs / retryBudgetDelayMs) : 0),
+  );
+  const deadlineAt = retryOptions.deadlineAt ?? Date.now() + phaseTimeoutMs;
+  let lastError: unknown;
+  let attemptsRun = 0;
+  let lastTransientStatus: number | undefined;
+
+  const attemptSummary = () =>
+    ` after ${attemptsRun} attempt(s)${
+      lastTransientStatus === undefined
+        ? ""
+        : `; last transient status was HTTP ${lastTransientStatus}`
+    }`;
+  const phaseTimeoutError = () =>
+    new Error(
+      `remote path discovery exceeded its ${phaseTimeoutMs}ms phase deadline${attemptSummary()}`,
+    );
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 0) throw phaseTimeoutError();
+    attemptsRun++;
+
+    const controller = new AbortController();
+    const attemptTimeoutMs = Math.min(PATH_DISCOVERY_FETCH_TIMEOUT_MS, remainingMs);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let shouldRetry = true;
+    try {
+      const request = (async () => {
+        const res = await fetch(url, {
+          headers,
+          signal: controller.signal,
+        });
+        return { res, text: await res.text() };
+      })();
+      const timedOut = new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          controller.abort();
+          reject(new DOMException(`Timed out after ${attemptTimeoutMs}ms`, "AbortError"));
+        }, attemptTimeoutMs);
+      });
+      const { res, text } = await Promise.race([request, timedOut]);
+      if (res.ok) {
+        if (res.status === 204) return null;
+        return text;
+      }
+
+      const userFailure = readDiscoveryUserFailure(res, text);
+      const detail =
+        userFailure ??
+        (/cloudflare:|ERR_UNSUPPORTED_ESM_URL_SCHEME/i.test(text) ? text.trim() : "");
+      lastError = new Error(
+        `path discovery returned HTTP ${res.status}${detail ? `: ${detail}` : ""}`,
+      );
+      // A newly applied route can briefly reach the previous Worker (404), and
+      // version-metadata validation rejects that mismatch with 503. Cloudflare
+      // can also return an unshaped 5xx while the uploaded version propagates.
+      // The authenticated endpoint's JSON { error } envelope is instead a real
+      // generateStaticParams/getStaticPaths failure and must surface once.
+      const transient =
+        res.status === 404 || (res.status >= 500 && res.status <= 599 && userFailure === null);
+      if (!transient) {
+        shouldRetry = false;
+        throw lastError;
+      }
+      lastTransientStatus = res.status;
+    } catch (error) {
+      if (Date.now() >= deadlineAt) throw phaseTimeoutError();
+      lastError =
+        error instanceof Error && error.name === "AbortError"
+          ? new Error(`path discovery timed out after ${attemptTimeoutMs}ms`)
+          : error;
+      if (!shouldRetry) throw lastError;
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
     }
-    throw error;
-  } finally {
-    clearTimeout(timeout);
+
+    if (attempt < retries && retryDelayMs > 0) {
+      const delayMs = Math.min(retryDelayMs, Math.max(0, deadlineAt - Date.now()));
+      if (delayMs <= 0) throw phaseTimeoutError();
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    }
   }
+
+  const message = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(`${message}${attemptSummary()}`, { cause: lastError });
 }
 
 function resolveConfiguredRouteDirs(
@@ -339,6 +469,7 @@ async function collectPagesPaths(options: {
   i18n: ResolvedNextConfig["i18n"];
   pagesDir: string;
   pageExtensions: readonly string[];
+  retryOptions?: PathDiscoveryRetryOptions;
   secretHeaders: Record<string, string>;
 }): Promise<string[]> {
   const [pageRoutes, apiRoutes] = await Promise.all([
@@ -381,6 +512,7 @@ async function collectPagesPaths(options: {
       const text = await fetchDiscoveryEndpoint(
         `${options.baseUrl}/__vinext/prerender/pages-static-paths?${search}`,
         options.secretHeaders,
+        options.retryOptions,
       );
       if (text === null) {
         continue;
@@ -476,6 +608,7 @@ async function collectAppPaths(options: {
   appDir: string;
   baseUrl: string | null;
   pageExtensions: readonly string[];
+  retryOptions?: PathDiscoveryRetryOptions;
   secretHeaders: Record<string, string>;
 }): Promise<{ loadingShellPaths: string[]; paths: string[] }> {
   const routes = await appRouter(options.appDir, options.pageExtensions);
@@ -499,6 +632,7 @@ async function collectAppPaths(options: {
           const text = await fetchDiscoveryEndpoint(
             `${options.baseUrl}/__vinext/prerender/static-params?${search}`,
             options.secretHeaders,
+            options.retryOptions,
           );
           if (text === null) return null;
           const value = JSON.parse(text) as unknown;
@@ -746,7 +880,7 @@ export async function emitPrerenderPathManifest(
       pagesDir,
       pageExtensions: config.pageExtensions,
     });
-    if (needsServer) {
+    if (needsServer && !options.pathDiscoveryTarget) {
       try {
         prodServer = await startPathDiscoveryServer({
           serverDir: bundleServerDir,
@@ -761,12 +895,38 @@ export async function emitPrerenderPathManifest(
       }
     }
 
-    const baseUrl = prodServer ? `http://127.0.0.1:${prodServer.port}` : null;
+    const baseUrl = options.pathDiscoveryTarget?.baseUrl
+      ? new URL(options.pathDiscoveryTarget.baseUrl).origin
+      : prodServer
+        ? `http://127.0.0.1:${prodServer.port}`
+        : null;
     const prerenderSecret =
       readPrerenderSecret(bundleServerDir) ?? readPrerenderSecret(manifestDir);
-    const secretHeaders: Record<string, string> = prerenderSecret
-      ? { [VINEXT_PRERENDER_SECRET_HEADER]: prerenderSecret }
-      : {};
+    if (needsServer && options.pathDiscoveryTarget && !prerenderSecret) {
+      throw new Error(
+        "Cannot discover warmup paths from the staged Worker because dist/server/vinext-server.json does not contain a prerender secret. Rebuild the app before deploying.",
+      );
+    }
+    const secretHeaders: Record<string, string> = Object.fromEntries(
+      new Headers(options.pathDiscoveryTarget?.headers),
+    );
+    if (prerenderSecret) {
+      secretHeaders[VINEXT_PRERENDER_SECRET_HEADER] = prerenderSecret;
+    }
+    const pathDiscoveryRetryOptions = options.pathDiscoveryTarget
+      ? {
+          deadlineAt:
+            Date.now() +
+            Math.max(
+              1,
+              options.pathDiscoveryTarget.phaseTimeoutMs ??
+                DEFAULT_REMOTE_PATH_DISCOVERY_PHASE_TIMEOUT_MS,
+            ),
+          phaseTimeoutMs: options.pathDiscoveryTarget.phaseTimeoutMs,
+          retries: options.pathDiscoveryTarget.retries,
+          retryDelayMs: options.pathDiscoveryTarget.retryDelayMs,
+        }
+      : undefined;
 
     try {
       if (appDir) {
@@ -774,6 +934,7 @@ export async function emitPrerenderPathManifest(
           appDir,
           baseUrl,
           pageExtensions: config.pageExtensions,
+          retryOptions: pathDiscoveryRetryOptions,
           secretHeaders,
         });
         for (const pathname of appPathResult.paths) {
@@ -791,6 +952,7 @@ export async function emitPrerenderPathManifest(
           i18n: config.i18n,
           pagesDir,
           pageExtensions: config.pageExtensions,
+          retryOptions: pathDiscoveryRetryOptions,
           secretHeaders,
         })) {
           addPath(paths, seen, pathname);
