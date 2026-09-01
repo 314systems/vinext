@@ -42,6 +42,8 @@ export type CdnWarmOptions = {
   timeoutMs?: number;
   retries?: number;
   retryDelayMs?: number;
+  /** Bound the whole warm phase, including queued targets and retries. */
+  phaseTimeoutMs?: number;
   /** Retry a newly staged version or preview alias until its routing has propagated. */
   propagatingTarget?: boolean;
   strict?: boolean;
@@ -81,6 +83,7 @@ export type CdnWarmRequestPlan = {
 export type CdnWarmReadinessResult = { ready: true } | { error: string; ready: false };
 
 export type PrerenderWarmPlan = {
+  appPaths?: string[];
   buildId?: string;
   buildIdentity?: string;
   deploymentId?: string;
@@ -124,6 +127,9 @@ function readPrerenderPathManifest(manifestPath: string): PrerenderPathManifest 
     if (
       !Array.isArray(manifest.paths) ||
       !manifest.paths.every((pathname) => typeof pathname === "string") ||
+      (manifest.appPaths !== undefined &&
+        (!Array.isArray(manifest.appPaths) ||
+          !manifest.appPaths.every((pathname) => typeof pathname === "string"))) ||
       (manifest.pagesPaths !== undefined &&
         (!Array.isArray(manifest.pagesPaths) ||
           !manifest.pagesPaths.every((pathname) => typeof pathname === "string"))) ||
@@ -225,6 +231,7 @@ export function readPrerenderWarmPlan(
     }
   }
   return {
+    ...(manifest.appPaths ? { appPaths: manifest.appPaths.map(applyConfig) } : {}),
     buildId: manifest.buildId,
     ...(manifest.buildIdentity ? { buildIdentity: manifest.buildIdentity } : {}),
     ...(manifest.deploymentId ? { deploymentId: manifest.deploymentId } : {}),
@@ -342,13 +349,69 @@ async function fetchHeadersWithTimeout(
   }
 }
 
-type WarmTarget = {
+export type CdnWarmTarget = {
   headers?: HeadersInit;
   kind: "html" | "rsc-full" | "rsc-loading-shell";
   label: string;
   pathname: string;
   sourcePathname: string;
 };
+
+export async function createCdnWarmTargets(
+  options: Pick<
+    CdnWarmOptions,
+    "deploymentId" | "headers" | "loadingShellPaths" | "paths" | "rscPaths"
+  >,
+): Promise<CdnWarmTarget[]> {
+  const requests: CdnWarmTarget[] = [];
+  const fullRscPaths = new Set(options.rscPaths ?? []);
+  const loadingShellPaths = new Set(options.loadingShellPaths ?? []);
+  const commonHeaders = new Headers(options.headers);
+  for (const pathname of new Set([...fullRscPaths, ...loadingShellPaths])) {
+    if (fullRscPaths.has(pathname)) {
+      const rscHeaders = new Headers(commonHeaders);
+      for (const [name, value] of createCanonicalRscRequestHeaders(options.deploymentId)) {
+        rscHeaders.set(name, value);
+      }
+      requests.push({
+        headers: rscHeaders,
+        kind: "rsc-full",
+        label: `${pathname} (RSC full)`,
+        pathname: createCanonicalRscRequestUrl(pathname),
+        sourcePathname: pathname,
+      });
+    }
+
+    if (loadingShellPaths.has(pathname)) {
+      const loadingHeaders = new Headers(commonHeaders);
+      for (const [name, value] of createCanonicalLoadingShellRscRequestHeaders(
+        options.deploymentId,
+      )) {
+        loadingHeaders.set(name, value);
+      }
+      requests.push({
+        headers: loadingHeaders,
+        kind: "rsc-loading-shell",
+        label: `${pathname} (RSC loading shell)`,
+        pathname: await createRscRequestUrl(pathname, loadingHeaders),
+        sourcePathname: pathname,
+      });
+    }
+  }
+
+  for (const pathname of new Set(options.paths)) {
+    const htmlHeaders = new Headers(commonHeaders);
+    htmlHeaders.set("Accept", "text/html");
+    requests.push({
+      headers: htmlHeaders,
+      kind: "html",
+      label: pathname,
+      pathname,
+      sourcePathname: pathname,
+    });
+  }
+  return requests;
+}
 
 class CdnWarmProgress {
   private readonly isTTY = process.stderr.isTTY;
@@ -770,7 +833,7 @@ export async function waitForCdnWarmTargetReadiness(
 
 function shouldRetryValidationFailure(
   response: Response,
-  target: WarmTarget,
+  target: CdnWarmTarget,
   options: {
     expectedBuildId?: string;
     expectedRscBuildId?: string;
@@ -802,8 +865,9 @@ function shouldRetryValidationFailure(
 }
 
 async function warmOnePath(
-  target: WarmTarget,
+  target: CdnWarmTarget,
   options: Required<Pick<CdnWarmOptions, "targetUrl" | "timeoutMs" | "retries">> & {
+    deadlineAt?: number;
     fetchImpl: typeof fetch;
     headers?: HeadersInit;
     expectedBuildId?: string;
@@ -811,6 +875,7 @@ async function warmOnePath(
     retryPropagationFailures: boolean;
     retryDelayMs: number;
     retryNotFound: boolean;
+    phaseTimeoutMs?: number;
   },
 ): Promise<
   | { path: string; ok: true; skipped: false }
@@ -821,22 +886,38 @@ async function warmOnePath(
   let lastError = "request failed before the first attempt";
   let lastRetryable = true;
 
+  const phaseDeadlineError = () =>
+    `CDN warmup exceeded its ${options.phaseTimeoutMs}ms phase deadline`;
+  const remainingPhaseMs = (): number =>
+    options.deadlineAt === undefined ? options.timeoutMs : options.deadlineAt - Date.now();
+
   const canRetry = (attempt: number): boolean => attempt < options.retries;
 
-  const waitBeforeRetry = async (): Promise<void> => {
-    if (options.retryDelayMs <= 0) return;
-    await new Promise((resolve) => setTimeout(resolve, options.retryDelayMs));
+  const waitBeforeRetry = async (): Promise<boolean> => {
+    if (options.retryDelayMs <= 0) return remainingPhaseMs() > 0;
+    const delayMs = Math.min(options.retryDelayMs, Math.max(0, remainingPhaseMs()));
+    if (delayMs <= 0) return false;
+    await delay(delayMs);
+    return remainingPhaseMs() > 0;
   };
 
   for (let attempt = 0; attempt <= options.retries; attempt++) {
+    const remainingMs = remainingPhaseMs();
+    if (remainingMs <= 0) {
+      return { path: target.label, ok: false, error: phaseDeadlineError(), retryable: false };
+    }
+    const attemptTimeoutMs = Math.min(options.timeoutMs, remainingMs);
     try {
       const { response } = await fetchWithTimeout(
         options.fetchImpl,
         url,
-        options.timeoutMs,
+        attemptTimeoutMs,
         target.headers ?? options.headers,
         "manual",
       );
+      if (options.deadlineAt !== undefined && Date.now() >= options.deadlineAt) {
+        return { path: target.label, ok: false, error: phaseDeadlineError(), retryable: false };
+      }
 
       if (process.env.VINEXT_CDN_WARM_DEBUG === "1") {
         console.log(
@@ -865,7 +946,9 @@ async function warmOnePath(
         lastRetryable = shouldRetryValidationFailure(response, target, options);
         if (!lastRetryable) break;
         if (!canRetry(attempt)) break;
-        await waitBeforeRetry();
+        if (!(await waitBeforeRetry())) {
+          return { path: target.label, ok: false, error: phaseDeadlineError(), retryable: false };
+        }
         continue;
       }
 
@@ -882,13 +965,18 @@ async function warmOnePath(
     } catch (error) {
       lastRetryable = true;
       if (error instanceof DOMException && error.name === "AbortError") {
-        lastError = `timed out after ${options.timeoutMs}ms`;
+        lastError =
+          options.deadlineAt !== undefined && Date.now() >= options.deadlineAt
+            ? phaseDeadlineError()
+            : `timed out after ${attemptTimeoutMs}ms`;
       } else {
         lastError = error instanceof Error ? error.message : String(error);
       }
     }
     if (!canRetry(attempt)) break;
-    await waitBeforeRetry();
+    if (!(await waitBeforeRetry())) {
+      return { path: target.label, ok: false, error: phaseDeadlineError(), retryable: false };
+    }
   }
 
   return { path: target.label, ok: false, error: lastError, retryable: lastRetryable };
@@ -916,54 +1004,9 @@ async function runWithConcurrency<T, R>(
 }
 
 export async function warmCdnCache(options: CdnWarmOptions): Promise<CdnWarmResult> {
-  const requests: WarmTarget[] = [];
-  const htmlRequests: WarmTarget[] = [];
-  const fullRscPaths = new Set(options.rscPaths ?? []);
-  const loadingShellPaths = new Set(options.loadingShellPaths ?? []);
-  const commonHeaders = new Headers(options.headers);
-  for (const pathname of new Set([...fullRscPaths, ...loadingShellPaths])) {
-    if (fullRscPaths.has(pathname)) {
-      const rscHeaders = new Headers(commonHeaders);
-      for (const [name, value] of createCanonicalRscRequestHeaders(options.deploymentId)) {
-        rscHeaders.set(name, value);
-      }
-      requests.push({
-        headers: rscHeaders,
-        kind: "rsc-full",
-        label: `${pathname} (RSC full)`,
-        pathname: createCanonicalRscRequestUrl(pathname),
-        sourcePathname: pathname,
-      });
-    }
-
-    if (loadingShellPaths.has(pathname)) {
-      const loadingHeaders = new Headers(commonHeaders);
-      for (const [name, value] of createCanonicalLoadingShellRscRequestHeaders(
-        options.deploymentId,
-      )) {
-        loadingHeaders.set(name, value);
-      }
-      requests.push({
-        headers: loadingHeaders,
-        kind: "rsc-loading-shell",
-        label: `${pathname} (RSC loading shell)`,
-        pathname: await createRscRequestUrl(pathname, loadingHeaders),
-        sourcePathname: pathname,
-      });
-    }
-  }
-
-  for (const pathname of options.paths) {
-    const htmlHeaders = new Headers(commonHeaders);
-    htmlHeaders.set("Accept", "text/html");
-    htmlRequests.push({
-      headers: htmlHeaders,
-      kind: "html",
-      label: pathname,
-      pathname,
-      sourcePathname: pathname,
-    });
-  }
+  const targets = await createCdnWarmTargets(options);
+  const requests = targets.filter((target) => target.kind !== "html");
+  const htmlRequests = targets.filter((target) => target.kind === "html");
   requests.push(...htmlRequests);
   const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_CDN_WARM_TIMEOUT_MS);
   const hasVersionOverride = new Headers(options.headers).has(WORKER_VERSION_OVERRIDE_HEADER);
@@ -977,6 +1020,9 @@ export async function warmCdnCache(options: CdnWarmOptions): Promise<CdnWarmResu
   const normalRetryDelayMs = Math.max(0, options.retryDelayMs ?? 0);
   const propagationRetryDelayMs = Math.max(0, options.retryDelayMs ?? 1_000);
   const fetchImpl = options.fetchImpl ?? fetch;
+  const phaseTimeoutMs =
+    options.phaseTimeoutMs === undefined ? undefined : Math.max(1, options.phaseTimeoutMs);
+  const deadlineAt = phaseTimeoutMs === undefined ? undefined : Date.now() + phaseTimeoutMs;
 
   if (requests.length === 0) {
     return {
@@ -996,7 +1042,7 @@ export async function warmCdnCache(options: CdnWarmOptions): Promise<CdnWarmResu
   progress.update(0, requests.length, "starting warmup");
 
   type WarmRetryMode = "normal" | "propagation-pass" | "propagation-retry";
-  const warmTarget = (target: WarmTarget, retryMode: WarmRetryMode = "normal") => {
+  const warmTarget = (target: CdnWarmTarget, retryMode: WarmRetryMode = "normal") => {
     const isPropagationRequest = retryMode !== "normal";
     const retries =
       retryMode === "propagation-retry"
@@ -1008,6 +1054,7 @@ export async function warmCdnCache(options: CdnWarmOptions): Promise<CdnWarmResu
       targetUrl: options.targetUrl,
       timeoutMs,
       retries,
+      deadlineAt,
       fetchImpl,
       headers: options.headers,
       expectedBuildId: options.expectedBuildId,
@@ -1015,11 +1062,12 @@ export async function warmCdnCache(options: CdnWarmOptions): Promise<CdnWarmResu
       retryPropagationFailures: isPropagationRequest,
       retryDelayMs: isPropagationRequest ? propagationRetryDelayMs : normalRetryDelayMs,
       retryNotFound: isPropagationRequest,
+      phaseTimeoutMs,
     });
   };
 
   const warmRequest = async (
-    target: WarmTarget,
+    target: CdnWarmTarget,
     retryMode: WarmRetryMode = "normal",
   ): Promise<Awaited<ReturnType<typeof warmOnePath>>> => {
     const result = await warmTarget(target, retryMode);
@@ -1029,7 +1077,7 @@ export async function warmCdnCache(options: CdnWarmOptions): Promise<CdnWarmResu
   };
 
   const warmPropagatingPass = async (
-    targets: readonly WarmTarget[],
+    targets: readonly CdnWarmTarget[],
   ): Promise<Awaited<ReturnType<typeof warmOnePath>>[]> => {
     const results = await runWithConcurrency(targets, concurrency, (target) =>
       warmRequest(target, "propagation-pass"),
@@ -1042,7 +1090,7 @@ export async function warmCdnCache(options: CdnWarmOptions): Promise<CdnWarmResu
         ): entry is {
           index: number;
           result: { path: string; ok: false; error: string; retryable: boolean };
-          target: WarmTarget;
+          target: CdnWarmTarget;
         } => !entry.result.ok,
       );
     const retryableFailed = failed.filter(({ result }) => result.retryable);
@@ -1092,7 +1140,7 @@ export async function warmCdnCache(options: CdnWarmOptions): Promise<CdnWarmResu
         entry,
       ): entry is {
         result: { path: string; ok: false; error: string; retryable: boolean };
-        target: WarmTarget;
+        target: CdnWarmTarget;
       } => !entry.result.ok,
     );
   const failures = failedRequests.map(({ result: { path, error } }) => ({ path, error }));

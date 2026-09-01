@@ -108,6 +108,7 @@ describe("prerender path manifest", () => {
     });
 
     expect(manifest).toEqual({
+      appPaths: ["/", "/dynamic", "/cached/intro", "/cached/featured"],
       buildId: "build-a",
       buildIdentity: "rsc-build-a",
       loadingShellPaths: ["/cached/intro", "/cached/featured"],
@@ -741,6 +742,7 @@ describe("prerender path manifest", () => {
     });
 
     expect(manifest?.paths).toEqual(["/pages-dir/static", "/pages-dir/foobar", "/specific/value"]);
+    expect(manifest?.appPaths).toEqual(["/pages-dir/static", "/specific/value"]);
     expect(manifest?.rscPaths).toEqual(["/pages-dir/static", "/specific/value"]);
     expect(manifest?.loadingShellPaths).toEqual(["/specific/value"]);
     expect(manifest?.pagesPaths).toEqual([]);
@@ -779,6 +781,11 @@ describe("prerender path manifest", () => {
       "/specific/value",
     ]);
     expect(manifest?.paths).toEqual(["/pages-dir/static", "/pages-dir/foobar", "/specific/value"]);
+    expect(manifest?.appPaths).toEqual([
+      "/pages-dir/static",
+      "/pages-dir/foobar",
+      "/specific/value",
+    ]);
     expect(manifest?.loadingShellPaths).toEqual(["/specific/value"]);
   });
 
@@ -835,6 +842,7 @@ describe("prerender path manifest", () => {
     });
 
     expect(manifest?.paths).toEqual(["/fr/api/status", "/fr/about", "/about"]);
+    expect(manifest?.appPaths).toEqual(["/fr/api/status"]);
     expect(manifest?.rscPaths).toEqual(["/fr/api/status"]);
     expect(manifest?.loadingShellPaths).toEqual(["/fr/api/status"]);
     expect(manifest?.pagesPaths).toEqual(["/about", "/fr/about"]);
@@ -873,6 +881,7 @@ describe("prerender path manifest", () => {
     });
 
     expect(manifest?.paths).toEqual(["/specific/value"]);
+    expect(manifest?.appPaths).toEqual(["/specific/value"]);
     expect(manifest?.rscPaths).toEqual(["/specific/value"]);
     expect(manifest?.pagesPaths).toEqual(["/health", "/specific/value"]);
   });
