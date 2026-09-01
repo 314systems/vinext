@@ -16,8 +16,13 @@ import { APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL } from "./app-rsc-render-mod
 
 export const CACHEABILITY_MANIFEST_MODULE = "__vinext_cacheability_manifest.js";
 
-export type CacheabilityRouteKind = "app-page" | "pages-page";
-export type CacheabilityRepresentation = "html" | "pages-data" | "rsc-full" | "rsc-loading-shell";
+export type CacheabilityRouteKind = "app-page" | "app-route" | "pages-page";
+export type CacheabilityRepresentation =
+  | "app-route"
+  | "html"
+  | "pages-data"
+  | "rsc-full"
+  | "rsc-loading-shell";
 type CacheabilityManifestRouteState =
   | "static-candidate"
   | "runtime-check"
@@ -39,6 +44,12 @@ export type CacheabilityManifest = {
   version: 1;
 };
 
+const manifestRoutePatterns = new WeakMap<CacheabilityManifest, ReadonlySet<string>>();
+
+function cacheabilityManifestRoutePatternKey(kind: CacheabilityRouteKind, pattern: string): string {
+  return `${kind}\0${pattern}`;
+}
+
 export function cacheabilityManifestRouteKey(
   kind: CacheabilityManifestRoute["kind"],
   pattern: string,
@@ -50,6 +61,7 @@ export function cacheabilityManifestRouteKey(
 
 function isRepresentation(value: unknown): value is CacheabilityRepresentation {
   return (
+    value === "app-route" ||
     value === "html" ||
     value === "pages-data" ||
     value === "rsc-full" ||
@@ -70,7 +82,7 @@ function parseRoute(key: string, value: unknown): CacheabilityManifestRoute | nu
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const route = value as Record<string, unknown>;
   if (
-    (route.kind !== "app-page" && route.kind !== "pages-page") ||
+    (route.kind !== "app-page" && route.kind !== "app-route" && route.kind !== "pages-page") ||
     typeof route.pattern !== "string" ||
     !route.pattern.startsWith("/") ||
     !isRepresentation(route.representation) ||
@@ -122,15 +134,36 @@ export function parseCacheabilityManifest(
     }
 
     const routes: Record<string, CacheabilityManifestRoute> = {};
+    const routePatterns = new Set<string>();
     for (const [key, routeValue] of Object.entries(record.routes)) {
       const route = parseRoute(key, routeValue);
       if (!route) return null;
       routes[key] = route;
+      routePatterns.add(cacheabilityManifestRoutePatternKey(route.kind, route.pattern));
     }
-    return { buildId: expectedBuildId, routes, version: 1 };
+    const manifest: CacheabilityManifest = { buildId: expectedBuildId, routes, version: 1 };
+    manifestRoutePatterns.set(manifest, routePatterns);
+    return manifest;
   } catch {
     return null;
   }
+}
+
+export function cacheabilityManifestHasRoutePattern(
+  manifest: CacheabilityManifest,
+  kind: CacheabilityRouteKind,
+  pattern: string,
+): boolean {
+  let routePatterns = manifestRoutePatterns.get(manifest);
+  if (!routePatterns) {
+    routePatterns = new Set(
+      Object.values(manifest.routes).map((route) =>
+        cacheabilityManifestRoutePatternKey(route.kind, route.pattern),
+      ),
+    );
+    manifestRoutePatterns.set(manifest, routePatterns);
+  }
+  return routePatterns.has(cacheabilityManifestRoutePatternKey(kind, pattern));
 }
 
 const CONTEXTUAL_RSC_HEADERS = [
@@ -158,7 +191,9 @@ export function cacheabilityRequestIdentity(request: Request): {
   const isRsc = request.headers.get(RSC_HEADER) === "1" || url.pathname.endsWith(".rsc");
   if (!isRsc) {
     const accept = request.headers.get("Accept")?.toLowerCase() ?? "";
-    return accept.includes("text/html") ? { representation: "html", requestKey } : null;
+    return accept.includes("text/html")
+      ? { representation: "html", requestKey }
+      : { representation: "app-route", requestKey };
   }
 
   if (CONTEXTUAL_RSC_HEADERS.some((header) => request.headers.has(header))) return null;

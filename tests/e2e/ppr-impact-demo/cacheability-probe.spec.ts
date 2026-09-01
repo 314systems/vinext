@@ -89,6 +89,47 @@ test("classifies completed App Page renders inside workerd", async ({ request })
     version: 1,
   });
 
+  const staticRouteHandlerProbe = await request.get("/cacheability/route-handler-static", {
+    headers: { ...headers, Accept: "*/*" },
+  });
+  expect(staticRouteHandlerProbe.headers()["x-vinext-build-id"]).toBeDefined();
+  await expect(staticRouteHandlerProbe.json()).resolves.toMatchObject({
+    kind: "app-route",
+    pattern: "/cacheability/route-handler-static",
+    state: "static-candidate",
+    status: 200,
+    version: 1,
+  });
+
+  // Next.js lets revalidate make a Route Handler statically eligible, but a
+  // dynamic API used by the completed handler still opts that route out.
+  // Ported from Next.js: test/e2e/app-dir/app-static/app-static.test.ts
+  const dynamicRouteHandlerProbe = await request.get("/cacheability/route-handler-dynamic", {
+    headers: { ...headers, Accept: "*/*" },
+  });
+  await expect(dynamicRouteHandlerProbe.json()).resolves.toMatchObject({
+    kind: "app-route",
+    pattern: "/cacheability/route-handler-dynamic",
+    state: "dynamic",
+    status: 200,
+    version: 1,
+  });
+
+  // A handler-owned public policy is an explicit cache opt-in even when the
+  // handler reads request data. Next.js preserves that policy rather than
+  // replacing it with the framework's dynamic default.
+  const explicitDynamicRouteHandlerProbe = await request.get(
+    "/cacheability/route-handler-explicit-dynamic",
+    { headers: { ...headers, Accept: "*/*" } },
+  );
+  await expect(explicitDynamicRouteHandlerProbe.json()).resolves.toMatchObject({
+    kind: "app-route",
+    pattern: "/cacheability/route-handler-explicit-dynamic",
+    state: "static-candidate",
+    status: 200,
+    version: 1,
+  });
+
   // Next.js keeps middleware in front of page serving on every request:
   // test/e2e/middleware-static-files/index.test.ts
   // https://github.com/vercel/next.js/blob/canary/test/e2e/middleware-static-files/index.test.ts

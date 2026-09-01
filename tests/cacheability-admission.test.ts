@@ -14,6 +14,11 @@ import {
   cacheabilityManifestRouteKey,
   type CacheabilityManifestRoute,
 } from "../packages/vinext/src/server/cacheability-manifest.js";
+import {
+  DefaultCdnCacheAdapter,
+  setCdnCacheAdapter,
+} from "../packages/vinext/src/shims/cdn-cache.js";
+import { CloudflareCdnCacheAdapter } from "../packages/cloudflare/src/cache/cdn-adapter.runtime.js";
 
 const encoder = new TextEncoder();
 
@@ -118,6 +123,27 @@ function staticPagesManifestRoute(): { raw: string; route: CacheabilityManifestR
     pattern: "/pages-route",
     representation: "html",
     requestKey: "/pages-route",
+    state: "static-candidate",
+    status: 200,
+  };
+  const key = cacheabilityManifestRouteKey(
+    route.kind,
+    route.pattern,
+    route.representation,
+    route.requestKey,
+  );
+  return {
+    raw: JSON.stringify({ buildId: "build-a", routes: { [key]: route }, version: 1 }),
+    route,
+  };
+}
+
+function staticAppRouteManifest(): { raw: string; route: CacheabilityManifestRoute } {
+  const route: CacheabilityManifestRoute = {
+    kind: "app-route",
+    pattern: "/api/data",
+    representation: "app-route",
+    requestKey: "/api/data",
     state: "static-candidate",
     status: 200,
   };
@@ -270,7 +296,11 @@ describe("single-request cacheability admission", () => {
       );
 
       expect(context).not.toBe(base);
-      expect(cacheabilityState(context).admission).toEqual({ policy: "deny" });
+      expect(cacheabilityState(context).admission).toEqual({
+        policy: "runtime",
+        representation: "app-route",
+        requestKey: "/page",
+      });
     },
   );
 
@@ -303,7 +333,9 @@ describe("single-request cacheability admission", () => {
       "build-a",
       true,
     );
-    cacheabilityState(context).route = { kind: "app-route", pattern: "/api/data" };
+    const state = cacheabilityState(context);
+    state.route = { kind: "app-route", pattern: "/api/data" };
+    state.explicitResponseCachePolicy = true;
 
     const response = await finalizeWorkerCacheabilityResponse(
       new Response("public", { headers: { "Cache-Control": "public, s-maxage=60" } }),
@@ -312,6 +344,166 @@ describe("single-request cacheability admission", () => {
 
     expect(response.headers.get("Cache-Control")).toBe("public, s-maxage=60");
     await expect(response.text()).resolves.toBe("public");
+  });
+
+  it("admits an unmanifested Route Handler only with an explicit response policy", async () => {
+    const raw = JSON.stringify({ buildId: "build-a", routes: {}, version: 1 });
+    const context = createWorkerCacheabilityAdmissionContext(
+      { waitUntil() {} },
+      new Request("https://example.com/api/mixed-methods", { headers: { Accept: "*/*" } }),
+      raw,
+      "build-a",
+    );
+    const state = cacheabilityState(context);
+    state.route = { kind: "app-route", pattern: "/api/mixed-methods" };
+    state.explicitResponseCachePolicy = true;
+    state.completedResponseBody = true;
+
+    const response = await finalizeWorkerCacheabilityResponse(
+      new Response("public", { headers: { "Cache-Control": "public, s-maxage=60" } }),
+      context,
+    );
+
+    expect(response.headers.get("Cache-Control")).toBe("public, s-maxage=60");
+    await expect(response.text()).resolves.toBe("public");
+  });
+
+  it("does not treat framework revalidate policy as an explicit unmanifested opt-in", async () => {
+    const raw = JSON.stringify({ buildId: "build-a", routes: {}, version: 1 });
+    const context = createWorkerCacheabilityAdmissionContext(
+      { waitUntil() {} },
+      new Request("https://example.com/api/mixed-methods", { headers: { Accept: "*/*" } }),
+      raw,
+      "build-a",
+    );
+    const state = cacheabilityState(context);
+    state.route = { kind: "app-route", pattern: "/api/mixed-methods" };
+    state.completedResponseBody = true;
+
+    const response = await finalizeWorkerCacheabilityResponse(
+      new Response("private", { headers: { "Cache-Control": "s-maxage=60" } }),
+      context,
+    );
+
+    expect(response.headers.get("Cache-Control")).toContain("no-store");
+    await expect(response.text()).resolves.toBe("private");
+  });
+
+  it("admits an unmanifested Route Handler with an explicit config policy", async () => {
+    const raw = JSON.stringify({ buildId: "build-a", routes: {}, version: 1 });
+    const context = createWorkerCacheabilityAdmissionContext(
+      { waitUntil() {} },
+      new Request("https://example.com/api/mixed-methods", { headers: { Accept: "*/*" } }),
+      raw,
+      "build-a",
+    );
+    const state = cacheabilityState(context);
+    state.route = { kind: "app-route", pattern: "/api/mixed-methods" };
+    state.explicitConfigCachePolicy = true;
+
+    const response = await finalizeWorkerCacheabilityResponse(
+      new Response("public", { headers: { "Cache-Control": "public, s-maxage=60" } }),
+      context,
+    );
+
+    expect(response.headers.get("Cache-Control")).toBe("public, s-maxage=60");
+    await expect(response.text()).resolves.toBe("public");
+  });
+
+  it("rejects a late-failing Route Handler made public by final config headers", async () => {
+    const context = createWorkerCacheabilityAdmissionContext(
+      { waitUntil() {} },
+      new Request("https://example.com/api/config-public", { headers: { Accept: "*/*" } }),
+      null,
+      "build-a",
+      true,
+    );
+    const state = cacheabilityState(context);
+    state.route = { kind: "app-route", pattern: "/api/config-public" };
+    state.explicitConfigCachePolicy = true;
+
+    const response = await finalizeWorkerCacheabilityResponse(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode("partial"));
+            controller.error(new Error("late failure"));
+          },
+        }),
+        { headers: { "Cache-Control": "public, s-maxage=60" } },
+      ),
+      context,
+    );
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get("Cache-Control")).toContain("no-store");
+    expect(response.headers.get("CDN-Cache-Control")).toBeNull();
+  });
+
+  it.each(["*/*", "text/html"])(
+    "admits only an exact manifest-backed Route Handler identity for Accept: %s",
+    async (accept) => {
+      const { raw } = staticAppRouteManifest();
+      const context = createWorkerCacheabilityAdmissionContext(
+        { waitUntil() {} },
+        new Request("https://example.com/api/data", { headers: { Accept: accept } }),
+        raw,
+        "build-a",
+      );
+      cacheabilityState(context).route = { kind: "app-route", pattern: "/api/data" };
+
+      const response = await finalizeWorkerCacheabilityResponse(
+        new Response("public", { headers: { "Cache-Control": "public, s-maxage=60" } }),
+        context,
+      );
+
+      expect(response.headers.get("Cache-Control")).toBe("public, s-maxage=60");
+    },
+  );
+
+  it("does not let explicit policy bypass an exact manifest status mismatch", async () => {
+    const { raw } = staticAppRouteManifest();
+    const context = createWorkerCacheabilityAdmissionContext(
+      { waitUntil() {} },
+      new Request("https://example.com/api/data", { headers: { Accept: "*/*" } }),
+      raw,
+      "build-a",
+    );
+    const state = cacheabilityState(context);
+    state.route = { kind: "app-route", pattern: "/api/data" };
+    state.explicitResponseCachePolicy = true;
+    state.completedResponseBody = true;
+
+    const response = await finalizeWorkerCacheabilityResponse(
+      new Response("redirected", {
+        headers: { "Cache-Control": "public, s-maxage=60", Location: "/elsewhere" },
+        status: 302,
+      }),
+      context,
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("Cache-Control")).toContain("no-store");
+  });
+
+  it("keeps an unlisted Route Handler query identity private despite explicit policy", async () => {
+    const { raw } = staticAppRouteManifest();
+    const context = createWorkerCacheabilityAdmissionContext(
+      { waitUntil() {} },
+      new Request("https://example.com/api/data?user=one"),
+      raw,
+      "build-a",
+    );
+    const state = cacheabilityState(context);
+    state.route = { kind: "app-route", pattern: "/api/data" };
+    state.explicitResponseCachePolicy = true;
+
+    const response = await finalizeWorkerCacheabilityResponse(
+      new Response("private", { headers: { "Cache-Control": "public, s-maxage=60" } }),
+      context,
+    );
+
+    expect(response.headers.get("Cache-Control")).toContain("no-store");
   });
 
   it("preserves an independently classified hybrid Pages response", async () => {
@@ -598,6 +790,57 @@ describe("cacheability probe finalization", () => {
       reason: outcome.reason,
       state: "dynamic",
       status: 500,
+    });
+  });
+
+  it("preserves build identity on Route Handler probe envelopes", async () => {
+    const previousBuildId = process.env.__VINEXT_BUILD_ID;
+    process.env.__VINEXT_BUILD_ID = "build-a";
+    setCdnCacheAdapter(new CloudflareCdnCacheAdapter());
+    try {
+      const state: RouteCacheabilityState = {
+        captureDeadlineAt: Date.now() + 1_000,
+        mode: "probe",
+        route: { kind: "app-route", pattern: "/api/data" },
+      };
+
+      const response = await finalizeWorkerCacheabilityResponse(
+        new Response("static", { headers: { "Cache-Control": "public, s-maxage=60" } }),
+        contextWith(state),
+      );
+
+      expect(response.headers.get("X-Vinext-Build-Id")).toBe("build-a");
+      await expect(response.json()).resolves.toMatchObject({
+        kind: "app-route",
+        state: "static-candidate",
+      });
+    } finally {
+      setCdnCacheAdapter(new DefaultCdnCacheAdapter());
+      if (previousBuildId === undefined) delete process.env.__VINEXT_BUILD_ID;
+      else process.env.__VINEXT_BUILD_ID = previousBuildId;
+    }
+  });
+
+  it.each([
+    ["Set-Cookie", "session=private; Path=/", "response sets a cookie"],
+    ["Vary", "User-Agent", "response has unsupported Vary fields"],
+  ])("keeps Route Handler probes with unsafe %s private", async (name, value, reason) => {
+    const state: RouteCacheabilityState = {
+      captureDeadlineAt: Date.now() + 1_000,
+      mode: "probe",
+      route: { kind: "app-route", pattern: "/api/data" },
+    };
+    const response = await finalizeWorkerCacheabilityResponse(
+      new Response("unsafe", {
+        headers: { "Cache-Control": "public, s-maxage=60", [name]: value },
+      }),
+      contextWith(state),
+    );
+
+    await expect(response.json()).resolves.toMatchObject({
+      kind: "app-route",
+      reason,
+      state: "dynamic",
     });
   });
 });

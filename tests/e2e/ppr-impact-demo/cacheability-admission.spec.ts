@@ -90,4 +90,60 @@ test("admits only exact manifest-backed App Page responses after clean EOF", asy
   expect(uncertifiedRsc.status()).toBe(200);
   expect(uncertifiedRsc.headers()["cache-control"]).toContain("no-store");
   expect(uncertifiedRsc.headers()["cdn-cache-control"]).toBeUndefined();
+
+  const certifiedRouteHandler = await request.get("/cacheability/route-handler-static");
+  expect(certifiedRouteHandler.status()).toBe(200);
+  await expect(certifiedRouteHandler.json()).resolves.toEqual({ kind: "static-route-handler" });
+  expect(certifiedRouteHandler.headers()["cdn-cache-control"]).toContain("public");
+
+  const unlistedRouteHandlerQuery = await request.get(
+    "/cacheability/route-handler-static?user=one",
+  );
+  expect(unlistedRouteHandlerQuery.status()).toBe(200);
+  expect(unlistedRouteHandlerQuery.headers()["cache-control"]).toContain("no-store");
+  expect(unlistedRouteHandlerQuery.headers()["cdn-cache-control"]).toBeUndefined();
+
+  // Next.js does not statically generate a GET+POST Route Handler, so this
+  // route is intentionally absent from the probe manifest. Its handler-owned
+  // public policy still opts the completed response into runtime admission.
+  const explicitMixedRouteHandler = await request.get("/cacheability/route-handler-mixed-explicit");
+  await expect(explicitMixedRouteHandler.json()).resolves.toEqual({
+    kind: "explicit-mixed-route-handler",
+  });
+  expect(explicitMixedRouteHandler.headers()["cache-control"]).toBe("public, s-maxage=60");
+
+  // `revalidate` alone is framework policy, not an explicit response-level
+  // opt-in, and must not bypass the route's manifest absence.
+  const frameworkPolicyMixedRouteHandler = await request.get(
+    "/cacheability/route-handler-mixed-revalidate",
+  );
+  await expect(frameworkPolicyMixedRouteHandler.json()).resolves.toEqual({
+    kind: "framework-policy-mixed-route-handler",
+  });
+  expect(frameworkPolicyMixedRouteHandler.headers()["cache-control"]).toContain("no-store");
+  expect(frameworkPolicyMixedRouteHandler.headers()["cdn-cache-control"]).toBeUndefined();
+
+  const dynamicRouteHandler = await request.get("/cacheability/route-handler-dynamic", {
+    headers: { "X-Probe-Value": "private" },
+  });
+  await expect(dynamicRouteHandler.json()).resolves.toEqual({ value: "private" });
+  expect(dynamicRouteHandler.headers()["cache-control"]).toContain("no-store");
+  expect(dynamicRouteHandler.headers()["cdn-cache-control"]).toBeUndefined();
+
+  const explicitDynamicRouteHandler = await request.get(
+    "/cacheability/route-handler-explicit-dynamic",
+    { headers: { "X-Probe-Value": "explicitly-public" } },
+  );
+  await expect(explicitDynamicRouteHandler.json()).resolves.toEqual({
+    value: "explicitly-public",
+  });
+  expect(explicitDynamicRouteHandler.headers()["cdn-cache-control"]).toBe("public, max-age=60");
+  expect(explicitDynamicRouteHandler.headers()["cache-control"]).toContain("must-revalidate");
+
+  const lateConfigPublicFailure = await request.get(
+    "/cacheability/route-handler-config-public-late-error",
+  );
+  expect(lateConfigPublicFailure.status()).toBe(500);
+  expect(lateConfigPublicFailure.headers()["cache-control"]).toContain("no-store");
+  expect(lateConfigPublicFailure.headers()["cdn-cache-control"]).toBeUndefined();
 });

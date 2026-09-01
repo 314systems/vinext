@@ -6,6 +6,7 @@ import {
   type RouteCacheabilityState,
 } from "vinext/shims/cacheability-classification";
 import {
+  applyCdnResponseBuildIdentityHeaders,
   applyCdnResponseHeaders,
   hasExplicitNonCacheableResponsePolicy,
   isNonCacheableCacheControl,
@@ -24,6 +25,7 @@ import {
 } from "./cacheability-limits.js";
 import {
   cacheabilityRequestIdentity,
+  cacheabilityManifestHasRoutePattern,
   findCacheabilityManifestRoute,
   parseCacheabilityManifest,
   type CacheabilityManifest,
@@ -150,9 +152,11 @@ function probeResponse(
     status,
     version: 1,
   };
-  return Response.json(body, {
-    headers: { "Cache-Control": NO_STORE_CACHE_CONTROL },
-  });
+  return applyCdnResponseBuildIdentityHeaders(
+    Response.json(body, {
+      headers: { "Cache-Control": NO_STORE_CACHE_CONTROL },
+    }),
+  );
 }
 
 async function drainProbeBody(response: Response, deadlineAt: number): Promise<string | null> {
@@ -457,6 +461,15 @@ function completedRouteOutcome(
   if (state.forcedDynamicReason) {
     return { cacheable: false, reason: state.forcedDynamicReason };
   }
+  if (state.route?.kind === "app-route") {
+    if (response.headers.has("set-cookie")) {
+      return { cacheable: false, reason: "response sets a cookie" };
+    }
+    if (hasUnsupportedCacheabilityVary(response.headers)) {
+      return { cacheable: false, reason: "response has unsupported Vary fields" };
+    }
+    return inferPagesPageCacheability(response);
+  }
   if (state.route?.kind === "app-page") {
     return inferFinalAppPageCacheability(response, state) ?? rendererOutcome;
   }
@@ -521,11 +534,59 @@ async function finalizeWorkerCacheabilityAdmission(
   // its own stack layer.
   if (state.preserveResponseCachePolicy) return response;
 
-  // Route Handlers prove body completion inside their execution boundary.
-  // This outer state still carries middleware/config routing vetoes that were
-  // observed before dispatch and must win over a handler's public policy.
+  const admission = state.admission;
+
+  // Route Handlers normally prove body completion inside their execution
+  // boundary, so the outer Worker does not buffer them a second time. Config
+  // headers run later, however, and can make an otherwise dynamic response
+  // public. Capture only that unproven final-public case before it can escape.
+  // A manifest-bearing deployment must also authorize the exact route/path
+  // identity. Normalize HTML-shaped direct navigations to the same Route
+  // Handler representation as canonical fetches.
   if (state.route?.kind === "app-route") {
+    let manifestRoute: CacheabilityManifestRoute | null = null;
+    let manifestContainsRoutePattern = false;
+    const hasExplicitRuntimePolicy =
+      state.explicitResponseCachePolicy === true || state.explicitConfigCachePolicy === true;
     if (
+      !admission ||
+      admission.policy === "deny" ||
+      !admission.representation ||
+      !admission.requestKey
+    ) {
+      return responseWithCachePolicy(response, response.body, null);
+    }
+    if (admission.policy === "manifest") {
+      const manifest = admission.manifest as CacheabilityManifest;
+      const representation =
+        admission.representation === "html" ? "app-route" : admission.representation;
+      manifestRoute = findCacheabilityManifestRoute(
+        manifest,
+        state.route.kind,
+        state.route.pattern,
+        {
+          representation: representation as Parameters<
+            typeof findCacheabilityManifestRoute
+          >[3]["representation"],
+          requestKey: admission.requestKey,
+        },
+      );
+      if (!manifestRoute && hasExplicitRuntimePolicy) {
+        manifestContainsRoutePattern = cacheabilityManifestHasRoutePattern(
+          manifest,
+          state.route.kind,
+          state.route.pattern,
+        );
+      }
+    }
+    const isManifestAuthorized =
+      manifestRoute?.state === "static-candidate" && manifestRoute.status === response.status;
+    const canUseBoundedRuntimeAdmission =
+      hasExplicitRuntimePolicy &&
+      (admission.policy === "runtime" ||
+        (admission.policy === "manifest" && !manifestRoute && !manifestContainsRoutePattern));
+    if (
+      (!isManifestAuthorized && !canUseBoundedRuntimeAdmission) ||
       response.status >= 500 ||
       state.forcedDynamicReason ||
       hasStrictFinalResponseVeto(response, state) ||
@@ -533,10 +594,30 @@ async function finalizeWorkerCacheabilityAdmission(
     ) {
       return responseWithCachePolicy(response, response.body, null);
     }
-    return response;
+
+    const outcome = inferPagesPageCacheability(response);
+    if (!outcome.cacheable || !outcome.cacheControl) {
+      return responseWithCachePolicy(response, response.body, null);
+    }
+    if (state.completedResponseBody) return response;
+
+    let captured: CapturedAdmissionBody;
+    try {
+      captured = await captureCacheabilityAdmissionBody(
+        response.body,
+        state.captureDeadlineAt,
+        CACHEABILITY_PROBE_BODY_LIMIT,
+        state.captureBudget ?? isolateCaptureBudget,
+      );
+    } catch {
+      return cacheabilityEvaluationFailureResponse(state.route.pattern);
+    }
+    if (captured.kind === "fallback") {
+      return responseWithCachePolicy(response, captured.body, null);
+    }
+    return responseWithCachePolicy(response, captured.body, outcome);
   }
 
-  const admission = state.admission;
   if (
     !admission ||
     admission.policy === "deny" ||
@@ -545,6 +626,15 @@ async function finalizeWorkerCacheabilityAdmission(
     !state.route ||
     response.status >= 500
   ) {
+    return responseWithCachePolicy(response, response.body, null);
+  }
+  const representationMatchesRoute =
+    state.route.kind === "app-page"
+      ? admission.representation === "html" ||
+        admission.representation === "rsc-full" ||
+        admission.representation === "rsc-loading-shell"
+      : admission.representation === "html" || admission.representation === "pages-data";
+  if (!representationMatchesRoute) {
     return responseWithCachePolicy(response, response.body, null);
   }
 

@@ -9,7 +9,11 @@ import type { CachedRouteValue } from "vinext/shims/cache-handler";
 import type { NextRequest } from "vinext/shims/server";
 import { _drainPendingRevalidations } from "vinext/shims/cache-request-state";
 import { runWithRootParamsUsage } from "vinext/shims/root-params";
-import { applyCdnResponseHeaders, NEVER_CACHE_CONTROL } from "./cache-control.js";
+import {
+  applyCdnResponseHeaders,
+  hasExplicitNonCacheableResponsePolicy,
+  NEVER_CACHE_CONTROL,
+} from "./cache-control.js";
 import { isrCacheControl, type IsrWritePolicy } from "./isr-cache.js";
 import {
   createStaticGenerationHeadersContext,
@@ -40,8 +44,10 @@ import {
 import {
   getRouteCacheabilityCaptureOptions,
   getRouteCacheabilityDynamicReason,
+  CACHEABILITY_POLICY_HEADERS,
   isRouteCacheabilityEvaluation,
-  markRouteCacheabilityFinalResponseUncacheable,
+  markRouteCacheabilityExplicitResponsePolicy,
+  markRouteCacheabilityResponseBodyComplete,
 } from "vinext/shims/cacheability-classification";
 import {
   CACHEABILITY_PROBE_BODY_LIMIT,
@@ -109,6 +115,13 @@ type CompletedAppRouteHandlerResponse = {
   completed: boolean;
   response: Response;
 };
+
+function hasExplicitCacheableResponsePolicy(headers: Headers): boolean {
+  return (
+    !hasExplicitNonCacheableResponsePolicy(headers) &&
+    CACHEABILITY_POLICY_HEADERS.some((name) => headers.has(name))
+  );
+}
 
 async function completeAppRouteHandlerResponse(
   response: Response,
@@ -311,7 +324,13 @@ export async function executeAppRouteHandler(
     }
     let { dynamicUsedInHandler, response } = handlerResult;
     assertSupportedAppRouteHandlerResponse(response);
-    const handlerSetCacheControl = response.headers.has("cache-control");
+    const handlerSetCachePolicy = CACHEABILITY_POLICY_HEADERS.some((name) =>
+      response.headers.has(name),
+    );
+    const hasExplicitCacheablePolicy = hasExplicitCacheableResponsePolicy(response.headers);
+    if (hasExplicitCacheablePolicy) {
+      markRouteCacheabilityExplicitResponsePolicy();
+    }
 
     const draftModeBeforeCompletion =
       options.getActiveDraftModeState?.() ?? options.isDraftMode === true;
@@ -321,7 +340,8 @@ export async function executeAppRouteHandler(
       shouldCompleteAppRouteHandlerResponse({
         dynamicConfig: options.handler.dynamic,
         dynamicUsedInHandler,
-        handlerSetCacheControl,
+        hasExplicitCacheablePolicy,
+        handlerSetCachePolicy,
         isAutoHead: options.isAutoHead,
         isDraftMode: draftModeBeforeCompletion || handlerDraftCookieBeforeCompletion != null,
         isProduction: options.isProduction,
@@ -333,6 +353,7 @@ export async function executeAppRouteHandler(
       const completed = await completeAppRouteHandlerResponse(response);
       response = completed.response;
       cleanupDeferredToBody = !completed.completed;
+      if (completed.completed) markRouteCacheabilityResponseBodyComplete();
       const dynamicUsedDuringCompletion = options.consumeDynamicUsage();
       dynamicUsedInHandler =
         handlerResult.didAccessDynamicRequest() ||
@@ -347,12 +368,6 @@ export async function executeAppRouteHandler(
       requestCacheabilityVeto ||
       cleanupDeferredToBody,
     );
-    if (responseMustStayPrivate) {
-      markRouteCacheabilityFinalResponseUncacheable(
-        "Route Handler did not complete as a reusable static response",
-      );
-    }
-
     if (dynamicUsedInHandler) {
       markKnownDynamicAppRoute(options.routePattern);
     }
@@ -381,7 +396,7 @@ export async function executeAppRouteHandler(
     if (
       shouldApplyAppRouteHandlerRevalidateHeader({
         dynamicUsedInHandler: responseMustStayPrivate,
-        handlerSetCacheControl,
+        handlerSetCachePolicy,
         isAutoHead: options.isAutoHead,
         isDraftMode: shouldApplyDraftPolicy,
         method: options.method,
@@ -404,7 +419,7 @@ export async function executeAppRouteHandler(
       shouldWriteAppRouteHandlerCache({
         dynamicConfig: options.handler.dynamic,
         dynamicUsedInHandler: responseMustStayPrivate,
-        handlerSetCacheControl,
+        handlerSetCachePolicy,
         isAutoHead: options.isAutoHead,
         isDraftMode: shouldApplyDraftPolicy,
         isProduction: options.isProduction,
@@ -451,7 +466,9 @@ export async function executeAppRouteHandler(
     // Next.js preserves a Route Handler's explicit Cache-Control even when the
     // handler used request data. During CDN probe/admission the adapter still
     // owns fail-closed policy until the completed response is authorized.
-    const preserveHandlerPolicy = !isRouteCacheabilityEvaluation() && handlerSetCacheControl;
+    const preserveHandlerPolicy = isRouteCacheabilityEvaluation()
+      ? hasExplicitCacheablePolicy
+      : handlerSetCachePolicy;
     if (responseMustStayPrivate && !preserveHandlerPolicy) {
       const headers = new Headers(finalized.headers);
       applyCdnResponseHeaders(headers, { cacheControl: NEVER_CACHE_CONTROL });

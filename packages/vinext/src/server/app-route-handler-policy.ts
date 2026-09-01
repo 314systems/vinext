@@ -39,7 +39,8 @@ type AppRouteHandlerCacheReadOptions = {
 type AppRouteHandlerResponseCacheOptions = {
   dynamicConfig?: string;
   dynamicUsedInHandler: boolean;
-  handlerSetCacheControl: boolean;
+  hasExplicitCacheablePolicy?: boolean;
+  handlerSetCachePolicy: boolean;
   isAutoHead: boolean;
   isDraftMode?: boolean;
   isProduction: boolean;
@@ -94,6 +95,11 @@ export function getAppRouteHandlerRevalidateSeconds(
 
 export function hasAppRouteHandlerDefaultExport(handler: RouteHandlerModule): boolean {
   return typeof handler.default === "function";
+}
+
+/** Match Next.js methods that force an App Route out of static generation. */
+export function hasNonStaticAppRouteHandlerMethods(handler: RouteHandlerModule): boolean {
+  return Boolean(handler.POST || handler.PUT || handler.DELETE || handler.PATCH || handler.OPTIONS);
 }
 
 export function resolveAppRouteHandlerMethod(
@@ -156,7 +162,7 @@ export function shouldApplyAppRouteHandlerRevalidateHeader(
     !options.isDraftMode &&
     !options.dynamicUsedInHandler &&
     (options.method === "GET" || options.isAutoHead) &&
-    !options.handlerSetCacheControl
+    !options.handlerSetCachePolicy
   );
 }
 
@@ -172,7 +178,8 @@ export function shouldCompleteAppRouteHandlerResponse(
   return (
     options.isProduction &&
     ((options.revalidateSeconds !== null && options.revalidateSeconds > 0) ||
-      options.requiresCompletedResponseAdmission === true) &&
+      options.requiresCompletedResponseAdmission === true ||
+      options.hasExplicitCacheablePolicy === true) &&
     options.dynamicConfig !== "force-dynamic" &&
     !options.isDraftMode &&
     !options.dynamicUsedInHandler &&

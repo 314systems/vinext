@@ -177,6 +177,25 @@ function hasNamedExportInProgram(program: Program, name: string): boolean {
   return false;
 }
 
+function hasRuntimeExportedNameInProgram(program: Program, name: string): boolean {
+  for (const node of program.body) {
+    if (node.type !== "ExportNamedDeclaration" || node.exportKind === "type") continue;
+    if (declarationHasBindingName(node.declaration, name)) return true;
+
+    for (const specifier of node.specifiers) {
+      if (specifier.exportKind === "type") continue;
+      if (moduleExportNameValue(specifier.exported ?? specifier.local) === name) return true;
+    }
+  }
+  return false;
+}
+
+function hasRuntimeExportAllInProgram(program: Program): boolean {
+  return program.body.some(
+    (node) => node.type === "ExportAllDeclaration" && node.exportKind !== "type",
+  );
+}
+
 function unwrapStaticExpression(expression: Expression): Expression {
   let current = expression;
   while (
@@ -756,6 +775,52 @@ export function classifyAppRoute(
   // without running the build (dynamic API calls like headers() are invisible
   // to static analysis). Report as unknown rather than falsely claiming static.
   return { type: "unknown" };
+}
+
+/**
+ * Return whether a Route Handler has a GET contract that Next.js considers
+ * eligible for static generation. This intentionally examines only the route
+ * module's direct segment config; request-time dynamic usage is decided by the
+ * staged Worker probe after the module has executed to completion.
+ *
+ * Ported from Next.js:
+ * packages/next/src/server/route-modules/app-route/helpers/is-static-gen-enabled.ts
+ */
+export function classifyAppRouteHandler(filePath: string): {
+  hasGet: boolean;
+  staticGenerationEnabled: boolean;
+} {
+  let code: string;
+  try {
+    code = fs.readFileSync(filePath, "utf8");
+  } catch {
+    return { hasGet: false, staticGenerationEnabled: false };
+  }
+
+  const program = parseRouteModule(code);
+  if (!program) return { hasGet: false, staticGenerationEnabled: false };
+
+  const dynamicValue = extractExportConstStringFromProgram(program, "dynamic");
+  const revalidateValue = extractExportConstNumberFromProgram(program, "revalidate");
+  const hasGet = hasRuntimeExportedNameInProgram(program, "GET");
+  const hasNonStaticMethod = ["POST", "PUT", "DELETE", "PATCH", "OPTIONS"].some((method) =>
+    hasRuntimeExportedNameInProgram(program, method),
+  );
+  // A value-bearing export star can contribute any HTTP method. Resolving it
+  // would require walking and parsing the module graph, so fail closed instead
+  // of incorrectly warming a module that may export a non-static method.
+  const hasUnknownRuntimeExports = hasRuntimeExportAllInProgram(program);
+  return {
+    hasGet,
+    staticGenerationEnabled:
+      !hasNonStaticMethod &&
+      !hasUnknownRuntimeExports &&
+      (dynamicValue === "force-static" ||
+        dynamicValue === "error" ||
+        revalidateValue === Infinity ||
+        (revalidateValue !== null && revalidateValue > 0) ||
+        hasRuntimeExportedNameInProgram(program, "generateStaticParams")),
+  };
 }
 
 // ─── Row building ─────────────────────────────────────────────────────────────
