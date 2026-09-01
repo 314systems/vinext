@@ -20,16 +20,18 @@ import {
 import { workerCapabilityMatches } from "./worker-prerender-discovery.js";
 import {
   CACHEABILITY_ADMISSION_ISOLATE_BODY_LIMIT,
-  CACHEABILITY_PROBE_BODY_LIMIT,
+  CACHEABILITY_ADMISSION_RESPONSE_BODY_LIMIT,
   CACHEABILITY_PROBE_TIMEOUT_MS,
 } from "./cacheability-limits.js";
 import {
+  cacheabilityManifestRouteState,
   cacheabilityRequestIdentity,
-  cacheabilityManifestHasRoutePattern,
+  cacheabilityRoutePathname,
   findCacheabilityManifestRoute,
   parseCacheabilityManifest,
   type CacheabilityManifest,
   type CacheabilityManifestRoute,
+  type CacheabilityRepresentation,
 } from "./cacheability-manifest.js";
 
 type CacheabilityProbeRouteState =
@@ -43,26 +45,38 @@ type CacheabilityProbeResult = {
   kind?: "app-page" | "app-route" | "pages-page";
   pattern?: string;
   reason?: string;
+  /** The renderer itself completed with a reusable static policy. */
+  rendererStatic?: boolean;
+  scope?: "identity" | "pattern";
   state: CacheabilityProbeRouteState;
   status: number;
   version: 1;
 };
 
-const SUPPORTED_CACHEABILITY_VARY_FIELDS = new Set(
+const FRAMEWORK_CACHEABILITY_VARY_FIELDS = new Set(
   VINEXT_RSC_VARY_HEADER.split(",").map((name) => name.trim().toLowerCase()),
 );
 
-function hasUnsupportedCacheabilityVary(headers: Headers): boolean {
-  return (headers.get("Vary") ?? "").split(",").some((name) => {
-    const normalized = name.trim().toLowerCase();
-    return normalized.length > 0 && !SUPPORTED_CACHEABILITY_VARY_FIELDS.has(normalized);
-  });
+function cacheabilityVaryRejectionReason(
+  headers: Headers,
+  state: RouteCacheabilityState,
+): string | null {
+  const fields = (headers.get("Vary") ?? "")
+    .split(",")
+    .map((name) => name.trim().toLowerCase())
+    .filter(Boolean);
+  if (fields.includes("*")) return "response uses Vary: *";
+  if (state.responseVary === "verbatim") return null;
+  return fields.some((name) => !FRAMEWORK_CACHEABILITY_VARY_FIELDS.has(name))
+    ? "response cache does not support custom Vary fields"
+    : null;
 }
 
 export function createWorkerCacheabilityContext(
   base: ExecutionContextLike,
   request: Request,
   expectedSecret: string | null | undefined,
+  responseVary?: "verbatim",
 ): ExecutionContextLike {
   const requestedMode = request.headers.get(VINEXT_CACHEABILITY_PROBE_HEADER);
   if (requestedMode !== "1" && requestedMode !== "identity") return base;
@@ -79,6 +93,7 @@ export function createWorkerCacheabilityContext(
   const state: RouteCacheabilityState = {
     captureDeadlineAt: Date.now() + CACHEABILITY_PROBE_TIMEOUT_MS,
     mode: requestedMode === "identity" ? "identity" : "probe",
+    responseVary,
   };
   return Object.assign(Object.create(Object.getPrototypeOf(base)), base, {
     [CACHEABILITY_REQUEST_STATE]: state,
@@ -104,14 +119,25 @@ export function createWorkerCacheabilityAdmissionContext(
   rawManifest: string | null | undefined,
   buildId: string | null | undefined,
   requiresCompletedResponseAdmission = rawManifest != null,
+  responseVary?: "verbatim",
 ): ExecutionContextLike {
   const identity = cacheabilityRequestIdentity(request);
   if (!rawManifest) {
     if (!requiresCompletedResponseAdmission) return base;
     const state: RouteCacheabilityState = {
-      admission: identity ? { policy: "runtime", ...identity } : { policy: "deny" },
+      admission: identity
+        ? {
+            policy: "runtime",
+            ...identity,
+            routePathname: cacheabilityRoutePathname(
+              new URL(request.url).pathname,
+              identity.representation,
+            ),
+          }
+        : { policy: "deny" },
       captureDeadlineAt: Date.now() + CACHEABILITY_PROBE_TIMEOUT_MS,
       mode: "admit",
+      responseVary,
     };
     return Object.assign(Object.create(Object.getPrototypeOf(base)), base, {
       [CACHEABILITY_REQUEST_STATE]: state,
@@ -122,9 +148,20 @@ export function createWorkerCacheabilityAdmissionContext(
 
   const state: RouteCacheabilityState = {
     admission:
-      manifest && identity ? { manifest, policy: "manifest", ...identity } : { policy: "deny" },
+      manifest && identity
+        ? {
+            manifest,
+            policy: "manifest",
+            ...identity,
+            routePathname: cacheabilityRoutePathname(
+              new URL(request.url).pathname,
+              identity.representation,
+            ),
+          }
+        : { policy: "deny" },
     captureDeadlineAt: Date.now() + CACHEABILITY_PROBE_TIMEOUT_MS,
     mode: "admit",
+    responseVary,
   };
   return Object.assign(Object.create(Object.getPrototypeOf(base)), base, {
     [CACHEABILITY_REQUEST_STATE]: state,
@@ -142,12 +179,17 @@ function probeResponse(
   routeState: CacheabilityProbeRouteState,
   outcome: RouteCacheabilityOutcome,
   status: number,
+  rendererStatic?: boolean,
 ): Response {
   const body: CacheabilityProbeResult = {
     cacheControl: outcome.cacheControl,
     kind: state.route?.kind,
     pattern: state.route?.pattern,
     reason: outcome.reason,
+    ...(rendererStatic !== undefined ? { rendererStatic } : {}),
+    ...(routeState === "dynamic"
+      ? { scope: state.patternDynamicReason ? ("pattern" as const) : ("identity" as const) }
+      : {}),
     state: routeState,
     status,
     version: 1,
@@ -162,7 +204,6 @@ function probeResponse(
 async function drainProbeBody(response: Response, deadlineAt: number): Promise<string | null> {
   if (!response.body) return null;
   const reader = response.body.getReader();
-  let total = 0;
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     while (true) {
@@ -182,17 +223,18 @@ async function drainProbeBody(response: Response, deadlineAt: number): Promise<s
         timeout = undefined;
       }
       if (result.done) return null;
-      total += result.value.byteLength;
-      if (total > CACHEABILITY_PROBE_BODY_LIMIT) {
-        return `response body exceeded ${CACHEABILITY_PROBE_BODY_LIMIT} bytes`;
-      }
     }
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   } finally {
     if (timeout !== undefined) clearTimeout(timeout);
-    await reader.cancel().catch(() => {});
-    reader.releaseLock();
+    // Cancellation is cleanup, not part of classification. A user stream may
+    // return a never-settling cancel promise; do not let it defeat the probe
+    // deadline after the body read has already timed out.
+    void reader.cancel().catch(() => {});
+    try {
+      reader.releaseLock();
+    } catch {}
   }
 }
 
@@ -270,7 +312,9 @@ function continueCapturedBody(
   const release = () => {
     if (released) return;
     released = true;
-    reader.releaseLock();
+    try {
+      reader.releaseLock();
+    } catch {}
   };
   return new ReadableStream<Uint8Array>(
     {
@@ -295,11 +339,16 @@ function continueCapturedBody(
           controller.error(error);
         }
       },
-      async cancel(reason) {
+      cancel(reason) {
+        releaseChunks(budget, captured, index);
         try {
-          await reader.cancel(reason);
-        } finally {
-          releaseChunks(budget, captured, index);
+          // A user stream may return a never-settling cancellation promise.
+          // Cleanup of the outer request must not wait for it.
+          void reader
+            .cancel(reason)
+            .catch(() => {})
+            .finally(release);
+        } catch {
           release();
         }
       },
@@ -335,7 +384,7 @@ function replayCapturedBody(
 export async function captureCacheabilityAdmissionBody(
   body: ReadableStream<Uint8Array> | null,
   deadlineAt: number,
-  limit = CACHEABILITY_PROBE_BODY_LIMIT,
+  limit = CACHEABILITY_ADMISSION_RESPONSE_BODY_LIMIT,
   budget = isolateCaptureBudget,
 ): Promise<CapturedAdmissionBody> {
   if (!body) return { body: null, kind: "captured" };
@@ -367,9 +416,19 @@ export async function captureCacheabilityAdmissionBody(
       }
     }
   } catch (error) {
-    await reader.cancel(error).catch(() => {});
     releaseChunks(budget, chunks);
-    reader.releaseLock();
+    const release = () => {
+      try {
+        reader.releaseLock();
+      } catch {}
+    };
+    try {
+      const cancellation = reader.cancel(error);
+      release();
+      void cancellation.catch(() => {}).finally(release);
+    } catch {
+      release();
+    }
     throw error;
   }
 }
@@ -461,12 +520,11 @@ function completedRouteOutcome(
   if (state.forcedDynamicReason) {
     return { cacheable: false, reason: state.forcedDynamicReason };
   }
+  const varyRejectionReason = cacheabilityVaryRejectionReason(response.headers, state);
+  if (varyRejectionReason) return { cacheable: false, reason: varyRejectionReason };
   if (state.route?.kind === "app-route") {
     if (response.headers.has("set-cookie")) {
       return { cacheable: false, reason: "response sets a cookie" };
-    }
-    if (hasUnsupportedCacheabilityVary(response.headers)) {
-      return { cacheable: false, reason: "response has unsupported Vary fields" };
     }
     return inferPagesPageCacheability(response);
   }
@@ -540,12 +598,12 @@ async function finalizeWorkerCacheabilityAdmission(
   // boundary, so the outer Worker does not buffer them a second time. Config
   // headers run later, however, and can make an otherwise dynamic response
   // public. Capture only that unproven final-public case before it can escape.
-  // A manifest-bearing deployment must also authorize the exact route/path
-  // identity. Normalize HTML-shaped direct navigations to the same Route
-  // Handler representation as canonical fetches.
+  // A manifest-bearing deployment normally authorizes the route pattern. An
+  // unlisted Route Handler can still opt in with an explicit application or
+  // config cache policy, but only after this finalizer has checked the fully
+  // completed response.
   if (state.route?.kind === "app-route") {
     let manifestRoute: CacheabilityManifestRoute | null = null;
-    let manifestContainsRoutePattern = false;
     const hasExplicitRuntimePolicy =
       state.explicitResponseCachePolicy === true || state.explicitConfigCachePolicy === true;
     if (
@@ -558,39 +616,30 @@ async function finalizeWorkerCacheabilityAdmission(
     }
     if (admission.policy === "manifest") {
       const manifest = admission.manifest as CacheabilityManifest;
-      const representation =
-        admission.representation === "html" ? "app-route" : admission.representation;
       manifestRoute = findCacheabilityManifestRoute(
         manifest,
         state.route.kind,
         state.route.pattern,
-        {
-          representation: representation as Parameters<
-            typeof findCacheabilityManifestRoute
-          >[3]["representation"],
-          requestKey: admission.requestKey,
-        },
       );
-      if (!manifestRoute && hasExplicitRuntimePolicy) {
-        manifestContainsRoutePattern = cacheabilityManifestHasRoutePattern(
-          manifest,
-          state.route.kind,
-          state.route.pattern,
-        );
-      }
     }
     const isManifestAuthorized =
-      manifestRoute?.state === "static-candidate" && manifestRoute.status === response.status;
+      manifestRoute !== null &&
+      admission.routePathname !== undefined &&
+      cacheabilityManifestRouteState(
+        manifestRoute,
+        admission.routePathname,
+        admission.representation as CacheabilityRepresentation,
+      ) !== null;
     const canUseBoundedRuntimeAdmission =
       hasExplicitRuntimePolicy &&
       (admission.policy === "runtime" ||
-        (admission.policy === "manifest" && !manifestRoute && !manifestContainsRoutePattern));
+        (admission.policy === "manifest" && !isManifestAuthorized));
     if (
       (!isManifestAuthorized && !canUseBoundedRuntimeAdmission) ||
       response.status >= 500 ||
       state.forcedDynamicReason ||
       hasStrictFinalResponseVeto(response, state) ||
-      hasUnsupportedCacheabilityVary(response.headers)
+      cacheabilityVaryRejectionReason(response.headers, state) !== null
     ) {
       return responseWithCachePolicy(response, response.body, null);
     }
@@ -606,7 +655,7 @@ async function finalizeWorkerCacheabilityAdmission(
       captured = await captureCacheabilityAdmissionBody(
         response.body,
         state.captureDeadlineAt,
-        CACHEABILITY_PROBE_BODY_LIMIT,
+        CACHEABILITY_ADMISSION_RESPONSE_BODY_LIMIT,
         state.captureBudget ?? isolateCaptureBudget,
       );
     } catch {
@@ -639,20 +688,19 @@ async function finalizeWorkerCacheabilityAdmission(
   }
 
   let manifestRoute: CacheabilityManifestRoute | null = null;
+  let manifestRouteState: ReturnType<typeof cacheabilityManifestRouteState> = null;
   if (admission.policy === "manifest") {
     const manifest = admission.manifest as CacheabilityManifest;
-    manifestRoute = findCacheabilityManifestRoute(manifest, state.route.kind, state.route.pattern, {
-      representation: admission.representation as Parameters<
-        typeof findCacheabilityManifestRoute
-      >[3]["representation"],
-      requestKey: admission.requestKey,
-    });
-    if (
-      !manifestRoute ||
-      manifestRoute.state === "dynamic" ||
-      manifestRoute.state === "probe-failed" ||
-      manifestRoute.status !== response.status
-    ) {
+    manifestRoute = findCacheabilityManifestRoute(manifest, state.route.kind, state.route.pattern);
+    manifestRouteState =
+      manifestRoute && admission.routePathname
+        ? cacheabilityManifestRouteState(
+            manifestRoute,
+            admission.routePathname,
+            admission.representation as CacheabilityRepresentation,
+          )
+        : null;
+    if (!manifestRoute || !manifestRouteState) {
       return responseWithCachePolicy(response, response.body, null);
     }
   }
@@ -663,16 +711,15 @@ async function finalizeWorkerCacheabilityAdmission(
   if (hasStrictFinalResponseVeto(response, state)) {
     return responseWithCachePolicy(response, response.body, null);
   }
-  if (hasUnsupportedCacheabilityVary(response.headers)) {
+  if (cacheabilityVaryRejectionReason(response.headers, state) !== null) {
     return responseWithCachePolicy(response, response.body, null);
   }
-
   let captured: CapturedAdmissionBody;
   try {
     captured = await captureCacheabilityAdmissionBody(
       response.body,
       state.captureDeadlineAt,
-      CACHEABILITY_PROBE_BODY_LIMIT,
+      CACHEABILITY_ADMISSION_RESPONSE_BODY_LIMIT,
       state.captureBudget ?? isolateCaptureBudget,
     );
   } catch {
@@ -690,7 +737,11 @@ async function finalizeWorkerCacheabilityAdmission(
     // renderer deliberately bypassed its cache-write path (notably draft mode
     // and nonce-bearing HTML), in which case the completed response must stay
     // private without being replaced by a 500.
-    if (manifestRoute?.state === "static-candidate" && outcome?.dynamicUsage === true) {
+    if (
+      manifestRoute &&
+      manifestRouteState === "static-candidate" &&
+      outcome?.dynamicUsage === true
+    ) {
       // The replacement 500 does not consume the captured replay stream. Its
       // cancellation releases the isolate-wide byte reservation immediately.
       await captured.body?.cancel().catch(() => {});
@@ -752,6 +803,21 @@ export async function finalizeWorkerCacheabilityResponse(
     );
   }
 
+  if (state.patternDynamicReason && !state.explicitConfigCachePolicy) {
+    // Route configuration is pattern-wide, but Next.js lets a matching
+    // next.config public cache policy override force-dynamic/revalidate=0.
+    // Config headers are applied before this Worker finalizer, so only bypass
+    // the render body when no explicit policy still needs completed-response
+    // classification. A real route 5xx above must never be hidden by pruning.
+    await response.body?.cancel().catch(() => {});
+    return probeResponse(
+      state,
+      "dynamic",
+      { cacheable: false, reason: state.patternDynamicReason },
+      response.status,
+    );
+  }
+
   const drainFailure = await drainProbeBody(response, state.captureDeadlineAt);
   if (drainFailure) {
     return probeResponse(
@@ -781,5 +847,6 @@ export async function finalizeWorkerCacheabilityResponse(
         : "dynamic",
     outcome,
     response.status,
+    rendererOutcome?.cacheable === true && rendererOutcome.dynamicUsage !== true,
   );
 }

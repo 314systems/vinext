@@ -75,6 +75,31 @@ test("classifies completed App Page renders inside workerd", async ({ request })
     version: 1,
   });
 
+  // Next.js treats both effective force-dynamic and revalidate=0 segment
+  // configuration as pattern-wide dynamic decisions:
+  // test/e2e/app-dir/app-prefetch/prefetching.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/app-prefetch/prefetching.test.ts
+  // packages/next/src/build/utils.ts
+  // packages/next/src/server/app-render/create-component-tree.tsx
+  // This includes inherited layout configuration. The coordinator can prune
+  // later concrete identities only after the staged Worker certifies this
+  // authoritative pattern scope.
+  for (const pathname of [
+    "/cacheability/pattern-force-dynamic",
+    "/cacheability/pattern-revalidate-zero",
+  ]) {
+    const patternDynamicProbe = await request.get(pathname, { headers });
+    expect(patternDynamicProbe.ok()).toBe(true);
+    await expect(patternDynamicProbe.json()).resolves.toMatchObject({
+      kind: "app-page",
+      pattern: pathname,
+      scope: "pattern",
+      state: "dynamic",
+      status: 200,
+      version: 1,
+    });
+  }
+
   // Ported from Next.js:
   // test/e2e/app-dir/custom-cache-control/custom-cache-control.test.ts
   const configPublicDynamicProbe = await request.get("/cacheability/config-public-dynamic", {
@@ -89,6 +114,53 @@ test("classifies completed App Page renders inside workerd", async ({ request })
     version: 1,
   });
 
+  const ordinaryPatternProbe = await request.get("/cacheability/config-public-pattern/ordinary", {
+    headers,
+  });
+  await expect(ordinaryPatternProbe.json()).resolves.toMatchObject({
+    kind: "app-page",
+    pattern: "/cacheability/config-public-pattern/:slug",
+    scope: "pattern",
+    state: "dynamic",
+    status: 200,
+    version: 1,
+  });
+  const specialPatternProbe = await request.get("/cacheability/config-public-pattern/special", {
+    headers,
+  });
+  await expect(specialPatternProbe.json()).resolves.toMatchObject({
+    cacheControl: "s-maxage=33",
+    kind: "app-page",
+    pattern: "/cacheability/config-public-pattern/:slug",
+    state: "static-candidate",
+    status: 200,
+    version: 1,
+  });
+
+  const representationHtmlProbe = await request.get("/cacheability/config-public-representation", {
+    headers,
+  });
+  await expect(representationHtmlProbe.json()).resolves.toMatchObject({
+    cacheControl: "s-maxage=34",
+    kind: "app-page",
+    pattern: "/cacheability/config-public-representation",
+    state: "static-candidate",
+    status: 200,
+    version: 1,
+  });
+  const representationRscProbe = await request.get(
+    "/cacheability/config-public-representation?_rsc",
+    { headers: { ...headers, Accept: "text/x-component", RSC: "1" } },
+  );
+  await expect(representationRscProbe.json()).resolves.toMatchObject({
+    kind: "app-page",
+    pattern: "/cacheability/config-public-representation",
+    scope: "pattern",
+    state: "dynamic",
+    status: 200,
+    version: 1,
+  });
+
   const staticRouteHandlerProbe = await request.get("/cacheability/route-handler-static", {
     headers: { ...headers, Accept: "*/*" },
   });
@@ -96,6 +168,17 @@ test("classifies completed App Page renders inside workerd", async ({ request })
   await expect(staticRouteHandlerProbe.json()).resolves.toMatchObject({
     kind: "app-route",
     pattern: "/cacheability/route-handler-static",
+    state: "static-candidate",
+    status: 200,
+    version: 1,
+  });
+
+  const largeRouteHandlerProbe = await request.get("/cacheability/route-handler-large", {
+    headers: { ...headers, Accept: "*/*" },
+  });
+  await expect(largeRouteHandlerProbe.json()).resolves.toMatchObject({
+    kind: "app-route",
+    pattern: "/cacheability/route-handler-large",
     state: "static-candidate",
     status: 200,
     version: 1,

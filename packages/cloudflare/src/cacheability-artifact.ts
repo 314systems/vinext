@@ -7,9 +7,7 @@ import {
 } from "vinext/internal/server/cacheability-manifest";
 import {
   cacheabilityManifestByteLimitError,
-  cacheabilityManifestRouteLimitError,
   MAX_CACHEABILITY_MANIFEST_BYTES,
-  MAX_CACHEABILITY_MANIFEST_ROUTES,
 } from "./cacheability-manifest-limits.js";
 
 type JavaScriptToken = {
@@ -194,16 +192,15 @@ function assertManifestModuleReachable(configPath: string): void {
 }
 
 /**
- * Upload a version-specific manifest from an isolated copy of the built Worker.
- * The application build already imports this stable module asset, so the final
- * upload only replaces its contents and never rewrites generated JavaScript.
+ * Write the version-specific manifest into the built Worker artifact.
+ * The application build already imports this stable module asset, so the
+ * completed dist directory remains the exact input to the final upload.
  */
-export function withCacheabilityManifestArtifact<T>(
+export function writeCacheabilityManifestArtifact(
   root: string,
   configuredPath: string | undefined,
   manifest: CacheabilityManifest,
-  upload: (configPath: string) => T,
-): T {
+): string {
   const configPath = resolveGeneratedServerConfig(root, configuredPath);
   assertManifestModuleReachable(configPath);
   const serverDirectory = path.dirname(configPath);
@@ -213,34 +210,19 @@ export function withCacheabilityManifestArtifact<T>(
       `Two-stage CDN warming requires ${CACHEABILITY_MANIFEST_MODULE} in the generated Worker artifact. Rebuild the app before deploying.`,
     );
   }
-  const routeCount = Object.keys(manifest.routes).length;
-  if (routeCount > MAX_CACHEABILITY_MANIFEST_ROUTES) {
-    throw cacheabilityManifestRouteLimitError(routeCount);
-  }
   const serializedManifest = JSON.stringify(manifest);
   const manifestBytes = Buffer.byteLength(serializedManifest);
   if (manifestBytes > MAX_CACHEABILITY_MANIFEST_BYTES) {
     throw cacheabilityManifestByteLimitError(manifestBytes);
   }
 
-  const isolatedDirectory = fs.mkdtempSync(
-    path.join(path.dirname(serverDirectory), ".vinext-cache-"),
-  );
+  const manifestSource = `export default ${JSON.stringify(serializedManifest)};\n`;
+  const pendingManifestPath = `${manifestPath}.${process.pid}.tmp`;
   try {
-    fs.cpSync(serverDirectory, isolatedDirectory, { recursive: true });
-    const isolatedManifestPath = path.join(isolatedDirectory, CACHEABILITY_MANIFEST_MODULE);
-    if (!fs.lstatSync(isolatedManifestPath).isFile()) {
-      throw new Error(
-        `Two-stage CDN warming requires ${CACHEABILITY_MANIFEST_MODULE} to be a regular Worker module.`,
-      );
-    }
-    fs.writeFileSync(
-      isolatedManifestPath,
-      `export default ${JSON.stringify(serializedManifest)};\n`,
-      "utf8",
-    );
-    return upload(path.relative(root, path.join(isolatedDirectory, path.basename(configPath))));
+    fs.writeFileSync(pendingManifestPath, manifestSource, "utf8");
+    fs.renameSync(pendingManifestPath, manifestPath);
   } finally {
-    fs.rmSync(isolatedDirectory, { recursive: true, force: true });
+    if (fs.existsSync(pendingManifestPath)) fs.unlinkSync(pendingManifestPath);
   }
+  return path.relative(root, configPath);
 }

@@ -1,7 +1,10 @@
 import type { ExecutionContextLike } from "vinext/shims/request-context";
 import {
+  VINEXT_EXPECTED_WORKER_VERSION_HEADER,
   VINEXT_PRERENDER_METADATA_ROUTES_PATH,
   VINEXT_PRERENDER_PAGES_STATIC_PATHS_PATH,
+  VINEXT_PRERENDER_READINESS_HEADER,
+  VINEXT_PRERENDER_READINESS_PATH,
   VINEXT_PRERENDER_SECRET_HEADER,
   VINEXT_PRERENDER_STATIC_PARAMS_PATH,
 } from "./headers.js";
@@ -10,6 +13,7 @@ const PRERENDER_DISCOVERY_PATHS = new Set([
   VINEXT_PRERENDER_STATIC_PARAMS_PATH,
   VINEXT_PRERENDER_PAGES_STATIC_PATHS_PATH,
   VINEXT_PRERENDER_METADATA_ROUTES_PATH,
+  VINEXT_PRERENDER_READINESS_PATH,
 ]);
 
 export function isWorkerPrerenderDiscoveryPath(pathname: string): boolean {
@@ -25,6 +29,41 @@ export function workerCapabilityMatches(provided: string, expected: string): boo
     mismatch |= (provided.charCodeAt(index) || 0) ^ expected.charCodeAt(index);
   }
   return mismatch === 0;
+}
+
+/**
+ * Respond to an authenticated staged-version readiness request without
+ * invoking middleware, routing, or rendering. The CDN adapter validates the
+ * expected Worker version before callers return this response.
+ */
+export function createWorkerPrerenderReadinessResponse(
+  ctx: ExecutionContextLike,
+  request: Request,
+): Response | null {
+  // Keep the ordinary request path to one cheap string scan. Only parse the
+  // URL when it could be the reserved readiness endpoint.
+  if (!request.url.includes(VINEXT_PRERENDER_READINESS_PATH)) return null;
+  if (new URL(request.url).pathname !== VINEXT_PRERENDER_READINESS_PATH) return null;
+
+  if (
+    ctx.isPrerenderPathDiscovery !== true ||
+    request.method !== "GET" ||
+    !request.headers.has(VINEXT_EXPECTED_WORKER_VERSION_HEADER)
+  ) {
+    // This namespace is framework-owned. Never let a failed capability check
+    // fall through to middleware or a user route that could spoof readiness.
+    return new Response(null, {
+      status: 404,
+      headers: { "Cache-Control": "no-store" },
+    });
+  }
+  return new Response(null, {
+    status: 204,
+    headers: {
+      "Cache-Control": "no-store",
+      [VINEXT_PRERENDER_READINESS_HEADER]: "1",
+    },
+  });
 }
 
 /**

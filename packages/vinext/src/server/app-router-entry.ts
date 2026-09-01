@@ -73,7 +73,10 @@ import {
 } from "./http-error-responses.js";
 import { assetPrefixPathname, isNextStaticPath } from "../utils/asset-prefix.js";
 import { createWorkerRevalidationContext } from "./worker-revalidation-context.js";
-import { createWorkerPrerenderDiscoveryContext } from "./worker-prerender-discovery.js";
+import {
+  createWorkerPrerenderDiscoveryContext,
+  createWorkerPrerenderReadinessResponse,
+} from "./worker-prerender-discovery.js";
 
 // Precompute the path components used for `_next/static/*` 404 short-circuit
 // detection. Both `__basePath` and `__assetPrefix` are inlined as
@@ -123,7 +126,12 @@ async function handleRequest(
   // Registration must precede admission setup: the active adapter declares
   // whether a completed response is required before public cache headers.
   registerConfiguredCacheAdapters(env as Record<string, unknown> | undefined);
+  const cdnCacheAdapter = getCdnCacheAdapter();
   let ctx = createWorkerPrerenderDiscoveryContext(requestCtx, request, __rscPrerenderSecret);
+  const readinessResponse = createWorkerPrerenderReadinessResponse(ctx, request);
+  if (readinessResponse) {
+    return (await validateCdnRequest(request)) ?? readinessResponse;
+  }
   let finalizeCacheabilityResponse:
     | ((response: Response, ctx: ExecutionContextLike) => Promise<Response>)
     | undefined;
@@ -135,6 +143,7 @@ async function handleRequest(
       ctx,
       request,
       __rscPrerenderSecret,
+      cdnCacheAdapter.responseVary,
     );
     if (probeContext !== ctx) {
       ctx = probeContext;
@@ -151,7 +160,7 @@ async function handleRequest(
     }
   }
   const requiresCompletedResponseAdmission =
-    getCdnCacheAdapter().requiresCompletedResponseAdmission === true;
+    cdnCacheAdapter.requiresCompletedResponseAdmission === true;
   if (
     !finalizeCacheabilityResponse &&
     (__rscCacheabilityManifest || requiresCompletedResponseAdmission) &&
@@ -164,6 +173,7 @@ async function handleRequest(
       __rscCacheabilityManifest,
       process.env.__VINEXT_BUILD_ID,
       requiresCompletedResponseAdmission,
+      cdnCacheAdapter.responseVary,
     );
     if (admissionContext !== ctx) {
       ctx = admissionContext;

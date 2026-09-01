@@ -24,7 +24,17 @@ export default {
   headers: async () => [
     {
       source: "/cacheability/config-public-dynamic",
+      missing: [{ type: "query", key: "preview" }],
       headers: [{ key: "Cache-Control", value: "s-maxage=32" }],
+    },
+    {
+      source: "/cacheability/config-public-pattern/special",
+      headers: [{ key: "Cache-Control", value: "s-maxage=33" }],
+    },
+    {
+      source: "/cacheability/config-public-representation",
+      missing: [{ type: "query", key: "_rsc", value: ".*" }],
+      headers: [{ key: "Cache-Control", value: "s-maxage=34" }],
     },
     {
       source: "/cacheability/route-handler-config-public-late-error",

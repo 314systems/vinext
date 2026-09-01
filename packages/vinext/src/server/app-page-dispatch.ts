@@ -96,6 +96,7 @@ import {
   beginRouteCacheability,
   isRouteCacheabilityIdentityProbe,
   isRouteCacheabilityProbe,
+  markRouteCacheabilityPatternDynamic,
 } from "vinext/shims/cacheability-classification";
 
 type AppPageParams = Record<string, string | string[]>;
@@ -643,13 +644,23 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     return new Response(null, { status: 204 });
   }
   const dynamicConfig = options.dynamicConfig;
-  const currentRevalidateSeconds = options.revalidateSeconds;
+  // Next.js treats a dynamic route with generateStaticParams as SSG even when
+  // the generator returns no concrete paths. Its default `revalidate = false`
+  // then applies to the first on-demand render of an unknown path.
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/build/index.ts
+  const currentRevalidateSeconds =
+    options.revalidateSeconds ?? (options.hasGenerateStaticParams ? Infinity : null);
   const interceptionId = options.isRscRequest
     ? options.request.headers.get(VINEXT_INTERCEPTION_ID_HEADER)
     : null;
   const isForceStatic = dynamicConfig === "force-static";
   const isDynamicError = dynamicConfig === "error";
   const isForceDynamic = dynamicConfig === "force-dynamic";
+  if (isRouteCacheabilityProbe() && (isForceDynamic || currentRevalidateSeconds === 0)) {
+    markRouteCacheabilityPatternDynamic(
+      isForceDynamic ? 'dynamic = "force-dynamic"' : "revalidate = 0",
+    );
+  }
   const isPrerender = process.env.VINEXT_PRERENDER === "1";
   const serveStreamingMetadata = shouldServeStreamingMetadata(
     options.request.headers.get("user-agent") ?? "",

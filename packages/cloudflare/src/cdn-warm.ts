@@ -5,6 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   PRERENDER_PATHS_MANIFEST,
   type PrerenderPathManifest,
+  type PrerenderRoutePattern,
 } from "vinext/internal/build/prerender-paths";
 import {
   getPrerenderedConcretePaths,
@@ -23,6 +24,11 @@ import {
 } from "vinext/internal/server/app-rsc-cache-busting";
 import { isNonCacheableCacheControl } from "vinext/shims/cdn-cache";
 import { normalizePathTrailingSlash } from "vinext/shims/url-utils";
+import {
+  VINEXT_PRERENDER_READINESS_HEADER,
+  VINEXT_PRERENDER_READINESS_PATH,
+  VINEXT_PRERENDER_SECRET_HEADER,
+} from "vinext/internal/server/headers";
 import { VINEXT_CDN_BUILD_ID_HEADER } from "./cache/cdn-build-id.js";
 
 export type CdnWarmOptions = {
@@ -32,6 +38,7 @@ export type CdnWarmOptions = {
   pagesDataPaths?: readonly string[];
   /** Statically eligible App Route Handler request identities. */
   routeHandlerPaths?: readonly string[];
+  routePatterns?: Readonly<Record<string, PrerenderRoutePattern>>;
   /** App Router ISR paths whose definitive client-navigation payload is warmed. */
   rscPaths?: readonly string[];
   /** App Router paths whose deterministic loading-boundary payload is warmed. */
@@ -77,6 +84,7 @@ export type CdnWarmResult = {
   skipped: number;
   failed: number;
   failures: Array<{ path: string; error: string }>;
+  skippedTargets: CdnWarmTarget[];
   warmedPlan: CdnWarmRequestPlan;
   retryPlan: CdnWarmRequestPlan;
 };
@@ -87,6 +95,7 @@ export type CdnWarmRequestPlan = {
   paths: string[];
   rscPaths: string[];
   routeHandlerPaths?: string[];
+  routePatterns?: Record<string, PrerenderRoutePattern>;
 };
 
 export type CdnWarmReadinessResult = { ready: true } | { error: string; ready: false };
@@ -96,11 +105,13 @@ export type PrerenderWarmPlan = {
   buildId?: string;
   buildIdentity?: string;
   deploymentId?: string;
+  fallbackRoutePatterns?: PrerenderRoutePattern[];
   loadingShellPaths: string[];
   pagesDataPaths?: string[];
   pagesPaths?: string[];
   paths: string[];
   routeHandlerPaths?: string[];
+  routePatterns?: Record<string, PrerenderRoutePattern>;
   rscBuildId?: string;
   rscPaths: string[];
 };
@@ -151,12 +162,49 @@ function readPrerenderPathManifest(manifestPath: string): PrerenderPathManifest 
       (manifest.excludedWarmPaths !== undefined &&
         (!Array.isArray(manifest.excludedWarmPaths) ||
           !manifest.excludedWarmPaths.every((pathname) => typeof pathname === "string"))) ||
+      (manifest.fallbackRoutePatterns !== undefined &&
+        (!Array.isArray(manifest.fallbackRoutePatterns) ||
+          !manifest.fallbackRoutePatterns.every(
+            (route) =>
+              route !== null &&
+              typeof route === "object" &&
+              !Array.isArray(route) &&
+              (route.kind === "app-page" ||
+                route.kind === "app-route" ||
+                route.kind === "pages-page") &&
+              typeof route.pattern === "string" &&
+              route.pattern.startsWith("/"),
+          ))) ||
       (manifest.rscPaths !== undefined &&
         (!Array.isArray(manifest.rscPaths) ||
           !manifest.rscPaths.every((pathname) => typeof pathname === "string"))) ||
       (manifest.routeHandlerPaths !== undefined &&
         (!Array.isArray(manifest.routeHandlerPaths) ||
           !manifest.routeHandlerPaths.every((pathname) => typeof pathname === "string"))) ||
+      (manifest.routePatterns !== undefined &&
+        (!manifest.routePatterns ||
+          typeof manifest.routePatterns !== "object" ||
+          Array.isArray(manifest.routePatterns) ||
+          !Object.entries(manifest.routePatterns).every(
+            ([pathname, route]) =>
+              pathname.startsWith("/") &&
+              route !== null &&
+              typeof route === "object" &&
+              !Array.isArray(route) &&
+              (route.kind === "app-page" ||
+                route.kind === "app-route" ||
+                route.kind === "pages-page") &&
+              typeof route.pattern === "string" &&
+              route.pattern.startsWith("/") &&
+              (route.cacheabilityProbe === undefined ||
+                (route.cacheabilityProbe !== null &&
+                  typeof route.cacheabilityProbe === "object" &&
+                  !Array.isArray(route.cacheabilityProbe) &&
+                  typeof route.cacheabilityProbe.canPrunePattern === "boolean" &&
+                  (route.cacheabilityProbe.concretePathname === undefined ||
+                    (typeof route.cacheabilityProbe.concretePathname === "string" &&
+                      route.cacheabilityProbe.concretePathname.startsWith("/"))))),
+          ))) ||
       (manifest.loadingShellPaths !== undefined &&
         (!Array.isArray(manifest.loadingShellPaths) ||
           !manifest.loadingShellPaths.every((pathname) => typeof pathname === "string"))) ||
@@ -224,6 +272,14 @@ export function readPrerenderWarmPlan(
     manifest.rscPaths !== undefined &&
     manifest.rscBuildId !== undefined;
   const applyConfig = (pathname: string) => applyWarmPathConfig(pathname, manifest);
+  const routePatterns = manifest.routePatterns
+    ? Object.fromEntries(
+        Object.entries(manifest.routePatterns).map(([pathname, route]) => [
+          pathname.includes("/_next/data/") ? pathname : applyConfig(pathname),
+          route,
+        ]),
+      )
+    : undefined;
   let htmlPaths = pathPlan.paths;
   if (options?.includeFallbackShells === true) {
     const prerenderManifest = readPrerenderManifest(
@@ -253,6 +309,9 @@ export function readPrerenderWarmPlan(
     buildId: manifest.buildId,
     ...(manifest.buildIdentity ? { buildIdentity: manifest.buildIdentity } : {}),
     ...(manifest.deploymentId ? { deploymentId: manifest.deploymentId } : {}),
+    ...(manifest.fallbackRoutePatterns
+      ? { fallbackRoutePatterns: manifest.fallbackRoutePatterns }
+      : {}),
     loadingShellPaths: supportsCanonicalRsc
       ? (manifest.loadingShellPaths ?? []).map(applyConfig)
       : [],
@@ -264,6 +323,7 @@ export function readPrerenderWarmPlan(
     ...(manifest.routeHandlerPaths
       ? { routeHandlerPaths: manifest.routeHandlerPaths.map(applyConfig) }
       : {}),
+    ...(routePatterns ? { routePatterns } : {}),
   };
 }
 
@@ -378,6 +438,7 @@ export type CdnWarmTarget = {
   label: string;
   pathname: string;
   sourcePathname: string;
+  route?: PrerenderRoutePattern;
 };
 
 export async function createCdnWarmTargets(
@@ -389,6 +450,7 @@ export async function createCdnWarmTargets(
     | "pagesDataPaths"
     | "paths"
     | "routeHandlerPaths"
+    | "routePatterns"
     | "rscPaths"
   >,
 ): Promise<CdnWarmTarget[]> {
@@ -408,6 +470,7 @@ export async function createCdnWarmTargets(
         label: `${pathname} (RSC full)`,
         pathname: createCanonicalRscRequestUrl(pathname),
         sourcePathname: pathname,
+        route: options.routePatterns?.[pathname],
       });
     }
 
@@ -424,6 +487,7 @@ export async function createCdnWarmTargets(
         label: `${pathname} (RSC loading shell)`,
         pathname: await createRscRequestUrl(pathname, loadingHeaders),
         sourcePathname: pathname,
+        route: options.routePatterns?.[pathname],
       });
     }
   }
@@ -437,6 +501,7 @@ export async function createCdnWarmTargets(
       label: pathname,
       pathname,
       sourcePathname: pathname,
+      route: options.routePatterns?.[pathname],
     });
   }
   for (const pathname of new Set(options.pagesDataPaths ?? [])) {
@@ -448,6 +513,7 @@ export async function createCdnWarmTargets(
       label: `${pathname} (Pages data)`,
       pathname,
       sourcePathname: pathname,
+      route: options.routePatterns?.[pathname],
     });
   }
   for (const pathname of new Set(options.routeHandlerPaths ?? [])) {
@@ -459,12 +525,13 @@ export async function createCdnWarmTargets(
       label: `${pathname} (Route Handler)`,
       pathname,
       sourcePathname: pathname,
+      route: options.routePatterns?.[pathname],
     });
   }
   return requests;
 }
 
-class CdnWarmProgress {
+export class CdnOperationProgress {
   private readonly isTTY = process.stderr.isTTY;
   private lastLineLength = 0;
 
@@ -694,10 +761,6 @@ function validateRscWarmResponse(
   if (missingVary) {
     return { outcome: "failed", error: `response Vary is missing ${missingVary}` };
   }
-  const extraVary = Array.from(vary).find((name) => !REQUIRED_RSC_VARY_HEADERS.includes(name));
-  if (extraVary) {
-    return { outcome: "failed", error: `response Vary has unsupported field ${extraVary}` };
-  }
   return { outcome: "warmed" };
 }
 
@@ -719,13 +782,6 @@ function validateHtmlWarmResponse(
   }
   const cachePolicyValidation = validateCachePolicy(response, true, requireCacheHit);
   if (cachePolicyValidation.outcome !== "warmed") return cachePolicyValidation;
-  const extraVary = (response.headers.get("Vary") ?? "")
-    .split(",")
-    .map((name) => name.trim().toLowerCase())
-    .find((name) => name && !REQUIRED_RSC_VARY_HEADERS.includes(name));
-  if (extraVary) {
-    return { outcome: "failed", error: `response Vary has unsupported field ${extraVary}` };
-  }
   return { outcome: "warmed" };
 }
 
@@ -774,6 +830,24 @@ function validateReadinessResponse(
   return null;
 }
 
+function validatePrerenderReadinessResponse(
+  response: Response,
+  expectedBuildId?: string,
+): string | null {
+  const buildIdentityValidation = validateBuildIdentity(response, expectedBuildId);
+  if (buildIdentityValidation?.outcome === "failed") return buildIdentityValidation.error;
+  if (response.redirected) return "redirected response";
+  if (response.status !== 204) return `expected readiness HTTP 204, received ${response.status}`;
+  if (response.headers.get(VINEXT_PRERENDER_READINESS_HEADER) !== "1") {
+    return `response is missing ${VINEXT_PRERENDER_READINESS_HEADER}: 1`;
+  }
+  const cacheControl = response.headers.get("Cache-Control");
+  if (!cacheControl || !/(?:^|,)\s*no-store\s*(?:,|$)/i.test(cacheControl)) {
+    return "readiness response is missing Cache-Control: no-store";
+  }
+  return null;
+}
+
 /**
  * Wait until version-override requests consistently reach the uploaded build
  * before any real cache key is filled. Every probe has a unique query key, so
@@ -794,6 +868,7 @@ export async function waitForCdnWarmTargetReadiness(
     plan: CdnWarmRequestPlan;
     maxAttempts?: number;
     phaseTimeoutMs?: number;
+    prerenderSecret?: string;
     probeIntervalMs?: number;
     requiredConsecutiveSuccesses?: number;
   },
@@ -813,8 +888,17 @@ export async function waitForCdnWarmTargetReadiness(
   }
 
   const headers = new Headers(options.headers);
-  const probePath = kind === "rsc" ? createCanonicalRscRequestUrl(pathname) : pathname;
-  if (kind === "rsc") {
+  const readinessSecret = options.prerenderSecret;
+  const useReadinessEndpoint = Boolean(readinessSecret);
+  const probePath = useReadinessEndpoint
+    ? VINEXT_PRERENDER_READINESS_PATH
+    : kind === "rsc"
+      ? createCanonicalRscRequestUrl(pathname)
+      : pathname;
+  if (readinessSecret) {
+    headers.set("Accept", "text/html");
+    headers.set(VINEXT_PRERENDER_SECRET_HEADER, readinessSecret);
+  } else if (kind === "rsc") {
     for (const [name, value] of createCanonicalRscRequestHeaders(options.deploymentId)) {
       headers.set(name, value);
     }
@@ -839,15 +923,15 @@ export async function waitForCdnWarmTargetReadiness(
     options.requiredConsecutiveSuccesses ?? DEFAULT_STAGED_READINESS_SUCCESSES,
   );
   const readinessRetries = Math.max(0, options.retries ?? DEFAULT_STAGED_READINESS_RETRIES);
+  const maxAttempts = Math.max(
+    requiredConsecutiveSuccesses,
+    options.maxAttempts ?? requiredConsecutiveSuccesses + readinessRetries,
+  );
   const phaseTimeoutMs = Math.max(
     1,
     options.phaseTimeoutMs ?? DEFAULT_STAGED_READINESS_PHASE_TIMEOUT_MS,
   );
   const deadlineAt = Date.now() + phaseTimeoutMs;
-  const maxAttempts = Math.max(
-    requiredConsecutiveSuccesses,
-    options.maxAttempts ?? requiredConsecutiveSuccesses + readinessRetries,
-  );
   const probeId = randomUUID();
   let consecutiveSuccesses = 0;
   let lastError = "readiness probe did not run";
@@ -868,12 +952,14 @@ export async function waitForCdnWarmTargetReadiness(
         Math.min(timeoutMs, remainingMs),
         headers,
       );
-      const validationError = validateReadinessResponse(
-        response,
-        kind,
-        options.expectedBuildId,
-        options.expectedRscBuildId,
-      );
+      const validationError = useReadinessEndpoint
+        ? validatePrerenderReadinessResponse(response, options.expectedBuildId)
+        : validateReadinessResponse(
+            response,
+            kind,
+            options.expectedBuildId,
+            options.expectedRscBuildId,
+          );
       if (process.env.VINEXT_CDN_WARM_DEBUG === "1") {
         console.log(
           `  CDN warm readiness attempt ${attempt + 1}: ` +
@@ -1151,6 +1237,7 @@ export async function warmCdnCache(options: CdnWarmOptions): Promise<CdnWarmResu
       skipped: 0,
       failed: 0,
       failures: [],
+      skippedTargets: [],
       warmedPlan: { loadingShellPaths: [], pagesDataPaths: [], paths: [], rscPaths: [] },
       retryPlan: { loadingShellPaths: [], pagesDataPaths: [], paths: [], rscPaths: [] },
     };
@@ -1158,7 +1245,7 @@ export async function warmCdnCache(options: CdnWarmOptions): Promise<CdnWarmResu
 
   console.log(`\n  Warming CDN cache with ${requests.length} discovered request(s)...`);
 
-  const progress = new CdnWarmProgress();
+  const progress = new CdnOperationProgress();
   let completedRequests = 0;
   progress.update(0, requests.length, "starting warmup");
 
@@ -1267,6 +1354,10 @@ export async function warmCdnCache(options: CdnWarmOptions): Promise<CdnWarmResu
     );
   const failures = failedRequests.map(({ result: { path, error } }) => ({ path, error }));
   const skippedResults = results.filter((result) => result.ok && result.skipped);
+  const skippedTargets = requests.filter((_target, index) => {
+    const result = results[index];
+    return result.ok && result.skipped;
+  });
   const warmedRequests = requests.filter((_target, index) => {
     const result = results[index];
     return result.ok && !result.skipped;
@@ -1300,6 +1391,7 @@ export async function warmCdnCache(options: CdnWarmOptions): Promise<CdnWarmResu
     skipped: skippedResults.length,
     failed: failures.length,
     failures,
+    skippedTargets,
     warmedPlan: {
       loadingShellPaths: warmedRequests
         .filter((target) => target.kind === "rsc-loading-shell")

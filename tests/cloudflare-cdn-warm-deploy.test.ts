@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { Buffer } from "node:buffer";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,10 +9,16 @@ import {
 } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
 import { VINEXT_CDN_BUILD_ID_HEADER } from "../packages/cloudflare/src/cache/cdn-build-id.js";
 import { VINEXT_EXPECTED_WORKER_VERSION_HEADER } from "../packages/cloudflare/src/version-headers.js";
-import { withCacheabilityManifestArtifact } from "../packages/cloudflare/src/cacheability-artifact.js";
-import { MAX_CACHEABILITY_MANIFEST_ROUTES } from "../packages/cloudflare/src/cacheability-manifest-limits.js";
-import { CACHEABILITY_MANIFEST_MODULE } from "../packages/vinext/src/server/cacheability-manifest.js";
-import { VINEXT_CACHEABILITY_PROBE_HEADER } from "../packages/vinext/src/server/headers.js";
+import { writeCacheabilityManifestArtifact } from "../packages/cloudflare/src/cacheability-artifact.js";
+import {
+  CACHEABILITY_MANIFEST_MODULE,
+  cacheabilityManifestRouteKey,
+  type CacheabilityManifest,
+} from "../packages/vinext/src/server/cacheability-manifest.js";
+import {
+  VINEXT_CACHEABILITY_PROBE_HEADER,
+  VINEXT_PRERENDER_READINESS_HEADER,
+} from "../packages/vinext/src/server/headers.js";
 
 const execFileSyncMock = vi.hoisted(() => vi.fn());
 const delayMock = vi.hoisted(() => vi.fn());
@@ -64,6 +71,17 @@ function cacheableHtml(body = "ok", cacheStatus = "MISS"): Response {
   });
 }
 
+function readinessResponse(buildId = "app-build-a"): Response {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      "cache-control": "no-store",
+      [VINEXT_CDN_BUILD_ID_HEADER]: buildId,
+      [VINEXT_PRERENDER_READINESS_HEADER]: "1",
+    },
+  });
+}
+
 function cacheablePagesData(cacheStatus = "MISS"): Response {
   return new Response('{"pageProps":{}}', {
     headers: {
@@ -105,12 +123,16 @@ function writeTwoStageWorkerArtifact(): void {
   );
 }
 
-function appPageProbeResponse(state: "static-candidate" | "probe-failed" = "static-candidate") {
+function appPageProbeResponse(
+  state: "static-candidate" | "probe-failed" = "static-candidate",
+  pattern = "/about",
+) {
   return Response.json(
     {
       kind: "app-page",
-      pattern: "/about",
+      pattern,
       ...(state === "probe-failed" ? { reason: "render classification failed" } : {}),
+      ...(state === "static-candidate" ? { rendererStatic: true } : {}),
       state,
       status: 200,
       version: 1,
@@ -121,6 +143,19 @@ function appPageProbeResponse(state: "static-candidate" | "probe-failed" = "stat
         [VINEXT_CDN_BUILD_ID_HEADER]: "app-build-a",
       },
     },
+  );
+}
+
+function appPageRoutePatterns(paths: readonly string[], pattern = "/about") {
+  return Object.fromEntries(
+    paths.map((pathname) => [
+      pathname,
+      {
+        cacheabilityProbe: { canPrunePattern: true },
+        kind: "app-page" as const,
+        pattern,
+      },
+    ]),
   );
 }
 
@@ -154,7 +189,7 @@ function mockTwoStageWrangler(
     if (args.includes("status")) {
       state.statusCount++;
       const replaceFinalStage =
-        state.finalStaged && state.statusCount >= 7 && options.replaceFinalStageBeforeHandoff;
+        state.finalStaged && state.statusCount >= 6 && options.replaceFinalStageBeforeHandoff;
       return JSON.stringify({
         id:
           state.statusCount === 1
@@ -205,6 +240,7 @@ function pagesPageProbeResponse() {
     {
       kind: "pages-page",
       pattern: "/pages-about",
+      rendererStatic: true,
       state: "static-candidate",
       status: 200,
       version: 1,
@@ -270,12 +306,11 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     writeFile("dist/server/index.js", "export default { fetch() {} };\n");
 
     expect(() =>
-      withCacheabilityManifestArtifact(
-        tmpDir,
-        "dist/server/wrangler.json",
-        { buildId: "build-a", routes: {}, version: 1 },
-        () => undefined,
-      ),
+      writeCacheabilityManifestArtifact(tmpDir, "dist/server/wrangler.json", {
+        buildId: "build-a",
+        routes: {},
+        version: 1,
+      }),
     ).toThrow(`Worker main module to import ${CACHEABILITY_MANIFEST_MODULE}`);
   });
 
@@ -303,12 +338,11 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     writeFile("dist/server/index.js", mainSource);
 
     expect(() =>
-      withCacheabilityManifestArtifact(
-        tmpDir,
-        "dist/server/wrangler.json",
-        { buildId: "build-a", routes: {}, version: 1 },
-        () => undefined,
-      ),
+      writeCacheabilityManifestArtifact(tmpDir, "dist/server/wrangler.json", {
+        buildId: "build-a",
+        routes: {},
+        version: 1,
+      }),
     ).toThrow(`Worker main module to import ${CACHEABILITY_MANIFEST_MODULE}`);
   });
 
@@ -325,44 +359,40 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     writeTwoStageWorkerArtifact();
     writeFile("dist/server/index.js", mainSource);
 
+    expect(
+      writeCacheabilityManifestArtifact(tmpDir, "dist/server/wrangler.json", {
+        buildId: "build-a",
+        routes: {},
+        version: 1,
+      }),
+    ).toBe("dist/server/wrangler.json");
+    expect(
+      fs.readFileSync(path.join(tmpDir, "dist/server", CACHEABILITY_MANIFEST_MODULE), "utf8"),
+    ).toBe('export default "{\\"buildId\\":\\"build-a\\",\\"routes\\":{},\\"version\\":1}";\n');
+  });
+
+  it("accepts a manifest over one MiB with more than 10,000 route patterns", () => {
+    writeTwoStageWorkerArtifact();
+    const routes = Object.fromEntries(
+      Array.from({ length: 10_001 }, (_, index) => {
+        const pattern = `/route-${index}-${"x".repeat(30)}`;
+        return [
+          cacheabilityManifestRouteKey("app-page", pattern),
+          { kind: "app-page" as const, pattern, state: "runtime-check" as const },
+        ];
+      }),
+    );
+    const manifest: CacheabilityManifest = { buildId: "build-a", routes, version: 1 };
+    const manifestBytes = Buffer.byteLength(JSON.stringify(manifest));
+    expect(manifestBytes).toBeGreaterThan(1024 * 1024);
+    expect(manifestBytes).toBeLessThan(2 * 1024 * 1024);
+
     expect(() =>
-      withCacheabilityManifestArtifact(
-        tmpDir,
-        "dist/server/wrangler.json",
-        { buildId: "build-a", routes: {}, version: 1 },
-        () => undefined,
-      ),
+      writeCacheabilityManifestArtifact(tmpDir, "dist/server/wrangler.json", manifest),
     ).not.toThrow();
   });
 
-  it("rejects a manifest with more exact identities than the deployment bound", () => {
-    writeTwoStageWorkerArtifact();
-    const route = {
-      kind: "app-page" as const,
-      pattern: "/page",
-      representation: "html" as const,
-      requestKey: "/page",
-      state: "static-candidate" as const,
-      status: 200,
-    };
-    const routes = Object.fromEntries(
-      Array.from({ length: MAX_CACHEABILITY_MANIFEST_ROUTES + 1 }, (_, index) => [
-        `route-${index}`,
-        route,
-      ]),
-    );
-
-    expect(() =>
-      withCacheabilityManifestArtifact(
-        tmpDir,
-        "dist/server/wrangler.json",
-        { buildId: "build-a", routes, version: 1 },
-        () => undefined,
-      ),
-    ).toThrow(`the limit is ${MAX_CACHEABILITY_MANIFEST_ROUTES}`);
-  });
-
-  it("uploads only static identities, then warms once and promotes the final version", async () => {
+  it("warms concrete static paths while tolerating a private paired representation", async () => {
     writeTwoStageWorkerArtifact();
     const events: string[] = [];
     let uploadCount = 0;
@@ -429,7 +459,8 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       const headers = new Headers(init?.headers);
       if (headers.get(VINEXT_CACHEABILITY_PROBE_HEADER) === "1") {
         const pathname = new URL(formatFetchUrl(input)).pathname;
-        events.push(`probe:${pathname}`);
+        const isRsc = headers.get("RSC") === "1";
+        events.push(`probe:${pathname}${isRsc ? ":rsc" : ""}`);
         if (
           pathname === "/pages-about" ||
           pathname === "/_next/data/app-build-a/pages-about.json"
@@ -440,7 +471,8 @@ describe("Cloudflare CDN warmup deploy flow", () => {
           return Response.json(
             {
               kind: "app-page",
-              pattern: "/dynamic",
+              pattern: "/:slug",
+              scope: "identity",
               state: "dynamic",
               status: 200,
               version: 1,
@@ -460,20 +492,53 @@ describe("Cloudflare CDN warmup deploy flow", () => {
             { headers: { [VINEXT_CDN_BUILD_ID_HEADER]: "app-build-a" } },
           );
         }
-        return appPageProbeResponse();
+        return appPageProbeResponse("static-candidate", "/:slug");
       }
       if (isReadinessFetch(input)) events.push("readiness");
       else {
         const pathname = new URL(formatFetchUrl(input)).pathname;
-        const count = (cacheRequestCounts.get(pathname) ?? 0) + 1;
-        cacheRequestCounts.set(pathname, count);
-        events.push(`${count === 1 ? "warm" : "unexpected-second-request"}:${pathname}`);
+        const isRsc = headers.get("RSC") === "1";
+        const cacheKey = `${pathname}${isRsc ? "?_rsc" : ""}`;
+        const count = (cacheRequestCounts.get(cacheKey) ?? 0) + 1;
+        cacheRequestCounts.set(cacheKey, count);
+        events.push(`${count === 1 ? "warm" : "unexpected-second-request"}:${cacheKey}`);
       }
       const pathname = new URL(formatFetchUrl(input)).pathname;
-      const cacheStatus = (cacheRequestCounts.get(pathname) ?? 0) > 1 ? "HIT" : "MISS";
-      return pathname.startsWith("/_next/data/")
-        ? cacheablePagesData(cacheStatus)
-        : cacheableHtml("ok", cacheStatus);
+      const isRsc = headers.get("RSC") === "1";
+      if (isReadinessFetch(input)) {
+        expect(pathname).toBe("/__vinext/prerender/readiness");
+        expect(headers.get("accept")).toBe("text/html");
+        expect(headers.get("rsc")).toBeNull();
+        expect(headers.get("x-vinext-prerender-secret")).toBe("test-prerender-secret");
+        return readinessResponse();
+      }
+      const cacheKey = `${pathname}${isRsc ? "?_rsc" : ""}`;
+      const cacheStatus = (cacheRequestCounts.get(cacheKey) ?? 0) > 1 ? "HIT" : "MISS";
+      if (pathname === "/about" && isRsc) {
+        return new Response("private paired rsc", {
+          headers: {
+            "Cache-Control": "no-store",
+            "CF-Cache-Status": "BYPASS",
+            "Content-Type": "text/x-component",
+            [VINEXT_CDN_BUILD_ID_HEADER]: "app-build-a",
+          },
+        });
+      }
+      if (pathname === "/dynamic") {
+        return new Response(isRsc ? "dynamic rsc" : "dynamic html", {
+          headers: {
+            "Cache-Control": "no-store",
+            "CF-Cache-Status": "BYPASS",
+            "Content-Type": isRsc ? "text/x-component" : "text/html",
+            [VINEXT_CDN_BUILD_ID_HEADER]: "app-build-a",
+          },
+        });
+      }
+      return isRsc
+        ? cacheableRsc()
+        : pathname.startsWith("/_next/data/")
+          ? cacheablePagesData(cacheStatus)
+          : cacheableHtml("ok", cacheStatus);
     });
     const { deployWithCdnWarmup } = await import("../packages/cloudflare/src/deploy.js");
 
@@ -489,7 +554,34 @@ describe("Cloudflare CDN warmup deploy flow", () => {
         pagesPaths: ["/pages-about"],
         paths: ["/about", "/dynamic", "/pages-about"],
         routeHandlerPaths: ["/api/data"],
-        rscPaths: [],
+        routePatterns: {
+          "/about": {
+            cacheabilityProbe: { canPrunePattern: true },
+            kind: "app-page",
+            pattern: "/:slug",
+          },
+          "/api/data": {
+            cacheabilityProbe: { canPrunePattern: true },
+            kind: "app-route",
+            pattern: "/api/data",
+          },
+          "/dynamic": {
+            cacheabilityProbe: { canPrunePattern: true },
+            kind: "app-page",
+            pattern: "/:slug",
+          },
+          "/pages-about": {
+            cacheabilityProbe: { canPrunePattern: true },
+            kind: "pages-page",
+            pattern: "/pages-about",
+          },
+          "/_next/data/app-build-a/pages-about.json": {
+            cacheabilityProbe: { canPrunePattern: true },
+            kind: "pages-page",
+            pattern: "/pages-about",
+          },
+        },
+        rscPaths: ["/about", "/dynamic"],
       }),
       warmCdnConcurrency: 1,
       warmCdnPromotionDelay: 0,
@@ -499,8 +591,10 @@ describe("Cloudflare CDN warmup deploy flow", () => {
 
     expect(deployedUrl).toBe("https://my-worker.example.workers.dev");
     expect(uploadCount).toBe(2);
-    expect(statusCount).toBe(7);
+    expect(statusCount).toBe(6);
     expect(Array.from(cacheRequestCounts.entries())).toEqual([
+      ["/about?_rsc", 1],
+      ["/dynamic?_rsc", 1],
       ["/_next/data/app-build-a/pages-about.json", 1],
       ["/api/data", 1],
       ["/about", 1],
@@ -513,23 +607,25 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       "status-2",
       "readiness",
       "probe:/about",
-      "probe:/dynamic",
       "probe:/pages-about",
-      "probe:/_next/data/app-build-a/pages-about.json",
       "probe:/api/data",
+      // Probe one representative for every pattern before probing siblings so
+      // a pattern-wide dynamic result can prune the remaining concrete paths.
+      "probe:/dynamic",
       "status-3",
       "upload-final",
       "status-4",
-      "status-5",
       "stage-final",
-      "status-6",
+      "status-5",
       "triggers",
       "readiness",
+      "warm:/about?_rsc",
+      "warm:/dynamic?_rsc",
       "warm:/_next/data/app-build-a/pages-about.json",
       "warm:/api/data",
       "warm:/about",
       "warm:/pages-about",
-      "status-7",
+      "status-6",
       "promote-final",
     ]);
     expect(finalConfig).toEqual({ main: "index.js", name: "my-worker", workers_dev: true });
@@ -538,39 +634,45 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     ) as string;
     const manifest = JSON.parse(manifestJson) as {
       buildId: string;
-      routes: Record<string, { pattern: string; state: string }>;
+      routes: Record<
+        string,
+        {
+          allowUnknown?: boolean;
+          pattern: string;
+          pathPrefix?: string;
+          runtimePaths?: string[];
+          staticRepresentation?: string;
+          staticPaths?: Record<string, string[]>;
+          state: string;
+        }
+      >;
     };
     expect(manifest.buildId).toBe("app-build-a");
     expect(Object.values(manifest.routes)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           kind: "app-page",
-          pattern: "/about",
-          state: "static-candidate",
+          pattern: "/:slug",
+          runtimePaths: ["/dynamic"],
+          staticPaths: { html: ["/about"] },
+          state: "runtime-check",
         }),
         expect.objectContaining({
           kind: "app-route",
           pattern: "/api/data",
-          representation: "app-route",
           state: "static-candidate",
         }),
         expect.objectContaining({
           kind: "pages-page",
           pattern: "/pages-about",
-          representation: "html",
-          state: "static-candidate",
-        }),
-        expect.objectContaining({
-          kind: "pages-page",
-          pattern: "/pages-about",
-          representation: "pages-data",
-          state: "static-candidate",
+          state: "runtime-check",
+          staticRepresentation: "html",
         }),
       ]),
     );
     expect(
       fs.readFileSync(path.join(tmpDir, "dist/server", CACHEABILITY_MANIFEST_MODULE), "utf8"),
-    ).toBe("export default null;\n");
+    ).toBe(finalManifestSource);
   });
 
   it("promotes a final Worker with an empty manifest when discovery finds no identities", async () => {
@@ -602,7 +704,61 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     expect(JSON.parse(manifestJson)).toEqual({ buildId: "app-build-a", routes: {}, version: 1 });
   });
 
-  it("promotes an empty manifest when every discovered identity is dynamic", async () => {
+  it("promotes compact pattern-only admission for zero-path static fallbacks", async () => {
+    writeTwoStageWorkerArtifact();
+    const wrangler = mockTwoStageWrangler();
+    const { deployWithCdnWarmup } = await import("../packages/cloudflare/src/deploy.js");
+
+    await expect(
+      deployWithCdnWarmup(tmpDir, [], {
+        cacheabilityProbe: true,
+        config: "dist/server/wrangler.json",
+        discoverWarmPlan: async () => ({
+          appPaths: [],
+          buildId: "app-build-a",
+          buildIdentity: "app-build-a",
+          fallbackRoutePatterns: [
+            { kind: "app-page", pattern: "/posts/:slug" },
+            { kind: "app-route", pattern: "/api/posts/:slug" },
+            { kind: "pages-page", pattern: "/legacy/:slug" },
+          ],
+          loadingShellPaths: [],
+          paths: [],
+          rscPaths: [],
+        }),
+      }),
+    ).resolves.toBe("https://my-worker.example.workers.dev");
+
+    expect(wrangler.uploads).toBe(2);
+    expect(wrangler.promoted).toBe(true);
+    expect(fetch).not.toHaveBeenCalled();
+    const manifestJson = JSON.parse(
+      wrangler.finalManifestSource!.slice("export default ".length, -2),
+    ) as string;
+    expect(JSON.parse(manifestJson)).toEqual({
+      buildId: "app-build-a",
+      routes: {
+        '["app-page","/posts/:slug"]': {
+          kind: "app-page",
+          pattern: "/posts/:slug",
+          state: "static-candidate",
+        },
+        '["app-route","/api/posts/:slug"]': {
+          kind: "app-route",
+          pattern: "/api/posts/:slug",
+          state: "static-candidate",
+        },
+        '["pages-page","/legacy/:slug"]': {
+          kind: "pages-page",
+          pattern: "/legacy/:slug",
+          state: "static-candidate",
+        },
+      },
+      version: 1,
+    });
+  });
+
+  it("promotes an empty manifest when every discovered pattern is dynamic", async () => {
     writeTwoStageWorkerArtifact();
     const wrangler = mockTwoStageWrangler();
     vi.mocked(fetch).mockImplementation(async (input, init) =>
@@ -611,6 +767,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
             {
               kind: "app-page",
               pattern: "/dynamic",
+              scope: "pattern",
               state: "dynamic",
               status: 200,
               version: 1,
@@ -618,7 +775,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
             { headers: { [VINEXT_CDN_BUILD_ID_HEADER]: "app-build-a" } },
           )
         : isReadinessFetch(input)
-          ? cacheableHtml()
+          ? readinessResponse()
           : new Response("unexpected", { status: 500 }),
     );
     const { deployWithCdnWarmup } = await import("../packages/cloudflare/src/deploy.js");
@@ -633,6 +790,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
           buildIdentity: "app-build-a",
           loadingShellPaths: [],
           paths: ["/dynamic"],
+          routePatterns: appPageRoutePatterns(["/dynamic"], "/dynamic"),
           rscPaths: [],
         }),
         warmCdnReadinessProbes: 1,
@@ -647,6 +805,128 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       wrangler.finalManifestSource!.slice("export default ".length, -2),
     ) as string;
     expect(JSON.parse(manifestJson)).toEqual({ buildId: "app-build-a", routes: {}, version: 1 });
+  });
+
+  it("excludes a Vary wildcard route from warming without blocking promotion", async () => {
+    writeTwoStageWorkerArtifact();
+    const wrangler = mockTwoStageWrangler();
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (new Headers(init?.headers).get(VINEXT_CACHEABILITY_PROBE_HEADER) === "1") {
+        return Response.json(
+          {
+            kind: "app-page",
+            pattern: "/wildcard",
+            reason: "response uses Vary: *",
+            scope: "identity",
+            state: "dynamic",
+            status: 200,
+            version: 1,
+          },
+          { headers: { [VINEXT_CDN_BUILD_ID_HEADER]: "app-build-a" } },
+        );
+      }
+      return isReadinessFetch(input)
+        ? readinessResponse()
+        : new Response("unexpected warm request", { status: 500 });
+    });
+    const { deployWithCdnWarmup } = await import("../packages/cloudflare/src/deploy.js");
+
+    await expect(
+      deployWithCdnWarmup(tmpDir, [], {
+        cacheabilityProbe: true,
+        config: "dist/server/wrangler.json",
+        discoverWarmPlan: async () => ({
+          appPaths: ["/wildcard"],
+          buildId: "app-build-a",
+          buildIdentity: "app-build-a",
+          loadingShellPaths: [],
+          paths: ["/wildcard"],
+          routePatterns: appPageRoutePatterns(["/wildcard"], "/wildcard"),
+          rscPaths: [],
+        }),
+        warmCdnReadinessProbes: 1,
+        warmCdnRetries: 0,
+      }),
+    ).resolves.toBe("https://my-worker.example.workers.dev");
+
+    expect(wrangler.uploads).toBe(2);
+    expect(wrangler.promoted).toBe(true);
+    expect(getRealWarmFetchCalls()).toHaveLength(1);
+    const manifestJson = JSON.parse(
+      wrangler.finalManifestSource!.slice("export default ".length, -2),
+    ) as string;
+    expect(JSON.parse(manifestJson)).toEqual({
+      buildId: "app-build-a",
+      routes: {
+        '["app-page","/wildcard"]': {
+          kind: "app-page",
+          pattern: "/wildcard",
+          state: "runtime-check",
+        },
+      },
+      version: 1,
+    });
+  });
+
+  it("probes a Pages-only concrete path once before warming HTML and data", async () => {
+    writeTwoStageWorkerArtifact();
+    const wrangler = mockTwoStageWrangler();
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (new Headers(init?.headers).get(VINEXT_CACHEABILITY_PROBE_HEADER) === "1") {
+        return pagesPageProbeResponse();
+      }
+      if (isReadinessFetch(input)) return readinessResponse();
+      return new URL(formatFetchUrl(input)).pathname.startsWith("/_next/data/")
+        ? cacheablePagesData()
+        : cacheableHtml();
+    });
+    const { deployWithCdnWarmup } = await import("../packages/cloudflare/src/deploy.js");
+
+    await expect(
+      deployWithCdnWarmup(tmpDir, [], {
+        cacheabilityProbe: true,
+        config: "dist/server/wrangler.json",
+        discoverWarmPlan: async () => ({
+          buildId: "app-build-a",
+          buildIdentity: "app-build-a",
+          loadingShellPaths: [],
+          pagesDataPaths: ["/_next/data/app-build-a/pages-about.json"],
+          pagesPaths: ["/pages-about"],
+          paths: ["/pages-about"],
+          routePatterns: {
+            "/_next/data/app-build-a/pages-about.json": {
+              cacheabilityProbe: { canPrunePattern: true },
+              kind: "pages-page",
+              pattern: "/pages-about",
+            },
+            "/pages-about": {
+              cacheabilityProbe: { canPrunePattern: true },
+              kind: "pages-page",
+              pattern: "/pages-about",
+            },
+          },
+          rscPaths: [],
+        }),
+        warmCdnPromotionDelay: 0,
+        warmCdnReadinessProbes: 1,
+        warmCdnRetries: 0,
+      }),
+    ).resolves.toBe("https://my-worker.example.workers.dev");
+
+    const requests = vi.mocked(fetch).mock.calls;
+    expect(
+      requests.filter(([, init]) =>
+        new Headers(init?.headers).has(VINEXT_CACHEABILITY_PROBE_HEADER),
+      ),
+    ).toHaveLength(1);
+    expect(
+      requests.filter(
+        ([input, init]) =>
+          !isReadinessFetch(input) &&
+          !new Headers(init?.headers).has(VINEXT_CACHEABILITY_PROBE_HEADER),
+      ),
+    ).toHaveLength(2);
+    expect(wrangler.promoted).toBe(true);
   });
 
   it("leaves an empty-manifest final Worker staged when promotion is disabled", async () => {
@@ -723,7 +1003,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       if (new Headers(init?.headers).get(VINEXT_CACHEABILITY_PROBE_HEADER) === "1") {
         return appPageProbeResponse();
       }
-      if (isReadinessFetch(input)) return cacheableHtml();
+      if (isReadinessFetch(input)) return readinessResponse();
       return cacheableHtml();
     });
     const { deployWithCdnWarmup } = await import("../packages/cloudflare/src/deploy.js");
@@ -738,6 +1018,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
           buildIdentity: "app-build-a",
           loadingShellPaths: [],
           paths: ["/about"],
+          routePatterns: appPageRoutePatterns(["/about"]),
           rscPaths: [],
         }),
         dangerouslyPromoteOnCdnWarmError: true,
@@ -763,7 +1044,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       if (new Headers(init?.headers).get(VINEXT_CACHEABILITY_PROBE_HEADER) === "1") {
         return appPageProbeResponse();
       }
-      if (isReadinessFetch(input)) return cacheableHtml();
+      if (isReadinessFetch(input)) return readinessResponse();
       return new Response("failed fill", {
         status: 500,
         headers: {
@@ -784,6 +1065,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
           buildIdentity: "app-build-a",
           loadingShellPaths: [],
           paths: ["/about"],
+          routePatterns: appPageRoutePatterns(["/about"]),
           rscPaths: [],
         }),
         dangerouslyPromoteOnCdnWarmError: true,
@@ -811,9 +1093,9 @@ describe("Cloudflare CDN warmup deploy flow", () => {
         const versions =
           statusCount === 1
             ? [{ version_id: OLD_VERSION, percentage: 100 }]
-            : statusCount === 7
+            : statusCount === 6
               ? [{ version_id: "44444444-4444-4444-8444-444444444444", percentage: 100 }]
-              : statusCount === 6
+              : statusCount === 5
                 ? [
                     { version_id: OLD_VERSION, percentage: 100 },
                     { version_id: FINAL_VERSION, percentage: 0 },
@@ -843,7 +1125,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       if (new Headers(init?.headers).get(VINEXT_CACHEABILITY_PROBE_HEADER) === "1") {
         return appPageProbeResponse();
       }
-      if (isReadinessFetch(input)) return cacheableHtml();
+      if (isReadinessFetch(input)) return readinessResponse();
       cacheRequestCount++;
       return cacheableHtml("ok", cacheRequestCount === 1 ? "MISS" : "HIT");
     });
@@ -859,6 +1141,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
           buildIdentity: "app-build-a",
           loadingShellPaths: [],
           paths: ["/about"],
+          routePatterns: appPageRoutePatterns(["/about"]),
           rscPaths: [],
         }),
         warmCdnCertify: true,
@@ -870,7 +1153,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     ).rejects.toThrow(
       "deployment traffic or deployment identity changed before the final version could be promoted",
     );
-    expect(statusCount).toBe(7);
+    expect(statusCount).toBe(6);
     expect(
       (execFileSyncMock.mock.calls as Array<[string, string[]]>).some(([, args]) =>
         args.includes(`${FINAL_VERSION}@100%`),
@@ -878,14 +1161,14 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     ).toBe(false);
   });
 
-  it("leaves production triggers untouched when an exact request cannot be classified", async () => {
+  it("leaves production triggers untouched when a route pattern cannot be classified", async () => {
     writeTwoStageWorkerArtifact();
     const wrangler = mockTwoStageWrangler();
     vi.mocked(fetch).mockImplementation(async (input, init) =>
       new Headers(init?.headers).get(VINEXT_CACHEABILITY_PROBE_HEADER) === "1"
         ? appPageProbeResponse("probe-failed")
         : isReadinessFetch(input)
-          ? cacheableHtml()
+          ? readinessResponse()
           : new Response("unexpected", { status: 500 }),
     );
     const { deployWithCdnWarmup } = await import("../packages/cloudflare/src/deploy.js");
@@ -900,6 +1183,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
           buildIdentity: "app-build-a",
           loadingShellPaths: [],
           paths: ["/about"],
+          routePatterns: appPageRoutePatterns(["/about"]),
           rscPaths: [],
         }),
         warmCdnConcurrency: 1,
@@ -919,7 +1203,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       new Headers(init?.headers).get(VINEXT_CACHEABILITY_PROBE_HEADER) === "1"
         ? appPageProbeResponse()
         : isReadinessFetch(input)
-          ? cacheableHtml()
+          ? readinessResponse()
           : new Response("unexpected", { status: 500 }),
     );
     const { deployWithCdnWarmup } = await import("../packages/cloudflare/src/deploy.js");
@@ -934,6 +1218,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
           buildIdentity: "app-build-a",
           loadingShellPaths: [],
           paths: ["/about"],
+          routePatterns: appPageRoutePatterns(["/about"]),
           rscPaths: [],
         }),
         warmCdnConcurrency: 1,
@@ -943,6 +1228,9 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     ).rejects.toThrow("final upload failed");
     expect(wrangler.uploads).toBe(2);
     expect(wrangler.triggerDeploys).toBe(0);
+    expect(
+      fs.readFileSync(path.join(tmpDir, "dist/server", CACHEABILITY_MANIFEST_MODULE), "utf8"),
+    ).not.toBe("export default null;\n");
   });
 
   it.each([
@@ -957,7 +1245,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
         if (new Headers(init?.headers).get(VINEXT_CACHEABILITY_PROBE_HEADER) === "1") {
           return appPageProbeResponse();
         }
-        if (isReadinessFetch(input)) return cacheableHtml();
+        if (isReadinessFetch(input)) return readinessResponse();
         return new Response("private", {
           headers: {
             "cache-control": "no-store",
@@ -978,6 +1266,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
           buildIdentity: "app-build-a",
           loadingShellPaths: [],
           paths: ["/about"],
+          routePatterns: appPageRoutePatterns(["/about"]),
           rscPaths: [],
         }),
         warmCdnConcurrency: 1,
@@ -997,7 +1286,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     },
   );
 
-  it("bounds queued prepared cache fills by one hard phase deadline", async () => {
+  it("lets prepared cache fills exceed the readiness window while requests keep completing", async () => {
     writeTwoStageWorkerArtifact();
     let now = 0;
     vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -1007,9 +1296,9 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       if (new Headers(init?.headers).get(VINEXT_CACHEABILITY_PROBE_HEADER) === "1") {
         return appPageProbeResponse();
       }
-      if (isReadinessFetch(input)) return cacheableHtml();
+      if (isReadinessFetch(input)) return readinessResponse();
       fillCalls++;
-      now = 120_001;
+      now += 120_001;
       return cacheableHtml();
     });
     const { deployWithCdnWarmup } = await import("../packages/cloudflare/src/deploy.js");
@@ -1024,6 +1313,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
           buildIdentity: "app-build-a",
           loadingShellPaths: [],
           paths: ["/first", "/queued"],
+          routePatterns: appPageRoutePatterns(["/first", "/queued"]),
           rscPaths: [],
         }),
         warmCdnConcurrency: 1,
@@ -1031,9 +1321,9 @@ describe("Cloudflare CDN warmup deploy flow", () => {
         warmCdnReadinessProbes: 1,
         warmCdnRetries: 0,
       }),
-    ).rejects.toThrow("CDN warmup exceeded its 120000ms phase deadline");
-    expect(fillCalls).toBe(1);
-    expect(wrangler.promoted).toBe(false);
+    ).resolves.toBe("https://my-worker.example.workers.dev");
+    expect(fillCalls).toBe(2);
+    expect(wrangler.promoted).toBe(true);
   });
 
   it("uses the dedicated cacheability-probe retry budget before the legacy warm fallback", async () => {
@@ -1074,7 +1364,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
         });
       }
       return isReadinessFetch(input)
-        ? cacheableHtml()
+        ? readinessResponse()
         : new Response("unexpected", { status: 500 });
     });
     const { deployWithCdnWarmup } = await import("../packages/cloudflare/src/deploy.js");
@@ -1089,6 +1379,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
           buildIdentity: "app-build-a",
           loadingShellPaths: [],
           paths: ["/about"],
+          routePatterns: appPageRoutePatterns(["/about"]),
           rscPaths: [],
         }),
         warmCdnConcurrency: 1,
@@ -1140,7 +1431,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       new Headers(init?.headers).get(VINEXT_CACHEABILITY_PROBE_HEADER) === "1"
         ? appPageProbeResponse()
         : isReadinessFetch(input)
-          ? cacheableHtml()
+          ? readinessResponse()
           : new Response("unexpected", { status: 500 }),
     );
     const { deployWithCdnWarmup } = await import("../packages/cloudflare/src/deploy.js");
@@ -1155,6 +1446,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
           buildIdentity: "app-build-a",
           loadingShellPaths: [],
           paths: ["/about"],
+          routePatterns: appPageRoutePatterns(["/about"]),
           rscPaths: [],
         }),
         warmCdnConcurrency: 1,
@@ -1202,7 +1494,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       new Headers(init?.headers).get(VINEXT_CACHEABILITY_PROBE_HEADER) === "1"
         ? appPageProbeResponse()
         : isReadinessFetch(input)
-          ? cacheableHtml()
+          ? readinessResponse()
           : new Response("unexpected", { status: 500 }),
     );
     const { deployWithCdnWarmup } = await import("../packages/cloudflare/src/deploy.js");
@@ -1217,6 +1509,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
           buildIdentity: "app-build-a",
           loadingShellPaths: [],
           paths: ["/about"],
+          routePatterns: appPageRoutePatterns(["/about"]),
           rscPaths: [],
         }),
         warmCdnConcurrency: 1,
@@ -1269,7 +1562,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       new Headers(init?.headers).get(VINEXT_CACHEABILITY_PROBE_HEADER) === "1"
         ? appPageProbeResponse()
         : isReadinessFetch(input)
-          ? cacheableHtml()
+          ? readinessResponse()
           : new Response("unexpected", { status: 500 }),
     );
     const { deployWithCdnWarmup } = await import("../packages/cloudflare/src/deploy.js");
@@ -1284,6 +1577,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
           buildIdentity: "app-build-a",
           loadingShellPaths: [],
           paths: ["/about"],
+          routePatterns: appPageRoutePatterns(["/about"]),
           rscPaths: [],
         }),
         warmCdnConcurrency: 1,
@@ -1336,7 +1630,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       new Headers(init?.headers).get(VINEXT_CACHEABILITY_PROBE_HEADER) === "1"
         ? appPageProbeResponse()
         : isReadinessFetch(input)
-          ? cacheableHtml()
+          ? readinessResponse()
           : new Response("unexpected", { status: 500 }),
     );
     const { deployWithCdnWarmup } = await import("../packages/cloudflare/src/deploy.js");
@@ -1351,6 +1645,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
           buildIdentity: "app-build-a",
           loadingShellPaths: [],
           paths: ["/about"],
+          routePatterns: appPageRoutePatterns(["/about"]),
           rscPaths: [],
         }),
         warmCdnConcurrency: 1,

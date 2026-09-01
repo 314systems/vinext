@@ -25,6 +25,7 @@ export type RouteCacheabilityState = {
     policy: "deny" | "manifest" | "runtime";
     representation?: string;
     requestKey?: string;
+    routePathname?: string;
   };
   /** Optional admission budget override used by focused runtime tests. */
   captureBudget?: { maxBytes: number; reservedBytes: number };
@@ -36,10 +37,14 @@ export type RouteCacheabilityState = {
   explicitResponseCachePolicy?: boolean;
   finalResponseVetoReason?: string;
   forcedDynamicReason?: string;
+  /** A route-config decision that applies to every concrete identity for this pattern. */
+  patternDynamicReason?: string;
   frameworkResponseCachePolicy?: Partial<Record<CacheabilityPolicyHeader, string>>;
   mode: "admit" | "identity" | "probe";
   outcome?: RouteCacheabilityOutcome;
   preserveResponseCachePolicy?: boolean;
+  /** Cache-key behavior declared by the active CDN adapter. */
+  responseVary?: "verbatim";
   probeBailout?: {
     kind: "private-cache";
     outcome: RouteCacheabilityOutcome;
@@ -87,6 +92,13 @@ export function markRouteCacheabilityDynamic(reason: string): void {
   const state = readRouteCacheabilityState();
   if (!state) return;
   state.forcedDynamicReason = reason;
+}
+
+/** Mark an effective route configuration that makes the whole pattern dynamic. */
+export function markRouteCacheabilityPatternDynamic(reason: string): void {
+  const state = readRouteCacheabilityState();
+  if (!state) return;
+  state.patternDynamicReason = reason;
 }
 
 /** Read a request-specific routing veto without making the route globally dynamic. */
