@@ -2,6 +2,14 @@ import { getRequestExecutionContext } from "./request-context.js";
 
 export const CACHEABILITY_REQUEST_STATE = Symbol.for("vinext.cacheabilityRequestState");
 
+export const CACHEABILITY_POLICY_HEADERS = [
+  "cache-control",
+  "cdn-cache-control",
+  "cloudflare-cdn-cache-control",
+] as const;
+
+type CacheabilityPolicyHeader = (typeof CACHEABILITY_POLICY_HEADERS)[number];
+
 export type RouteCacheabilityOutcome = {
   cacheControl?: string;
   cacheable: boolean;
@@ -12,17 +20,35 @@ export type RouteCacheabilityOutcome = {
 };
 
 export type RouteCacheabilityState = {
+  admission?: {
+    manifest?: unknown;
+    policy: "deny" | "manifest" | "runtime";
+    representation?: string;
+    requestKey?: string;
+  };
+  /** Optional admission budget override used by focused runtime tests. */
+  captureBudget?: { maxBytes: number; reservedBytes: number };
   captureDeadlineAt: number;
   complete?: (outcome: RouteCacheabilityOutcome) => void;
   completion?: Promise<RouteCacheabilityOutcome>;
+  finalResponseVetoReason?: string;
   forcedDynamicReason?: string;
-  mode: "identity" | "probe";
+  frameworkResponseCachePolicy?: Partial<Record<CacheabilityPolicyHeader, string>>;
+  mode: "admit" | "identity" | "probe";
   outcome?: RouteCacheabilityOutcome;
+  preserveResponseCachePolicy?: boolean;
   route?: {
-    kind: "app-page";
+    kind: "app-page" | "app-route";
     pattern: string;
   };
 };
+
+/** Preserve the existing policy when hybrid routing hands the request to Pages Router. */
+export function preserveRouteCacheabilityResponsePolicy(): void {
+  const state = readRouteCacheabilityState();
+  if (!state || state.mode !== "admit") return;
+  state.preserveResponseCachePolicy = true;
+}
 
 export function readRouteCacheabilityState(): RouteCacheabilityState | null {
   const context = getRequestExecutionContext();
@@ -32,7 +58,7 @@ export function readRouteCacheabilityState(): RouteCacheabilityState | null {
   );
 }
 
-export function beginRouteCacheability(kind: "app-page", pattern: string): boolean {
+export function beginRouteCacheability(kind: "app-page" | "app-route", pattern: string): boolean {
   const state = readRouteCacheabilityState();
   if (!state) return false;
   state.route = { kind, pattern };
@@ -46,9 +72,57 @@ export function markRouteCacheabilityDynamic(reason: string): void {
   state.forcedDynamicReason = reason;
 }
 
+/** Read a request-specific routing veto without making the route globally dynamic. */
+export function getRouteCacheabilityDynamicReason(): string | null {
+  return readRouteCacheabilityState()?.forcedDynamicReason ?? null;
+}
+
+/** Reuse the active request's bounded response-capture envelope when available. */
+export function getRouteCacheabilityCaptureOptions(): Pick<
+  RouteCacheabilityState,
+  "captureBudget" | "captureDeadlineAt"
+> | null {
+  const state = readRouteCacheabilityState();
+  return state
+    ? { captureBudget: state.captureBudget, captureDeadlineAt: state.captureDeadlineAt }
+    : null;
+}
+
+/** Keep a completed response private without treating it as static-to-dynamic. */
+export function markRouteCacheabilityFinalResponseUncacheable(reason: string): void {
+  const state = readRouteCacheabilityState();
+  if (!state || state.mode !== "admit") return;
+  state.finalResponseVetoReason ??= reason;
+}
+
+/** Record framework-owned policy so admission can identify policy added later. */
+export function captureRouteCacheabilityResponsePolicy(headers: Headers): void {
+  const state = readRouteCacheabilityState();
+  if (!state || state.mode !== "admit") return;
+
+  const policy: Partial<Record<CacheabilityPolicyHeader, string>> = {};
+  for (const name of CACHEABILITY_POLICY_HEADERS) {
+    const value = headers.get(name);
+    if (value !== null) policy[name] = value;
+  }
+  // Framework response shaping has more than one trusted phase. In
+  // particular, the App Page renderer can leave Cache-Control absent before
+  // the outer response finalizer applies the adapter's provisional no-store
+  // default. Keep the latest trusted snapshot; configurable response headers
+  // run after the final capture and remain visible to the strict admission
+  // comparison below.
+  state.frameworkResponseCachePolicy = policy;
+}
+
 /** True only for an authenticated probe that must render the matched App Page. */
 export function isRouteCacheabilityProbe(): boolean {
   return readRouteCacheabilityState()?.mode === "probe";
+}
+
+/** True when the outer Worker must decide cache admission after clean EOF. */
+export function isRouteCacheabilityEvaluation(): boolean {
+  const mode = readRouteCacheabilityState()?.mode;
+  return mode === "probe" || mode === "admit";
 }
 
 /** True for the authenticated routing pass that must not evaluate user components. */

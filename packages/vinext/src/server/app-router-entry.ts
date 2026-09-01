@@ -26,11 +26,13 @@ import "./server-globals.js";
 import rscHandler, {
   __assetPrefix as __rscAssetPrefix,
   __basePath as __rscBasePath,
+  __cacheabilityManifest as __rscCacheabilityManifest,
   __imageAllowedWidths as __rscImageAllowedWidths,
   __imageConfig as __rscImageConfig,
   __prerenderSecret as __rscPrerenderSecret,
 } from "virtual:vinext-rsc-entry";
 import { runWithExecutionContext, type ExecutionContextLike } from "vinext/shims/request-context";
+import { getCdnCacheAdapter } from "vinext/shims/cdn-cache";
 // @ts-expect-error -- virtual module resolved by vinext at build time
 import { registerConfiguredCacheAdapters } from "virtual:vinext-cache-adapters";
 import { applyCdnResponseIdentityHeaders, validateCdnRequest } from "./cache-control.js";
@@ -52,6 +54,8 @@ import {
   isOpenRedirectShaped,
 } from "./request-pipeline.js";
 import {
+  NEXT_ACTION_HEADER,
+  RSC_ACTION_HEADER,
   VINEXT_CACHEABILITY_PROBE_HEADER,
   VINEXT_PRERENDER_ROUTE_PARAMS_HEADER,
   VINEXT_PRERENDER_SECRET_HEADER,
@@ -84,6 +88,13 @@ type WorkerAssetEnv = {
   };
 };
 
+function isPotentialCompletedAdmissionRequest(request: Request): boolean {
+  if (request.method !== "GET" && request.method !== "HEAD") return false;
+  if (request.headers.has(NEXT_ACTION_HEADER) || request.headers.has(RSC_ACTION_HEADER))
+    return false;
+  return true;
+}
+
 export default {
   async fetch(
     request: Request,
@@ -108,6 +119,9 @@ async function handleRequest(
     : createWorkerRevalidationContext(platformCtx, (internalRequest, internalCtx) =>
         handleRequest(internalRequest, env, internalCtx),
       );
+  // Registration must precede admission setup: the active adapter declares
+  // whether a completed response is required before public cache headers.
+  registerConfiguredCacheAdapters(env as Record<string, unknown> | undefined);
   let ctx = createWorkerPrerenderDiscoveryContext(requestCtx, request, __rscPrerenderSecret);
   let finalizeCacheabilityResponse:
     | ((response: Response, ctx: ExecutionContextLike) => Promise<Response>)
@@ -126,9 +140,29 @@ async function handleRequest(
       finalizeCacheabilityResponse = cacheability.finalizeWorkerCacheabilityResponse;
     }
   }
+  const requiresCompletedResponseAdmission =
+    getCdnCacheAdapter().requiresCompletedResponseAdmission === true;
+  if (
+    !finalizeCacheabilityResponse &&
+    (__rscCacheabilityManifest || requiresCompletedResponseAdmission) &&
+    isPotentialCompletedAdmissionRequest(request)
+  ) {
+    const cacheability = await import("./cacheability-request.js");
+    const admissionContext = cacheability.createWorkerCacheabilityAdmissionContext(
+      ctx,
+      request,
+      __rscCacheabilityManifest,
+      process.env.__VINEXT_BUILD_ID,
+      requiresCompletedResponseAdmission,
+    );
+    if (admissionContext !== ctx) {
+      ctx = admissionContext;
+      finalizeCacheabilityResponse = cacheability.finalizeWorkerCacheabilityResponse;
+    }
+  }
 
-  // Register config-driven cache adapters before any rendering touches the cache.
-  registerConfiguredCacheAdapters(env as Record<string, unknown> | undefined);
+  // Register the image adapter before rendering can touch it. Cache adapters
+  // were registered above because cacheability admission depends on them.
   registerConfiguredImageOptimizer(env as Record<string, unknown> | undefined);
 
   const cdnValidationResponse = await validateCdnRequest(request);

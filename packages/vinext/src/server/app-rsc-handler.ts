@@ -107,7 +107,10 @@ import {
   type AppRouteTreePrefetchRoute,
   type PrefetchInliningConfig,
 } from "./app-route-tree-prefetch.js";
-import { markRouteCacheabilityDynamic } from "vinext/shims/cacheability-classification";
+import {
+  markRouteCacheabilityDynamic,
+  preserveRouteCacheabilityResponsePolicy,
+} from "vinext/shims/cacheability-classification";
 
 type AppPageParams = Record<string, string | string[]>;
 type RequestContext = ReturnType<typeof requestContextFromRequest>;
@@ -119,6 +122,32 @@ type StaticParamsMap = AppPrerenderStaticParamsMap;
 type RootParamNamesMap = AppPrerenderRootParamNamesMap;
 
 type AppRscMiddlewareContext = AppMiddlewareContext;
+
+function ruleUsesUnkeyedRequestCondition(rule: NextRedirect | NextRewrite): boolean {
+  return [...(rule.has ?? []), ...(rule.missing ?? [])].some(
+    (condition) =>
+      condition.type === "header" || condition.type === "cookie" || condition.type === "host",
+  );
+}
+
+function markConditionalRewriteCacheability(rewrite: NextRewrite): void {
+  if (ruleUsesUnkeyedRequestCondition(rewrite)) {
+    // Query values are already part of the public Workers Cache key. Headers,
+    // cookies, and hostnames are not, so a rewrite selected by any of them
+    // cannot publish its destination under the source URL.
+    markRouteCacheabilityDynamic(
+      "next.config rewrite depends on request headers, cookies, or hostnames",
+    );
+  }
+}
+
+function markConditionalRedirectCacheability(redirect: NextRedirect): void {
+  if (ruleUsesUnkeyedRequestCondition(redirect)) {
+    markRouteCacheabilityDynamic(
+      "next.config redirect depends on request headers, cookies, or hostnames",
+    );
+  }
+}
 
 function haveSameRequestCookies(
   first: ReadonlyMap<string, string>,
@@ -490,6 +519,7 @@ async function applyRewrite(
     options.requestContext,
     options.basePathState,
     options.paramsPathname,
+    markConditionalRewriteCacheability,
   );
   if (!rewritten) return null;
 
@@ -832,6 +862,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
         options.configRedirects,
         preMiddlewareRequestContext,
         basePathState,
+        markConditionalRedirectCacheability,
       )
     : null;
   if (configMatchers && redirect) {
@@ -899,12 +930,16 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       request: userlandRequest,
       validateExternalRewriteRequest: () => validateClaimedOutsideBasePathRsc(true),
     });
-    if (middlewareResult.matched) {
+    if (middlewareResult.pathnameEligible) {
       // Next.js runs matched middleware before serving a page response. A CDN
       // HIT in front of this Worker would skip that request-specific boundary,
       // so this architecture must remain private until middleware is isolated
       // into an uncached outer stage.
-      markRouteCacheabilityDynamic("middleware matched this request");
+      markRouteCacheabilityDynamic(
+        middlewareResult.matched
+          ? "middleware matched this request"
+          : "middleware is eligible for this pathname",
+      );
     }
     if (middlewareResult.kind === "response") {
       if (request.body && !request.body.locked) {
@@ -1259,8 +1294,12 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
         void sourceRequest.body.cancel().catch(() => {});
       }
     }
-    if (sourceMiddlewareResult.matched) {
-      markRouteCacheabilityDynamic("middleware matched this request");
+    if (sourceMiddlewareResult.pathnameEligible) {
+      markRouteCacheabilityDynamic(
+        sourceMiddlewareResult.matched
+          ? "middleware matched this request"
+          : "middleware is eligible for this pathname",
+      );
     }
     if (sourceMiddlewareResult.kind === "response") {
       options.clearRequestContext();
@@ -1460,6 +1499,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
             url,
           })) ?? null)
         : null;
+    if (response) preserveRouteCacheabilityResponsePolicy();
     if (!response || !pagesDataRequest || resolvedUrl === originalResolvedUrl) return response;
 
     const headers = new Headers(response.headers);

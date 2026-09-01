@@ -20,8 +20,9 @@ import { readStreamAsText } from "../utils/text-stream.js";
 import { markFrameworkLinkHeaders } from "./app-response-header-provenance.js";
 import { deferUntilStreamConsumed } from "./defer-until-stream-consumed.js";
 import {
+  captureRouteCacheabilityResponsePolicy,
   deferRouteCacheability,
-  isRouteCacheabilityProbe,
+  isRouteCacheabilityEvaluation,
   type RouteCacheabilityOutcome,
 } from "vinext/shims/cacheability-classification";
 
@@ -42,6 +43,16 @@ type BuildAppPageCacheRenderObservation = (input: {
   cacheTags: readonly string[];
   state: AppPageRenderObservationState;
 }) => RenderObservation;
+
+type FinalizeAppPageCacheabilityEvaluationOptions = {
+  capturedDynamicUsageBeforeContextCleanup?: () => boolean;
+  consumeDynamicUsage: () => boolean;
+  consumeRenderObservationState?: () => AppPageRenderObservationState;
+  getPageTags: () => string[];
+  getRequestCacheLife?: () => AppPageRequestCacheLife | null;
+  expireSeconds?: number;
+  revalidateSeconds: number | null;
+};
 
 type FinalizeAppPageHtmlCacheResponseOptions = {
   capturedDynamicUsageBeforeContextCleanup?: () => boolean;
@@ -175,21 +186,14 @@ function appPageCacheControlHeader(cacheControl: CacheControlMetadata): string {
     : buildRevalidateCacheControl(cacheControl.revalidate, cacheControl.expire);
 }
 
-function finalizeProbeAppPageResponse(
+function finalizeEvaluatedAppPageResponse(
   response: Response,
-  options: {
-    capturedDynamicUsageBeforeContextCleanup?: () => boolean;
-    consumeDynamicUsage: () => boolean;
-    consumeRenderObservationState?: () => AppPageRenderObservationState;
-    getPageTags: () => string[];
-    getRequestCacheLife?: () => AppPageRequestCacheLife | null;
-    expireSeconds?: number;
-    revalidateSeconds: number | null;
-  },
+  options: FinalizeAppPageCacheabilityEvaluationOptions,
 ): Response | null {
-  if (!isRouteCacheabilityProbe()) return null;
+  if (!isRouteCacheabilityEvaluation()) return null;
   const complete = deferRouteCacheability();
   if (!complete) return response;
+  captureRouteCacheabilityResponsePolicy(response.headers);
 
   let completed = false;
   const finish = (): void => {
@@ -240,11 +244,22 @@ function finalizeProbeAppPageResponse(
   });
 }
 
+/**
+ * Complete probe/admission classification for an App Page response that does
+ * not enter the ISR cache-write path. Ordinary requests pass through unchanged.
+ */
+export function finalizeAppPageCacheabilityEvaluationResponse(
+  response: Response,
+  options: FinalizeAppPageCacheabilityEvaluationOptions,
+): Response {
+  return finalizeEvaluatedAppPageResponse(response, options) ?? response;
+}
+
 export function finalizeAppPageHtmlCacheResponse(
   response: Response,
   options: FinalizeAppPageHtmlCacheResponseOptions,
 ): Response {
-  const probeResponse = finalizeProbeAppPageResponse(response, options);
+  const probeResponse = finalizeEvaluatedAppPageResponse(response, options);
   if (probeResponse) {
     void options.capturedRscDataPromise?.catch(() => {});
     return probeResponse;
@@ -350,7 +365,7 @@ export function finalizeAppPageRscCacheResponse(
   response: Response,
   options: ScheduleAppPageRscCacheWriteOptions,
 ): Response {
-  const probeResponse = finalizeProbeAppPageResponse(response, options);
+  const probeResponse = finalizeEvaluatedAppPageResponse(response, options);
   if (probeResponse) {
     void options.capturedRscDataPromise?.catch(() => {});
     return probeResponse;

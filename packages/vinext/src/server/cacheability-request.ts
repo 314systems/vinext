@@ -1,16 +1,33 @@
 import type { ExecutionContextLike } from "vinext/shims/request-context";
 import {
   CACHEABILITY_REQUEST_STATE,
+  CACHEABILITY_POLICY_HEADERS,
   type RouteCacheabilityOutcome,
   type RouteCacheabilityState,
 } from "vinext/shims/cacheability-classification";
-import { NO_STORE_CACHE_CONTROL } from "./cache-control.js";
-import { VINEXT_CACHEABILITY_PROBE_HEADER, VINEXT_PRERENDER_SECRET_HEADER } from "./headers.js";
+import {
+  applyCdnResponseHeaders,
+  isNonCacheableCacheControl,
+  NO_STORE_CACHE_CONTROL,
+} from "./cache-control.js";
+import {
+  VINEXT_CACHEABILITY_PROBE_HEADER,
+  VINEXT_PRERENDER_SECRET_HEADER,
+  VINEXT_RSC_VARY_HEADER,
+} from "./headers.js";
 import { workerCapabilityMatches } from "./worker-prerender-discovery.js";
 import {
+  CACHEABILITY_ADMISSION_ISOLATE_BODY_LIMIT,
   CACHEABILITY_PROBE_BODY_LIMIT,
   CACHEABILITY_PROBE_TIMEOUT_MS,
 } from "./cacheability-limits.js";
+import {
+  cacheabilityRequestIdentity,
+  findCacheabilityManifestRoute,
+  parseCacheabilityManifest,
+  type CacheabilityManifest,
+  type CacheabilityManifestRoute,
+} from "./cacheability-manifest.js";
 
 type CacheabilityProbeRouteState =
   | "dynamic"
@@ -20,13 +37,24 @@ type CacheabilityProbeRouteState =
 
 type CacheabilityProbeResult = {
   cacheControl?: string;
-  kind?: "app-page";
+  kind?: "app-page" | "app-route";
   pattern?: string;
   reason?: string;
   state: CacheabilityProbeRouteState;
   status: number;
   version: 1;
 };
+
+const SUPPORTED_CACHEABILITY_VARY_FIELDS = new Set(
+  VINEXT_RSC_VARY_HEADER.split(",").map((name) => name.trim().toLowerCase()),
+);
+
+function hasUnsupportedCacheabilityVary(headers: Headers): boolean {
+  return (headers.get("Vary") ?? "").split(",").some((name) => {
+    const normalized = name.trim().toLowerCase();
+    return normalized.length > 0 && !SUPPORTED_CACHEABILITY_VARY_FIELDS.has(normalized);
+  });
+}
 
 export function createWorkerCacheabilityContext(
   base: ExecutionContextLike,
@@ -48,6 +76,52 @@ export function createWorkerCacheabilityContext(
   const state: RouteCacheabilityState = {
     captureDeadlineAt: Date.now() + CACHEABILITY_PROBE_TIMEOUT_MS,
     mode: requestedMode === "identity" ? "identity" : "probe",
+  };
+  return Object.assign(Object.create(Object.getPrototypeOf(base)), base, {
+    [CACHEABILITY_REQUEST_STATE]: state,
+  });
+}
+
+let cachedManifest:
+  | { buildId: string; manifest: CacheabilityManifest | null; raw: string }
+  | undefined;
+
+function readBoundManifest(raw: string, buildId: string): CacheabilityManifest | null {
+  if (cachedManifest?.raw === raw && cachedManifest.buildId === buildId) {
+    return cachedManifest.manifest;
+  }
+  const manifest = parseCacheabilityManifest(raw, buildId);
+  cachedManifest = { buildId, manifest, raw };
+  return manifest;
+}
+
+export function createWorkerCacheabilityAdmissionContext(
+  base: ExecutionContextLike,
+  request: Request,
+  rawManifest: string | null | undefined,
+  buildId: string | null | undefined,
+  requiresCompletedResponseAdmission = rawManifest != null,
+): ExecutionContextLike {
+  const identity = cacheabilityRequestIdentity(request);
+  if (!rawManifest) {
+    if (!requiresCompletedResponseAdmission) return base;
+    const state: RouteCacheabilityState = {
+      admission: identity ? { policy: "runtime", ...identity } : { policy: "deny" },
+      captureDeadlineAt: Date.now() + CACHEABILITY_PROBE_TIMEOUT_MS,
+      mode: "admit",
+    };
+    return Object.assign(Object.create(Object.getPrototypeOf(base)), base, {
+      [CACHEABILITY_REQUEST_STATE]: state,
+    });
+  }
+
+  const manifest = buildId ? readBoundManifest(rawManifest, buildId) : null;
+
+  const state: RouteCacheabilityState = {
+    admission:
+      manifest && identity ? { manifest, policy: "manifest", ...identity } : { policy: "deny" },
+    captureDeadlineAt: Date.now() + CACHEABILITY_PROBE_TIMEOUT_MS,
+    mode: "admit",
   };
   return Object.assign(Object.create(Object.getPrototypeOf(base)), base, {
     [CACHEABILITY_REQUEST_STATE]: state,
@@ -117,12 +191,383 @@ async function drainProbeBody(response: Response, deadlineAt: number): Promise<s
   }
 }
 
+type CapturedAdmissionBody =
+  | { body: ReadableStream<Uint8Array> | null; kind: "captured" }
+  | { body: ReadableStream<Uint8Array>; kind: "fallback" };
+
+export type CacheabilityAdmissionCaptureBudget = {
+  maxBytes: number;
+  reservedBytes: number;
+};
+
+const isolateCaptureBudget: CacheabilityAdmissionCaptureBudget = {
+  maxBytes: CACHEABILITY_ADMISSION_ISOLATE_BODY_LIMIT,
+  reservedBytes: 0,
+};
+
+export function createCacheabilityAdmissionCaptureBudget(
+  maxBytes: number,
+): CacheabilityAdmissionCaptureBudget {
+  return { maxBytes, reservedBytes: 0 };
+}
+
+type CapturedChunk = { reserved: boolean; value: Uint8Array };
+
+function reserveChunk(budget: CacheabilityAdmissionCaptureBudget, byteLength: number): boolean {
+  if (byteLength > budget.maxBytes - budget.reservedBytes) return false;
+  budget.reservedBytes += byteLength;
+  return true;
+}
+
+function releaseChunk(budget: CacheabilityAdmissionCaptureBudget, chunk: CapturedChunk): void {
+  if (!chunk.reserved) return;
+  chunk.reserved = false;
+  budget.reservedBytes -= chunk.value.byteLength;
+}
+
+function releaseChunks(
+  budget: CacheabilityAdmissionCaptureBudget,
+  chunks: CapturedChunk[],
+  start = 0,
+): void {
+  for (let index = start; index < chunks.length; index++) {
+    releaseChunk(budget, chunks[index]);
+  }
+}
+
+async function readBeforeDeadline<T>(
+  promise: Promise<T>,
+  deadlineAt: number,
+): Promise<{ kind: "timeout" } | { kind: "value"; value: T }> {
+  const remaining = deadlineAt - Date.now();
+  if (remaining <= 0) return { kind: "timeout" };
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise.then((value) => ({ kind: "value" as const, value })),
+      new Promise<{ kind: "timeout" }>((resolve) => {
+        timeout = setTimeout(() => resolve({ kind: "timeout" }), remaining);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
+function continueCapturedBody(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  captured: CapturedChunk[],
+  budget: CacheabilityAdmissionCaptureBudget,
+  pendingRead?: Promise<ReadableStreamReadResult<Uint8Array>>,
+): ReadableStream<Uint8Array> {
+  let index = 0;
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    reader.releaseLock();
+  };
+  return new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        if (index < captured.length) {
+          const chunk = captured[index++];
+          controller.enqueue(chunk.value);
+          releaseChunk(budget, chunk);
+          return;
+        }
+        try {
+          const result = await (pendingRead ?? reader.read());
+          pendingRead = undefined;
+          if (result.done) {
+            release();
+            controller.close();
+          } else {
+            controller.enqueue(result.value);
+          }
+        } catch (error) {
+          release();
+          controller.error(error);
+        }
+      },
+      async cancel(reason) {
+        try {
+          await reader.cancel(reason);
+        } finally {
+          releaseChunks(budget, captured, index);
+          release();
+        }
+      },
+    },
+    { highWaterMark: 0 },
+  );
+}
+
+function replayCapturedBody(
+  captured: CapturedChunk[],
+  budget: CacheabilityAdmissionCaptureBudget,
+): ReadableStream<Uint8Array> {
+  let index = 0;
+  return new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        if (index >= captured.length) {
+          controller.close();
+          return;
+        }
+        const chunk = captured[index++];
+        controller.enqueue(chunk.value);
+        releaseChunk(budget, chunk);
+      },
+      cancel() {
+        releaseChunks(budget, captured, index);
+      },
+    },
+    { highWaterMark: 0 },
+  );
+}
+
+export async function captureCacheabilityAdmissionBody(
+  body: ReadableStream<Uint8Array> | null,
+  deadlineAt: number,
+  limit = CACHEABILITY_PROBE_BODY_LIMIT,
+  budget = isolateCaptureBudget,
+): Promise<CapturedAdmissionBody> {
+  if (!body) return { body: null, kind: "captured" };
+  const reader = body.getReader();
+  const chunks: CapturedChunk[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const pendingRead = reader.read();
+      const deadlineResult = await readBeforeDeadline(pendingRead, deadlineAt);
+      if (deadlineResult.kind === "timeout") {
+        return {
+          body: continueCapturedBody(reader, chunks, budget, pendingRead),
+          kind: "fallback",
+        };
+      }
+      const result = deadlineResult.value;
+      if (result.done) {
+        reader.releaseLock();
+        return { body: replayCapturedBody(chunks, budget), kind: "captured" };
+      }
+      const nextTotal = total + result.value.byteLength;
+      const withinResponseLimit = nextTotal <= limit;
+      const reserved = withinResponseLimit && reserveChunk(budget, result.value.byteLength);
+      chunks.push({ reserved, value: result.value });
+      total = nextTotal;
+      if (!reserved) {
+        return { body: continueCapturedBody(reader, chunks, budget), kind: "fallback" };
+      }
+    }
+  } catch (error) {
+    await reader.cancel(error).catch(() => {});
+    releaseChunks(budget, chunks);
+    reader.releaseLock();
+    throw error;
+  }
+}
+
+function responseWithCachePolicy(
+  response: Response,
+  body: BodyInit | null,
+  outcome: RouteCacheabilityOutcome | null,
+): Response {
+  const headers = new Headers(response.headers);
+  applyCdnResponseHeaders(
+    headers,
+    outcome?.cacheable === true && outcome.cacheControl
+      ? { cacheControl: outcome.cacheControl, tags: outcome.tags }
+      : { cacheControl: NO_STORE_CACHE_CONTROL },
+  );
+  return new Response(body, {
+    headers,
+    status: response.status,
+    statusText: response.statusText,
+  });
+}
+
+function inferFinalAppPageCacheability(
+  response: Response,
+  state: RouteCacheabilityState,
+): RouteCacheabilityOutcome | null {
+  if (!state.frameworkResponseCachePolicy) return null;
+
+  // Config headers run after the framework snapshots its provisional policy.
+  // Match Next.js by honoring a later explicit public policy instead of
+  // replacing it with the renderer-derived default during admission.
+  const changedPolicy = (
+    ["cloudflare-cdn-cache-control", "cdn-cache-control", "cache-control"] as const
+  ).find((name) => {
+    const value = response.headers.get(name);
+    return value !== null && value !== state.frameworkResponseCachePolicy?.[name];
+  });
+  if (!changedPolicy) return null;
+
+  const cacheControl = response.headers.get(changedPolicy)!;
+  if (isNonCacheableCacheControl(cacheControl)) return { cacheable: false };
+  const cacheTag = response.headers.get("Cache-Tag");
+  return {
+    cacheable: true,
+    cacheControl,
+    ...(cacheTag
+      ? {
+          tags: cacheTag
+            .split(",")
+            .map((tag) => tag.trim())
+            .filter(Boolean),
+        }
+      : {}),
+  };
+}
+
+function staticToDynamicResponse(route: CacheabilityManifestRoute): Response {
+  const headers = new Headers({ "Content-Type": "text/plain; charset=utf-8" });
+  applyCdnResponseHeaders(headers, { cacheControl: NO_STORE_CACHE_CONTROL });
+  return new Response(
+    `[vinext] Route ${route.pattern} changed from static to dynamic after deployment.`,
+    { headers, status: 500 },
+  );
+}
+
+function cacheabilityEvaluationFailureResponse(pattern: string): Response {
+  const headers = new Headers({ "Content-Type": "text/plain; charset=utf-8" });
+  applyCdnResponseHeaders(headers, { cacheControl: NO_STORE_CACHE_CONTROL });
+  return new Response(`[vinext] Route ${pattern} failed during cacheability evaluation.`, {
+    headers,
+    status: 500,
+  });
+}
+
+function hasStrictFinalResponseVeto(response: Response, state: RouteCacheabilityState): boolean {
+  if (state.finalResponseVetoReason || response.headers.has("set-cookie")) return true;
+
+  for (const name of CACHEABILITY_POLICY_HEADERS) {
+    const value = response.headers.get(name);
+    if (
+      value !== null &&
+      value !== state.frameworkResponseCachePolicy?.[name] &&
+      isNonCacheableCacheControl(value)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function finalizeWorkerCacheabilityAdmission(
+  response: Response,
+  state: RouteCacheabilityState,
+): Promise<Response> {
+  // This layer classifies App Pages only. Hybrid routing can hand the request
+  // to Pages Router after admission begins; retain the Pages response and its
+  // independently computed cache policy until Pages probing is introduced by
+  // its own stack layer.
+  if (state.preserveResponseCachePolicy) return response;
+
+  // Route Handlers prove body completion inside their execution boundary.
+  // This outer state still carries middleware/config routing vetoes that were
+  // observed before dispatch and must win over a handler's public policy.
+  if (state.route?.kind === "app-route") {
+    if (
+      response.status >= 500 ||
+      state.forcedDynamicReason ||
+      hasStrictFinalResponseVeto(response, state) ||
+      hasUnsupportedCacheabilityVary(response.headers)
+    ) {
+      return responseWithCachePolicy(response, response.body, null);
+    }
+    return response;
+  }
+
+  const admission = state.admission;
+  if (
+    !admission ||
+    admission.policy === "deny" ||
+    !admission.representation ||
+    !admission.requestKey ||
+    !state.route ||
+    response.status >= 500
+  ) {
+    return responseWithCachePolicy(response, response.body, null);
+  }
+
+  let manifestRoute: CacheabilityManifestRoute | null = null;
+  if (admission.policy === "manifest") {
+    const manifest = admission.manifest as CacheabilityManifest;
+    manifestRoute = findCacheabilityManifestRoute(manifest, state.route.pattern, {
+      representation: admission.representation as Parameters<
+        typeof findCacheabilityManifestRoute
+      >[2]["representation"],
+      requestKey: admission.requestKey,
+    });
+    if (
+      !manifestRoute ||
+      manifestRoute.state === "dynamic" ||
+      manifestRoute.state === "probe-failed" ||
+      manifestRoute.status !== response.status
+    ) {
+      return responseWithCachePolicy(response, response.body, null);
+    }
+  }
+
+  if (state.forcedDynamicReason) {
+    return responseWithCachePolicy(response, response.body, null);
+  }
+  if (hasStrictFinalResponseVeto(response, state)) {
+    return responseWithCachePolicy(response, response.body, null);
+  }
+  if (hasUnsupportedCacheabilityVary(response.headers)) {
+    return responseWithCachePolicy(response, response.body, null);
+  }
+
+  let captured: CapturedAdmissionBody;
+  try {
+    captured = await captureCacheabilityAdmissionBody(
+      response.body,
+      state.captureDeadlineAt,
+      CACHEABILITY_PROBE_BODY_LIMIT,
+      state.captureBudget ?? isolateCaptureBudget,
+    );
+  } catch {
+    return cacheabilityEvaluationFailureResponse(state.route.pattern);
+  }
+  if (captured.kind === "fallback") {
+    return responseWithCachePolicy(response, captured.body, null);
+  }
+
+  let outcome = state.completion ? await state.completion : (state.outcome ?? null);
+  if (state.route.kind === "app-page") {
+    outcome = inferFinalAppPageCacheability(response, state) ?? outcome;
+  }
+  if (outcome?.cacheable !== true || !outcome.cacheControl) {
+    // Next.js throws a static-to-dynamic error only when the runtime render
+    // actually observed dynamic usage. An absent outcome can also mean the
+    // renderer deliberately bypassed its cache-write path (notably draft mode
+    // and nonce-bearing HTML), in which case the completed response must stay
+    // private without being replaced by a 500.
+    if (manifestRoute?.state === "static-candidate" && outcome?.dynamicUsage === true) {
+      // The replacement 500 does not consume the captured replay stream. Its
+      // cancellation releases the isolate-wide byte reservation immediately.
+      await captured.body?.cancel().catch(() => {});
+      return staticToDynamicResponse(manifestRoute);
+    }
+    return responseWithCachePolicy(response, captured.body, null);
+  }
+  return responseWithCachePolicy(response, captured.body, outcome);
+}
+
 export async function finalizeWorkerCacheabilityResponse(
   response: Response,
   ctx: ExecutionContextLike,
 ): Promise<Response> {
   const state = readState(ctx);
   if (!state) return response;
+
+  if (state.mode === "admit") {
+    return finalizeWorkerCacheabilityAdmission(response, state);
+  }
 
   if (state.mode === "identity") {
     await response.body?.cancel().catch(() => {});

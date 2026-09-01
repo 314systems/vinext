@@ -6,6 +6,7 @@ import {
   resolveAppRouteHandlerMethod,
   resolveAppRouteHandlerSpecialError,
   shouldApplyAppRouteHandlerRevalidateHeader,
+  shouldCompleteAppRouteHandlerResponse,
   shouldReadAppRouteHandlerCache,
   shouldWriteAppRouteHandlerCache,
 } from "../packages/vinext/src/server/app-route-handler-policy.js";
@@ -22,6 +23,22 @@ describe("app route handler policy helpers", () => {
     expect(getAppRouteHandlerRevalidateSeconds({ revalidate: Infinity })).toBeNull();
     expect(getAppRouteHandlerRevalidateSeconds({ revalidate: Number.NaN })).toBeNull();
     expect(getAppRouteHandlerRevalidateSeconds({ revalidate: false })).toBe(Infinity);
+  });
+
+  // Ported from Next.js:
+  // packages/next/src/server/route-modules/app-route/helpers/is-static-gen-enabled.ts
+  it("recognizes every App Route static-generation opt-in", () => {
+    expect(getAppRouteHandlerRevalidateSeconds({ dynamic: "force-static" })).toBe(Infinity);
+    expect(getAppRouteHandlerRevalidateSeconds({ dynamic: "error" })).toBe(Infinity);
+    expect(
+      getAppRouteHandlerRevalidateSeconds({
+        generateStaticParams() {
+          return [{ slug: "one" }];
+        },
+      }),
+    ).toBe(Infinity);
+    expect(getAppRouteHandlerRevalidateSeconds({ dynamic: "force-dynamic" })).toBeNull();
+    expect(getAppRouteHandlerRevalidateSeconds({})).toBeNull();
   });
 
   it("treats revalidate = 0 as never-cache for route handler ISR read/write gates", () => {
@@ -56,6 +73,21 @@ describe("app route handler policy helpers", () => {
     // unless the handler set its own. Gating this off would leave the
     // response with no Cache-Control and expose it to heuristic caching.
     expect(shouldApplyAppRouteHandlerRevalidateHeader(writeBase)).toBe(true);
+  });
+
+  it("completes GET bodies when the CDN adapter requires response admission", () => {
+    expect(
+      shouldCompleteAppRouteHandlerResponse({
+        dynamicConfig: "auto",
+        dynamicUsedInHandler: false,
+        handlerSetCacheControl: false,
+        isAutoHead: false,
+        isProduction: true,
+        method: "GET",
+        revalidateSeconds: null,
+        requiresCompletedResponseAdmission: true,
+      }),
+    ).toBe(true);
   });
 
   it("detects invalid default-export route handlers", () => {
