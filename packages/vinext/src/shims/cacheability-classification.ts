@@ -31,6 +31,7 @@ export type RouteCacheabilityState = {
   captureDeadlineAt: number;
   complete?: (outcome: RouteCacheabilityOutcome) => void;
   completion?: Promise<RouteCacheabilityOutcome>;
+  explicitConfigCachePolicy?: boolean;
   finalResponseVetoReason?: string;
   forcedDynamicReason?: string;
   frameworkResponseCachePolicy?: Partial<Record<CacheabilityPolicyHeader, string>>;
@@ -42,7 +43,7 @@ export type RouteCacheabilityState = {
     outcome: RouteCacheabilityOutcome;
   };
   route?: {
-    kind: "app-page" | "app-route";
+    kind: "app-page" | "app-route" | "pages-page";
     pattern: string;
   };
 };
@@ -51,6 +52,7 @@ export type RouteCacheabilityState = {
 export function preserveRouteCacheabilityResponsePolicy(): void {
   const state = readRouteCacheabilityState();
   if (!state || state.mode !== "admit") return;
+  if (state.route?.kind === "pages-page") return;
   state.preserveResponseCachePolicy = true;
 }
 
@@ -62,10 +64,19 @@ export function readRouteCacheabilityState(): RouteCacheabilityState | null {
   );
 }
 
-export function beginRouteCacheability(kind: "app-page" | "app-route", pattern: string): boolean {
+export function beginRouteCacheability(
+  kind: "app-page" | "app-route" | "pages-page",
+  pattern: string,
+): boolean {
   const state = readRouteCacheabilityState();
   if (!state) return false;
   state.route = { kind, pattern };
+  if (kind === "pages-page") {
+    // App routing preserves an independently handled Pages response while the
+    // request is in transit. Once Pages classification begins, this layer owns
+    // admission and must fail unlisted or request-specific identities closed.
+    state.preserveResponseCachePolicy = false;
+  }
   return true;
 }
 
@@ -97,6 +108,13 @@ export function markRouteCacheabilityFinalResponseUncacheable(reason: string): v
   const state = readRouteCacheabilityState();
   if (!state || state.mode !== "admit") return;
   state.finalResponseVetoReason ??= reason;
+}
+
+/** Record that next.config explicitly owns the final response cache policy. */
+export function markRouteCacheabilityExplicitConfigPolicy(): void {
+  const state = readRouteCacheabilityState();
+  if (!state) return;
+  state.explicitConfigCachePolicy = true;
 }
 
 /** Record framework-owned policy so admission can identify policy added later. */

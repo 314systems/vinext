@@ -7,6 +7,7 @@ import {
 } from "vinext/shims/cacheability-classification";
 import {
   applyCdnResponseHeaders,
+  hasExplicitNonCacheableResponsePolicy,
   isNonCacheableCacheControl,
   NO_STORE_CACHE_CONTROL,
 } from "./cache-control.js";
@@ -37,7 +38,7 @@ type CacheabilityProbeRouteState =
 
 type CacheabilityProbeResult = {
   cacheControl?: string;
-  kind?: "app-page" | "app-route";
+  kind?: "app-page" | "app-route" | "pages-page";
   pattern?: string;
   reason?: string;
   state: CacheabilityProbeRouteState;
@@ -392,7 +393,7 @@ function inferFinalAppPageCacheability(
   response: Response,
   state: RouteCacheabilityState,
 ): RouteCacheabilityOutcome | null {
-  if (!state.frameworkResponseCachePolicy) return null;
+  if (!state.explicitConfigCachePolicy && !state.frameworkResponseCachePolicy) return null;
 
   // Config headers run after the framework snapshots its provisional policy.
   // Match Next.js by honoring a later explicit public policy instead of
@@ -401,7 +402,10 @@ function inferFinalAppPageCacheability(
     ["cloudflare-cdn-cache-control", "cdn-cache-control", "cache-control"] as const
   ).find((name) => {
     const value = response.headers.get(name);
-    return value !== null && value !== state.frameworkResponseCachePolicy?.[name];
+    return (
+      value !== null &&
+      (state.explicitConfigCachePolicy || value !== state.frameworkResponseCachePolicy?.[name])
+    );
   });
   if (!changedPolicy) return null;
 
@@ -420,6 +424,57 @@ function inferFinalAppPageCacheability(
         }
       : {}),
   };
+}
+
+function inferPagesPageCacheability(response: Response): RouteCacheabilityOutcome {
+  const cacheControl =
+    response.headers.get("Cloudflare-CDN-Cache-Control") ??
+    response.headers.get("CDN-Cache-Control") ??
+    response.headers.get("Cache-Control");
+  if (!cacheControl || isNonCacheableCacheControl(cacheControl)) {
+    return { cacheable: false };
+  }
+  const cacheTag = response.headers.get("Cache-Tag");
+  return {
+    cacheable: true,
+    cacheControl,
+    ...(cacheTag
+      ? {
+          tags: cacheTag
+            .split(",")
+            .map((tag) => tag.trim())
+            .filter(Boolean),
+        }
+      : {}),
+  };
+}
+
+function completedRouteOutcome(
+  response: Response,
+  state: RouteCacheabilityState,
+  rendererOutcome: RouteCacheabilityOutcome | null = state.outcome ?? null,
+): RouteCacheabilityOutcome | null {
+  if (state.forcedDynamicReason) {
+    return { cacheable: false, reason: state.forcedDynamicReason };
+  }
+  if (state.route?.kind === "app-page") {
+    return inferFinalAppPageCacheability(response, state) ?? rendererOutcome;
+  }
+  if (state.route?.kind !== "pages-page") return rendererOutcome;
+  if (
+    response.headers.has("set-cookie") ||
+    hasExplicitNonCacheableResponsePolicy(response.headers)
+  ) {
+    return { cacheable: false };
+  }
+  // Pages request-time routes (GSSP/GIP) are dynamic by default, but Next.js
+  // deliberately honors an explicit public response policy. ASO/config-header
+  // responses likewise use the completed policy rather than a hardcoded TTL.
+  // Ported from Next.js:
+  // test/e2e/getserversideprops/test/index.test.ts
+  // test/e2e/app-dir/custom-cache-control/custom-cache-control.test.ts
+  const responseOutcome = inferPagesPageCacheability(response);
+  return responseOutcome.cacheable ? responseOutcome : (rendererOutcome ?? responseOutcome);
 }
 
 function staticToDynamicResponse(route: CacheabilityManifestRoute): Response {
@@ -496,10 +551,10 @@ async function finalizeWorkerCacheabilityAdmission(
   let manifestRoute: CacheabilityManifestRoute | null = null;
   if (admission.policy === "manifest") {
     const manifest = admission.manifest as CacheabilityManifest;
-    manifestRoute = findCacheabilityManifestRoute(manifest, state.route.pattern, {
+    manifestRoute = findCacheabilityManifestRoute(manifest, state.route.kind, state.route.pattern, {
       representation: admission.representation as Parameters<
         typeof findCacheabilityManifestRoute
-      >[2]["representation"],
+      >[3]["representation"],
       requestKey: admission.requestKey,
     });
     if (
@@ -537,10 +592,8 @@ async function finalizeWorkerCacheabilityAdmission(
     return responseWithCachePolicy(response, captured.body, null);
   }
 
-  let outcome = state.completion ? await state.completion : (state.outcome ?? null);
-  if (state.route.kind === "app-page") {
-    outcome = inferFinalAppPageCacheability(response, state) ?? outcome;
-  }
+  const rendererOutcome = state.completion ? await state.completion : (state.outcome ?? null);
+  const outcome = completedRouteOutcome(response, state, rendererOutcome);
   if (outcome?.cacheable !== true || !outcome.cacheControl) {
     // Next.js throws a static-to-dynamic error only when the runtime render
     // actually observed dynamic usage. An absent outcome can also mean the
@@ -576,7 +629,7 @@ export async function finalizeWorkerCacheabilityResponse(
       state.route ? "runtime-check" : "probe-failed",
       state.route
         ? { cacheable: false }
-        : { cacheable: false, reason: "request did not resolve to a probeable App Page" },
+        : { cacheable: false, reason: "request did not resolve to a probeable page route" },
       response.status,
     );
   }
@@ -586,7 +639,7 @@ export async function finalizeWorkerCacheabilityResponse(
     return probeResponse(
       state,
       "probe-failed",
-      { cacheable: false, reason: "request did not resolve to a probeable App Page" },
+      { cacheable: false, reason: "request did not resolve to a probeable page route" },
       response.status,
     );
   }
@@ -619,7 +672,8 @@ export async function finalizeWorkerCacheabilityResponse(
     );
   }
 
-  const outcome = state.completion ? await state.completion : state.outcome;
+  const rendererOutcome = state.completion ? await state.completion : (state.outcome ?? null);
+  const outcome = completedRouteOutcome(response, state, rendererOutcome);
   if (!outcome) {
     return probeResponse(
       state,

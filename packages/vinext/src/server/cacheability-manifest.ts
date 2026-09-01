@@ -16,7 +16,8 @@ import { APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL } from "./app-rsc-render-mod
 
 export const CACHEABILITY_MANIFEST_MODULE = "__vinext_cacheability_manifest.js";
 
-export type CacheabilityRepresentation = "html" | "rsc-full" | "rsc-loading-shell";
+export type CacheabilityRouteKind = "app-page" | "pages-page";
+export type CacheabilityRepresentation = "html" | "pages-data" | "rsc-full" | "rsc-loading-shell";
 type CacheabilityManifestRouteState =
   | "static-candidate"
   | "runtime-check"
@@ -24,7 +25,7 @@ type CacheabilityManifestRouteState =
   | "probe-failed";
 
 export type CacheabilityManifestRoute = {
-  kind: "app-page";
+  kind: CacheabilityRouteKind;
   pattern: string;
   representation: CacheabilityRepresentation;
   requestKey: string;
@@ -48,7 +49,12 @@ export function cacheabilityManifestRouteKey(
 }
 
 function isRepresentation(value: unknown): value is CacheabilityRepresentation {
-  return value === "html" || value === "rsc-full" || value === "rsc-loading-shell";
+  return (
+    value === "html" ||
+    value === "pages-data" ||
+    value === "rsc-full" ||
+    value === "rsc-loading-shell"
+  );
 }
 
 function isRouteState(value: unknown): value is CacheabilityManifestRouteState {
@@ -64,7 +70,7 @@ function parseRoute(key: string, value: unknown): CacheabilityManifestRoute | nu
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const route = value as Record<string, unknown>;
   if (
-    route.kind !== "app-page" ||
+    (route.kind !== "app-page" && route.kind !== "pages-page") ||
     typeof route.pattern !== "string" ||
     !route.pattern.startsWith("/") ||
     !isRepresentation(route.representation) ||
@@ -78,7 +84,7 @@ function parseRoute(key: string, value: unknown): CacheabilityManifestRoute | nu
     return null;
   }
   const parsed: CacheabilityManifestRoute = {
-    kind: "app-page",
+    kind: route.kind,
     pattern: route.pattern,
     representation: route.representation,
     requestKey: route.requestKey,
@@ -146,6 +152,9 @@ export function cacheabilityRequestIdentity(request: Request): {
 
   const url = new URL(request.url);
   const requestKey = `${url.pathname}${url.search}`;
+  if (/(?:^|\/)_next\/data\/[^/]+\/.+\.json$/.test(url.pathname)) {
+    return { representation: "pages-data", requestKey };
+  }
   const isRsc = request.headers.get(RSC_HEADER) === "1" || url.pathname.endsWith(".rsc");
   if (!isRsc) {
     const accept = request.headers.get("Accept")?.toLowerCase() ?? "";
@@ -175,17 +184,13 @@ export function cacheabilityRequestIdentity(request: Request): {
 
 export function findCacheabilityManifestRoute(
   manifest: CacheabilityManifest,
+  kind: CacheabilityRouteKind,
   pattern: string,
   identity: { representation: CacheabilityRepresentation; requestKey: string },
 ): CacheabilityManifestRoute | null {
   return (
     manifest.routes[
-      cacheabilityManifestRouteKey(
-        "app-page",
-        pattern,
-        identity.representation,
-        identity.requestKey,
-      )
+      cacheabilityManifestRouteKey(kind, pattern, identity.representation, identity.requestKey)
     ] ?? null
   );
 }

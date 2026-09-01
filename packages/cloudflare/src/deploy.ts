@@ -685,8 +685,26 @@ export async function runWranglerDeploy(
   return deployedUrl ?? "(URL not detected in wrangler output)";
 }
 
-export function hasCdnWarmRequests(plan: CdnWarmRequestPlan): boolean {
-  return plan.paths.length + plan.rscPaths.length + plan.loadingShellPaths.length > 0;
+export function hasCdnWarmRequests(
+  plan: Omit<CdnWarmRequestPlan, "pagesDataPaths"> & { pagesDataPaths?: readonly string[] },
+): boolean {
+  return (
+    plan.paths.length +
+      (plan.pagesDataPaths?.length ?? 0) +
+      plan.rscPaths.length +
+      plan.loadingShellPaths.length >
+    0
+  );
+}
+
+export function projectRequiresRouteCacheabilityProbeManifest(
+  project: Pick<ProjectInfo, "isAppRouter" | "isPagesRouter">,
+  cacheConfig: VinextCacheConfig | null,
+): boolean {
+  return (
+    (project.isAppRouter || project.isPagesRouter) &&
+    requiresRouteCacheabilityProbeManifest(cacheConfig)
+  );
 }
 
 type CdnWarmDeployOptions = Pick<
@@ -713,7 +731,12 @@ type CdnWarmDeployOptions = Pick<
 > &
   Pick<
     CdnWarmOptions,
-    "deploymentId" | "expectedBuildId" | "expectedRscBuildId" | "loadingShellPaths" | "rscPaths"
+    | "deploymentId"
+    | "expectedBuildId"
+    | "expectedRscBuildId"
+    | "loadingShellPaths"
+    | "pagesDataPaths"
+    | "rscPaths"
   > & {
     /** Probe a staged Worker and upload the resulting manifest as a second version. */
     cacheabilityProbe?: boolean;
@@ -797,26 +820,34 @@ async function deployUploadedVersionWithCdnWarmup(
   let warmPlanDiscovered = hasPreparedWarmPlan || options.discoverWarmPlan === undefined;
   let remainingWarmPlan: CdnWarmRequestPlan = {
     loadingShellPaths: [...(options.loadingShellPaths ?? [])],
+    pagesDataPaths: [...(options.pagesDataPaths ?? [])],
     paths: [...paths],
     rscPaths: [...(options.rscPaths ?? [])],
   };
   let discoveredWarmRequests =
     remainingWarmPlan.paths.length +
+    remainingWarmPlan.pagesDataPaths.length +
     remainingWarmPlan.rscPaths.length +
     remainingWarmPlan.loadingShellPaths.length;
 
   const prepareWarmPlan = (plan: CdnWarmRequestPlan): CdnWarmRequestPlan => {
-    if (plan.paths.length === 0 || expectedBuildId !== undefined) return plan;
+    if (
+      (plan.paths.length === 0 && plan.pagesDataPaths.length === 0) ||
+      expectedBuildId !== undefined
+    ) {
+      return plan;
+    }
     if (!allowUnverifiedPromotion) {
+      const warmupKind = plan.paths.length > 0 ? "CDN HTML warmup" : "CDN Pages data warmup";
       throw new Error(
-        "CDN HTML warmup requires a CDN adapter that declares build-identity response headers. " +
+        `${warmupKind} requires a CDN adapter that declares build-identity response headers. ` +
           "Configure that adapter capability or deploy without --experimental-warm-cdn-cache.",
       );
     }
     console.warn(
-      `  CDN warmup: skipping ${plan.paths.length} HTML request(s) because the CDN adapter does not declare build-identity response headers.`,
+      `  CDN warmup: skipping ${plan.paths.length} HTML and ${plan.pagesDataPaths.length} Pages data request(s) because the CDN adapter does not declare build-identity response headers.`,
     );
-    return { ...plan, paths: [] };
+    return { ...plan, pagesDataPaths: [], paths: [] };
   };
 
   const discoverWarmPlan = async (targetUrl: string, headers?: HeadersInit): Promise<void> => {
@@ -827,11 +858,13 @@ async function deployUploadedVersionWithCdnWarmup(
     expectedRscBuildId = plan.rscBuildId;
     remainingWarmPlan = {
       loadingShellPaths: [...plan.loadingShellPaths],
+      pagesDataPaths: [...(plan.pagesDataPaths ?? [])],
       paths: [...plan.paths],
       rscPaths: [...plan.rscPaths],
     };
     discoveredWarmRequests =
       remainingWarmPlan.paths.length +
+      remainingWarmPlan.pagesDataPaths.length +
       remainingWarmPlan.rscPaths.length +
       remainingWarmPlan.loadingShellPaths.length;
     warmPlanDiscovered = true;
@@ -848,6 +881,7 @@ async function deployUploadedVersionWithCdnWarmup(
     propagatingTarget = false,
     plan: CdnWarmRequestPlan = {
       loadingShellPaths: remainingWarmPlan.loadingShellPaths,
+      pagesDataPaths: remainingWarmPlan.pagesDataPaths,
       paths: remainingWarmPlan.paths,
       rscPaths: remainingWarmPlan.rscPaths,
     },
@@ -862,6 +896,7 @@ async function deployUploadedVersionWithCdnWarmup(
       expectedBuildId,
       expectedRscBuildId,
       loadingShellPaths: plan.loadingShellPaths,
+      pagesDataPaths: plan.pagesDataPaths,
       rscPaths: plan.rscPaths,
       concurrency: options.warmCdnConcurrency,
       phaseTimeoutMs: hasPreparedWarmPlan ? DEFAULT_STAGED_READINESS_PHASE_TIMEOUT_MS : undefined,
@@ -894,6 +929,7 @@ async function deployUploadedVersionWithCdnWarmup(
   const initialWarmRequests =
     options.discoverWarmPlan === undefined || hasPreparedWarmPlan
       ? remainingWarmPlan.paths.length +
+        remainingWarmPlan.pagesDataPaths.length +
         remainingWarmPlan.rscPaths.length +
         remainingWarmPlan.loadingShellPaths.length
       : 1;
@@ -945,16 +981,18 @@ async function deployUploadedVersionWithCdnWarmup(
           await discoverWarmPlan(targetUrl, headers);
           remainingWarmPlan = prepareWarmPlan(remainingWarmPlan);
           console.log(
-            `  CDN warmup: discovered ${remainingWarmPlan.paths.length} HTML, ${remainingWarmPlan.rscPaths.length} RSC, and ${remainingWarmPlan.loadingShellPaths.length} loading-shell request(s).`,
+            `  CDN warmup: discovered ${remainingWarmPlan.paths.length} HTML, ${remainingWarmPlan.pagesDataPaths.length} Pages data, ${remainingWarmPlan.rscPaths.length} RSC, and ${remainingWarmPlan.loadingShellPaths.length} loading-shell request(s).`,
           );
         }
         const stagedWarmPlan: CdnWarmRequestPlan = {
           loadingShellPaths: remainingWarmPlan.loadingShellPaths,
+          pagesDataPaths: remainingWarmPlan.pagesDataPaths,
           paths: remainingWarmPlan.paths,
           rscPaths: remainingWarmPlan.rscPaths,
         };
         const stagedWarmRequests =
           stagedWarmPlan.paths.length +
+          stagedWarmPlan.pagesDataPaths.length +
           stagedWarmPlan.rscPaths.length +
           stagedWarmPlan.loadingShellPaths.length;
         if (stagedWarmRequests > 0) {
@@ -1005,6 +1043,7 @@ async function deployUploadedVersionWithCdnWarmup(
             }
             remainingWarmPlan = {
               loadingShellPaths: warmResult.retryPlan.loadingShellPaths,
+              pagesDataPaths: warmResult.retryPlan.pagesDataPaths,
               paths: warmResult.retryPlan.paths,
               rscPaths: warmResult.retryPlan.rscPaths,
             };
@@ -1058,6 +1097,7 @@ async function deployUploadedVersionWithCdnWarmup(
 
   const countRemainingWarmRequests = (): number =>
     remainingWarmPlan.paths.length +
+    remainingWarmPlan.pagesDataPaths.length +
     remainingWarmPlan.rscPaths.length +
     remainingWarmPlan.loadingShellPaths.length;
 
@@ -1368,24 +1408,27 @@ async function deployWithCacheabilityProbe(
         "Two-stage CDN warming requires a CDN adapter that exposes the application build identity.",
       );
     }
-    const plan: PrerenderWarmPlan = {
+    const plan: PrerenderWarmPlan & CdnWarmRequestPlan = {
       ...discovered,
       appPaths: discovered.appPaths ? [...discovered.appPaths] : undefined,
       loadingShellPaths: [...discovered.loadingShellPaths],
+      pagesDataPaths: [...(discovered.pagesDataPaths ?? [])],
+      pagesPaths: discovered.pagesPaths ? [...discovered.pagesPaths] : undefined,
       paths: [...discovered.paths],
       rscPaths: [...discovered.rscPaths],
     };
-    if (!plan.appPaths) {
+    if (!plan.appPaths && !plan.pagesPaths) {
       throw new Error(
-        "Two-stage CDN warming requires staged discovery to report App Page route ownership.",
+        "Two-stage CDN warming requires staged discovery to report App or Pages route ownership.",
       );
     }
-    const appPathSet = new Set(plan.appPaths);
-    plan.paths = plan.paths.filter((pathname) => appPathSet.has(pathname));
+    const ownedHtmlPaths = new Set([...(plan.appPaths ?? []), ...(plan.pagesPaths ?? [])]);
+    plan.paths = plan.paths.filter((pathname) => ownedHtmlPaths.has(pathname));
     const targets = await createCdnWarmTargets({
       deploymentId: plan.deploymentId,
       headers,
       loadingShellPaths: plan.loadingShellPaths,
+      pagesDataPaths: plan.pagesDataPaths,
       paths: plan.paths,
       rscPaths: plan.rscPaths,
     });
@@ -1415,7 +1458,7 @@ async function deployWithCacheabilityProbe(
       );
     } else {
       console.log(
-        "  CDN warmup: no App Page request identities were discovered; embedding an empty fail-closed cacheability manifest.",
+        "  CDN warmup: no page request identities were discovered; embedding an empty fail-closed cacheability manifest.",
       );
     }
     const probe = await probeStagedWorkerCacheability({
@@ -1436,10 +1479,13 @@ async function deployWithCacheabilityProbe(
         `Two-stage CDN warming failed to classify ${probe.failures.length}/${probe.probed} request(s). First failure: ${probe.failures[0]}`,
       );
     }
-    const finalPlan: PrerenderWarmPlan = {
+    const finalPlan: PrerenderWarmPlan & CdnWarmRequestPlan = {
       ...plan,
       loadingShellPaths: probe.cacheableTargets
         .filter((target) => target.kind === "rsc-loading-shell")
+        .map((target) => target.sourcePathname),
+      pagesDataPaths: probe.cacheableTargets
+        .filter((target) => target.kind === "pages-data")
         .map((target) => target.sourcePathname),
       paths: probe.cacheableTargets
         .filter((target) => target.kind === "html")
@@ -1486,6 +1532,7 @@ async function deployWithCacheabilityProbe(
     expectedRscBuildId: prepared.plan.rscBuildId,
     expectedDeploymentState: stagedProbeDeployment,
     loadingShellPaths: prepared.plan.loadingShellPaths,
+    pagesDataPaths: prepared.plan.pagesDataPaths,
     rscPaths: prepared.plan.rscPaths,
     uploadedVersion: prepared.upload,
   });
@@ -1707,8 +1754,10 @@ export async function deploy(options: DeployOptions): Promise<void> {
   });
   const hasStrictResponseVary = hasVerbatimResponseVary(viteConfigMetadata.cacheConfig);
   const hasBuildIdentityHeader = hasBuildIdentityResponseHeader(viteConfigMetadata.cacheConfig);
-  const needsCacheabilityProbeManifest =
-    info.isAppRouter && requiresRouteCacheabilityProbeManifest(viteConfigMetadata.cacheConfig);
+  const needsCacheabilityProbeManifest = projectRequiresRouteCacheabilityProbeManifest(
+    info,
+    viteConfigMetadata.cacheConfig,
+  );
   const shouldEmitPrerenderPathManifest = !options.skipBuild && prerenderDecision;
 
   // Step 5: Build

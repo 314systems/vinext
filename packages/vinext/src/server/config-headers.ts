@@ -8,6 +8,7 @@ import type { HeaderRecord } from "./request-pipeline.js";
 import {
   CACHEABILITY_POLICY_HEADERS,
   markRouteCacheabilityDynamic,
+  markRouteCacheabilityExplicitConfigPolicy,
   markRouteCacheabilityFinalResponseUncacheable,
 } from "vinext/shims/cacheability-classification";
 import { isNonCacheableCacheControl } from "vinext/shims/cdn-cache";
@@ -39,6 +40,9 @@ function markExplicitConfigResponseVeto(
     if (name === "set-cookie") {
       markRouteCacheabilityFinalResponseUncacheable("next.config headers set a cookie");
       continue;
+    }
+    if (CACHEABILITY_POLICY_HEADER_NAMES.has(name)) {
+      markRouteCacheabilityExplicitConfigPolicy();
     }
     if (CACHEABILITY_POLICY_HEADER_NAMES.has(name) && isNonCacheableCacheControl(header.value)) {
       markRouteCacheabilityFinalResponseUncacheable(
@@ -143,6 +147,14 @@ export function applyConfigHeadersToResponse(
         header.key,
         postConfigLink ? `${header.value}, ${postConfigLink}` : header.value,
       );
+    } else if (
+      !ADDITIVE_CONFIG_HEADER_NAMES.has(lowerName) &&
+      options.middlewareHeaders?.has(lowerName)
+    ) {
+      // Middleware runs after next.config headers in Next.js, so it remains
+      // authoritative even when this config field may replace a renderer-owned
+      // default (notably Cache-Control).
+      continue;
     } else if (ADDITIVE_CONFIG_HEADER_NAMES.has(lowerName)) {
       responseHeaders.append(header.key, header.value);
     } else if (options.overwriteExisting?.has(lowerName) || !responseHeaders.has(lowerName)) {

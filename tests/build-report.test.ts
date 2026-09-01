@@ -404,12 +404,16 @@ export { gsp as getStaticProps };
 describe("classifyPagesRoute", () => {
   it("classifies isr-test.tsx as isr with revalidate=1", () => {
     const filePath = path.join(FIXTURES_PAGES, "isr-test.tsx");
-    expect(classifyPagesRoute(filePath)).toEqual({ type: "isr", revalidate: 1 });
+    expect(classifyPagesRoute(filePath)).toEqual({
+      hasStaticProps: true,
+      type: "isr",
+      revalidate: 1,
+    });
   });
 
   it("classifies ssr.tsx as ssr", () => {
     const filePath = path.join(FIXTURES_PAGES, "ssr.tsx");
-    expect(classifyPagesRoute(filePath)).toEqual({ type: "ssr" });
+    expect(classifyPagesRoute(filePath)).toEqual({ hasServerSideProps: true, type: "ssr" });
   });
 
   it("classifies index.tsx as static", () => {

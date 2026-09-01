@@ -64,6 +64,16 @@ function cacheableHtml(body = "ok", cacheStatus = "MISS"): Response {
   });
 }
 
+function cacheablePagesData(cacheStatus = "MISS"): Response {
+  return new Response('{"pageProps":{}}', {
+    headers: {
+      "cf-cache-status": cacheStatus,
+      "content-type": "application/json",
+      [VINEXT_CDN_BUILD_ID_HEADER]: "app-build-a",
+    },
+  });
+}
+
 function cacheableRsc(body = "flight"): Response {
   return new Response(body, {
     headers: {
@@ -188,6 +198,24 @@ function mockTwoStageWrangler(
     throw new Error(`Unexpected Wrangler args: ${args.join(" ")}`);
   });
   return state;
+}
+
+function pagesPageProbeResponse() {
+  return Response.json(
+    {
+      kind: "pages-page",
+      pattern: "/pages-about",
+      state: "static-candidate",
+      status: 200,
+      version: 1,
+    },
+    {
+      headers: {
+        "Cache-Control": "no-store",
+        [VINEXT_CDN_BUILD_ID_HEADER]: "app-build-a",
+      },
+    },
+  );
 }
 
 describe("Cloudflare CDN warmup deploy flow", () => {
@@ -332,7 +360,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     let uploadCount = 0;
     let statusCount = 0;
     let finalStaged = false;
-    let cacheRequestCount = 0;
+    const cacheRequestCounts = new Map<string, number>();
     let finalManifestSource = "";
     let finalConfig: unknown;
 
@@ -393,26 +421,39 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       const headers = new Headers(init?.headers);
       if (headers.get(VINEXT_CACHEABILITY_PROBE_HEADER) === "1") {
         const pathname = new URL(formatFetchUrl(input)).pathname;
-        events.push(`probe-${pathname}`);
-        return pathname === "/dynamic"
-          ? Response.json(
-              {
-                kind: "app-page",
-                pattern: "/dynamic",
-                state: "dynamic",
-                status: 200,
-                version: 1,
-              },
-              { headers: { [VINEXT_CDN_BUILD_ID_HEADER]: "app-build-a" } },
-            )
-          : appPageProbeResponse();
+        events.push(`probe:${pathname}`);
+        if (
+          pathname === "/pages-about" ||
+          pathname === "/_next/data/app-build-a/pages-about.json"
+        ) {
+          return pagesPageProbeResponse();
+        }
+        if (pathname === "/dynamic") {
+          return Response.json(
+            {
+              kind: "app-page",
+              pattern: "/dynamic",
+              state: "dynamic",
+              status: 200,
+              version: 1,
+            },
+            { headers: { [VINEXT_CDN_BUILD_ID_HEADER]: "app-build-a" } },
+          );
+        }
+        return appPageProbeResponse();
       }
       if (isReadinessFetch(input)) events.push("readiness");
       else {
-        cacheRequestCount++;
-        events.push(cacheRequestCount === 1 ? "warm" : "unexpected-second-request");
+        const pathname = new URL(formatFetchUrl(input)).pathname;
+        const count = (cacheRequestCounts.get(pathname) ?? 0) + 1;
+        cacheRequestCounts.set(pathname, count);
+        events.push(`${count === 1 ? "warm" : "unexpected-second-request"}:${pathname}`);
       }
-      return cacheableHtml("ok", cacheRequestCount > 1 ? "HIT" : "MISS");
+      const pathname = new URL(formatFetchUrl(input)).pathname;
+      const cacheStatus = (cacheRequestCounts.get(pathname) ?? 0) > 1 ? "HIT" : "MISS";
+      return pathname.startsWith("/_next/data/")
+        ? cacheablePagesData(cacheStatus)
+        : cacheableHtml("ok", cacheStatus);
     });
     const { deployWithCdnWarmup } = await import("../packages/cloudflare/src/deploy.js");
 
@@ -424,8 +465,8 @@ describe("Cloudflare CDN warmup deploy flow", () => {
         buildId: "app-build-a",
         buildIdentity: "app-build-a",
         loadingShellPaths: [],
-        // The discovery manifest can contain a mixed App/Pages HTML plan.
-        // This stack only certifies App Pages; the Pages path stays private.
+        pagesDataPaths: ["/_next/data/app-build-a/pages-about.json"],
+        pagesPaths: ["/pages-about"],
         paths: ["/about", "/dynamic", "/pages-about"],
         rscPaths: [],
       }),
@@ -438,15 +479,21 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     expect(deployedUrl).toBe("https://my-worker.example.workers.dev");
     expect(uploadCount).toBe(2);
     expect(statusCount).toBe(7);
-    expect(cacheRequestCount).toBe(1);
+    expect(Array.from(cacheRequestCounts.entries())).toEqual([
+      ["/_next/data/app-build-a/pages-about.json", 1],
+      ["/about", 1],
+      ["/pages-about", 1],
+    ]);
     expect(events).toEqual([
       "upload-probe",
       "status-1",
       "stage-probe",
       "status-2",
       "readiness",
-      "probe-/about",
-      "probe-/dynamic",
+      "probe:/about",
+      "probe:/dynamic",
+      "probe:/pages-about",
+      "probe:/_next/data/app-build-a/pages-about.json",
       "status-3",
       "upload-final",
       "status-4",
@@ -455,7 +502,9 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       "status-6",
       "triggers",
       "readiness",
-      "warm",
+      "warm:/_next/data/app-build-a/pages-about.json",
+      "warm:/about",
+      "warm:/pages-about",
       "status-7",
       "promote-final",
     ]);
@@ -468,9 +517,27 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       routes: Record<string, { pattern: string; state: string }>;
     };
     expect(manifest.buildId).toBe("app-build-a");
-    expect(Object.values(manifest.routes)).toEqual([
-      expect.objectContaining({ pattern: "/about", state: "static-candidate" }),
-    ]);
+    expect(Object.values(manifest.routes)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "app-page",
+          pattern: "/about",
+          state: "static-candidate",
+        }),
+        expect.objectContaining({
+          kind: "pages-page",
+          pattern: "/pages-about",
+          representation: "html",
+          state: "static-candidate",
+        }),
+        expect.objectContaining({
+          kind: "pages-page",
+          pattern: "/pages-about",
+          representation: "pages-data",
+          state: "static-candidate",
+        }),
+      ]),
+    );
     expect(
       fs.readFileSync(path.join(tmpDir, "dist/server", CACHEABILITY_MANIFEST_MODULE), "utf8"),
     ).toBe("export default null;\n");

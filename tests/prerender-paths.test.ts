@@ -745,7 +745,7 @@ describe("prerender path manifest", () => {
     expect(manifest?.appPaths).toEqual(["/pages-dir/static", "/specific/value"]);
     expect(manifest?.rscPaths).toEqual(["/pages-dir/static", "/specific/value"]);
     expect(manifest?.loadingShellPaths).toEqual(["/specific/value"]);
-    expect(manifest?.pagesPaths).toEqual([]);
+    expect(manifest?.pagesPaths).toEqual(["/pages-dir/foobar"]);
   });
 
   it("uses the runtime-best App route for App-only loading-shell discovery", async () => {
@@ -845,7 +845,7 @@ describe("prerender path manifest", () => {
     expect(manifest?.appPaths).toEqual(["/fr/api/status"]);
     expect(manifest?.rscPaths).toEqual(["/fr/api/status"]);
     expect(manifest?.loadingShellPaths).toEqual(["/fr/api/status"]);
-    expect(manifest?.pagesPaths).toEqual(["/about", "/fr/about"]);
+    expect(manifest?.pagesPaths).toEqual(["/fr/about", "/about"]);
   });
 
   it("resolves Pages-discovered warm paths to their runtime App owner", async () => {
@@ -883,7 +883,8 @@ describe("prerender path manifest", () => {
     expect(manifest?.paths).toEqual(["/specific/value"]);
     expect(manifest?.appPaths).toEqual(["/specific/value"]);
     expect(manifest?.rscPaths).toEqual(["/specific/value"]);
-    expect(manifest?.pagesPaths).toEqual(["/health", "/specific/value"]);
+    expect(manifest?.pagesPaths).toEqual([]);
+    expect(manifest?.pagesDataPaths).toEqual([]);
   });
 
   it("fails path discovery when generateStaticParams discovery aborts", async () => {
@@ -1162,6 +1163,16 @@ describe("prerender path manifest", () => {
       "/posts/a%2fb",
     ]);
     expect(manifest?.pagesPaths).toEqual(manifest?.paths);
+    expect(manifest?.pagesDataPaths).toEqual([
+      "/docs/_next/data/build-a/en/posts/hello.json",
+      "/docs/_next/data/build-a/fr/posts/bonjour.json",
+      "/docs/_next/data/build-a/fr/posts/string-fr.json",
+      "/docs/_next/data/build-a/FR/posts/string-fr-upper.json",
+      "/docs/_next/data/build-a/en/posts/string-en-explicit.json",
+      "/docs/_next/data/build-a/en/posts/string-en.json",
+      "/docs/_next/data/build-a/en/posts/%7Euser.json",
+      "/docs/_next/data/build-a/en/posts/a%2fb.json",
+    ]);
     expect(fetch).toHaveBeenCalledWith(
       "http://127.0.0.1:43210/__vinext/prerender/pages-static-paths?pattern=%2Fposts%2F%3Aslug&locales=%5B%22en%22%2C%22fr%22%5D&defaultLocale=en",
       expect.any(Object),
@@ -1315,6 +1326,26 @@ describe("prerender path manifest", () => {
     expect(manifest?.paths).toEqual(["/about"]);
     expect(manifest?.pagesPaths).toEqual(["/about"]);
     expect(manifest?.excludedWarmPaths).toEqual(["/fr/about"]);
+  });
+
+  it("discovers concrete getServerSideProps HTML and data identities", async () => {
+    writeFile("package.json", JSON.stringify({ type: "module" }));
+    writeFile("dist/server/BUILD_ID", "build-a\n");
+    writeFile("dist/server/entry.js", "export default {};\n");
+    writeFile(
+      "pages/gssp.tsx",
+      [
+        "export async function getServerSideProps() { return { props: {} }; }",
+        "export default function Page() { return null; }",
+      ].join("\n"),
+    );
+    const { emitPrerenderPathManifest } =
+      await import("../packages/vinext/src/build/prerender-paths.js");
+
+    const manifest = await emitPrerenderPathManifest({ root: tmpDir });
+
+    expect(manifest?.pagesPaths).toEqual(["/gssp"]);
+    expect(manifest?.pagesDataPaths).toEqual(["/_next/data/build-a/gssp.json"]);
   });
 
   it("does not reload disk config when supplied resolved config", async () => {

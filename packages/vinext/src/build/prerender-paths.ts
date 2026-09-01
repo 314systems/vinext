@@ -31,6 +31,7 @@ import { matchesRewriteSource } from "../config/config-matchers.js";
 import { pagesRouteHasPriorityOverAppRoute } from "../server/hybrid-route-priority.js";
 import { extractLocaleFromUrl, normalizeDefaultLocalePathname } from "../server/pages-i18n.js";
 import { normalizePathTrailingSlash } from "vinext/shims/url-utils";
+import { buildPagesDataHref } from "vinext/shims/internal/pages-data-url";
 
 export type PrerenderPathManifest = {
   /** App Page HTML paths after hybrid route ownership has been resolved. */
@@ -49,6 +50,8 @@ export type PrerenderPathManifest = {
   loadingShellPaths?: string[];
   /** Pages Router paths selected by the existing HTML warm discovery pass. */
   pagesPaths?: string[];
+  /** Pages Router JSON data identities corresponding to discovered static paths. */
+  pagesDataPaths?: string[];
   /** Public paths omitted because configured routes can replace their page response. */
   excludedWarmPaths?: string[];
   trailingSlash?: boolean;
@@ -473,7 +476,7 @@ async function collectPagesPaths(options: {
   pageExtensions: readonly string[];
   retryOptions?: PathDiscoveryRetryOptions;
   secretHeaders: Record<string, string>;
-}): Promise<string[]> {
+}): Promise<{ dataPaths: string[]; paths: string[] }> {
   const [pageRoutes, apiRoutes] = await Promise.all([
     pagesRouter(options.pagesDir, options.pageExtensions),
     apiRouter(options.pagesDir, options.pageExtensions),
@@ -481,6 +484,8 @@ async function collectPagesPaths(options: {
   const apiPatterns = new Set(apiRoutes.map((route) => route.pattern));
   const paths: string[] = [];
   const seen = new Set<string>();
+  const dataPaths: string[] = [];
+  const seenDataPaths = new Set<string>();
 
   for (const route of pageRoutes) {
     if (apiPatterns.has(route.pattern)) continue;
@@ -489,19 +494,28 @@ async function collectPagesPaths(options: {
       continue;
     }
 
-    const { type } = classifyPagesRoute(route.filePath);
-    if (type === "api" || type === "ssr") continue;
+    const { hasServerSideProps, hasStaticProps, type } = classifyPagesRoute(route.filePath);
+    if (type === "api") continue;
 
     if (!route.isDynamic) {
       if (options.i18n) {
         for (const locale of options.i18n.locales) {
-          addPath(paths, seen, localizePagesPath(route.pattern, locale, options.i18n));
+          const pathname = localizePagesPath(route.pattern, locale, options.i18n);
+          addPath(paths, seen, pathname);
+          if (hasStaticProps || hasServerSideProps) addPath(dataPaths, seenDataPaths, pathname);
         }
       } else {
         addPath(paths, seen, route.pattern);
+        if (hasStaticProps || hasServerSideProps) {
+          addPath(dataPaths, seenDataPaths, route.pattern);
+        }
       }
       continue;
     }
+
+    // A dynamic GSSP route has no enumerable parameter source. It remains
+    // fail-closed unless another deployment input supplies a concrete path.
+    if (type === "ssr") continue;
 
     if (!options.baseUrl) continue;
 
@@ -555,13 +569,14 @@ async function collectPagesPaths(options: {
                 options.i18n,
               );
         addPath(paths, seen, pathname);
+        if (hasStaticProps) addPath(dataPaths, seenDataPaths, pathname);
       }
     } catch (error) {
       throwDiscoveryFailure(route.pattern, error);
     }
   }
 
-  return paths;
+  return { dataPaths, paths };
 }
 
 async function excludePagesApiWarmPaths(options: {
@@ -587,6 +602,19 @@ function localizePagesPath(
 ): string {
   if (!i18n || !locale || locale === i18n.defaultLocale) return pathname;
   return pathname === "/" ? `/${locale}` : `/${locale}${pathname}`;
+}
+
+/**
+ * Next.js data URLs always carry the locale segment, including the default
+ * locale that is omitted from the corresponding public HTML pathname.
+ *
+ * Ported from Next.js:
+ * packages/next/src/shared/lib/router/utils/format-next-pathname-info.ts
+ */
+function localizePagesDataPath(pathname: string, i18n: ResolvedNextConfig["i18n"]): string {
+  if (!i18n) return pathname;
+  if (extractPagesStaticPathLocale(pathname, i18n).explicitLocalePrefix) return pathname;
+  return pathname === "/" ? `/${i18n.defaultLocale}` : `/${i18n.defaultLocale}${pathname}`;
 }
 
 function extractPagesStaticPathLocale(
@@ -739,6 +767,7 @@ async function resolveAppWarmPaths(options: {
   appPaths: string[];
   htmlPaths: string[];
   loadingShellPaths: string[];
+  pagesPaths: string[];
   rscPaths: string[];
 }> {
   const appRoutes = await appRouter(options.appDir, options.pageExtensions);
@@ -753,6 +782,7 @@ async function resolveAppWarmPaths(options: {
   const appPaths: string[] = [];
   const htmlPaths: string[] = [];
   const loadingShellPaths: string[] = [];
+  const pagesPaths: string[] = [];
   for (const pathname of options.paths) {
     const appMatch = matchAppRoute(pathname, appRoutes);
     // Pages Router i18n prefixes are routing metadata rather than part of the
@@ -771,7 +801,10 @@ async function resolveAppWarmPaths(options: {
       pagesMatch &&
       (!appMatch || pagesRouteHasPriorityOverAppRoute(pagesMatch.route, appMatch.route))
     ) {
-      if (!isPagesApiRequest) htmlPaths.push(pathname);
+      if (!isPagesApiRequest) {
+        htmlPaths.push(pathname);
+        pagesPaths.push(pathname);
+      }
       continue;
     }
     if (!appMatch) continue;
@@ -796,7 +829,7 @@ async function resolveAppWarmPaths(options: {
       loadingShellPaths.push(pathname);
     }
   }
-  return { appPaths, htmlPaths, loadingShellPaths, rscPaths };
+  return { appPaths, htmlPaths, loadingShellPaths, pagesPaths, rscPaths };
 }
 
 function configuredRouteAffectsWarmPath(
@@ -878,6 +911,8 @@ export async function emitPrerenderPathManifest(
   const seen = new Set<string>();
   const discoveredPagesPaths: string[] = [];
   const seenPagesPaths = new Set<string>();
+  const discoveredPagesDataPaths: string[] = [];
+  const seenPagesDataPaths = new Set<string>();
   const discoveredAppPaths: string[] = [];
   const seenAppPaths = new Set<string>();
   const discoveredLoadingShellPaths: string[] = [];
@@ -956,16 +991,20 @@ export async function emitPrerenderPathManifest(
       }
 
       if (pagesDir) {
-        for (const pathname of await collectPagesPaths({
+        const pagesPathResult = await collectPagesPaths({
           baseUrl,
           i18n: config.i18n,
           pagesDir,
           pageExtensions: config.pageExtensions,
           retryOptions: pathDiscoveryRetryOptions,
           secretHeaders,
-        })) {
+        });
+        for (const pathname of pagesPathResult.paths) {
           addPath(paths, seen, pathname);
           addPath(discoveredPagesPaths, seenPagesPaths, pathname);
+        }
+        for (const pathname of pagesPathResult.dataPaths) {
+          addPath(discoveredPagesDataPaths, seenPagesDataPaths, pathname);
         }
       }
     } finally {
@@ -992,6 +1031,7 @@ export async function emitPrerenderPathManifest(
           paths: configuredPagesWarmPaths,
         })
       : configuredPagesWarmPaths;
+  const discoveredPagesDataPathSet = new Set(discoveredPagesDataPaths);
   const configuredCandidatePaths = paths.filter((pathname) => !excludedWarmPathSet.has(pathname));
   const appOwnedWarmPaths = appDir
     ? await resolveAppWarmPaths({
@@ -1005,9 +1045,22 @@ export async function emitPrerenderPathManifest(
         appPaths: [],
         htmlPaths: discoveredAppPaths,
         loadingShellPaths: discoveredLoadingShellPaths,
+        pagesPaths: resolvedPagesWarmPaths,
         rscPaths: discoveredAppPaths,
       };
   const warmPaths = appDir ? appOwnedWarmPaths.htmlPaths : resolvedPagesWarmPaths;
+  const pagesOwnedWarmPaths = appDir ? appOwnedWarmPaths.pagesPaths : resolvedPagesWarmPaths;
+  const resolvedPagesDataWarmPaths = pagesOwnedWarmPaths.filter((pathname) =>
+    discoveredPagesDataPathSet.has(pathname),
+  );
+  const pagesDataPaths = resolvedPagesDataWarmPaths.map((pathname) =>
+    buildPagesDataHref(
+      config.basePath,
+      config.buildId,
+      localizePagesDataPath(pathname, config.i18n),
+      "",
+    ),
+  );
 
   const manifest: PrerenderPathManifest = {
     ...(appDir ? { appPaths: appOwnedWarmPaths.appPaths } : {}),
@@ -1019,7 +1072,8 @@ export async function emitPrerenderPathManifest(
     ...(config.deploymentId ? { deploymentId: config.deploymentId } : {}),
     ...(pagesDir
       ? {
-          pagesPaths: resolvedPagesWarmPaths,
+          pagesDataPaths,
+          pagesPaths: pagesOwnedWarmPaths,
         }
       : {}),
     ...(excludedWarmPathSet.size > 0 ? { excludedWarmPaths: Array.from(excludedWarmPathSet) } : {}),
