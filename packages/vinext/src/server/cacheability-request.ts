@@ -591,6 +591,14 @@ export async function finalizeWorkerCacheabilityResponse(
     );
   }
 
+  // A private-cache boundary suspends before request-private user code runs.
+  // Only that dedicated framework bailout may outrank an internal render
+  // status; ordinary dynamic usage must never hide a genuine route 5xx.
+  if (state.probeBailout?.kind === "private-cache") {
+    await response.body?.cancel().catch(() => {});
+    return probeResponse(state, "dynamic", state.probeBailout.outcome, response.status);
+  }
+
   if (response.status >= 500) {
     await response.body?.cancel().catch(() => {});
     return probeResponse(
