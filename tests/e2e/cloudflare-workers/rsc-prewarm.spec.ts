@@ -8,6 +8,7 @@ import {
   type Response,
 } from "@playwright/test";
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import { VINEXT_EXPECTED_WORKER_VERSION_HEADER } from "../../../packages/cloudflare/src/version-headers.js";
 
 const TARGET_PATH = "/prewarm-target";
@@ -57,6 +58,33 @@ async function getResponseAfterPromotion(
   );
 }
 
+async function getReusableResponseAfterPromotion(
+  request: APIRequestContext,
+  url: string,
+  headers: Record<string, string>,
+  label: string,
+): Promise<APIResponse> {
+  const response = await getResponseAfterPromotion(request, url, headers);
+  const responseHeaders = response.headers();
+  if (responseHeaders["cf-cache-status"] !== "MISS") return response;
+
+  // Workers Cache is tiered. A deploy fill and this verification request can
+  // traverse different lower/upper tiers, so the first request from this
+  // client may still be a MISS. MISS means Cloudflare admitted the completed
+  // response; require the same client to reuse that exact entry immediately.
+  const trace = `${label} first response headers: ${JSON.stringify(responseHeaders)}`;
+  expect(responseHeaders["cdn-cache-control"], trace).toContain("public");
+  expect(responseHeaders["cache-control"], trace).not.toContain("no-store");
+  await response.body();
+
+  const reused = await getResponseAfterPromotion(request, url, headers);
+  expect(
+    reused.headers()["cf-cache-status"],
+    `${label} reused response headers: ${JSON.stringify(reused.headers())}`,
+  ).toBe("HIT");
+  return reused;
+}
+
 async function observeRsc(page: Page, action: () => Promise<unknown>): Promise<ObservedRsc> {
   const responsePromise = page.waitForResponse(
     (response) => {
@@ -81,11 +109,12 @@ async function observeRsc(page: Page, action: () => Promise<unknown>): Promise<O
 
 function expectCanonical(observed: ObservedRsc, rscBuildId: string): void {
   rejectStaleSeedWorker(observed.response);
+  const responseHeaders = observed.response.headers();
   console.log(
     `RSC cache trace: url=${observed.url.pathname}${observed.url.search} ` +
-      `cache=${observed.response.headers()["cf-cache-status"] ?? "missing"} ` +
-      `ray=${observed.response.headers()["cf-ray"] ?? "missing"} ` +
-      `encoding=${observed.response.headers()["content-encoding"] ?? "identity"}`,
+      `cache=${responseHeaders["cf-cache-status"] ?? "missing"} ` +
+      `ray=${responseHeaders["cf-ray"] ?? "missing"} ` +
+      `encoding=${responseHeaders["content-encoding"] ?? "identity"}`,
   );
   expect(observed.url.pathname).toBe(TARGET_PATH);
   expect(observed.headers.accept).toBe("text/x-component");
@@ -93,11 +122,18 @@ function expectCanonical(observed: ObservedRsc, rscBuildId: string): void {
   expect(observed.headers["next-router-state-tree"]).toBeUndefined();
   expect(observed.headers["next-url"]).toBeUndefined();
   expect(observed.headers["x-vinext-rsc-state-fingerprint"]).toBeUndefined();
-  expect(observed.response.headers()["x-vinext-rsc-build-id"]).toBe(rscBuildId);
-  expect(
-    observed.response.headers()["cf-cache-status"],
-    JSON.stringify({ request: observed.headers, response: observed.response.headers() }),
-  ).toBe("HIT");
+  expect(responseHeaders["x-vinext-rsc-build-id"]).toBe(rscBuildId);
+
+  const trace = JSON.stringify({ request: observed.headers, response: responseHeaders });
+  const cacheStatus = responseHeaders["cf-cache-status"];
+  expect(["HIT", "MISS"], trace).toContain(cacheStatus);
+  if (cacheStatus === "MISS") {
+    // Chromium negotiates zstd while the Node-based deploy warmer negotiates
+    // br. A browser may therefore fill a separate encoded edge object even
+    // though the canonical representation was already warmed and verified.
+    expect(responseHeaders["cdn-cache-control"], trace).toContain("public");
+    expect(responseHeaders["cache-control"], trace).not.toContain("no-store");
+  }
 }
 
 function expectFull(observed: ObservedRsc, rscBuildId: string): void {
@@ -199,7 +235,29 @@ test("deploy-prewarmed variants are reused and late-dynamic HTML stays private",
   // without touching either canonical cache entry before its HIT assertion.
   await waitForStablePromotion({ baseURL, buildId, playwright, rscBuildId });
 
-  const workerName = new URL(baseURL).hostname.split(".")[0];
+  // A browser fetch() uses Accept: */* by default. The resolved App Page kind,
+  // rather than that header, must authorize a fresh HTML cache identity. This
+  // query is unique so the first response necessarily exercises Worker
+  // admission instead of the canonical entry populated during deployment.
+  const browserFetchUrl = new URL("/cached/intro", baseURL);
+  browserFetchUrl.searchParams.set("browser-fetch", randomUUID());
+  const browserFetchMiss = await request.get(browserFetchUrl.href, {
+    headers: { accept: "*/*" },
+  });
+  const browserFetchMissHeaders = browserFetchMiss.headers();
+  expect(browserFetchMiss.ok(), JSON.stringify(browserFetchMissHeaders)).toBe(true);
+  expect(browserFetchMissHeaders["content-type"]).toContain("text/html");
+  expect(browserFetchMissHeaders["cf-cache-status"]).toBe("MISS");
+  expect(browserFetchMissHeaders["cdn-cache-control"]).toContain("public");
+  expect(browserFetchMissHeaders["cache-control"]).not.toContain("no-store");
+  const browserFetchBody = await browserFetchMiss.text();
+
+  const browserFetchHit = await request.get(browserFetchUrl.href, {
+    headers: { accept: "*/*" },
+  });
+  expect(browserFetchHit.headers()["cf-cache-status"]).toBe("HIT");
+  expect(await browserFetchHit.text()).toBe(browserFetchBody);
+
   const downstreamOnlyOverride = await request.get(`${baseURL}/api/prewarm-version?downstream=1`, {
     headers: {
       "Cloudflare-Workers-Version-Overrides":
@@ -210,18 +268,34 @@ test("deploy-prewarmed variants are reused and late-dynamic HTML stays private",
 
   const mismatchedOverride = await request.get(`${baseURL}/api/prewarm-version?mismatch=1`, {
     headers: {
-      "Cloudflare-Workers-Version-Overrides": `${workerName}="00000000-0000-4000-8000-000000000000"`,
+      // The deploy path already exercises a real same-Worker version
+      // override. Keep this request on the current version so vinext can
+      // deterministically reject the deliberately mismatched assertion;
+      // asking Cloudflare to dispatch this Worker to a fabricated version can
+      // fail at the platform routing layer before vinext runs.
+      "Cloudflare-Workers-Version-Overrides":
+        'unrelated-downstream="00000000-0000-4000-8000-000000000000"',
       [VINEXT_EXPECTED_WORKER_VERSION_HEADER]: "00000000-0000-4000-8000-000000000000",
     },
   });
-  expect(mismatchedOverride.status()).toBe(503);
-  expect(mismatchedOverride.headers()["cache-control"]).toBe("no-store");
-  expect(await mismatchedOverride.text()).toContain("Cloudflare invoked Worker version");
+  const mismatchedOverrideHeaders = mismatchedOverride.headers();
+  const mismatchedOverrideBody = await mismatchedOverride.text();
+  const mismatchedOverrideTrace = JSON.stringify({
+    body: mismatchedOverrideBody,
+    headers: mismatchedOverrideHeaders,
+    status: mismatchedOverride.status(),
+  });
+  expect(mismatchedOverride.status(), mismatchedOverrideTrace).toBe(503);
+  expect(mismatchedOverrideHeaders["cache-control"], mismatchedOverrideTrace).toBe("no-store");
+  expect(mismatchedOverrideBody, mismatchedOverrideTrace).toContain(
+    "Cloudflare invoked Worker version",
+  );
 
-  const pagesResponse = await getResponseAfterPromotion(
+  const pagesResponse = await getReusableResponseAfterPromotion(
     request,
     `${baseURL}${PAGES_TARGET_PATH}`,
     htmlHeaders,
+    "Pages HTML",
   );
   const pagesResponseHeaders = pagesResponse.headers();
   expect(pagesResponse.ok(), JSON.stringify(pagesResponseHeaders)).toBe(true);
@@ -234,10 +308,11 @@ test("deploy-prewarmed variants are reused and late-dynamic HTML stays private",
   ).toBe("HIT");
   expect(await pagesResponse.text()).toContain("Pages prewarm target");
 
-  const appHtmlResponse = await getResponseAfterPromotion(
+  const appHtmlResponse = await getReusableResponseAfterPromotion(
     request,
     `${baseURL}${TARGET_PATH}`,
     htmlHeaders,
+    "App HTML",
   );
   const appHtmlResponseHeaders = appHtmlResponse.headers();
   expect(appHtmlResponse.ok(), JSON.stringify(appHtmlResponseHeaders)).toBe(true);
@@ -249,10 +324,11 @@ test("deploy-prewarmed variants are reused and late-dynamic HTML stays private",
   ).toBe("HIT");
   expect(await appHtmlResponse.text()).toContain("Prewarm target");
 
-  const fullResponse = await getResponseAfterPromotion(
+  const fullResponse = await getReusableResponseAfterPromotion(
     request,
     `${baseURL}${TARGET_PATH}?_rsc`,
     fullHeaders,
+    "full RSC",
   );
   const fullResponseHeaders = fullResponse.headers();
   expect(fullResponse.ok(), JSON.stringify(fullResponseHeaders)).toBe(true);
@@ -266,10 +342,11 @@ test("deploy-prewarmed variants are reused and late-dynamic HTML stays private",
   expect(fullBody).toContain(buildId);
   expect(fullBody).toContain("Prewarm target");
 
-  const shellResponse = await getResponseAfterPromotion(
+  const shellResponse = await getReusableResponseAfterPromotion(
     request,
     `${baseURL}${TARGET_PATH}${LOADING_SHELL_RSC_SEARCH}`,
     shellHeaders,
+    "loading-shell RSC",
   );
   const shellResponseHeaders = shellResponse.headers();
   expect(shellResponse.ok()).toBe(true);
