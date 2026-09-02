@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { finalizeCdnAdapterBuildOutput } from "./cdn-adapter-config.js";
 
 export const DEFAULT_CDN_VERSION_METADATA_BINDING = "CF_VERSION_METADATA";
 
@@ -45,9 +46,34 @@ export function cdnAdapter(options?: CdnAdapterOptions) {
       "[vinext] cdnAdapter({ versionMetadataBinding }) must be a non-empty string binding name.",
     );
   }
+  const versionMetadataBinding =
+    options?.versionMetadataBinding ?? DEFAULT_CDN_VERSION_METADATA_BINDING;
+  const bindingIsExplicit = options?.versionMetadataBinding !== undefined;
   return {
     adapter: fileURLToPath(import.meta.resolve("./cdn-adapter.runtime.js")),
     options,
+    output: {
+      matchesBuild({ plugins }: { plugins: readonly { name?: string }[] }) {
+        return plugins.some(
+          ({ name }) =>
+            name === "vite-plugin-cloudflare" || name?.startsWith("vite-plugin-cloudflare:"),
+        );
+      },
+      finalizeBuildOutput({
+        outDir,
+        isPrimaryServerOutput,
+      }: {
+        outDir: string;
+        isPrimaryServerOutput: boolean;
+      }) {
+        return finalizeCdnAdapterBuildOutput({
+          outDir,
+          isPrimaryServerOutput,
+          binding: versionMetadataBinding,
+          bindingIsExplicit,
+        });
+      },
+    },
     capabilities: {
       buildIdentity: "response-header" as const,
       responseVary: "verbatim" as const,

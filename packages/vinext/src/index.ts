@@ -1460,6 +1460,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   const { supportsNativeTypeofWindowFolding: useNativeTypeofWindowFolding } =
     assertSupportedViteVersion();
   const prerenderConfig = normalizeVinextPrerenderConfig(options.prerender);
+  const cacheAdapterBuildOutputs = [options.cache?.data?.output, options.cache?.cdn?.output].filter(
+    (output) => output !== undefined,
+  );
   let root: string;
   let pagesDir: string;
   let canonicalPagesDir: string;
@@ -1527,6 +1530,17 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   let rscClassificationManifest: RouteClassificationManifest | null = null;
   let rscActionOwnerRoutes: Awaited<ReturnType<typeof appRouter>> | null = null;
   let rscActionOwnerSharedRoots: string[] = [];
+  const serverEntryKindsByEnvironment = new Map<string, Set<string>>();
+
+  function recordServerEntryLoad(environmentName: string | undefined, id: string): void {
+    if (!environmentName) return;
+    let entries = serverEntryKindsByEnvironment.get(environmentName);
+    if (!entries) {
+      entries = new Set();
+      serverEntryKindsByEnvironment.set(environmentName, entries);
+    }
+    entries.add(id);
+  }
 
   // Resolve shim paths - works both from source (.ts) and built (.js).
   const shimsDir = path.resolve(__dirname, "shims");
@@ -4030,6 +4044,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           }
           // Pages Router virtual modules
           if (id === RESOLVED_SERVER_ENTRY) {
+            recordServerEntryLoad(this.environment?.name, id);
             return await generateServerEntry(
               this.environment.config.publicDir === "" ? false : this.environment.config.publicDir,
             );
@@ -4074,6 +4089,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             return "export default null;";
           }
           if (id === RESOLVED_RSC_ENTRY && hasAppDir) {
+            recordServerEntryLoad(this.environment?.name, id);
             const routes = await appRouter(appDir, nextConfig?.pageExtensions, fileMatcher);
             const metaRoutes = scanMetadataFiles(appDir);
             const hasServerActions = await resolveHasServerActions(this.environment.config);
@@ -4168,6 +4184,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             return generateImageAdaptersModule(options.images);
           }
           if (id === RESOLVED_APP_SSR_ENTRY && hasAppDir) {
+            recordServerEntryLoad(this.environment?.name, id);
             return generateSsrEntry(hasPagesDir);
           }
           if (id === RESOLVED_APP_BROWSER_ENTRY && hasAppDir) {
@@ -7321,6 +7338,41 @@ export const loadServerActionClient = ${
       },
     },
   ];
+
+  if (cacheAdapterBuildOutputs.length > 0) {
+    plugins.push({
+      name: "vinext:cache-adapter-build-output",
+      apply: "build",
+      enforce: "post",
+      writeBundle: {
+        sequential: true,
+        order: "post",
+        async handler(outputOptions) {
+          if (!outputOptions.dir) return;
+          const config = this.environment?.config;
+          if (!config) return;
+
+          const build = { plugins: config.plugins };
+          const buildRoot = config.root ?? process.cwd();
+          const outDir = path.resolve(buildRoot, outputOptions.dir);
+          const loadedEntries = serverEntryKindsByEnvironment.get(this.environment?.name ?? "");
+          const isPrimaryServerOutput = Boolean(
+            loadedEntries?.has(RESOLVED_RSC_ENTRY) ||
+            (loadedEntries?.has(RESOLVED_SERVER_ENTRY) &&
+              !loadedEntries.has(RESOLVED_APP_SSR_ENTRY)),
+          );
+          for (const output of cacheAdapterBuildOutputs) {
+            if (output.matchesBuild && !output.matchesBuild(build)) continue;
+            await output.finalizeBuildOutput?.({
+              root: buildRoot,
+              outDir,
+              isPrimaryServerOutput,
+            });
+          }
+        },
+      },
+    });
+  }
 
   // Append auto-injected RSC plugins if applicable
   if (rscPluginPromise) {
