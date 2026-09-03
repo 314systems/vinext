@@ -31,6 +31,8 @@ export default {
     ".": {
       entry: [
         "scripts/*.{js,ts,mjs,mts}",
+        // Loaded by Oxlint from the string paths in vite.config.ts.
+        "oxlint-plugins/*.ts",
         "tests/**/*.test.ts",
         "tests/helpers.ts",
         // Filesystem route entries in the standalone Vite/Worker fixture.
