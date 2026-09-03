@@ -394,6 +394,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
 
   it("warms concrete static paths while tolerating a private paired representation", async () => {
     writeTwoStageWorkerArtifact();
+    const log = vi.spyOn(console, "log");
     const events: string[] = [];
     let uploadCount = 0;
     let statusCount = 0;
@@ -629,6 +630,11 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       "status-6",
       "promote-final",
     ]);
+    expect(log).toHaveBeenCalledWith("  CDN warmup plan by route:");
+    expect(log).toHaveBeenCalledWith("    /:slug         App page           2        3");
+    expect(log).toHaveBeenCalledWith("    /pages-about   Pages page        2/2        0       0");
+    expect(log).toHaveBeenCalledWith("    /api/data      Route Handler     1/1        0       0");
+    log.mockRestore();
     expect(finalConfig).toEqual({ main: "index.js", name: "my-worker", workers_dev: true });
     const manifestJson = JSON.parse(
       finalManifestSource.slice("export default ".length, -2),
